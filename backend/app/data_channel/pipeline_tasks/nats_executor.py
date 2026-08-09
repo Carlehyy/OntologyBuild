@@ -1,11 +1,18 @@
 """
 流水线任务 NATS executor 进程
 
-独立进程消费 JetStream 工作队列并执行流水线调度任务，把执行负载（GIL、
-内存、数据库连接）移出 Web 进程。NATS 只负责送达；并发正确性由执行引擎
-的数据库原子租约（``engine._claim_task``）兜底，重复消息在 claim 失败
-返回「任务正在执行中」后直接 ack 丢弃。
+独立进程消费 JetStream 工作队列并执行后台任务，把执行负载（GIL、内存、
+数据库连接）移出 Web 进程。NATS 只负责送达；并发正确性由执行引擎的
+数据库原子租约（``engine._claim_task``）与各任务自身的数据库/文件
+状态机兜底，重复消息在执行侧幂等消化后直接 ack 丢弃。
 
+当前消费的 subject：
+
+- ``pipeline.task.execute``：数据任务池的调度/手动单任务触发；
+- ``task.pipeline.run``：UI 手动运行整条流水线（不带 write_opts）；
+- ``task.dataset.import``：数据集导入的解析（inspect）/提交（commit）。
+
+每个 subject 使用独立 durable pull consumer，共享进程级并发信号量。
 启动方式::
 
     python -m app.data_channel.pipeline_tasks.nats_executor
@@ -24,6 +31,7 @@ import os
 import signal
 import sys
 import time
+from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +43,12 @@ _IN_PROGRESS_INTERVAL_SECONDS = 20
 _FETCH_TIMEOUT_SECONDS = 5
 _HEARTBEAT_INTERVAL_SECONDS = 5
 _CONSUMER_DURABLE = "pipeline-executor"
+_PIPELINE_RUN_DURABLE = "pipeline-run-executor"
+_DATASET_IMPORT_DURABLE = "dataset-import-executor"
+
+# 消息处理器：解析后的 payload → 协程；业务异常必须在 handler 内消化，
+# 逃到 ``_process_message`` 的异常一律 nak 重投
+MessageHandler = Callable[[dict], Awaitable[None]]
 
 
 def _touch_heartbeat() -> None:
@@ -43,6 +57,73 @@ def _touch_heartbeat() -> None:
     fd = os.open(HEARTBEAT_PATH, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o644)
     os.close(fd)
     os.utime(HEARTBEAT_PATH, (now, now))
+
+
+async def _execute_pipeline_task_message(payload: dict) -> None:
+    """pipeline.task.execute：数据任务池调度/手动触发的单任务执行。"""
+    task_id = str(payload["task_id"])
+    trigger_type = str(payload.get("trigger_type") or "manual")
+
+    from app.data_channel.pipeline_tasks.engine import execute_pipeline_task
+
+    result = await asyncio.to_thread(execute_pipeline_task, task_id, trigger_type)
+    if isinstance(result, dict) and result.get("status") == "ok":
+        logger.info("PipelineTask %s 执行完成", task_id)
+    else:
+        # claim 冲突（"任务正在执行中"）与业务失败都算送达成功：
+        # 正确性由数据库租约兜底，消息直接 ack 丢弃
+        logger.warning(
+            "PipelineTask %s 执行未成功: %s",
+            task_id,
+            (result or {}).get("error") if isinstance(result, dict) else result,
+        )
+
+
+async def _run_pipeline_run_message(payload: dict) -> None:
+    """task.pipeline.run：UI 手动运行整条流水线（不带 write_opts）。"""
+    pipeline_id = str(payload["pipeline_id"])
+    run_id = str(payload["run_id"])
+
+    from app.tasks.v2.pipeline_run import pipeline_run_task
+
+    # Celery 包装下裸函数在 .run 上；无 Celery 环境时本体即可调用
+    run_fn = getattr(pipeline_run_task, "run", pipeline_run_task)
+    await asyncio.to_thread(run_fn, pipeline_id, run_id)
+    logger.info("Pipeline %s 运行 %s 执行完成", pipeline_id, run_id)
+
+
+async def _run_dataset_import_message(payload: dict) -> None:
+    """task.dataset.import：数据集导入的解析/提交两个阶段。"""
+    job_id = str(payload["job_id"])
+    kind = str(payload["kind"])
+
+    from app.tasks.v2 import dataset_import
+
+    task = {
+        "inspect": dataset_import.inspect_dataset_import,
+        "commit": dataset_import.commit_dataset_import,
+    }.get(kind)
+    if task is None:
+        raise ValueError(f"未知的数据集导入任务类型: {kind!r}")
+    # 同 pipeline_run_task：兼容 Celery 包装与裸函数两种形态
+    run_fn = getattr(task, "run", task)
+    await asyncio.to_thread(run_fn, job_id)
+    logger.info("数据集导入任务 %s（%s）执行完成", job_id, kind)
+
+
+def _handler_registry():
+    """subject → (durable, handler)：每 subject 独立 durable pull consumer。"""
+    from app.data_channel.pipeline_tasks.dispatch import (
+        DATASET_IMPORT_SUBJECT,
+        PIPELINE_EXECUTE_SUBJECT,
+        PIPELINE_RUN_SUBJECT,
+    )
+
+    return (
+        (PIPELINE_EXECUTE_SUBJECT, _CONSUMER_DURABLE, _execute_pipeline_task_message),
+        (PIPELINE_RUN_SUBJECT, _PIPELINE_RUN_DURABLE, _run_pipeline_run_message),
+        (DATASET_IMPORT_SUBJECT, _DATASET_IMPORT_DURABLE, _run_dataset_import_message),
+    )
 
 
 class PipelineExecutor:
@@ -64,22 +145,21 @@ class PipelineExecutor:
             logger.info("流水线 executor 收到关闭信号，停止拉取新消息")
         self._shutdown.set()
 
-    async def _process_message(self, msg) -> None:
+    async def _process_message(
+        self,
+        msg,
+        handler: MessageHandler,
+        description: str,
+    ) -> None:
         """执行一条消息并按结果 ack/nak；执行期间周期续约。"""
         try:
             payload = json.loads(msg.data.decode())
-            task_id = str(payload["task_id"])
-            trigger_type = str(payload.get("trigger_type") or "manual")
         except Exception:
-            logger.error("流水线执行消息无法解析，nak 丢弃: %r", msg.data)
+            logger.error("%s 消息无法解析，nak 丢弃: %r", description, msg.data)
             await msg.nak()
             return
 
-        from app.data_channel.pipeline_tasks.engine import execute_pipeline_task
-
-        execute = asyncio.ensure_future(
-            asyncio.to_thread(execute_pipeline_task, task_id, trigger_type)
-        )
+        execute = asyncio.ensure_future(handler(payload))
         while True:
             done, _ = await asyncio.wait(
                 {execute}, timeout=_IN_PROGRESS_INTERVAL_SECONDS
@@ -88,45 +168,45 @@ class PipelineExecutor:
                 break
             if self._shutdown.is_set():
                 # 关闭流程中不再续约，但仍等执行线程自然结束；消息若因
-                # ack_wait 到期被重投，由数据库租约拦下重复执行
+                # ack_wait 到期被重投，由数据库租约/文件状态机拦下重复执行
                 continue
             try:
                 await msg.in_progress()
             except Exception:
-                logger.exception("PipelineTask %s 执行消息续约失败", task_id)
+                logger.exception("%s 执行消息续约失败", description)
         try:
-            result = execute.result()
+            execute.result()
         except Exception:
-            # execute_pipeline_task 内部消化所有业务异常；能逃到这里的是
-            # 线程级意外，交给 nak 重投
-            logger.exception("PipelineTask %s 执行线程异常逃逸", task_id)
+            # handler 内部消化所有业务异常；能逃到这里的是解析/线程级意外，
+            # 交给 nak 重投
+            logger.exception("%s 执行异常逃逸", description)
             await msg.nak()
             return
-        if isinstance(result, dict) and result.get("status") == "ok":
-            logger.info("PipelineTask %s 执行完成", task_id)
-        else:
-            # claim 冲突（"任务正在执行中"）与业务失败都算送达成功：
-            # 正确性由数据库租约兜底，消息直接 ack 丢弃
-            logger.warning(
-                "PipelineTask %s 执行未成功: %s",
-                task_id,
-                (result or {}).get("error") if isinstance(result, dict) else result,
-            )
         await msg.ack()
 
-    async def _run_message(self, msg) -> None:
+    async def _run_message(
+        self,
+        msg,
+        handler: MessageHandler,
+        description: str,
+    ) -> None:
         try:
-            await self._process_message(msg)
+            await self._process_message(msg, handler, description)
         except Exception:
-            logger.exception("流水线执行消息处理异常")
+            logger.exception("%s 消息处理异常", description)
             try:
                 await msg.nak()
             except Exception:
-                logger.exception("流水线执行消息 nak 失败")
+                logger.exception("%s 消息 nak 失败", description)
         finally:
             self._semaphore.release()
 
-    async def _fetch_loop(self, subscription) -> None:
+    async def _fetch_loop(
+        self,
+        subscription,
+        handler: MessageHandler,
+        description: str,
+    ) -> None:
         """批量拉取消息并限并发派发执行；关闭信号到来时退出循环。"""
         while not self._shutdown.is_set():
             try:
@@ -139,7 +219,7 @@ class PipelineExecutor:
             except Exception:
                 if self._shutdown.is_set():
                     break
-                logger.exception("流水线执行消息拉取失败，5 秒后重试")
+                logger.exception("%s 消息拉取失败，5 秒后重试", description)
                 await asyncio.sleep(5)
                 continue
             for msg in messages:
@@ -159,7 +239,9 @@ class PipelineExecutor:
                     except Exception:
                         logger.exception("关闭时退回未执行消息失败")
                     continue
-                task = asyncio.ensure_future(self._run_message(msg))
+                task = asyncio.ensure_future(
+                    self._run_message(msg, handler, description)
+                )
                 self._in_flight.add(task)
                 task.add_done_callback(self._in_flight.discard)
 
@@ -174,7 +256,6 @@ class PipelineExecutor:
 
         from app.config import settings
         from app.data_channel.pipeline_tasks.dispatch import (
-            PIPELINE_EXECUTE_SUBJECT,
             PIPELINE_STREAM,
             ensure_pipeline_stream,
         )
@@ -184,18 +265,30 @@ class PipelineExecutor:
         try:
             js = nc.jetstream()
             await ensure_pipeline_stream(js)
-            subscription = await js.pull_subscribe(
-                PIPELINE_EXECUTE_SUBJECT,
-                durable=_CONSUMER_DURABLE,
-                stream=PIPELINE_STREAM,
-                config=ConsumerConfig(ack_wait=30, max_deliver=5),
-            )
+            loops = []
+            for subject, durable, handler in _handler_registry():
+                subscription = await js.pull_subscribe(
+                    subject,
+                    durable=durable,
+                    stream=PIPELINE_STREAM,
+                    config=ConsumerConfig(ack_wait=30, max_deliver=5),
+                )
+                logger.info(
+                    "流水线 executor 已订阅 %s（durable=%s）",
+                    subject,
+                    durable,
+                )
+                loops.append(
+                    asyncio.ensure_future(
+                        self._fetch_loop(subscription, handler, subject)
+                    )
+                )
             logger.info(
-                "流水线 executor 已启动（并发上限 %d，durable=%s）",
+                "流水线 executor 已启动（并发上限 %d，%d 个 subject）",
                 self._concurrency,
-                _CONSUMER_DURABLE,
+                len(loops),
             )
-            await self._fetch_loop(subscription)
+            await asyncio.gather(*loops)
             if self._in_flight:
                 logger.info(
                     "等待 %d 个在途执行结束（至多 %d 秒）",

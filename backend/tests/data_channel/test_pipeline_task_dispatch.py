@@ -10,9 +10,13 @@ from fastapi import BackgroundTasks, HTTPException
 
 from app.data_channel.pipeline_tasks import dispatch as dispatch_module
 from app.data_channel.pipeline_tasks.dispatch import (
+    DATASET_IMPORT_SUBJECT,
     PIPELINE_EXECUTE_SUBJECT,
+    PIPELINE_RUN_SUBJECT,
     PIPELINE_STREAM,
+    PIPELINE_STREAM_SUBJECTS,
     dispatch_pipeline_task,
+    dispatch_task,
     ensure_pipeline_stream,
 )
 from app.data_channel.pipeline_tasks.execution_service import trigger_task
@@ -23,14 +27,32 @@ from app.models.v2.pipeline import Pipeline
 
 
 class _FakeJS:
-    def __init__(self, calls, *, add_stream_error: Exception | None = None):
+    def __init__(
+        self,
+        calls,
+        *,
+        add_stream_error: Exception | None = None,
+        existing_subjects: list[str] | None = None,
+    ):
         self._calls = calls
         self._add_stream_error = add_stream_error
+        self._existing_subjects = existing_subjects
 
     async def add_stream(self, config):
         self._calls.setdefault("add_stream", []).append(config)
         if self._add_stream_error is not None:
             raise self._add_stream_error
+
+    async def stream_info(self, name):
+        from types import SimpleNamespace
+
+        self._calls.setdefault("stream_info", []).append(name)
+        return SimpleNamespace(
+            config=SimpleNamespace(subjects=list(self._existing_subjects or [])),
+        )
+
+    async def update_stream(self, config):
+        self._calls.setdefault("update_stream", []).append(config)
 
 
 class _FakeNC:
@@ -98,12 +120,62 @@ def test_dispatch_ensures_work_queue_stream_once(fake_nats, monkeypatch):
 
     (config,), = [fake_nats["add_stream"]]
     assert config.name == PIPELINE_STREAM == "PIPELINE_TASKS"
-    assert config.subjects == ["pipeline.task.execute"]
+    # 流已扩容：旧 subject 保持不变，新增 UI 手动运行与数据集导入
+    assert config.subjects == [
+        "pipeline.task.execute",
+        "task.pipeline.run",
+        "task.dataset.import",
+    ]
+    assert config.subjects == list(PIPELINE_STREAM_SUBJECTS)
     assert config.retention == RetentionPolicy.WORK_QUEUE
     assert config.max_age == 7 * 24 * 3600
     assert config.duplicate_window == 10 * 60
     # 进程内缓存：同一进程只确保一次 Stream
     assert len(fake_nats["published"]) == 2
+
+
+def test_dispatch_task_publishes_generic_subject_payload_and_msg_id(fake_nats):
+    dispatch_task(
+        PIPELINE_RUN_SUBJECT,
+        {"pipeline_id": "pipe-1", "run_id": "run-1"},
+    )
+
+    (subject, payload, headers), = fake_nats["published"]
+    assert subject == PIPELINE_RUN_SUBJECT == "task.pipeline.run"
+    body = json.loads(payload.decode())
+    assert body["pipeline_id"] == "pipe-1"
+    assert body["run_id"] == "run-1"
+    assert datetime.fromisoformat(body["dispatched_at"])
+    # Msg-Id 惯例：subject + 排序参数 + 纳秒时间戳
+    assert re.fullmatch(
+        r"task\.pipeline\.run:pipeline_id=pipe-1:run_id=run-1:\d+",
+        headers["Nats-Msg-Id"],
+    )
+    assert fake_nats["drained"] is True
+
+
+def test_dispatch_task_dataset_import_subject(fake_nats):
+    dispatch_task(
+        DATASET_IMPORT_SUBJECT,
+        {"job_id": "job-1", "kind": "inspect"},
+    )
+
+    (subject, payload, headers), = fake_nats["published"]
+    assert subject == DATASET_IMPORT_SUBJECT == "task.dataset.import"
+    body = json.loads(payload.decode())
+    assert body["job_id"] == "job-1"
+    assert body["kind"] == "inspect"
+    assert re.fullmatch(
+        r"task\.dataset\.import:job_id=job-1:kind=inspect:\d+",
+        headers["Nats-Msg-Id"],
+    )
+
+
+def test_dispatch_task_without_nats_url_fails_with_chinese_message(monkeypatch):
+    monkeypatch.setattr("app.config.settings.nats_url", "")
+
+    with pytest.raises(RuntimeError, match="未配置 NATS_URL"):
+        dispatch_task(PIPELINE_RUN_SUBJECT, {"pipeline_id": "p", "run_id": "r"})
 
 
 def test_dispatch_without_nats_url_fails_with_chinese_message(monkeypatch):
@@ -115,13 +187,55 @@ def test_dispatch_without_nats_url_fails_with_chinese_message(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ensure_stream_tolerates_already_exists():
+    """流已存在且 subject 已是最新：不更新、不抛异常。"""
     calls: dict = {"add_stream": []}
     js = _FakeJS(
         calls,
         add_stream_error=Exception("stream name already in use"),
+        existing_subjects=list(PIPELINE_STREAM_SUBJECTS),
     )
 
     await ensure_pipeline_stream(js)  # 不抛异常即为通过
+
+    assert "update_stream" not in calls
+
+
+@pytest.mark.asyncio
+async def test_ensure_stream_evolves_legacy_stream_subjects():
+    """生产旧流只有 pipeline.task.execute：合并 subjects 后原地更新。"""
+    calls: dict = {"add_stream": []}
+    js = _FakeJS(
+        calls,
+        add_stream_error=Exception("stream name already in use"),
+        existing_subjects=["pipeline.task.execute"],
+    )
+
+    await ensure_pipeline_stream(js)
+
+    (config,), = [calls["update_stream"]]
+    # 旧 subject 保留在前，新增 subject 合并入流，旧 durable 不受影响
+    assert config.subjects == [
+        "pipeline.task.execute",
+        "task.dataset.import",
+        "task.pipeline.run",
+    ]
+    assert set(config.subjects) == set(PIPELINE_STREAM_SUBJECTS)
+
+
+@pytest.mark.asyncio
+async def test_ensure_stream_update_preserves_unknown_subjects():
+    """流上存在本版本未知的 subject 时保留不丢（前向兼容）。"""
+    calls: dict = {"add_stream": []}
+    js = _FakeJS(
+        calls,
+        add_stream_error=Exception("stream name already in use"),
+        existing_subjects=["pipeline.task.execute", "task.future"],
+    )
+
+    await ensure_pipeline_stream(js)
+
+    (config,), = [calls["update_stream"]]
+    assert set(config.subjects) == set(PIPELINE_STREAM_SUBJECTS) | {"task.future"}
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ import asyncio
 import json
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +14,10 @@ from app.data_channel.pipeline_tasks.nats_executor import (
     PipelineExecutor,
     _touch_heartbeat,
 )
+
+# 旧 subject 的 handler：既有消息处理测试都走它
+_PIPELINE_TASK_HANDLER = nats_executor._execute_pipeline_task_message
+_PIPELINE_TASK_DESC = "pipeline.task.execute"
 
 
 class _FakeMsg:
@@ -58,7 +63,7 @@ async def test_successful_execution_acks(executor, monkeypatch):
     )
     msg = _msg()
 
-    await executor._process_message(msg)
+    await executor._process_message(msg, _PIPELINE_TASK_HANDLER, _PIPELINE_TASK_DESC)
 
     assert calls == [("task-1", "scheduled")]
     assert msg.acked == 1
@@ -74,7 +79,7 @@ async def test_claim_conflict_is_acked_and_dropped(executor, monkeypatch):
     )
     msg = _msg()
 
-    await executor._process_message(msg)
+    await executor._process_message(msg, _PIPELINE_TASK_HANDLER, _PIPELINE_TASK_DESC)
 
     assert msg.acked == 1
     assert msg.naked == 0
@@ -91,7 +96,7 @@ async def test_unparseable_message_is_naked(executor, monkeypatch):
     )
     msg = _FakeMsg(b"not-json")
 
-    await executor._process_message(msg)
+    await executor._process_message(msg, _PIPELINE_TASK_HANDLER, _PIPELINE_TASK_DESC)
 
     assert msg.naked == 1
     assert msg.acked == 0
@@ -108,7 +113,7 @@ async def test_thread_exception_escape_is_naked(executor, monkeypatch):
     )
     msg = _msg()
 
-    await executor._process_message(msg)
+    await executor._process_message(msg, _PIPELINE_TASK_HANDLER, _PIPELINE_TASK_DESC)
 
     assert msg.naked == 1
     assert msg.acked == 0
@@ -123,7 +128,7 @@ async def test_in_progress_renews_while_executing(executor, monkeypatch):
     )
     msg = _msg()
 
-    await executor._process_message(msg)
+    await executor._process_message(msg, _PIPELINE_TASK_HANDLER, _PIPELINE_TASK_DESC)
 
     # ack_wait=30s、续约间隔 20s 的同比例缩小：0.22s 执行应续约 4 次左右
     assert msg.in_progress_calls >= 2
@@ -150,10 +155,166 @@ async def test_no_renewal_after_shutdown_requested(executor, monkeypatch):
         await asyncio.to_thread(started.wait)
         executor.request_shutdown()
 
-    await asyncio.gather(executor._process_message(msg), request_shutdown_soon())
+    await asyncio.gather(
+        executor._process_message(msg, _PIPELINE_TASK_HANDLER, _PIPELINE_TASK_DESC),
+        request_shutdown_soon(),
+    )
 
     assert msg.in_progress_calls == 0
     assert msg.acked == 1
+
+
+def _run_msg(pipeline_id: str = "pipe-1", run_id: str = "run-1") -> _FakeMsg:
+    return _FakeMsg(json.dumps({
+        "pipeline_id": pipeline_id,
+        "run_id": run_id,
+        "dispatched_at": "2026-08-08T00:00:00",
+    }).encode())
+
+
+def _import_msg(job_id: str = "job-1", kind: str = "inspect") -> _FakeMsg:
+    return _FakeMsg(json.dumps({
+        "job_id": job_id,
+        "kind": kind,
+        "dispatched_at": "2026-08-08T00:00:00",
+    }).encode())
+
+
+@pytest.mark.asyncio
+async def test_pipeline_run_handler_invokes_bare_function(executor, monkeypatch):
+    """task.pipeline.run：线程内调用 pipeline_run_task 裸函数（不带 write_opts）。"""
+    calls = []
+    # 裸函数形态（无 .run 属性）：getattr 兼容直接返回本体
+    monkeypatch.setattr(
+        "app.tasks.v2.pipeline_run.pipeline_run_task",
+        lambda pipeline_id, run_id: calls.append((pipeline_id, run_id)),
+    )
+    msg = _run_msg()
+
+    await executor._process_message(
+        msg, nats_executor._run_pipeline_run_message, "task.pipeline.run"
+    )
+
+    assert calls == [("pipe-1", "run-1")]
+    assert msg.acked == 1
+    assert msg.naked == 0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_run_handler_unwraps_celery_task_run(executor, monkeypatch):
+    """Celery 包装形态：裸函数在 .run 上。"""
+    calls = []
+    celery_like = SimpleNamespace(
+        run=lambda pipeline_id, run_id: calls.append((pipeline_id, run_id)),
+    )
+    monkeypatch.setattr(
+        "app.tasks.v2.pipeline_run.pipeline_run_task", celery_like
+    )
+    msg = _run_msg("pipe-2", "run-2")
+
+    await executor._process_message(
+        msg, nats_executor._run_pipeline_run_message, "task.pipeline.run"
+    )
+
+    assert calls == [("pipe-2", "run-2")]
+    assert msg.acked == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_run_handler_thread_exception_is_naked(executor, monkeypatch):
+    def explode(*_args):
+        raise RuntimeError("thread escaped")
+
+    monkeypatch.setattr("app.tasks.v2.pipeline_run.pipeline_run_task", explode)
+    msg = _run_msg()
+
+    await executor._process_message(
+        msg, nats_executor._run_pipeline_run_message, "task.pipeline.run"
+    )
+
+    assert msg.naked == 1
+    assert msg.acked == 0
+
+
+@pytest.mark.asyncio
+async def test_dataset_import_handler_routes_inspect_and_commit(executor, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "app.tasks.v2.dataset_import.inspect_dataset_import",
+        lambda job_id: calls.append(("inspect", job_id)),
+    )
+    monkeypatch.setattr(
+        "app.tasks.v2.dataset_import.commit_dataset_import",
+        lambda job_id: calls.append(("commit", job_id)),
+    )
+
+    inspect_msg = _import_msg("job-1", "inspect")
+    commit_msg = _import_msg("job-2", "commit")
+    await executor._process_message(
+        inspect_msg, nats_executor._run_dataset_import_message, "task.dataset.import"
+    )
+    await executor._process_message(
+        commit_msg, nats_executor._run_dataset_import_message, "task.dataset.import"
+    )
+
+    assert calls == [("inspect", "job-1"), ("commit", "job-2")]
+    assert inspect_msg.acked == 1
+    assert commit_msg.acked == 1
+
+
+@pytest.mark.asyncio
+async def test_dataset_import_handler_unwraps_celery_task_run(executor, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "app.tasks.v2.dataset_import.inspect_dataset_import",
+        SimpleNamespace(run=lambda job_id: calls.append(job_id)),
+    )
+    msg = _import_msg("job-9", "inspect")
+
+    await executor._process_message(
+        msg, nats_executor._run_dataset_import_message, "task.dataset.import"
+    )
+
+    assert calls == ["job-9"]
+    assert msg.acked == 1
+
+
+@pytest.mark.asyncio
+async def test_dataset_import_handler_unknown_kind_is_naked(executor, monkeypatch):
+    def forbidden(*_args):  # pragma: no cover - 防御断言
+        raise AssertionError("未知 kind 不得触达任何任务体")
+
+    monkeypatch.setattr(
+        "app.tasks.v2.dataset_import.inspect_dataset_import", forbidden
+    )
+    monkeypatch.setattr(
+        "app.tasks.v2.dataset_import.commit_dataset_import", forbidden
+    )
+    msg = _import_msg("job-1", "bogus")
+
+    await executor._process_message(
+        msg, nats_executor._run_dataset_import_message, "task.dataset.import"
+    )
+
+    assert msg.naked == 1
+    assert msg.acked == 0
+
+
+def test_handler_registry_covers_all_stream_subjects():
+    from app.data_channel.pipeline_tasks.dispatch import PIPELINE_STREAM_SUBJECTS
+
+    registry = nats_executor._handler_registry()
+    subjects = [subject for subject, _durable, _handler in registry]
+    durables = {durable for _subject, durable, _handler in registry}
+
+    # 每个流 subject 恰好一个 durable；旧 durable 名称保持不变
+    assert subjects == list(PIPELINE_STREAM_SUBJECTS)
+    assert durables == {
+        "pipeline-executor",
+        "pipeline-run-executor",
+        "dataset-import-executor",
+    }
+    assert nats_executor._CONSUMER_DURABLE == "pipeline-executor"
 
 
 class _FakeSubscription:
@@ -194,7 +355,9 @@ async def test_fetch_loop_respects_concurrency_limit(executor, monkeypatch):
     messages = [_msg(f"task-{index}") for index in range(4)]
     subscription = _FakeSubscription([messages])
 
-    fetch_task = asyncio.ensure_future(executor._fetch_loop(subscription))
+    fetch_task = asyncio.ensure_future(
+        executor._fetch_loop(subscription, _PIPELINE_TASK_HANDLER, _PIPELINE_TASK_DESC)
+    )
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline and not all(m.acked for m in messages):
         await asyncio.sleep(0.02)
@@ -212,11 +375,66 @@ async def test_fetch_loop_naks_unstarted_messages_on_shutdown(executor):
         [messages], on_fetch=executor.request_shutdown,
     )
 
-    await executor._fetch_loop(subscription)
+    await executor._fetch_loop(subscription, _PIPELINE_TASK_HANDLER, _PIPELINE_TASK_DESC)
 
     # 关闭信号到来后已拉取但未开始的消息立即 nak，让其他 executor 接管
     assert [m.naked for m in messages] == [1, 1]
     assert [m.acked for m in messages] == [0, 0]
+
+
+@pytest.mark.asyncio
+async def test_run_subscribes_each_subject_with_own_durable(
+    executor, monkeypatch, tmp_path
+):
+    """run() 为注册表每个 subject 建立独立 durable pull consumer。"""
+    import nats as nats_module
+
+    monkeypatch.setattr(
+        nats_executor, "HEARTBEAT_PATH", str(tmp_path / "heartbeat")
+    )
+    monkeypatch.setattr(
+        "app.config.settings.nats_url", "nats://fake-nats:4222"
+    )
+    subscriptions = []
+
+    class FakeJS:
+        async def add_stream(self, config):
+            pass
+
+        async def pull_subscribe(self, subject, durable, stream, config):
+            subscriptions.append((subject, durable, stream, config))
+            return _FakeSubscription([])
+
+    class FakeNC:
+        def jetstream(self):
+            return FakeJS()
+
+        async def drain(self):
+            pass
+
+    async def fake_connect(url, **kwargs):
+        return FakeNC()
+
+    monkeypatch.setattr(nats_module, "connect", fake_connect)
+
+    run_task = asyncio.ensure_future(executor.run())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and len(subscriptions) < 3:
+        await asyncio.sleep(0.02)
+    executor.request_shutdown()
+    await asyncio.wait_for(run_task, timeout=5)
+
+    assert [(subject, durable) for subject, durable, _s, _c in subscriptions] == [
+        ("pipeline.task.execute", "pipeline-executor"),
+        ("task.pipeline.run", "pipeline-run-executor"),
+        ("task.dataset.import", "dataset-import-executor"),
+    ]
+    assert all(stream == "PIPELINE_TASKS" for _s, _d, stream, _c in subscriptions)
+    # ack_wait=30s 与 20s 续约间隔配套；max_deliver 兜底 poison 消息
+    assert all(
+        config.ack_wait == 30 and config.max_deliver == 5
+        for _s, _d, _stream, config in subscriptions
+    )
 
 
 @pytest.mark.asyncio
@@ -287,7 +505,9 @@ def test_dispatch_to_executor_end_to_end(monkeypatch):
             consumer = PipelineExecutor()
             messages = await subscription.fetch(1, timeout=10)
             assert len(messages) == 1
-            await consumer._run_message(messages[0])
+            await consumer._run_message(
+                messages[0], _PIPELINE_TASK_HANDLER, _PIPELINE_TASK_DESC
+            )
             # ack 是 fire-and-forget 发布，轮询等服务端记账
             import time as _time
             deadline = _time.monotonic() + 10
