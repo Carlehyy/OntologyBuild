@@ -244,6 +244,49 @@ def ontology_overview(ontology_id: str, db: Session):
     })
 
 
+def _instance_fact_label(
+        inst: ObjectInstance,
+        type_info: Optional[SimpleNamespace],
+        instance_id: str,
+) -> str:
+    """事实流实例标签：候选顺序与审批待办标签（_approval_instance_label）对齐，
+    避免同一实例在「待审批」与「事实流」两处标识不一致。"""
+    props = inst.properties if isinstance(inst.properties, dict) else {}
+    candidates: list[str] = []
+    if type_info is not None:
+        primary_key = getattr(type_info, "primary_key", None)
+        if primary_key:
+            candidates.append(primary_key)
+            for prop in getattr(type_info, "properties", None) or []:
+                if not isinstance(prop, dict):
+                    continue
+                prop_id, prop_name = prop.get("id"), prop.get("name")
+                if prop_id == primary_key and prop_name:
+                    candidates.append(prop_name)
+                elif prop_name == primary_key and prop_id:
+                    candidates.append(prop_id)
+    candidates.extend(("name", "flight_no", "id"))
+    candidates.extend(("title", "label", "code", "month", "report_month"))
+
+    value = None
+    for key in dict.fromkeys(candidates):
+        candidate = props.get(key)
+        if (
+            candidate is not None
+            and not isinstance(candidate, (dict, list))
+            and str(candidate).strip()
+        ):
+            value = str(candidate).strip()
+            break
+    if value is None and inst.external_id:
+        value = str(inst.external_id)
+
+    type_name = getattr(type_info, "name", "") if type_info is not None else ""
+    if value:
+        return f"{type_name}·{value}" if type_name else value
+    return type_name or instance_id[:8]
+
+
 def recent_facts(
         ontology_id: str,
         limit: int,
@@ -288,8 +331,12 @@ def recent_facts(
     log_map = {l.id: l for l in db.query(ActionExecutionLog).filter(
         ActionExecutionLog.id.in_(inst_ids)).all()} if inst_ids else {}
     if release_snapshot is not None:
-        type_names = {
-            str(item["id"]): item.get("displayName") or item.get("name") or ""
+        type_info = {
+            str(item["id"]): SimpleNamespace(
+                name=item.get("displayName") or item.get("name") or "",
+                primary_key=item.get("primaryKey"),
+                properties=item.get("properties") or [],
+            )
             for item in release_snapshot["objectTypes"] if item.get("id")
         }
         action_names = {
@@ -297,17 +344,20 @@ def recent_facts(
             for item in release_snapshot["actions"] if item.get("id")
         }
     else:
-        type_names = {o.id: (o.display_name or o.name) for o in
-                      db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id).all()}
+        type_info = {
+            o.id: SimpleNamespace(
+                name=o.display_name or o.name,
+                primary_key=getattr(o, "primary_key", None),
+                properties=getattr(o, "properties", None) or [],
+            )
+            for o in db.query(ObjectType).filter(ObjectType.ontology_id == ontology_id).all()
+        }
         action_names = {}
 
     def _label(f: PropertyFact) -> str:
         inst = inst_map.get(f.instance_id)
         if inst is not None:
-            props = inst.properties or {}
-            nm = props.get("name") or props.get("flight_no") or props.get("id")
-            tn = type_names.get(inst.object_type_id, "")
-            return f"{tn}·{nm}" if nm else (tn or f.instance_id[:8])
+            return _instance_fact_label(inst, type_info.get(inst.object_type_id), f.instance_id)
         s = sent_map.get(f.instance_id)
         if s is not None:
             return f"哨兵·{s.display_name or s.name}"
