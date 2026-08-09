@@ -144,18 +144,71 @@ test.describe('Python 脚本编辑页', () => {
     await expect(page.getByText('脚本历史版本')).toBeVisible()
     await expect(page.getByText('v2')).toBeVisible()
     await expect(page.getByText('v1')).toBeVisible()
-    await expect(page.getByText('当前')).toBeVisible()
+    await expect(page.getByText('当前', { exact: true })).toBeVisible()
 
     // 展开 v1 脚本内容
     await page.getByRole('button', { name: '查看' }).last().click()
     await expect(page.getByText('第一版')).toBeVisible()
 
-    // 恢复 v1 到编辑器：内容替换为 v1、保存重新置灰、未保存状态出现
+    // 恢复 v1 到编辑器：先弹二次确认，确认后内容替换为 v1、保存重新置灰
     await page.getByRole('button', { name: '恢复到编辑器' }).last().click()
+    await expect(page.getByText('恢复 v1 到编辑器')).toBeVisible()
+    await page.getByRole('button', { name: '恢复', exact: true }).click()
     await expect(page.locator('.cm-content')).toContainText('第一版')
     await expect(page.locator('.cm-content')).not.toContainText('已保存')
     await expect(page.getByText('有未保存修改 · 草稿已自动缓存')).toBeVisible()
     await expect(page.getByRole('button', { name: /保存/ })).toBeDisabled()
+  })
+
+  test('执行可取消：显示已执行耗时并终止等待', async ({ page }) => {
+    // 让执行请求挂起，直到取消后才放行；不复用 mockScriptPage，避免 unroute 重注册
+    const executeGate: { release?: () => void } = {}
+    await page.addInitScript(() => {
+      localStorage.setItem('token', 'e2e-token')
+      localStorage.setItem('auth-store', JSON.stringify({
+        state: { token: 'e2e-token', user: { id: 'u1', username: 'tester', role: 'admin' } },
+        version: 0,
+      }))
+    })
+    await page.route('**/api/**', async (route: Route) => {
+      const url = new URL(route.request().url())
+      // 只拦截后端 API；/src/api/*.ts 是 Vite 模块文件，必须放行
+      if (!url.pathname.startsWith('/api/')) return route.continue()
+      const ok = (data: unknown, status = 200) => route.fulfill({
+        status,
+        contentType: 'application/json',
+        body: JSON.stringify(data),
+      })
+      if (url.pathname === `/api/v2/pipelines/${PIPELINE_ID}/script/execute`) {
+        await new Promise<void>(resolve => { executeGate.release = resolve })
+        return ok(executeOk)
+      }
+      if (url.pathname === `/api/v2/pipelines/${PIPELINE_ID}/script/cancel`) {
+        return ok({ cancelled: true })
+      }
+      if (url.pathname === `/api/v2/pipelines/${PIPELINE_ID}`) {
+        return ok(pythonPipeline)
+      }
+      return ok({})
+    })
+    await page.goto(`/#/data/pipelines/script/${PIPELINE_ID}`)
+
+    await page.getByRole('button', { name: /^执行$/ }).click()
+    await expect(page.getByText(/已执行 \d+s/)).toBeVisible()
+    await page.getByRole('button', { name: '取消' }).first().click()
+    await expect(page.getByText('已取消本次执行')).toBeVisible()
+    executeGate.release?.()
+  })
+
+  test('保存门槛 checklist 随执行状态推进', async ({ page }) => {
+    await mockScriptPage(page)
+    await page.goto(`/#/data/pipelines/script/${PIPELINE_ID}`)
+
+    // 初始：脚本非空 ✓，但未执行、未校验
+    await expect(page.getByText('三项全部通过后保存可点')).toBeVisible()
+    await page.getByRole('button', { name: /^执行$/ }).click()
+    await expect(page.getByText('执行成功 · 输出格式校验通过')).toBeVisible()
+    await expect(page.getByText('可以保存：保存时平台会重新执行并复验')).toBeVisible()
   })
 
   test('未保存修改自动缓存草稿，刷新后恢复并提示', async ({ page }) => {

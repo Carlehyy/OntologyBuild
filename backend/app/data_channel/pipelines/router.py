@@ -435,13 +435,27 @@ def execute_pipeline_script(
     pipeline_id: str,
     body: ScriptBody,
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     """执行 Python 脚本（不落库）：真实在内核执行编辑器中的当前内容。
 
     返回执行结果与平台行格式（list[dict]）校验结论，供脚本编辑页展示；
     脚本级失败以 ok=false + traceback 承载，网关类故障返回 502。
+    同一用户对同一流水线同时只允许一次进行中执行（409），可经取消端点终止。
     """
-    return python_engine_service.execute_pipeline_script(pipeline_id, body, db)
+    return python_engine_service.execute_pipeline_script(
+        pipeline_id, body, db, current_user=current_user)
+
+
+@router.post("/{pipeline_id}/script/cancel")
+def cancel_pipeline_script(
+    pipeline_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """取消当前用户在该流水线上进行中的脚本执行；内核在下一轮询周期内销毁。"""
+    return python_engine_service.cancel_pipeline_script(
+        pipeline_id, db, current_user=current_user)
 
 
 @router.put("/{pipeline_id}/script")

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import threading
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -26,15 +27,49 @@ _SAMPLE_ROWS = 50
 # 每条流水线保留的脚本历史版数上限（超出后最旧的版本被修剪）
 _SCRIPT_VERSION_KEEP = 20
 
+# 进行中的手动执行：key = f"{pipeline_id}:{user_id}"，值为取消事件。
+# 「取消」端点置位后，执行循环在下一个轮询周期内终止并销毁内核。
+_IN_FLIGHT: dict[str, threading.Event] = {}
+_IN_FLIGHT_LOCK = threading.Lock()
 
-def execute_pipeline_script(pipeline_id: str, body, db: Session) -> dict:
+
+def _in_flight_key(pipeline_id: str, current_user) -> str:
+    return f"{pipeline_id}:{getattr(current_user, 'id', None) or 'anonymous'}"
+
+
+def execute_pipeline_script(pipeline_id: str, body, db: Session, current_user=None) -> dict:
     """执行脚本并返回结果与格式校验结论（脚本级失败以 ok=false 承载）。"""
     pipeline = _load_python_pipeline(db, pipeline_id)
     script = (body.script or "")
     if not script.strip():
         raise HTTPException(400, "脚本内容为空，无法执行。")
-    execution = _run(script)
+    key = _in_flight_key(pipeline_id, current_user)
+    cancel_event = threading.Event()
+    with _IN_FLIGHT_LOCK:
+        if key in _IN_FLIGHT:
+            raise HTTPException(
+                409,
+                "该流水线有正在执行的脚本，请等待完成或先取消上一次执行。",
+            )
+        _IN_FLIGHT[key] = cancel_event
+    try:
+        execution = _run(script, cancel_event)
+    finally:
+        with _IN_FLIGHT_LOCK:
+            _IN_FLIGHT.pop(key, None)
     return _execution_payload(pipeline, execution)
+
+
+def cancel_pipeline_script(pipeline_id: str, db: Session, current_user=None) -> dict:
+    """取消当前用户在该流水线上进行中的脚本执行（内核侧终止）。"""
+    _load_python_pipeline(db, pipeline_id)
+    key = _in_flight_key(pipeline_id, current_user)
+    with _IN_FLIGHT_LOCK:
+        event = _IN_FLIGHT.get(key)
+    if event is None:
+        return {"cancelled": False}
+    event.set()
+    return {"cancelled": True}
 
 
 def save_pipeline_script(
@@ -156,12 +191,13 @@ def _load_python_pipeline(db: Session, pipeline_id: str) -> Pipeline:
     return pipeline
 
 
-def _run(script: str) -> ScriptExecution:
-    """基础设施类失败（未配置/不可达/超时）映射为 502；脚本异常留在结果里。"""
+def _run(script: str, cancel_event=None) -> ScriptExecution:
+    """基础设施类失败（未配置/不可达/超时/取消）映射为 502；脚本异常留在结果里。"""
     try:
         return execute_script(
             script,
             timeout=settings.python_script_timeout_seconds,
+            cancel_event=cancel_event,
         )
     except PythonEngineError as exc:
         raise HTTPException(502, str(exc)) from exc
@@ -181,6 +217,8 @@ def _execution_payload(pipeline: Pipeline, execution: ScriptExecution) -> dict:
         "error": execution.error,
         "traceback": execution.traceback,
         "duration_ms": execution.duration_ms,
+        # 平台执行时限，供页面展示「已执行 Xs / 上限 Ys」
+        "timeout_seconds": settings.python_script_timeout_seconds,
     }
 
 
