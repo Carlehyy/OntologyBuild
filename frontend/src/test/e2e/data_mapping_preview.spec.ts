@@ -1,7 +1,15 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 
-async function mockMappingPreview(page: Page, options: { failFirstApply?: boolean } = {}) {
+interface MockOptions {
+  failFirstApply?: boolean
+  datasetStatus?: 'approved' | 'rejected'
+  withInstances?: boolean
+  withUnmappedObject?: boolean
+}
+
+async function mockMappingPreview(page: Page, options: MockOptions = {}) {
   const columns = Array.from({ length: 8 }, (_, index) => `field_${index + 1}`)
+  const datasetStatus = options.datasetStatus ?? 'approved'
   let applyAttempts = 0
   await page.addInitScript(() => {
     localStorage.setItem('token', 'e2e-token')
@@ -28,19 +36,27 @@ async function mockMappingPreview(page: Page, options: { failFirstApply?: boolea
     if (url.pathname === '/api/v2/ontologies/ontology-preview/current-release/workspace') return ok({
       versionId: 'release-1', versionNumber: 'v1', isCurrentRelease: true,
       workspaceMode: 'release', editable: false, revision: 'r1',
-      objectTypes: [{
-        id: 'object-order', name: 'Order', displayName: '订单', primaryKey: 'id',
-        properties: [{ id: 'id', name: 'id', displayName: '订单编号', type: 'string' }],
-      }],
+      objectTypes: [
+        {
+          id: 'object-order', name: 'Order', displayName: '订单', primaryKey: 'id',
+          properties: [{ id: 'id', name: 'id', displayName: '订单编号', type: 'string' }],
+        },
+        ...(options.withUnmappedObject ? [{
+          id: 'object-log', name: 'Log', displayName: '日志', primaryKey: null,
+          properties: [{ id: 'msg', name: 'msg', displayName: '消息', type: 'string' }],
+        }] : []),
+      ],
       linkTypes: [],
       mappings: [{
         id: 'mapping-1', curatedDatasetId: 'dataset-wide', targetObjectTypeId: 'object-order',
-        entityClass: 'Order', fieldMapping: { field_1: 'id' }, status: 'published',
+        entityClass: 'Order',
+        fieldMapping: { field_1: 'id', __applied_dataset_version_id__: 'dataset-version-23' },
+        status: 'published',
       }],
       linkMappings: [],
     })
     if (url.pathname === '/api/v2/curated') return ok([{
-      id: 'dataset-wide', name: '订单宽表', status: 'approved', row_count: 45,
+      id: 'dataset-wide', name: '订单宽表', status: datasetStatus, row_count: 45,
       quality_score: .96, primary_key: 'field_1', producer_pipeline_id: null,
       output_key: null, has_review_evidence: true,
     }])
@@ -52,6 +68,9 @@ async function mockMappingPreview(page: Page, options: { failFirstApply?: boolea
         is_primary_key: index === 0, sample_values: [`值 ${index + 1}`],
       })),
     })
+    if (url.pathname === '/api/v2/datasets/dataset-wide/versions') return ok([
+      { id: 'dataset-version-23', version_no: 23, rowcount: 45, processed_at: '2026-07-26T08:27:21+00:00' },
+    ])
     if (url.pathname === '/api/v2/datasets/dataset-wide/preview') return ok({
       columns,
       total_rows: 2,
@@ -96,6 +115,10 @@ async function mockMappingPreview(page: Page, options: { failFirstApply?: boolea
         count: end - offset,
       })
     }
+    if (
+      url.pathname === '/api/v2/formal/ontologies/ontology-preview/instances'
+      && options.withInstances
+    ) return ok([{ id: 'inst-1', objectTypeId: 'object-order' }])
     if (url.pathname.startsWith('/api/v2/formal/ontologies/ontology-preview/')) return ok([])
     return ok([])
   })
@@ -115,8 +138,8 @@ test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async
   expect(searchBox).not.toBeNull()
   expect(filtersBox!.x + filtersBox!.width).toBeLessThanOrEqual(searchBox!.x)
   expect(Math.abs(filtersBox!.y + filtersBox!.height / 2 - (searchBox!.y + searchBox!.height / 2))).toBeLessThan(2)
-  await expect(page.locator('.dmo-target-cell b').first()).toHaveCSS('font-size', '12px')
-  await expect(page.locator('.dmo-target-cell small').first()).toHaveCSS('font-size', '10px')
+  await expect(page.locator('.dmo-target-cell b').first()).toHaveCSS('font-size', '13px')
+  await expect(page.locator('.dmo-target-cell small').first()).toHaveCSS('font-size', '11px')
   const cardBox = await page.locator('.dmo-card').boundingBox()
   expect(cardBox).not.toBeNull()
   expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(page.viewportSize()!.height + 1)
@@ -140,12 +163,12 @@ test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async
   await expect(dialog).toHaveCount(0)
 })
 
-test('数据映射按钮进入映射工作台，左上角按钮返回上一页', async ({ page }) => {
+test('查看字段级映射按钮进入映射工作台，左上角按钮返回上一页', async ({ page }) => {
   await mockMappingPreview(page)
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
   const mappingButton = page.locator('.dmo-primary-button')
-  await expect(mappingButton).toHaveText('数据映射')
+  await expect(mappingButton).toHaveText('查看字段级映射')
   await mappingButton.click()
 
   await expect(page).toHaveURL(/\/ontologies\/ontology-preview\/graph\?view=mapping$/)
@@ -181,21 +204,81 @@ test('数据映射按钮进入映射工作台，左上角按钮返回上一页',
   await expect(page).toHaveURL(/\/ontologies\/ontology-preview\/graph$/)
 })
 
-test('当前发布态可安全重放已批准数据，并明确反馈加载、失败与完整对账结果', async ({ page }) => {
+test('当前发布态可安全重放已批准数据：先确认，再明确反馈加载、失败与完整灌入结果', async ({ page }) => {
   const calls = await mockMappingPreview(page, { failFirstApply: true })
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
-  const reconcile = page.getByRole('button', { name: '立即对账' })
+  const reconcile = page.getByRole('button', { name: '立即灌入' })
   await expect(reconcile).toBeVisible()
-  await expect(page.getByText('只读取当前 Mapping 绑定的最新已批准版本')).toBeVisible()
+  await expect(page.getByText('只读取当前映射绑定的最新已批准版本')).toBeVisible()
 
+  // 取消支线：弹窗出现但不发请求
   await reconcile.click()
-  await expect(page.getByRole('button', { name: '正在对账…' })).toBeDisabled()
+  const confirmDialog = page.getByRole('dialog', { name: '确认重新灌入数据' })
+  await expect(confirmDialog).toBeVisible()
+  await expect(confirmDialog.getByText('重写「订单」的对象与关系实例')).toBeVisible()
+  await confirmDialog.getByRole('button', { name: '取消' }).click()
+  await expect(confirmDialog).toHaveCount(0)
+  expect(calls.applyAttempts()).toBe(0)
+
+  // 确认支线：第一次 409 失败反馈
+  await reconcile.click()
+  await confirmDialog.getByRole('button', { name: '确认灌入' }).click()
+  await expect(page.getByRole('button', { name: '正在灌入…' })).toBeDisabled()
   await expect(page.getByRole('alert')).toContainText('当前成品版本尚未批准，不能进入正式本体')
 
-  await page.getByRole('button', { name: '立即对账' }).click()
+  // 重试成功反馈
+  await page.getByRole('button', { name: '立即灌入' }).click()
+  await confirmDialog.getByRole('button', { name: '确认灌入' }).click()
   await expect(page.getByRole('status')).toContainText(
-    '对账完成：对象 2 条、关系 1 条；哨兵评估 2 次、触发 1 次。',
+    '灌入完成：对象实例 2 条、关系实例 1 条已更新；哨兵评估 2 次、触发 1 次。',
   )
   expect(calls.applyAttempts()).toBe(2)
+})
+
+test('审核异常数据集前置可见：徽标、禁用预览与灌入、横幅提示、已灌入版本', async ({ page }) => {
+  await mockMappingPreview(page, { datasetStatus: 'rejected', withInstances: true })
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  // 行全通但来源数据集被拒绝 → 横幅审核异常态
+  await expect(page.getByText('数据链路已连通，但 1 个来源数据集审核状态异常')).toBeVisible()
+  // 行内与侧栏均有「已拒绝」徽标
+  await expect(page.locator('.dmo-dataset-cell .dmo-review-badge')).toHaveText('已拒绝')
+  await expect(page.locator('.dmo-source-item .dmo-review-badge')).toHaveText('已拒绝')
+  // 已灌入版本新鲜度
+  await expect(page.locator('.dmo-source-item small')).toContainText('已灌入 v23')
+  // 预览前置禁用并给出原因
+  const preview = page.getByRole('button', { name: '预览数据源 订单宽表' })
+  await expect(preview).toBeDisabled()
+  await expect(preview).toHaveAttribute('title', '数据集已拒绝，仅保留审计，不可预览')
+  // 灌入前置禁用并给出原因，且不出现确认弹窗
+  const reconcile = page.getByRole('button', { name: '立即灌入' })
+  await expect(reconcile).toBeDisabled()
+  await expect(page.getByText('来源数据集已拒绝，不能灌入；请先完成数据审核。')).toBeVisible()
+})
+
+test('未配置元素：实例列占位、下一步卡指向图谱页创建草稿', async ({ page }) => {
+  await mockMappingPreview(page, { withUnmappedObject: true })
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  // 未配置行实例列显示占位符而非误导性的 0 条
+  await expect(page.locator('.dmo-instance-cell b.is-empty')).toHaveText('—')
+  // KPI 口径：只统计本本体的来源数据资产
+  await expect(page.locator('.dmo-kpis > div').nth(3)).toContainText('来源数据资产')
+  await expect(page.locator('.dmo-kpis > div').nth(3)).toContainText('成品 1 · 人工 0')
+
+  // 选中未配置行 → 下一步卡仅给草稿路径
+  await page.locator('.dmo-map-row', { hasText: '日志' }).click()
+  await expect(page.getByText('建立映射需在草稿版本中进行')).toBeVisible()
+  await page.getByRole('button', { name: '前往图谱页创建草稿' }).click()
+  await expect(page).toHaveURL(/\/ontologies\/ontology-preview\/graph$/)
+})
+
+test('侧栏齿轮携带元素上下文跳转字段级映射视图', async ({ page }) => {
+  await mockMappingPreview(page)
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  await page.getByRole('button', { name: '查看该元素字段映射' }).click()
+  await expect(page).toHaveURL(/\/ontologies\/ontology-preview\/graph\?view=mapping&focus=object(%3A|:)object-order$/)
+  await expect(page.getByTestId('mapping-workspace')).toBeVisible()
 })

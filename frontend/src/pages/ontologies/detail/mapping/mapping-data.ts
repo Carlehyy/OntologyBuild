@@ -3,6 +3,9 @@ import { useQuery } from '@tanstack/react-query'
 import { apiClientV2 } from '@/api/client'
 import type { CuratedDataset } from '@/api/v2/curated'
 import type { DatasetOverviewItem, DatasetSchemaColumn } from '@/api/v2/datasets'
+import type { DatasetVersionSummary } from './mapping-review'
+
+export * from './mapping-review'
 
 export interface MappingProperty {
   id: string
@@ -87,6 +90,8 @@ export interface MappingDataset {
   primaryKeyColumns: string[]
   source: 'curated' | 'manual'
   sourceLabel: string
+  /** curated 数据集的审核状态（approved/pending_review/rejected）；人工数据集无审核流，恒为 null。 */
+  reviewStatus: string | null
   columns: DatasetSchemaColumn[]
 }
 
@@ -259,14 +264,10 @@ export function useMappingData(
     ),
   })
 
-  const datasetBase = useMemo<Omit<MappingDataset, 'columns'>[]>(() => {
-    // A curated dataset may have an approved production version while its latest
-    // version is awaiting review. Keep already-mapped logical datasets visible in
-    // that state so the versioned mapping and its review subscription do not
-    // disappear exactly when a reviewer needs to understand the downstream path.
-    const referencedDatasetIds = new Set<string>()
+  const referencedDatasetIds = useMemo(() => {
+    const ids = new Set<string>()
     for (const mapping of mappings) {
-      if (mapping.curated_dataset_id) referencedDatasetIds.add(mapping.curated_dataset_id)
+      if (mapping.curated_dataset_id) ids.add(mapping.curated_dataset_id)
     }
     for (const mapping of linkMappings) {
       for (const datasetId of [
@@ -274,9 +275,17 @@ export function useMappingData(
         mapping.tgt_dataset_id,
         mapping.edge_dataset_id,
       ]) {
-        if (datasetId) referencedDatasetIds.add(datasetId)
+        if (datasetId) ids.add(datasetId)
       }
     }
+    return ids
+  }, [linkMappings, mappings])
+
+  const datasetBase = useMemo<Omit<MappingDataset, 'columns'>[]>(() => {
+    // A curated dataset may have an approved production version while its latest
+    // version is awaiting review. Keep already-mapped logical datasets visible in
+    // that state so the versioned mapping and its review subscription do not
+    // disappear exactly when a reviewer needs to understand the downstream path.
     const approved = (curatedQuery.data || [])
       .filter(item => item.status === 'approved' || referencedDatasetIds.has(item.id))
       .map(item => ({
@@ -287,6 +296,7 @@ export function useMappingData(
         primaryKeyColumns: primaryKeyColumns(item.primary_key),
         source: 'curated' as const,
         sourceLabel: '成品数据集',
+        reviewStatus: item.status,
       }))
     const manual = (manualQuery.data?.items || [])
       .filter(item => item.source === 'upload' || item.source === 'manual')
@@ -298,6 +308,7 @@ export function useMappingData(
         primaryKeyColumns: primaryKeyColumns(item.primary_key),
         source: 'manual' as const,
         sourceLabel: '人工数据集',
+        reviewStatus: null,
       }))
     const unique = new Map<string, Omit<MappingDataset, 'columns'>>()
     for (const item of [...approved, ...manual]) unique.set(item.id, item)
@@ -325,6 +336,28 @@ export function useMappingData(
     columns: schemasQuery.data?.[item.id] || [],
   })), [datasetBase, schemasQuery.data])
 
+  // 已灌入版本新鲜度：仅对被映射引用的数据集拉版本列表；失败静默降级（不展示、不阻塞）。
+  const referencedIdsKey = useMemo(() => [...referencedDatasetIds].sort(), [referencedDatasetIds])
+  const versionsQuery = useQuery<Record<string, DatasetVersionSummary[]>>({
+    queryKey: ['mapping-dataset-versions', referencedIdsKey.join(',')],
+    enabled: enabled && referencedIdsKey.length > 0,
+    queryFn: async () => {
+      const pairs = await Promise.all(referencedIdsKey.map(async datasetId => {
+        try {
+          const result = await apiClientV2.get<DatasetVersionSummary[]>(`/datasets/${datasetId}/versions`)
+          return [datasetId, Array.isArray(result) ? result : []] as const
+        } catch {
+          return [datasetId, []] as const
+        }
+      }))
+      return Object.fromEntries(pairs)
+    },
+  })
+  const datasetVersionLists = useMemo(
+    () => versionsQuery.data || {},
+    [versionsQuery.data],
+  )
+
   const requiredQueries: Array<{
     isLoading: boolean
     isError: boolean
@@ -340,6 +373,7 @@ export function useMappingData(
     objectInstances: instancesQuery.data || [],
     linkInstances: linkInstancesQuery.data || [],
     datasets,
+    datasetVersionLists,
     workspaceRevision: workspaceQuery.data?.revision || null,
     workspaceEditable: workspaceQuery.data?.editable ?? null,
     workspaceMode: workspaceQuery.data?.workspaceMode || null,

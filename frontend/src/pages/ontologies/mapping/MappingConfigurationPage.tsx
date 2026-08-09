@@ -159,6 +159,8 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
   const { id: ontologyId = '' } = useParams<{ id: string }>()
   const [searchParams] = useSearchParams()
   const versionId = searchParams.get('versionId')
+  // 从总览页「查看字段映射」跳入时聚焦的目标节点（object:<id> / relation:<id>）。
+  const focusParam = searchParams.get('focus')
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const data = useMappingData(ontologyId, false, versionId, true)
@@ -380,6 +382,8 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
     setCuratedAutoApplyDatasetIds(consistentlyEnabled(curatedAutomationPolicies))
     setManualAutoApplyDatasetIds(consistentlyEnabled(manualAutomationPolicies))
     setNodes(nextNodes); setEdges(nextEdges)
+    // 未配置的元素不在画布上（无对应节点），focus 静默忽略，右侧清单仍可检索到它。
+    if (focusParam && nextNodes.some(node => node.id === focusParam)) setFocusedNodeId(focusParam)
     if (data.workspaceEditable === true && primaryKeyMigrationCount > 0) {
       setDirty(true)
       setNotice({
@@ -387,7 +391,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
         text: `检测到 ${primaryKeyMigrationCount} 个历史对象映射可补齐稳定身份列，请保存一次完成兼容升级。`,
       })
     }
-  }, [data, datasetById, objectById, ontologyId, setEdges, setNodes, toggleDatasetPreview])
+  }, [data, datasetById, focusParam, objectById, ontologyId, setEdges, setNodes, toggleDatasetPreview])
 
   useEffect(() => {
     if (!editable || !dirty) return
