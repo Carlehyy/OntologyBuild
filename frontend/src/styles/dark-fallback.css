@@ -1,0 +1,242 @@
+/* ═══════════════════════════════════════════════
+   深色模式兜底覆盖层（过渡性）
+   ───────────────────────────────────────────────
+   平台约 120 个文件、4800+ 处仍使用硬编码的中性色工具类
+   （bg-white / text-slate-700 / border-slate-200 等），它们不读取
+   CSS 变量，无法随 .dark 自动翻转。本层在深色模式下把这些类按
+   “亮度反转”原则映射到 tokens.css 的深色阶梯，让未迁移页面先达到
+   可用的深色状态。
+
+   规则基于 frontend/src 的真实类名统计生成，仅覆盖 gray/slate/white/
+   black 中性色（zinc/neutral/stone 未在代码库使用）。
+
+   注意：
+   - text-white、bg-black、bg-slate-800/900 等“深色友好”类保持原样；
+   - 彩色系（teal/rose/amber 等浅底徽章）不在本层处理；
+   - 某页面逐页迁移到语义 token（bg-card、text-foreground 等）后，
+     该页面命中的规则即失效冗余，可逐条删除，本层最终整体移除。
+   ═══════════════════════════════════════════════ */
+
+/* ── 不透明表面 ── */
+.dark .bg-white {
+  background-color: var(--card);
+}
+.dark .bg-slate-50,
+.dark .bg-gray-50 {
+  background-color: #121820;
+}
+.dark .bg-slate-100,
+.dark .bg-gray-100 {
+  background-color: var(--muted);
+}
+.dark .bg-slate-200,
+.dark .bg-gray-200 {
+  background-color: #28303d;
+}
+.dark .bg-slate-300,
+.dark .bg-gray-300 {
+  background-color: #333e4d;
+}
+.dark .bg-slate-400,
+.dark .bg-slate-500,
+.dark .bg-gray-500 {
+  background-color: #475060;
+}
+
+/* ── 半透明浅表面（保持原透明度，换成深色基底） ── */
+.dark .bg-white\/95 { background-color: rgb(22 28 38 / 0.95); }
+.dark .bg-white\/90 { background-color: rgb(22 28 38 / 0.9); }
+.dark .bg-white\/88 { background-color: rgb(22 28 38 / 0.88); }
+.dark .bg-white\/80 { background-color: rgb(22 28 38 / 0.8); }
+.dark .bg-white\/70 { background-color: rgb(22 28 38 / 0.7); }
+.dark .bg-white\/60 { background-color: rgb(22 28 38 / 0.6); }
+.dark .bg-white\/50 { background-color: rgb(22 28 38 / 0.5); }
+
+.dark .bg-slate-50\/95 { background-color: rgb(18 24 32 / 0.95); }
+.dark .bg-slate-50\/80 { background-color: rgb(18 24 32 / 0.8); }
+.dark .bg-slate-50\/70 { background-color: rgb(18 24 32 / 0.7); }
+.dark .bg-slate-50\/60 { background-color: rgb(18 24 32 / 0.6); }
+.dark .bg-slate-50\/50 { background-color: rgb(18 24 32 / 0.5); }
+.dark .bg-slate-50\/30 { background-color: rgb(18 24 32 / 0.3); }
+
+/* ── 文字（100/200 与 text-white 保持原样，它们本就用于深底上） ── */
+.dark .text-black,
+.dark .text-slate-950,
+.dark .text-slate-900,
+.dark .text-slate-800,
+.dark .text-gray-900,
+.dark .text-gray-800 {
+  color: var(--foreground);
+}
+.dark .text-slate-700,
+.dark .text-gray-700 {
+  color: #d0d6df;
+}
+.dark .text-slate-600,
+.dark .text-slate-500,
+.dark .text-gray-600,
+.dark .text-gray-500 {
+  color: var(--muted-foreground);
+}
+.dark .text-slate-400,
+.dark .text-gray-400 {
+  color: #8b95a5;
+}
+.dark .text-slate-300,
+.dark .text-gray-300 {
+  color: var(--color-text-tertiary);
+}
+
+/* ── 边框 / 分隔线 / 描边环 ── */
+.dark .border-slate-50,
+.dark .border-slate-100,
+.dark .border-slate-200,
+.dark .border-gray-100,
+.dark .border-gray-200 {
+  border-color: var(--border);
+}
+/* divide-* 作用于子元素选择器，需按同样结构覆盖 */
+.dark .divide-slate-50 > :not([hidden]) ~ :not([hidden]),
+.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--border);
+}
+/* ring-* 颜色通过 --tw-ring-color 驱动 */
+.dark .ring-slate-100,
+.dark .ring-slate-200 {
+  --tw-ring-color: var(--border);
+}
+.dark .border-slate-300,
+.dark .border-gray-300,
+.dark .border-gray-900,
+.dark .border-black {
+  border-color: var(--color-border-hover);
+}
+.dark .border-white\/80,
+.dark .border-white\/70 {
+  border-color: rgb(255 255 255 / 0.12);
+}
+
+/* ── hover / focus / disabled / 结构伪类变体 ── */
+.dark .hover\:bg-white:hover,
+.dark .group:hover .group-hover\:bg-white {
+  background-color: var(--muted);
+}
+.dark .hover\:bg-slate-50:hover,
+.dark .hover\:bg-gray-50:hover,
+.dark .focus-visible\:bg-slate-50:focus-visible,
+.dark .group:hover .group-hover\:bg-slate-50 {
+  background-color: var(--muted);
+}
+.dark .hover\:bg-slate-100:hover,
+.dark .hover\:bg-gray-100:hover {
+  background-color: var(--accent);
+}
+.dark .hover\:bg-slate-200:hover {
+  background-color: var(--color-bg-active);
+}
+.dark .hover\:bg-slate-50\/80:hover,
+.dark .hover\:bg-slate-50\/70:hover,
+.dark .hover\:bg-slate-50\/60:hover {
+  background-color: var(--muted);
+}
+.dark .focus\:bg-white:focus,
+.dark .focus-visible\:bg-white:focus-visible,
+.dark .focus-within\:bg-white:focus-within {
+  background-color: var(--card);
+}
+.dark .odd\:bg-white:nth-child(odd) {
+  background-color: #121820;
+}
+.dark .even\:bg-slate-50\/45:nth-child(even) {
+  background-color: rgb(18 24 32 / 0.45);
+}
+.dark .disabled\:bg-slate-50:disabled {
+  background-color: #121820;
+}
+.dark .disabled\:bg-slate-100:disabled {
+  background-color: var(--muted);
+}
+.dark .disabled\:text-slate-400:disabled {
+  color: var(--color-text-disabled);
+}
+
+.dark .hover\:text-black:hover,
+.dark .hover\:text-slate-900:hover,
+.dark .hover\:text-slate-800:hover,
+.dark .hover\:text-gray-800:hover,
+.dark .hover\:text-slate-700:hover,
+.dark .hover\:text-gray-700:hover {
+  color: var(--foreground);
+}
+.dark .hover\:text-slate-600:hover,
+.dark .hover\:text-gray-600:hover {
+  color: #d0d6df;
+}
+
+.dark .hover\:border-slate-200:hover,
+.dark .hover\:border-slate-300:hover,
+.dark .hover\:border-gray-300:hover {
+  border-color: var(--color-border-hover);
+}
+.dark .focus-visible\:ring-slate-400:focus-visible {
+  --tw-ring-color: var(--color-ring);
+}
+
+/* ── 表单控件：无背景类的带框输入框（Tailwind preflight 不重置文本框背景，
+     UA 默认浅色底会在深色下显白；color-scheme: dark 之外的调色板对齐） ── */
+.dark input.border-slate-200,
+.dark input.border-slate-300,
+.dark input.border-gray-200,
+.dark input.border-gray-300,
+.dark select.border-slate-200,
+.dark select.border-slate-300,
+.dark select.border-gray-200,
+.dark select.border-gray-300,
+.dark textarea.border-slate-200,
+.dark textarea.border-slate-300,
+.dark textarea.border-gray-200,
+.dark textarea.border-gray-300 {
+  background-color: var(--card);
+}
+.dark .placeholder\:text-slate-400::placeholder,
+.dark .placeholder\:text-slate-300::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+/* ── 渐变端点（tailwinds v3 通过自定义属性驱动渐变） ── */
+.dark .from-white {
+  --tw-gradient-from: #161c26 var(--tw-gradient-from-position);
+  --tw-gradient-to: rgb(22 28 38 / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+}
+.dark .from-slate-50 {
+  --tw-gradient-from: #121820 var(--tw-gradient-from-position);
+  --tw-gradient-to: rgb(18 24 32 / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+}
+.dark .from-slate-50\/80 {
+  --tw-gradient-from: rgb(18 24 32 / 0.8) var(--tw-gradient-from-position);
+  --tw-gradient-to: rgb(18 24 32 / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+}
+.dark .via-white {
+  --tw-gradient-to: rgb(22 28 38 / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), #161c26 var(--tw-gradient-via-position), var(--tw-gradient-to);
+}
+.dark .via-white\/80 {
+  --tw-gradient-to: rgb(22 28 38 / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), rgb(22 28 38 / 0.8) var(--tw-gradient-via-position), var(--tw-gradient-to);
+}
+.dark .via-white\/75 {
+  --tw-gradient-to: rgb(22 28 38 / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), rgb(22 28 38 / 0.75) var(--tw-gradient-via-position), var(--tw-gradient-to);
+}
+.dark .to-white {
+  --tw-gradient-to: #161c26 var(--tw-gradient-to-position);
+}
+.dark .to-slate-50\/70 {
+  --tw-gradient-to: rgb(18 24 32 / 0.7) var(--tw-gradient-to-position);
+}
+.dark .to-slate-50\/50 {
+  --tw-gradient-to: rgb(18 24 32 / 0.5) var(--tw-gradient-to-position);
+}
