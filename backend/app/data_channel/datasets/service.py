@@ -46,6 +46,21 @@ def version_has_content(version: DatasetVersion | None) -> bool:
     ))
 
 
+def detach_run_version_lineage(db, version_ids: list[str]) -> int:
+    """删除版本前摘除运行记录的血缘指针（v2_pipeline_runs.dataset_version_id）。
+
+    该列只写不读（执行记录展示走 stats.meta.outputs 内的版本 id），运行记录
+    本身保留。不摘除会让版本删除撞上 FK（NO ACTION）：成品删除 500，keep
+    清理也会在 best-effort 兜底下静默失效。
+    """
+    if not version_ids:
+        return 0
+    from app.models.v2.pipeline import PipelineRun
+    return db.query(PipelineRun).filter(
+        PipelineRun.dataset_version_id.in_(version_ids)
+    ).update({PipelineRun.dataset_version_id: None}, synchronize_session=False)
+
+
 class TabularParseError(ValueError):
     """上传的表格无法可靠解析。
 
@@ -790,6 +805,13 @@ class DatasetService:
         # 证据快照已丢”的不可恢复状态，因此被任何审核引用的版本永久排除清理。
         reviewed_ver_ids = {row[0] for row in self._db.query(CuratedReview.dataset_version_id).filter(
             CuratedReview.dataset_version_id.in_([v.id for v in candidates])).all()}
+
+        # 先摘除运行记录对拟删版本的血缘指针，否则 FK（NO ACTION）让清理失败
+        deletable_ids = [
+            v.id for v in candidates
+            if v.id not in media_ver_ids and v.id not in reviewed_ver_ids
+        ]
+        detach_run_version_lineage(self._db, deletable_ids)
 
         removed = 0
         for v in candidates:

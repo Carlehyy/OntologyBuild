@@ -85,6 +85,9 @@ def delete_curated(
         )
     ]
     if version_ids:
+        # 摘除运行记录对版本的血缘指针，否则版本删除撞 FK（NO ACTION）
+        from app.data_channel.datasets.service import detach_run_version_lineage
+        detach_run_version_lineage(db, version_ids)
         (
             db.query(MediaItem)
             .filter(MediaItem.dataset_version_id.in_(version_ids))

@@ -384,6 +384,19 @@ def delete_pipeline(
             f"流水线已被 {len(references)} 个调度任务引用"
             f"（{names}{suffix}），请先在数据任务池删除或改绑这些任务。",
         )
+    # 该流水线生产过的成品数据集通过 producer_pipeline_id RESTRICT 引用它；
+    # 直接删除会在 FK 层 500。显式 409 并点名资产，引导先删成品数据集。
+    from app.models.v2.dataset import Dataset as _ProducedDataset
+    produced = db.query(_ProducedDataset).filter(
+        _ProducedDataset.producer_pipeline_id == pipeline_id).all()
+    if produced:
+        names = "、".join(d.name for d in produced[:3])
+        suffix = "…" if len(produced) > 3 else ""
+        raise HTTPException(
+            409,
+            f"该流水线是 {len(produced)} 个成品数据集（{names}{suffix}）的生产者，"
+            "请先在资产湖删除对应成品数据集，再删除流水线。",
+        )
     reject_sync_chain_refs_fn(db, pipeline_id, action="删除")
     db.query(PipelineRun).filter(
         PipelineRun.pipeline_id == pipeline_id
