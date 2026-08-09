@@ -840,10 +840,6 @@ test('complete branch → real-data trial → reviewed release works in the brow
   const runtimeBox = await page.locator('.runtime-summary').boundingBox()
   const factBox = await page.locator('.fact-composition').boundingBox()
   const recentFactBox = await page.locator('.recent-facts').boundingBox()
-  const overviewShellSize = await page.locator('.ontology-overview-shell').evaluate(element => ({
-    clientHeight: element.clientHeight,
-    scrollHeight: element.scrollHeight,
-  }))
   expect(profileBox).not.toBeNull()
   expect(kpiBox).not.toBeNull()
   expect(runtimeBox).not.toBeNull()
@@ -855,10 +851,10 @@ test('complete branch → real-data trial → reviewed release works in the brow
   expect(runtimeBox!.x).toBeGreaterThan(profileBox!.x + profileBox!.width)
   expect(Math.abs(factBox!.y - recentFactBox!.y)).toBeLessThan(2)
   expect(kpiBox!.height).toBeLessThan(300)
-  expect(factBox!.height).toBeLessThan(270)
-  if ((page.viewportSize()?.width || 0) > 1470) {
-    expect(overviewShellSize.scrollHeight - overviewShellSize.clientHeight).toBeLessThan(3)
-  }
+  // 总览允许纵向滚动展示完整内容（底部事实区给足自然高度），
+  // 但外壳必须始终可滚动，绝不允许回到 overflow:hidden 裁切内容。
+  expect(factBox!.height).toBeLessThan(360)
+  await expect(page.locator('.ontology-overview-shell')).toHaveCSS('overflow-y', 'auto')
   const runtimeSummary = page.locator('.runtime-summary')
   const runtimeStart = runtimeSummary.getByLabel('运行汇总开始日期')
   const runtimeEnd = runtimeSummary.getByLabel('运行汇总结束日期')
