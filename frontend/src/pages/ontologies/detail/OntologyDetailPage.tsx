@@ -270,7 +270,7 @@ export default function OntologyDetailPage() {
           <DataMappingOverview ontologyId={id!} />
         </div>
       ) : activeGroup === 'data' ? (
-        <div data-testid="ontology-detail-content" className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-hidden">
+        <div data-testid="ontology-detail-content" className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-auto">
           <FormalInstancesView ontologyId={id!} onOpenVersions={() => setShowVersionModal(true)} />
         </div>
       ) : (
