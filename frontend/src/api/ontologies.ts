@@ -72,12 +72,6 @@ export const ontologyApi = {
     a.remove()
     window.setTimeout(() => URL.revokeObjectURL(url), 0)
   },
-
-  // Audit
-  startAudit: (oid: string, body: { model_id: string; model_name: string }) =>
-    apiClient.post<{ task_id: string }>(`/ontologies/${oid}/audit`, body),
-  getAuditStatus: (oid: string, task_id: string) =>
-    apiClient.get(`/ontologies/${oid}/audit/status?task_id=${task_id}`),
 }
 
 export const modelApi = {

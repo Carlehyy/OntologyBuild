@@ -49,7 +49,6 @@ app/services/storage_service.py
 
 ```text
 app/routers/v2/graph.py
-app/services/audit_service.py
 app/services/llm_service.py
 app/services/sentinel/__init__.py
 app/services/connection/sql_connector.py

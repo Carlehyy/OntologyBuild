@@ -20,7 +20,7 @@ from app.config import settings
 from app.bootstrap import health as bootstrap_health
 from app.bootstrap.lifecycle import application_lifespan
 from app.bootstrap.seeding import seed_database
-from app.routers import auth, users, ontologies, entities, logic, actions, graph, settings as settings_router, export, audit, domains
+from app.routers import auth, users, ontologies, entities, logic, actions, graph, settings as settings_router, export, domains
 from app.model_configs.router import router as model_configs_router
 from app.platform.router import router as overview_router
 from app.routers import formal as formal_router
@@ -192,7 +192,6 @@ app.include_router(logic.router, prefix="/api/v1/ontologies/{ontology_id}/logic"
 app.include_router(actions.router, prefix="/api/v1/ontologies/{ontology_id}/actions", tags=["actions"], dependencies=legacy_ontology_guard)
 app.include_router(graph.router, prefix="/api/v1/ontologies/{ontology_id}/graph", tags=["graph"], dependencies=ontology_guard)
 app.include_router(export.router, prefix="/api/v1/ontologies/{ontology_id}/export", tags=["export"], dependencies=ontology_guard)
-app.include_router(audit.router, prefix="/api/v1/ontologies/{ontology_id}/audit", tags=["audit"], dependencies=ontology_guard)
 app.include_router(domains.router, prefix="/api/v1/domains", tags=["domains"])
 app.include_router(model_configs_router, prefix="/api/v1/models", tags=["models"], dependencies=models_guard)
 app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["settings"], dependencies=admin_guard)

@@ -30,7 +30,6 @@ MODEL_MODULES = (
     "app.ontologies.agent_runtime.models",
     "app.ontologies.decision_simulation.models",
     "app.ontologies.attribute_schemas.models",
-    "app.ontologies.audit.models",
     "app.ontologies.entities.models",
     "app.ontologies.formal_modeling.models",
     "app.ontologies.inference.models",

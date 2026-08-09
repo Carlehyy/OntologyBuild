@@ -5,7 +5,6 @@ from app.models.entity import Entity
 from app.models.logic import LogicRule
 from app.models.action import Action
 from app.models.relation import Relation
-from app.models.audit_task import AuditTask
 from app.models.agent_config import AgentConfig
 from app.models.domain import Domain
 
@@ -17,7 +16,6 @@ __all__ = [
     "LogicRule",
     "Action",
     "Relation",
-    "AuditTask",
     "AgentConfig",
     "Domain",
 ]

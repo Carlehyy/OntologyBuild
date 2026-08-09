@@ -2946,11 +2946,9 @@ def test_celery_delayed_tasks_and_compose_workers_use_the_same_app():
         name for name in celery_app.tasks
         if name.startswith("app.tasks.")
     }
+    # Celery 退役第一阶段后的真实任务集：dataset_import 两任务与 UI 手动
+    # 运行已迁至 NATS executor，audit 功能与 extraction 退休兼容任务已删除。
     assert registered_application_tasks == {
-        "app.tasks.audit.run_audit",
-        "app.tasks.extraction.run_extraction",
-        "app.tasks.v2.dataset_import.commit_dataset_import",
-        "app.tasks.v2.dataset_import.inspect_dataset_import",
         "app.tasks.v2.connection_sync.sync_connection",
         "app.tasks.v2.mapping_apply.mapping_apply_task",
         "app.tasks.v2.pipeline_run.pipeline_run_task",
@@ -2962,13 +2960,3 @@ def test_celery_delayed_tasks_and_compose_workers_use_the_same_app():
         assert compose["services"]["celery_worker"]["command"] == (
             "celery -A app.tasks.celery_app:celery_app worker --loglevel=info"
         )
-
-
-def test_retired_extraction_task_acknowledges_old_queued_messages():
-    from app.tasks.extraction import run_extraction
-
-    assert run_extraction.run("legacy-task-id") == {
-        "status": "retired",
-        "task_id": "legacy-task-id",
-        "message": "Ontology document extraction has been retired",
-    }

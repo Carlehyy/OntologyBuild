@@ -8,12 +8,12 @@ celery_app = Celery("ontoprompt",
                     # worker process.  Importing a task only in the API process
                     # registers its name on the producer, but leaves the worker
                     # unable to consume it ("Received unregistered task").
+                    # dataset_import 与 UI 手动运行已迁至 NATS executor
+                    # （app.data_channel.pipeline_tasks.nats_executor），不在
+                    # 此注册；其余任务在 Celery 退役第二阶段处理。
                     include=[
-                        "app.tasks.extraction",
-                        "app.tasks.audit",
                         "app.tasks.v2.pipeline_run",
                         "app.tasks.v2.mapping_apply",
-                        "app.tasks.v2.dataset_import",
                         "app.tasks.v2.connection_sync",
                     ])
 

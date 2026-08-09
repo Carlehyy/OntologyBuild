@@ -22,7 +22,7 @@ def seed_database() -> None:
     db = SessionLocal()
     try:
         # Import all models to ensure tables are created
-        from app.models import user, ontology, model_config, entity, logic as logic_model, action, relation, audit_task, domain  # noqa: F401
+        from app.models import user, ontology, model_config, entity, logic as logic_model, action, relation, domain  # noqa: F401
         from app.models.v2 import dataset as v2_dataset, pipeline as v2_pipeline, connection as v2_connection  # noqa: F401
         from app.models.v2.logic import OntologyLogicRule, OntologyStateMachine  # noqa: F401
         from app.models.v2.action import OntologyActionType, OntologyActionRun  # noqa: F401
