@@ -408,7 +408,7 @@ export default function FormalInstancesView({
   }
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto bg-white">
+    <div className="min-h-full bg-white">
       <div className="mx-auto flex min-h-full max-w-[1600px] flex-col gap-5 p-5">
         {/* ① 数据概览：KPI + 类型分布/来源构成/近7天活动（复用已加载数据） */}
         {catalog && (
@@ -421,18 +421,7 @@ export default function FormalInstancesView({
           />
         )}
 
-        {/* ② 类型数据画像：随浏览器选中类型切换 */}
-        {selection && selectedType && (
-          <InstanceTypeProfileSection
-            ontologyId={ontologyId}
-            selection={selection}
-            typeNode={selectedType}
-            activeFilters={filters}
-            onFilterProp={toggleFilterValue}
-          />
-        )}
-
-        {/* ③ 实例浏览器：目录 + 表格（既有结构完整保留） */}
+        {/* ② 实例浏览器：实体模型目录 + 实例表格（先选类型，再看数据） */}
         <div
           ref={browserRef}
           className="grid h-[min(76vh,780px)] min-h-[520px] shrink-0 grid-cols-1 overflow-hidden rounded-xl border border-slate-200 md:grid-cols-[minmax(230px,280px)_minmax(0,1fr)]"
@@ -788,6 +777,17 @@ export default function FormalInstancesView({
         </footer>
       </section>
         </div>
+
+        {/* ③ 类型数据画像：跟随浏览器选中类型，点击字段分布条可精确过滤上方表格 */}
+        {selection && selectedType && (
+          <InstanceTypeProfileSection
+            ontologyId={ontologyId}
+            selection={selection}
+            typeNode={selectedType}
+            activeFilters={filters}
+            onFilterProp={toggleFilterValue}
+          />
+        )}
       </div>
       <ConfirmModal
         open={showAdoptConfirm}
