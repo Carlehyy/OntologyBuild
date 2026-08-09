@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 import time
 from datetime import datetime
 
@@ -83,6 +84,29 @@ async def _dispatch(
         await nc.drain()
 
 
+# 模块级专用事件循环线程：FastAPI 的 async def 端点在事件循环上运行，
+# asyncio.run() 在其中会直接报「cannot be called from a running event
+# loop」（同步 def 端点跑线程池则没事）——数据集导入曾因此全线 503。
+# 独立循环线程对两种调用上下文都安全。
+_dispatch_loop: asyncio.AbstractEventLoop | None = None
+_dispatch_loop_lock = threading.Lock()
+
+
+def _get_dispatch_loop() -> asyncio.AbstractEventLoop:
+    global _dispatch_loop
+    with _dispatch_loop_lock:
+        if _dispatch_loop is None or _dispatch_loop.is_closed():
+            loop = asyncio.new_event_loop()
+            thread = threading.Thread(
+                target=loop.run_forever,
+                name="nats-dispatch-loop",
+                daemon=True,
+            )
+            thread.start()
+            _dispatch_loop = loop
+        return _dispatch_loop
+
+
 def _dispatch_sync(subject: str, payload: dict, msg_id: str) -> None:
     from app.config import settings
 
@@ -92,7 +116,11 @@ def _dispatch_sync(subject: str, payload: dict, msg_id: str) -> None:
             "后台任务派发失败：未配置 NATS_URL（JetStream 消息通道），"
             "请在环境配置中显式设置后重试"
         )
-    asyncio.run(_dispatch(subject, payload, nats_url, msg_id))
+    future = asyncio.run_coroutine_threadsafe(
+        _dispatch(subject, payload, nats_url, msg_id),
+        _get_dispatch_loop(),
+    )
+    future.result(timeout=15)
 
 
 def dispatch_task(subject: str, payload: dict) -> None:

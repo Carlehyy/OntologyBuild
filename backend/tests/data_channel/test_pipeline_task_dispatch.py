@@ -427,3 +427,17 @@ def test_reconcile_job_runner_opens_session_and_swallows_errors(monkeypatch):
     )
     # 对账器异常不能炸掉调度线程
     scheduler_module._pipeline_reconcile_job_runner()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_works_inside_running_event_loop(fake_nats):
+    """回归：async def 端点（如数据集导入）在事件循环上运行，asyncio.run
+    会直接炸——派发必须经专用循环线程，任意调用上下文都安全。"""
+    dispatch_task(
+        DATASET_IMPORT_SUBJECT,
+        {"job_id": "job-async-ctx", "kind": "inspect"},
+    )
+    (subject, payload, headers), = fake_nats["published"]
+    assert subject == "task.dataset.import"
+    assert json.loads(payload.decode())["job_id"] == "job-async-ctx"
+    assert headers["Nats-Msg-Id"]
