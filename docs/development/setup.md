@@ -36,7 +36,7 @@ Redis、NATS、Neo4j、MinIO 和 n8n 探针；Chromium CDP 地址同样必须配
 # dev_server 先执行 alembic upgrade head；迁移失败时 API 不会启动
 uv run --directory backend python -m app.dev_server
 uv run --directory backend celery -A app.tasks.celery_app:celery_app worker --loglevel=info
-# 流水线 executor：消费 NATS 派发的流水线调度/手动异步触发任务
+# 流水线 executor：消费 NATS 派发的流水线调度/手动触发、UI 手动运行与数据集导入任务
 uv run --directory backend python -m app.data_channel.pipeline_tasks.nats_executor
 npm --prefix frontend ci
 npm --prefix frontend run dev
@@ -55,7 +55,8 @@ uv run --directory backend jupyter kernelgateway --KernelGatewayApp.port=8088
 本地起栈（docker-compose.local.yml）时该网关由 `python_kernel_gateway` 服务
 自动提供，无需手工启动。
 
-流水线定时触发与手动异步触发经 NATS JetStream 派发给独立 executor 进程
+流水线定时触发与手动异步触发、UI 手动运行整条流水线、数据集导入的解析与
+提交，都经 NATS JetStream 派发给独立 executor 进程
 执行，不再占用 API 进程；手动 `sync=true` 仍在 API 进程内同步执行。
 executor 被打断的执行由数据库租约兜底：租约最长 6 小时过期，API 进程内
 的对账器（默认每 5 分钟）把过期中断的任务/运行记录收口为 failed。

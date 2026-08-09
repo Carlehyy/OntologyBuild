@@ -285,23 +285,18 @@ def test_async_import_stages_file_and_normalizes_source_headers_to_field_keys(
 
     from app import database as database_module
     from app.config import settings
+    from app.data_channel.pipeline_tasks import dispatch as dispatch_module
     from app.tasks.v2 import dataset_import as import_tasks
 
     monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
-    inspection_jobs = []
+    dispatched = []
     monkeypatch.setattr(
-        import_tasks.inspect_dataset_import,
-        "delay",
-        lambda job_id: inspection_jobs.append(job_id),
+        dispatch_module,
+        "dispatch_task",
+        lambda subject, payload: dispatched.append((subject, payload)),
     )
     task_session = sessionmaker(bind=db.get_bind())
     monkeypatch.setattr(database_module, "SessionLocal", task_session)
-    commit_jobs = []
-    monkeypatch.setattr(
-        import_tasks.commit_dataset_import,
-        "delay",
-        lambda job_id: commit_jobs.append(job_id),
-    )
 
     workbook = openpyxl.Workbook()
     first = workbook.active
@@ -328,8 +323,10 @@ def test_async_import_stages_file_and_normalizes_source_headers_to_field_keys(
     assert started.status_code == 202, started.text
     job = started.json()["data"]
     assert job["status"] == "queued"
-    assert inspection_jobs == [job["job_id"]]
-    import_tasks.inspect_dataset_import.run(job["job_id"])
+    assert dispatched == [
+        ("task.dataset.import", {"job_id": job["job_id"], "kind": "inspect"}),
+    ]
+    import_tasks.inspect_dataset_import(job["job_id"])
 
     inspected = api.get(
         f"/api/v2/datasets/imports/{job['job_id']}",
@@ -373,8 +370,11 @@ def test_async_import_stages_file_and_normalizes_source_headers_to_field_keys(
     )
     assert committed.status_code == 202, committed.text
     assert committed.json()["data"]["status"] == "import_queued"
-    assert commit_jobs == [job["job_id"]]
-    import_tasks.commit_dataset_import.run(job["job_id"])
+    assert dispatched == [
+        ("task.dataset.import", {"job_id": job["job_id"], "kind": "inspect"}),
+        ("task.dataset.import", {"job_id": job["job_id"], "kind": "commit"}),
+    ]
+    import_tasks.commit_dataset_import(job["job_id"])
 
     completed = api.get(
         f"/api/v2/datasets/imports/{job['job_id']}",
@@ -639,20 +639,20 @@ def test_online_table_bindable_to_ontology_mapping(api, auth_headers, ontology):
     assert r.json()["mapping_id"]
 
 
-def test_async_import_always_dispatches_celery(
+def test_async_import_always_dispatches_nats_task(
     api, auth_headers, monkeypatch, tmp_path,
 ):
-    """Spreadsheet imports always use the registered Celery task."""
+    """Spreadsheet imports always dispatch through the NATS work queue."""
     from app.config import settings
-    from app.tasks.v2 import dataset_import as import_tasks
+    from app.data_channel.pipeline_tasks import dispatch as dispatch_module
 
     monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
     dispatched = []
 
     monkeypatch.setattr(
-        import_tasks.inspect_dataset_import,
-        "delay",
-        lambda job_id: dispatched.append(job_id),
+        dispatch_module,
+        "dispatch_task",
+        lambda subject, payload: dispatched.append((subject, payload)),
     )
 
     started = api.post(
@@ -667,8 +667,10 @@ def test_async_import_always_dispatches_celery(
     assert started.status_code == 202, started.text
     queued = started.json()["data"]
     assert queued["status"] == "queued"
-    assert queued["execution_mode"] == "celery"
-    assert dispatched == [queued["job_id"]]
+    assert queued["execution_mode"] == "nats"
+    assert dispatched == [
+        ("task.dataset.import", {"job_id": queued["job_id"], "kind": "inspect"}),
+    ]
 
     inspected = api.get(
         f"/api/v2/datasets/imports/{queued['job_id']}",
@@ -678,19 +680,19 @@ def test_async_import_always_dispatches_celery(
     assert inspected.json()["data"]["status"] == "queued"
 
 
-def test_async_import_fails_closed_when_broker_is_down(
+def test_async_import_fails_closed_when_task_channel_is_down(
     api, auth_headers, monkeypatch, tmp_path, caplog,
 ):
-    """Broker failure never starts an API-process background task."""
+    """Task-channel failure never starts an API-process background task."""
     from app.config import settings
-    from app.tasks.v2 import dataset_import as import_tasks
+    from app.data_channel.pipeline_tasks import dispatch as dispatch_module
 
     monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
 
-    def broker_down(*_args, **_kwargs):
-        raise RuntimeError("redis unavailable")
+    def channel_down(*_args, **_kwargs):
+        raise RuntimeError("nats unavailable")
 
-    monkeypatch.setattr(import_tasks.inspect_dataset_import, "delay", broker_down)
+    monkeypatch.setattr(dispatch_module, "dispatch_task", channel_down)
     caplog.set_level("ERROR", logger="app.data_channel.datasets.router")
 
     started = api.post(
@@ -704,10 +706,10 @@ def test_async_import_fails_closed_when_broker_is_down(
     )
     assert started.status_code == 503, started.text
     assert started.json()["detail"] == (
-        "Redis/Celery 后台任务服务不可用，数据集导入任务未投递")
+        "后台任务通道不可用，数据集导入任务未投递")
     assert "任务未执行" in caplog.text
     assert "已降级" not in caplog.text
-    assert "redis unavailable" not in caplog.text
+    assert "nats unavailable" not in caplog.text
 
 
 def _upload_stable_manual_contract(api, auth_headers):

@@ -32,7 +32,6 @@ from app.data_channel.pipelines.dependency_service import (
 from app.data_channel.pipelines.execution_service import (
     DRY_RUN_BUCKET as _DRY_RUN_BUCKET,
     dry_run_uri as _dry_run_uri,
-    ensure_broker_reachable as _ensure_broker_reachable,
     format_pipeline as _format_pipeline,
 )
 from app.data_channel.steward.models import N8nPipeline
@@ -330,7 +329,6 @@ def run_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
         pipeline_id,
         db,
         require_production_executable_fn=_require_production_executable,
-        broker_check_fn=_ensure_broker_reachable,
     )
 
 

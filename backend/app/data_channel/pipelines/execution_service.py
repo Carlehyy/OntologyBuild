@@ -1,12 +1,10 @@
 """Pipeline execution and serialization helpers independent of HTTP routing."""
 from __future__ import annotations
 
-import socket
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -23,16 +21,6 @@ def dry_run_uri(pipeline_id: str, dry_run_id: str) -> str:
     """Rebuild a staged-output URI without trusting a client-provided path."""
     uuid.UUID(dry_run_id)
     return f"s3://{DRY_RUN_BUCKET}/dry-runs/{pipeline_id}/{dry_run_id}.json"
-
-
-def ensure_broker_reachable(timeout: float = 2.0) -> None:
-    """Fail quickly when the Celery broker cannot accept a connection."""
-    parsed = urlparse(settings.redis_url)
-    sock = socket.create_connection(
-        (parsed.hostname or "localhost", parsed.port or 6379),
-        timeout=timeout,
-    )
-    sock.close()
 
 
 def format_pipeline(pipeline: Pipeline) -> dict:
@@ -67,9 +55,8 @@ def enqueue_pipeline_run(
     db: Session,
     *,
     require_production_executable_fn: Callable[[Pipeline], None],
-    broker_check_fn: Callable[[], None],
 ) -> dict:
-    """Create a run and enqueue the unchanged Celery task."""
+    """Create a run and dispatch it to the NATS pipeline executor."""
     pipeline = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pipeline:
         raise HTTPException(404, "Pipeline not found")
@@ -85,15 +72,20 @@ def enqueue_pipeline_run(
     db.refresh(run)
 
     try:
-        broker_check_fn()
-        from app.tasks.v2.pipeline_run import pipeline_run_task
+        from app.data_channel.pipeline_tasks.dispatch import (
+            PIPELINE_RUN_SUBJECT,
+            dispatch_task,
+        )
 
-        pipeline_run_task.delay(pipeline_id, run.id)
+        dispatch_task(
+            PIPELINE_RUN_SUBJECT,
+            {"pipeline_id": pipeline_id, "run_id": run.id},
+        )
     except Exception as exc:
-        # Celery/Redis 不可用时立即标记失败，避免 run 永远停在 pending。
+        # 后台任务通道不可用时立即标记失败，避免 run 永远停在 pending。
         # 运行失败只写 run，不动 pipeline.status（生命周期与运行态分离）
         run.status = "failed"
-        run.error_log = f"任务派发失败 (Celery/Redis 不可用?): {exc}"
+        run.error_log = f"任务派发失败（后台任务通道不可用）: {exc}"
         run.finished_at = datetime.now(timezone.utc)
         db.commit()
         return {

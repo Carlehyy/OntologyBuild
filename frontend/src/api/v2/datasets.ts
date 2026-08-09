@@ -118,7 +118,7 @@ export interface DatasetImportJob {
   /** 当前后台阶段的近似进度（0-100）；浏览器上传进度由 onProgress 单独上报 */
   progress?: number
   phase?: string
-  execution_mode?: 'celery' | 'local'
+  execution_mode?: 'celery' | 'local' | 'nats'
 }
 
 export interface UploadVersionResult {

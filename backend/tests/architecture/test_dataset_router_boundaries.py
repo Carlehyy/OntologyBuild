@@ -134,23 +134,15 @@ def test_dispatch_wrapper_resolves_router_logger_and_settings_at_call_time(
 ):
     from app.config import settings
 
-    task = object()
-    background_tasks = object()
     patched_logger = object()
     expected = {"execution_mode": "patched"}
     received = {}
 
     def fake_dispatch(
-        dispatched_task,
         job_id,
-        dispatched_background_tasks,
         **kwargs,
     ):
-        received["args"] = (
-            dispatched_task,
-            job_id,
-            dispatched_background_tasks,
-        )
+        received["args"] = (job_id,)
         received["kwargs"] = kwargs
         return expected
 
@@ -162,15 +154,15 @@ def test_dispatch_wrapper_resolves_router_logger_and_settings_at_call_time(
     )
 
     result = dataset_router._dispatch_dataset_import_task(
-        task,
         "job-1",
-        background_tasks,
+        kind="inspect",
         operation="解析",
     )
 
     assert result is expected
-    assert received["args"] == (task, "job-1", background_tasks)
+    assert received["args"] == ("job-1",)
     assert received["kwargs"] == {
+        "kind": "inspect",
         "operation": "解析",
         "settings_obj": settings,
         "logger_obj": patched_logger,
@@ -341,16 +333,27 @@ def test_dataset_services_keep_patchable_runtime_imports_local():
     )
     functions = _top_level_functions(tree)
 
-    for function_name in (
-        "start_dataset_import",
-        "commit_dataset_import_job",
-    ):
+    # 解析/提交两个阶段分别以固定 kind 派发，不再持有 Celery 任务对象
+    expected_kinds = {
+        "start_dataset_import": "inspect",
+        "commit_dataset_import_job": "commit",
+    }
+    for function_name, expected_kind in expected_kinds.items():
         imported_modules = {
             node.module
             for node in ast.walk(functions[function_name])
             if isinstance(node, ast.ImportFrom) and node.module
         }
-        assert "app.tasks.v2.dataset_import" in imported_modules
+        assert "app.tasks.v2.dataset_import" not in imported_modules
+        kinds = {
+            keyword.value.value
+            for node in ast.walk(functions[function_name])
+            if isinstance(node, ast.Call)
+            for keyword in node.keywords
+            if keyword.arg == "kind"
+            and isinstance(keyword.value, ast.Constant)
+        }
+        assert kinds == {expected_kind}
 
     dispatch_imports = {
         node.module
@@ -358,6 +361,8 @@ def test_dataset_services_keep_patchable_runtime_imports_local():
         if isinstance(node, ast.ImportFrom) and node.module
     }
     assert "app.data_channel.datasets.import_jobs" in dispatch_imports
+    # 导入任务经 NATS 工作队列派发，不再触达 Celery 任务对象
+    assert "app.data_channel.pipeline_tasks.dispatch" in dispatch_imports
     assert not any(
         isinstance(node, ast.Attribute) and node.attr == "add_task"
         for node in ast.walk(functions["dispatch_dataset_import_task"])

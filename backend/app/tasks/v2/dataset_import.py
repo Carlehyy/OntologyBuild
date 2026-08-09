@@ -1,7 +1,5 @@
-"""Celery tasks for asynchronous manual spreadsheet imports."""
+"""数据集异步导入任务体：由 NATS executor 线程内直接调用（已迁出 Celery）。"""
 from __future__ import annotations
-
-from app.tasks.celery_app import celery_app
 
 
 def _first_sheet_name(raw: bytes, extension: str) -> str:
@@ -26,7 +24,6 @@ def _first_sheet_name(raw: bytes, extension: str) -> str:
     return "CSV"
 
 
-@celery_app.task(name="app.tasks.v2.dataset_import.inspect_dataset_import")
 def inspect_dataset_import(job_id: str) -> None:
     from app.data_channel.datasets.import_jobs import (
         read_manifest, source_path, update_status)
@@ -84,7 +81,6 @@ def inspect_dataset_import(job_id: str) -> None:
         )
 
 
-@celery_app.task(name="app.tasks.v2.dataset_import.commit_dataset_import")
 def commit_dataset_import(job_id: str) -> None:
     from app.database import SessionLocal
     from app.data_channel.datasets.import_jobs import (

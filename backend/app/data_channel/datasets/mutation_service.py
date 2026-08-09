@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import BackgroundTasks, HTTPException, UploadFile
+from fastapi import HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.data_channel.datasets.manual_contract import (
@@ -17,39 +17,42 @@ from app.services.v2.dataset_service import DatasetService
 
 
 def dispatch_dataset_import_task(
-    task,
     job_id: str,
-    background_tasks: BackgroundTasks,
     *,
+    kind: str,
     operation: str,
     settings_obj: Any,
     logger_obj: Any,
 ) -> dict:
-    """Dispatch one import task through the required Celery worker."""
+    """Dispatch one import task through the NATS work queue (fail-closed)."""
     from app.data_channel.datasets.import_jobs import update_status
+    from app.data_channel.pipeline_tasks.dispatch import (
+        DATASET_IMPORT_SUBJECT,
+        dispatch_task,
+    )
 
     try:
-        task.delay(job_id)
+        dispatch_task(DATASET_IMPORT_SUBJECT, {"job_id": job_id, "kind": kind})
     except Exception as exc:  # noqa: BLE001 - dispatch failures are fail-closed
         update_status(
             job_id,
             status="failed",
-            execution_mode="celery",
+            execution_mode="nats",
             progress=5,
             phase="后台任务投递失败",
-            error="Redis/Celery 后台任务服务不可用",
+            error="后台任务通道不可用",
         )
         logger_obj.error(
-            "Celery 无法投递数据集%s任务 %s；任务未执行（%s）",
+            "后台任务通道无法投递数据集%s任务 %s；任务未执行（%s）",
             operation,
             job_id,
             type(exc).__name__,
         )
         raise HTTPException(
             503,
-            "Redis/Celery 后台任务服务不可用，数据集导入任务未投递",
+            "后台任务通道不可用，数据集导入任务未投递",
         ) from exc
-    return update_status(job_id, execution_mode="celery")
+    return update_status(job_id, execution_mode="nats")
 
 
 def check_upload_file(filename: str | None, content: bytes) -> str:
@@ -192,7 +195,6 @@ async def upload_dataset(
 
 
 async def start_dataset_import(
-    background_tasks: BackgroundTasks,
     file: UploadFile,
     current_user: Any,
     *,
@@ -204,7 +206,6 @@ async def start_dataset_import(
     from app.config import settings
     from app.data_channel.datasets.import_jobs import (
         create_import_job, remove_job, source_path, update_manifest, update_status)
-    from app.tasks.v2.dataset_import import inspect_dataset_import
 
     ext = check_manual_import_extension_fn(file.filename)
     manifest = create_import_job(
@@ -234,9 +235,8 @@ async def start_dataset_import(
             error=None,
         )
         status = dispatch_dataset_import_task_fn(
-            inspect_dataset_import,
             job_id,
-            background_tasks,
+            kind="inspect",
             operation="解析",
         )
         return {"data": status}
@@ -272,7 +272,6 @@ def get_dataset_import(
 def commit_dataset_import_job(
     job_id: str,
     body: CreateTableRequest,
-    background_tasks: BackgroundTasks,
     current_user: Any,
     *,
     build_manual_schema_fn: Callable[..., tuple[str, dict]],
@@ -280,7 +279,6 @@ def commit_dataset_import_job(
 ):
     from app.data_channel.datasets.import_jobs import (
         assert_job_owner, read_status, update_status, write_metadata)
-    from app.tasks.v2.dataset_import import commit_dataset_import
 
     try:
         assert_job_owner(job_id, current_user.id)
@@ -297,7 +295,7 @@ def commit_dataset_import_job(
             409, f"导入任务当前状态为 {status.get('status') or 'unknown'}，不能提交")
 
     # Validate the small field contract synchronously; full-file validation runs
-    # after the response in either the local background runner or Celery.
+    # in the NATS pipeline executor after the response.
     build_manual_schema_fn(body, origin="upload")
     write_metadata(job_id, body.model_dump())
     update_status(
@@ -308,9 +306,8 @@ def commit_dataset_import_job(
         error=None,
     )
     queued = dispatch_dataset_import_task_fn(
-        commit_dataset_import,
         job_id,
-        background_tasks,
+        kind="commit",
         operation="导入",
     )
     return {"data": queued}

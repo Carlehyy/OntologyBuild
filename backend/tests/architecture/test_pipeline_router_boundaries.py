@@ -95,10 +95,6 @@ def test_pipeline_router_reexports_helper_aliases_by_identity():
         is execution_service.dry_run_uri
     )
     assert (
-        pipeline_router._ensure_broker_reachable
-        is execution_service.ensure_broker_reachable
-    )
-    assert (
         pipeline_router._format_pipeline
         is execution_service.format_pipeline
     )
@@ -167,7 +163,6 @@ def test_execution_wrappers_resolve_router_aliases_at_call_time(
     monkeypatch,
 ):
     require_executable = object()
-    broker_check = object()
     task_refs = object()
     is_n8n = object()
     formatter = object()
@@ -178,11 +173,6 @@ def test_execution_wrappers_resolve_router_aliases_at_call_time(
         pipeline_router,
         "_require_production_executable",
         require_executable,
-    )
-    monkeypatch.setattr(
-        pipeline_router,
-        "_ensure_broker_reachable",
-        broker_check,
     )
     monkeypatch.setattr(
         pipeline_router,
@@ -315,7 +305,6 @@ def test_execution_wrappers_resolve_router_aliases_at_call_time(
 
     assert received["enqueue"][2] == {
         "require_production_executable_fn": require_executable,
-        "broker_check_fn": broker_check,
     }
     assert received["sync"][2] == {
         "require_production_executable_fn": require_executable,
@@ -419,8 +408,9 @@ def test_execution_service_keeps_patchable_runtime_imports_local():
     functions = _top_level_functions(tree)
 
     expected_local_imports = {
+        # UI 手动运行经 NATS 工作队列派发，不再在 API 进程触达 Celery 任务
         "enqueue_pipeline_run": {
-            "app.tasks.v2.pipeline_run",
+            "app.data_channel.pipeline_tasks.dispatch",
         },
         "run_pipeline_synchronously": {
             "app.tasks.v2.pipeline_run",

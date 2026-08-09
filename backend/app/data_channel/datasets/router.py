@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.data_channel.datasets import mutation_service, query_service
@@ -49,19 +49,17 @@ def get_db():
 
 
 def _dispatch_dataset_import_task(
-    task,
     job_id: str,
-    background_tasks: BackgroundTasks,
     *,
+    kind: str,
     operation: str,
 ) -> dict:
-    """Dispatch one import task through the required Celery worker."""
+    """Dispatch one import task through the NATS work queue."""
     from app.config import settings
 
     return mutation_service.dispatch_dataset_import_task(
-        task,
         job_id,
-        background_tasks,
+        kind=kind,
         operation=operation,
         settings_obj=settings,
         logger_obj=logger,
@@ -92,13 +90,11 @@ async def upload_dataset(
 
 @router.post("/imports", status_code=202)
 async def start_dataset_import(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user=Depends(get_current_user),
 ):
     """Stream one spreadsheet to an isolated directory and queue server parsing."""
     return await mutation_service.start_dataset_import(
-        background_tasks,
         file,
         current_user,
         check_manual_import_extension_fn=_check_manual_import_extension,
@@ -116,13 +112,11 @@ def get_dataset_import(
 def commit_dataset_import_job(
     job_id: str,
     body: CreateTableRequest,
-    background_tasks: BackgroundTasks,
     current_user=Depends(get_current_user),
 ):
     return mutation_service.commit_dataset_import_job(
         job_id,
         body,
-        background_tasks,
         current_user,
         build_manual_schema_fn=_build_manual_schema,
         dispatch_dataset_import_task_fn=_dispatch_dataset_import_task,
