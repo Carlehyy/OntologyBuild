@@ -90,11 +90,13 @@ def normalize_rows(body: Any) -> list[dict]:
     return [{"value": body}]
 
 
-def execute_script(script: str, *, timeout: int | None = None) -> ScriptExecution:
+def execute_script(script: str, *, timeout: int | None = None, cancel_event=None) -> ScriptExecution:
     """在 Jupyter Kernel Gateway 上执行脚本并提取 result 行数据。
 
     基础设施类失败（未配置/不可达/超时/输出协议非法）抛 PythonEngineError；
     脚本自身异常不抛出，以 ScriptExecution.error + traceback 承载。
+    cancel_event（threading.Event）置位时在下一个轮询周期内取消执行，
+    内核随 finally 销毁，远端不会留下空跑的执行。
     """
     timeout = timeout or settings.python_script_timeout_seconds
     base_url = (settings.python_kernel_gateway_url or "").strip().rstrip("/")
@@ -125,7 +127,8 @@ def execute_script(script: str, *, timeout: int | None = None) -> ScriptExecutio
     execution = ScriptExecution(kernel_id=kernel_id)
     try:
         stdout_text, error_name, error_value, traceback_text = _run_on_kernel(
-            base_url, kernel_id, headers, script + _RESULT_EPILOGUE, timeout)
+            base_url, kernel_id, headers, script + _RESULT_EPILOGUE, timeout,
+            cancel_event=cancel_event)
         execution.stdout = stdout_text[-_STDOUT_TAIL_CHARS:]
         execution.traceback = traceback_text
         if error_name:
@@ -147,6 +150,8 @@ def _run_on_kernel(
     headers: dict[str, str],
     code: str,
     timeout: int,
+    *,
+    cancel_event=None,
 ) -> tuple[str, str, str, str]:
     """经 Jupyter WebSocket 通道执行代码，回收 (stdout, ename, evalue, traceback)。"""
     import websocket  # websocket-client；延迟导入保持模块加载轻量
@@ -194,6 +199,8 @@ def _run_on_kernel(
     try:
         ws.send(json.dumps(request))
         while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise PythonEngineError("本次执行已被用户取消。")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise PythonEngineError(

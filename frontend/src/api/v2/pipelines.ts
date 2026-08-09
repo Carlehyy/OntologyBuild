@@ -119,6 +119,8 @@ export interface ScriptExecutionResult {
   error: string | null
   traceback: string
   duration_ms: number
+  /** 平台执行时限（秒），供「已执行 Xs / 上限 Ys」展示 */
+  timeout_seconds?: number
 }
 
 /** 保存脚本 = 服务端重跑复验通过后才落库；返回更新后的流水线与执行摘要 */
@@ -212,9 +214,12 @@ const pipelinesApi = {
   dryRunRows: (id: string, dryRunId: string, params?: { output_index?: number; page?: number; page_size?: number }) =>
     apiClientV2.get<DryRunRowsPage>(`/pipelines/${id}/dry-run/${dryRunId}/rows`, { params }).then(r => r),
 
-  /** Python 脚本：执行编辑器当前内容（不落库），返回结果与行格式校验结论 */
-  executeScript: (id: string, script: string) =>
-    apiClientV2.post<ScriptExecutionResult>(`/pipelines/${id}/script/execute`, { script }).then(r => r),
+  /** Python 脚本：执行编辑器当前内容（不落库），返回结果与行格式校验结论；可传 AbortSignal 取消等待 */
+  executeScript: (id: string, script: string, signal?: AbortSignal) =>
+    apiClientV2.post<ScriptExecutionResult>(`/pipelines/${id}/script/execute`, { script }, { signal }).then(r => r),
+  /** Python 脚本：取消当前用户在该流水线进行中的执行（内核侧终止） */
+  cancelScript: (id: string) =>
+    apiClientV2.post<{ cancelled: boolean }>(`/pipelines/${id}/script/cancel`).then(r => r),
   /** Python 脚本：保存（服务端重跑复验，输出格式合法才落库） */
   saveScript: (id: string, script: string) =>
     apiClientV2.put<ScriptSaveResult>(`/pipelines/${id}/script`, { script }).then(r => r),
