@@ -164,17 +164,17 @@
 .dmo-flow-title b { color: var(--dmo-ink); font-size: 13px; font-weight: 700; }
 .dmo-flow-title small { margin-top: 3px; color: var(--dmo-subtle); font-size: 12px; }
 .dmo-flow-caption { flex: none; color: var(--dmo-faint); font-size: 11px; }
-.dmo-flow-canvas { min-height: 280px; }
-.dmo-flow-skeleton { height: 280px; border-radius: 12px; background: linear-gradient(100deg, var(--dmo-line-soft) 38%, var(--dmo-hover-bg) 50%, var(--dmo-line-soft) 62%); background-size: 200% 100%; }
+.dmo-flow-canvas { min-height: 200px; }
+.dmo-flow-skeleton { height: 240px; border-radius: 12px; background: linear-gradient(100deg, var(--dmo-line-soft) 38%, var(--dmo-hover-bg) 50%, var(--dmo-line-soft) 62%); background-size: 200% 100%; }
 @media (prefers-reduced-motion: no-preference) {
   .dmo-flow-skeleton { animation: dmoShimmer 1.4s linear infinite; }
 }
 @keyframes dmoShimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-.dmo-flow-empty { min-height: 220px; margin: 10px 0 8px; border: 1px dashed var(--dmo-line); border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: var(--dmo-faint); text-align: center; }
+.dmo-flow-empty { min-height: 200px; margin: 10px 0 8px; border: 1px dashed var(--dmo-line); border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: var(--dmo-faint); text-align: center; }
 .dmo-flow-empty b { color: var(--dmo-muted); font-size: 13px; }
 .dmo-flow-empty span { max-width: 460px; color: var(--dmo-faint); font-size: 12px; line-height: 1.6; }
 
-.dmo-workspace { min-height: 0; flex: none; display: grid; grid-template-columns: minmax(640px,1.62fr) minmax(330px,.78fr); align-items: start; background: var(--dmo-workspace-bg); }
+.dmo-workspace { min-height: 0; flex: 1 0 auto; display: grid; grid-template-columns: minmax(640px,1.62fr) minmax(330px,.78fr); background: var(--dmo-workspace-bg); }
 .dmo-register { min-width: 0; border-right: 1px solid var(--dmo-line); display: flex; flex-direction: column; background: var(--dmo-panel); }
 .dmo-register-head { min-height: 64px; padding: 12px 16px 9px; border-bottom: 1px solid var(--dmo-line-soft); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .dmo-register-title { min-width: 0; display: flex; flex: 1; flex-direction: column; }

@@ -171,7 +171,7 @@ export default function MappingFlowChart({
   const height = useMemo(() => {
     const datasets = model.nodes.filter(node => node.kind === 'dataset').length
     const elements = model.nodes.length - datasets
-    return Math.min(560, Math.max(280, Math.max(datasets, elements) * 52))
+    return Math.min(400, Math.max(200, Math.max(datasets, elements) * 44))
   }, [model])
 
   const events = useMemo(() => ({
