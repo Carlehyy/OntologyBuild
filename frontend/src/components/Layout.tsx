@@ -6,6 +6,7 @@ import {
   UserCircle, User, Menu, X,
 } from 'lucide-react'
 import InboxPopover from '@/components/inbox/InboxPopover'
+import PreferencesModal from '@/components/preferences/PreferencesModal'
 import { visibleNavigation, type PlatformNavItem } from '@/config/navigation'
 
 export default function Layout({ children }: { children: React.ReactNode }) {
@@ -19,6 +20,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [collapsedActiveGroup, setCollapsedActiveGroup] = useState<string | null>(null)
   const [inboxOpen, setInboxOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const [preferencesOpen, setPreferencesOpen] = useState(false)
   const inboxRef = useRef<HTMLDivElement>(null)
   const userMenuRef = useRef<HTMLDivElement>(null)
 
@@ -134,7 +136,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         const subActive = exact ? sub.to === exact.to : isActive(sub.to)
                         return (
                           <Link key={sub.to} to={sub.to} onClick={() => setMobileNavOpen(false)}
-                            className={`flex items-center gap-2 px-2 py-1.5 rounded-md text-xs transition-colors ${subActive ? 'bg-[#b5f3e6] text-[var(--color-nav-bg)] font-medium' : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'}`}>
+                            className={`flex items-center gap-2 px-2 py-1.5 rounded-md text-xs transition-colors ${subActive ? 'bg-[var(--color-nav-light)] text-[var(--color-nav-bg)] font-medium' : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'}`}>
                             <SubIcon size={14} />
                             <span>{sub.label}</span>
                           </Link>
@@ -185,12 +187,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 type="button"
                 onClick={() => { setCollapsed(false); setMobileNavOpen(true) }}
                 aria-label="打开平台导航"
-                className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 md:hidden"
+                className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] md:hidden"
               >
                 <Menu size={18} />
               </button>
             </div>
-            
+
             {/* 右侧：收件箱 + 用户中心 */}
             <div className="flex items-center gap-1">
               {/* 收件箱 */}
@@ -222,7 +224,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   <div className="absolute right-0 mt-3 w-64 bg-[var(--color-bg-elevated)] rounded-lg shadow-lg border border-[var(--color-border)] z-50 overflow-hidden anim-fade-in-down origin-top">
                     {/* 用户信息 */}
                     <div className="px-4 py-4 border-b border-[var(--color-border)] flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-teal-600 flex items-center justify-center text-white font-semibold shrink-0">
+                      <div className="w-10 h-10 rounded-lg bg-[var(--color-nav-bg)] flex items-center justify-center text-white font-semibold shrink-0">
                         {(user?.username || 'U').slice(0, 1).toUpperCase()}
                       </div>
                       <div className="min-w-0">
@@ -236,12 +238,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     {/* 菜单项 */}
                     <div className="py-1">
                       {[
-                        { icon: User, label: '个人资料', desc: '查看和修改个人信息' },
-                        { icon: Settings, label: '偏好设置', desc: '主题、语言、通知设置' },
+                        { icon: User, label: '个人资料', desc: '查看和修改个人信息', action: undefined as (() => void) | undefined },
+                        { icon: Settings, label: '偏好设置', desc: '主题、语言、通知设置', action: () => { setUserMenuOpen(false); setPreferencesOpen(true) } },
                       ].map(item => {
                         const Icon = item.icon
                         return (
-                          <button key={item.label} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors text-left group">
+                          <button key={item.label} onClick={item.action} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-hover)] transition-colors text-left group">
                             <div className="w-7 h-7 rounded-md bg-[var(--color-bg-base)] flex items-center justify-center text-[var(--color-text-secondary)] group-hover:text-[var(--color-nav-bg)] transition-colors shrink-0">
                               <Icon size={14} />
                             </div>
@@ -261,9 +263,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                           logout()
                           navigate('/login')
                         }}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-red-500/10 text-[var(--color-danger)] transition-colors text-left"
+                        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-danger-bg)] text-[var(--color-danger)] transition-colors text-left"
                       >
-                        <div className="w-7 h-7 rounded-md bg-red-500/10 flex items-center justify-center shrink-0">
+                        <div className="w-7 h-7 rounded-md bg-[var(--color-danger-bg)] flex items-center justify-center shrink-0">
                           <LogOut size={14} />
                         </div>
                         <span className="text-sm">退出登录</span>
@@ -279,6 +281,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           {children}
         </div>
       </main>
+
+      <PreferencesModal open={preferencesOpen} onClose={() => setPreferencesOpen(false)} />
     </div>
   )
 }

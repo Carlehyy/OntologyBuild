@@ -7,11 +7,11 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-[var(--color-primary)] text-[var(--color-text-inverse)] hover:bg-[var(--color-primary-hover)] active:bg-[var(--color-primary-active)]",
+        default: "bg-[var(--color-primary)] text-[var(--color-primary-foreground)] hover:bg-[var(--color-primary-hover)] active:bg-[var(--color-primary-active)]",
         ghost: "bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]",
         outline: "border border-[var(--color-border)] bg-transparent text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]",
-        danger: "bg-[var(--color-danger)] text-white hover:bg-[#a83232]",
-        success: "bg-[var(--color-success)] text-white hover:bg-[#247a3e]",
+        danger: "bg-[var(--color-danger)] text-white hover:bg-[var(--color-danger-hover)]",
+        success: "bg-[var(--color-success)] text-white hover:bg-[var(--color-success-hover)]",
         link: "text-[var(--color-primary)] underline-offset-4 hover:underline bg-transparent",
       },
       size: {

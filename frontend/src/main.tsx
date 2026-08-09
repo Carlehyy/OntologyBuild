@@ -5,6 +5,12 @@ import './styles/animations.css'
 import './index.css'
 import './i18n'
 import App from './App'
+import { applyThemeClass } from './lib/theme'
+import { useThemeStore } from './stores/themeStore'
+
+// 主题初始化：index.html 的内联脚本已在首帧前应用 .dark，这里在 store 水合后再次对齐，
+// 并兜底 index.html 脚本未能覆盖的运行时注入场景。
+applyThemeClass(useThemeStore.getState().theme, document.documentElement)
 
 // ReactFlow / Chromium 偶发 ResizeObserver loop 通知属于浏览器布局测量噪音；
 // 在 Vite dev overlay 中会被当成未处理错误刷屏，影响本地调试体验。

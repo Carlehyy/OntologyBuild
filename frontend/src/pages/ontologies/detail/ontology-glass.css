@@ -1,19 +1,22 @@
 /* ════════════════════════════════════════════════════════════════
    Ontology Detail — Glass-morphism theme (SCOPED, reuses global palette)
    只作用于本体详情页根容器 .onto-glass-root，不影响全站主题。
-   复用全站现有主题色（深靛 #1a1a2e primary + 灰白底 + 青绿点缀），
+   复用全站既有浅色配色（深靛 #1a1a2e primary + 灰白底 + 青绿点缀），
    仅保留玻璃质感，不再使用独立配色。
+
+   注意：本页是固定的浅色作用域主题。全站 token 已支持 .dark 翻转，
+   为避免深色模式下浅玻璃背景与翻浅的文字/强调色冲突，这里把原本引用
+   全站 token 的值钉为字面量；本页迁移深色主题时再改回语义 token。
    ════════════════════════════════════════════════════════════════ */
 
 .onto-glass-root {
-  /* 复用全站 token：不在此覆盖 --color-*，直接继承 :root。
-     仅定义玻璃专用 token 与本页氛围变量。 */
+  /* 玻璃专用 token 与本页氛围变量（固定浅色，不随 .dark 翻转） */
 
-  /* 强调色：取全站主色（深靛）与导航青绿 */
-  --onto-accent: var(--color-primary);          /* #1a1a2e */
-  --onto-accent-hover: var(--color-primary-hover);
-  --onto-accent-soft: var(--color-primary-light);
-  --onto-accent-teal: var(--color-nav-bg);       /* #0d9488 */
+  /* 强调色：钉住深靛主色与导航青绿的浅色值 */
+  --onto-accent: #1a1a2e;
+  --onto-accent-hover: #16213e;
+  --onto-accent-soft: #e8eaf6;
+  --onto-accent-teal: var(--color-nav-bg);       /* #0d9488，深浅主题一致 */
 
   /* 玻璃专用 token（中性冷调阴影，呼应灰白底） */
   --glass-bg: rgba(255, 255, 255, 0.66);
@@ -25,7 +28,7 @@
 
   position: relative;
   min-height: 100%;
-  color: var(--color-text-primary);
+  color: #1a1a2e;
 }
 
 .onto-glass-root {
@@ -107,11 +110,11 @@
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--glass-border);
   border-radius: 12px;
-  color: var(--color-text-secondary);
+  color: #5a5a72;
   transition: all 200ms ease;
 }
 .onto-glass-btn:hover {
-  color: var(--color-primary);
+  color: #1a1a2e;
   border-color: rgba(26, 26, 46, 0.22);
   background: rgba(255,255,255,0.8);
 }

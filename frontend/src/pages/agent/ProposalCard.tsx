@@ -82,7 +82,7 @@ export function ProposalCard({ oid, proposal }: { oid: string; proposal: AgentAc
         </div>
         {!result && (
           <button onClick={execute} disabled={!dryRunOk || executing}
-            className="inline-flex items-center gap-1.5 h-7 px-3 rounded-lg bg-[var(--color-primary)] text-white text-xs font-medium hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed transition-all shrink-0">
+            className="inline-flex items-center gap-1.5 h-7 px-3 rounded-lg bg-[var(--color-primary)] text-[var(--color-primary-foreground)] text-xs font-medium hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed transition-all shrink-0">
             {executing ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
             确认执行
           </button>

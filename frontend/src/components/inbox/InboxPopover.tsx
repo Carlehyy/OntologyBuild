@@ -91,7 +91,7 @@ export default function InboxPopover({
       <button
         type="button"
         onClick={() => onOpenChange(!open)}
-        className={`relative grid h-11 w-11 place-items-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 ${
+        className={`relative grid h-11 w-11 place-items-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] ${
           open
             ? 'bg-[var(--color-bg-hover)] text-[var(--color-text-primary)]'
             : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
@@ -102,7 +102,7 @@ export default function InboxPopover({
       >
         <Inbox size={21} strokeWidth={1.8} />
         {openCount > 0 && (
-          <span className="absolute right-0 top-0 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-semibold tabular-nums text-white shadow-sm">
+          <span className="absolute right-0 top-0 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--color-danger)] px-1 text-[10px] font-semibold tabular-nums text-white shadow-sm">
             {openCount > 99 ? '99+' : openCount}
           </span>
         )}
@@ -112,20 +112,20 @@ export default function InboxPopover({
         <section
           id="global-inbox-popover"
           aria-label="收件箱消息"
-          className="fixed left-3 right-3 top-[58px] z-50 origin-top-right overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-[0_18px_50px_rgba(30,64,62,0.14)] animate-slide-up motion-reduce:animate-none sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-[448px]"
+          className="fixed left-3 right-3 top-[58px] z-50 origin-top-right overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-popover)] shadow-[var(--shadow-lg)] animate-slide-up motion-reduce:animate-none sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-[448px]"
         >
-          <header className="flex min-h-[72px] items-center gap-3 border-b border-slate-100 px-4 py-3.5">
+          <header className="flex min-h-[72px] items-center gap-3 border-b border-[var(--color-border)] px-4 py-3.5">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <h2 className="text-[15px] font-semibold tracking-tight text-slate-900">收件箱</h2>
+                <h2 className="text-[15px] font-semibold tracking-tight text-[var(--color-text-primary)]">收件箱</h2>
                 {openCount > 0 && (
-                  <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 px-2 py-1 text-[11px] font-medium tabular-nums text-rose-700">
+                  <span className="inline-flex items-center gap-1 rounded-md bg-[var(--color-danger-bg)] px-2 py-1 text-[11px] font-medium tabular-nums text-[var(--color-danger)]">
                     <AlertTriangle size={11} aria-hidden="true" />
                     {openCount} 项待恢复
                   </span>
                 )}
               </div>
-              <p className="mt-1 text-xs leading-4 text-slate-500">
+              <p className="mt-1 text-xs leading-4 text-[var(--color-text-secondary)]">
                 阅读仅表示已知晓；任务成功后，故障会自动恢复
               </p>
             </div>
@@ -133,7 +133,7 @@ export default function InboxPopover({
               type="button"
               onClick={() => void list.refetch()}
               disabled={list.isFetching}
-              className="grid h-11 w-11 shrink-0 place-items-center rounded-xl text-slate-400 transition-colors duration-200 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-xl text-[var(--color-text-tertiary)] transition-colors duration-200 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] disabled:cursor-not-allowed disabled:opacity-50"
               aria-label="刷新收件箱"
             >
               <RefreshCw size={16} className={list.isFetching ? 'animate-spin motion-reduce:animate-none' : ''} />
@@ -145,34 +145,34 @@ export default function InboxPopover({
               <div className="space-y-2.5 p-3" aria-label="正在加载收件箱">
                 {[0, 1, 2].map(index => (
                   <div key={index} className="grid grid-cols-[40px_minmax(0,1fr)] gap-3 rounded-xl px-3 py-4">
-                    <span className="h-10 w-10 animate-pulse rounded-xl bg-slate-100 motion-reduce:animate-none" />
+                    <span className="h-10 w-10 animate-pulse rounded-xl bg-[var(--color-bg-hover)] motion-reduce:animate-none" />
                     <span className="space-y-2">
-                      <span className="block h-4 w-28 animate-pulse rounded bg-slate-100 motion-reduce:animate-none" />
-                      <span className="block h-4 w-4/5 animate-pulse rounded bg-slate-100 motion-reduce:animate-none" />
-                      <span className="block h-3 w-full animate-pulse rounded bg-slate-100 motion-reduce:animate-none" />
+                      <span className="block h-4 w-28 animate-pulse rounded bg-[var(--color-bg-hover)] motion-reduce:animate-none" />
+                      <span className="block h-4 w-4/5 animate-pulse rounded bg-[var(--color-bg-hover)] motion-reduce:animate-none" />
+                      <span className="block h-3 w-full animate-pulse rounded bg-[var(--color-bg-hover)] motion-reduce:animate-none" />
                     </span>
                   </div>
                 ))}
               </div>
             ) : list.isError ? (
               <div role="alert" className="flex flex-col items-center px-5 py-10 text-center">
-                <AlertTriangle size={24} className="mb-2 text-rose-500" />
-                <p className="text-sm font-medium text-slate-700">收件箱加载失败</p>
-                <p className="mt-1 text-xs text-slate-500">请检查网络后重新加载</p>
-                <button type="button" onClick={() => void list.refetch()} className="mt-3 inline-flex h-11 items-center gap-1.5 rounded-lg bg-slate-100 px-3.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40">
+                <AlertTriangle size={24} className="mb-2 text-[var(--color-danger)]" />
+                <p className="text-sm font-medium text-[var(--color-text-primary)]">收件箱加载失败</p>
+                <p className="mt-1 text-xs text-[var(--color-text-secondary)]">请检查网络后重新加载</p>
+                <button type="button" onClick={() => void list.refetch()} className="mt-3 inline-flex h-11 items-center gap-1.5 rounded-lg bg-[var(--color-bg-hover)] px-3.5 text-xs font-medium text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-bg-active)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]">
                   <RefreshCw size={13} />重新加载
                 </button>
               </div>
             ) : items.length === 0 ? (
               <div className="flex flex-col items-center px-5 py-12 text-center">
-                <span className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-600">
+                <span className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-[var(--color-success-bg)] text-[var(--color-success)]">
                   <CheckCircle2 size={20} />
                 </span>
-                <p className="text-sm font-medium text-slate-700">任务运行平稳</p>
-                <p className="mt-1 text-xs text-slate-400">数据任务执行失败时会在这里提醒你</p>
+                <p className="text-sm font-medium text-[var(--color-text-primary)]">任务运行平稳</p>
+                <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">数据任务执行失败时会在这里提醒你</p>
               </div>
             ) : (
-              <div className="divide-y divide-slate-100" role="list">
+              <div className="divide-y divide-[var(--color-border)]" role="list">
                 {items.map(item => (
                   <InboxPopoverItem
                     key={item.id}
@@ -190,17 +190,17 @@ export default function InboxPopover({
           <button
             type="button"
             onClick={() => { onOpenChange(false); onNavigate('/inbox') }}
-            className="group flex h-12 w-full items-center justify-between border-t border-slate-100 px-4 text-xs font-medium text-teal-700 transition-colors duration-200 hover:bg-teal-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500/40"
+            className="group flex h-12 w-full items-center justify-between border-t border-[var(--color-border)] px-4 text-xs font-medium text-[var(--color-nav-bg)] transition-colors duration-200 hover:bg-[var(--color-nav-light)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-ring)]"
           >
             <span>查看全部消息</span>
-            <span className="inline-flex items-center gap-1 text-[11px] text-slate-400 transition-colors group-hover:text-teal-700">
+            <span className="inline-flex items-center gap-1 text-[11px] text-[var(--color-text-tertiary)] transition-colors group-hover:text-[var(--color-nav-bg)]">
               进入收件箱
               <ChevronRight size={14} className="transition-transform group-hover:translate-x-0.5 motion-reduce:transform-none" />
             </span>
           </button>
           {stateMutation.isPending && (
             <div className="pointer-events-none absolute inset-x-0 bottom-12 flex justify-center" aria-live="polite">
-              <span className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 px-3 py-1.5 text-[11px] text-white shadow-lg"><Loader2 size={11} className="animate-spin motion-reduce:animate-none" />正在更新</span>
+              <span className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-text-primary)] px-3 py-1.5 text-[11px] text-[var(--color-bg-base)] shadow-lg"><Loader2 size={11} className="animate-spin motion-reduce:animate-none" />正在更新</span>
             </div>
           )}
         </section>
@@ -238,32 +238,32 @@ function InboxPopoverItem({
         ? '已取消'
         : '已过期'
   const stateTone = isOpen
-    ? 'bg-rose-50 text-rose-700'
+    ? 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'
     : isResolved
-      ? 'bg-emerald-50 text-emerald-700'
-      : 'bg-slate-100 text-slate-600'
+      ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]'
+      : 'bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)]'
   const iconTone = isOpen
-    ? 'bg-rose-50 text-rose-600'
+    ? 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'
     : isResolved
-      ? 'bg-emerald-50 text-emerald-600'
-      : 'bg-slate-100 text-slate-500'
+      ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]'
+      : 'bg-[var(--color-bg-hover)] text-[var(--color-text-tertiary)]'
 
   return (
     <article
       role="listitem"
-      className={`group relative transition-colors duration-200 hover:bg-slate-50/80 ${
-        item.deliveryState === 'unread' ? 'bg-teal-50/30' : 'bg-white'
+      className={`group relative transition-colors duration-200 hover:bg-[var(--color-bg-hover)] ${
+        item.deliveryState === 'unread' ? 'bg-[color-mix(in_srgb,var(--color-nav-bg)_7%,transparent)]' : ''
       }`}
     >
       {item.deliveryState === 'unread' && (
-        <span className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-teal-600" aria-hidden="true" />
+        <span className="absolute inset-y-4 left-0 w-0.5 rounded-r-full bg-[var(--color-nav-bg)]" aria-hidden="true" />
       )}
 
       <button
         type="button"
         onClick={onOpen}
         aria-label={`打开消息：${item.title}`}
-        className="grid w-full grid-cols-[40px_minmax(0,1fr)] gap-3 px-4 pb-2 pt-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500/40"
+        className="grid w-full grid-cols-[40px_minmax(0,1fr)] gap-3 px-4 pb-2 pt-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-ring)]"
       >
         <span className={`relative grid h-10 w-10 shrink-0 place-items-center rounded-xl ${iconTone}`}>
           {isOpen
@@ -274,7 +274,7 @@ function InboxPopoverItem({
                 ? <CircleSlash2 size={18} aria-hidden="true" />
                 : <Clock3 size={18} aria-hidden="true" />}
           {item.deliveryState === 'unread' && (
-            <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-teal-600" aria-hidden="true" />
+            <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--color-popover)] bg-[var(--color-nav-bg)]" aria-hidden="true" />
           )}
         </span>
 
@@ -285,10 +285,10 @@ function InboxPopoverItem({
                 {stateLabel}
               </span>
               {item.deliveryState === 'unread' && (
-                <span className="shrink-0 text-[11px] font-medium text-teal-700">未读</span>
+                <span className="shrink-0 text-[11px] font-medium text-[var(--color-nav-bg)]">未读</span>
               )}
               {item.occurrenceCount > 1 && (
-                <span className="truncate rounded-md bg-amber-50 px-2 py-1 text-[11px] font-medium tabular-nums text-amber-700">
+                <span className="truncate rounded-md bg-[var(--color-warning-bg)] px-2 py-1 text-[11px] font-medium tabular-nums text-[var(--color-warning)]">
                   连续失败 {item.occurrenceCount} 次
                 </span>
               )}
@@ -296,23 +296,23 @@ function InboxPopoverItem({
             <time
               dateTime={item.lastOccurredAt}
               title={formatExactTime(item.lastOccurredAt)}
-              className="shrink-0 text-[11px] tabular-nums text-slate-400"
+              className="shrink-0 text-[11px] tabular-nums text-[var(--color-text-tertiary)]"
             >
               {formatRelativeTime(item.lastOccurredAt)}
             </time>
           </span>
 
           <span className="mt-1.5 flex min-w-0 items-start gap-1.5">
-            <span className="line-clamp-2 min-w-0 flex-1 text-[14px] font-semibold leading-5 text-slate-800" title={item.title}>
+            <span className="line-clamp-2 min-w-0 flex-1 text-[14px] font-semibold leading-5 text-[var(--color-text-primary)]" title={item.title}>
               {item.title}
             </span>
             <ChevronRight
               size={15}
-              className="mt-0.5 shrink-0 text-slate-300 transition-[transform,color] duration-200 group-hover:translate-x-0.5 group-hover:text-slate-500 motion-reduce:transform-none"
+              className="mt-0.5 shrink-0 text-[var(--color-text-disabled)] transition-[transform,color] duration-200 group-hover:translate-x-0.5 group-hover:text-[var(--color-text-secondary)] motion-reduce:transform-none"
               aria-hidden="true"
             />
           </span>
-          <span className="mt-1 line-clamp-2 text-xs leading-[18px] text-slate-500" title={item.summary}>
+          <span className="mt-1 line-clamp-2 text-xs leading-[18px] text-[var(--color-text-secondary)]" title={item.summary}>
             {item.summary}
           </span>
         </span>
@@ -322,10 +322,10 @@ function InboxPopoverItem({
         <span aria-hidden="true" />
         <span className="flex min-w-0 items-center justify-between gap-2">
           <span
-            className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-slate-500"
+            className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)]"
             title={sourceName}
           >
-            <Workflow size={13} className="shrink-0 text-slate-400" aria-hidden="true" />
+            <Workflow size={13} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
             <span className="truncate">{sourceName}</span>
           </span>
           <span className="flex shrink-0 items-center gap-1">
@@ -334,7 +334,7 @@ function InboxPopoverItem({
                 type="button"
                 disabled={busy}
                 onClick={onMarkRead}
-                className="inline-flex h-11 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-medium text-slate-500 transition-colors duration-200 hover:bg-white hover:text-slate-800 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-11 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-medium text-[var(--color-text-secondary)] transition-colors duration-200 hover:bg-[var(--color-popover)] hover:text-[var(--color-text-primary)] hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] disabled:cursor-not-allowed disabled:opacity-50"
                 aria-label={`将“${item.title}”标为已读`}
               >
                 <MailOpen size={13} aria-hidden="true" />
@@ -346,7 +346,7 @@ function InboxPopoverItem({
                 type="button"
                 disabled={busy}
                 onClick={onArchive}
-                className="inline-flex h-11 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-medium text-slate-500 transition-colors duration-200 hover:bg-white hover:text-slate-800 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-11 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-medium text-[var(--color-text-secondary)] transition-colors duration-200 hover:bg-[var(--color-popover)] hover:text-[var(--color-text-primary)] hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] disabled:cursor-not-allowed disabled:opacity-50"
                 aria-label={`归档“${item.title}”`}
               >
                 <Archive size={13} aria-hidden="true" />

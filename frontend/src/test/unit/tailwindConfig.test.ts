@@ -18,4 +18,21 @@ describe('Tailwind compatibility configuration', () => {
     assert.equal(resolved.theme.borderRadius.md, '0.375rem')
     assert.equal(resolved.theme.borderRadius.lg, '0.5rem')
   })
+
+  it('enables class-based dark mode and maps shadcn semantic colors to CSS variables', () => {
+    const resolved = resolveConfig(config)
+    const colors = resolved.theme.colors as unknown as Record<string, string | Record<string, string>>
+
+    assert.deepEqual(config.darkMode, ['class'])
+    assert.equal(colors.background, 'var(--background)')
+    assert.equal(colors.foreground, 'var(--foreground)')
+    assert.equal((colors.primary as Record<string, string>).DEFAULT, 'var(--primary)')
+    assert.equal((colors.primary as Record<string, string>).foreground, 'var(--primary-foreground)')
+    assert.equal((colors.muted as Record<string, string>).DEFAULT, 'var(--muted)')
+    assert.equal((colors.muted as Record<string, string>).foreground, 'var(--muted-foreground)')
+    assert.equal((colors.destructive as Record<string, string>).DEFAULT, 'var(--destructive)')
+    assert.equal(colors.border, 'var(--border)')
+    assert.equal(colors.input, 'var(--input)')
+    assert.equal(colors.ring, 'var(--ring)')
+  })
 })

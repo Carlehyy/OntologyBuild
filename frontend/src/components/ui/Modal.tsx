@@ -64,7 +64,7 @@ export function Modal({
     <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center p-4">
       <div
         className={cn(
-          'absolute inset-0 bg-slate-950/30 backdrop-blur-[2px] animate-fade-in',
+          'absolute inset-0 bg-[var(--color-bg-overlay)] animate-fade-in',
           backdropClassName,
         )}
         onClick={disableClose ? undefined : onClose}
@@ -76,7 +76,7 @@ export function Modal({
         aria-labelledby={title ? titleId : undefined}
         aria-describedby={description ? descriptionId : undefined}
         className={cn(
-          'relative flex max-h-[calc(100dvh-2rem)] w-full flex-col overflow-hidden rounded-2xl border border-white/80 bg-white/95 shadow-[0_24px_72px_rgba(15,23,42,0.18)] backdrop-blur-xl animate-slide-up',
+          'relative flex max-h-[calc(100dvh-2rem)] w-full flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-popover)] shadow-[var(--shadow-lg)] animate-slide-up',
           sizeMap[size],
           panelClassName,
         )}
@@ -86,7 +86,7 @@ export function Modal({
           onClick={onClose}
           disabled={disableClose}
           aria-label="关闭弹窗"
-          className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+          className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--color-text-tertiary)]"
         >
           <X size={16} />
         </button>
@@ -97,18 +97,18 @@ export function Modal({
             headerClassName,
           )}>
             {headerIcon && (
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)]">
                 {headerIcon}
               </div>
             )}
             <div className="min-w-0 pt-0.5">
               {title && (
-                <h3 id={titleId} className="text-base font-semibold tracking-[-0.01em] text-slate-900">
+                <h3 id={titleId} className="text-base font-semibold tracking-[-0.01em] text-[var(--color-text-primary)]">
                   {title}
                 </h3>
               )}
               {description && (
-                <p id={descriptionId} className="mt-1 text-sm leading-6 text-slate-500">
+                <p id={descriptionId} className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">
                   {description}
                 </p>
               )}
@@ -123,7 +123,7 @@ export function Modal({
         )}>{children}</div>
         {footer && (
           <footer className={cn(
-            'flex shrink-0 justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-6 py-4',
+            'flex shrink-0 justify-end gap-2 border-t border-[var(--color-border)] bg-[var(--color-muted)] px-6 py-4',
             footerClassName,
           )}>
             {footer}
@@ -165,8 +165,8 @@ export function ConfirmModal({
       title={title}
       size="sm"
       headerIcon={danger
-        ? <AlertTriangle size={19} className="text-red-600" />
-        : <Info size={19} className="text-teal-600" />}
+        ? <AlertTriangle size={19} className="text-[var(--color-danger)]" />
+        : <Info size={19} className="text-[var(--color-nav-bg)]" />}
       footer={(
         <>
           <Button variant="outline" onClick={onClose} disabled={loading}>{cancelText}</Button>
@@ -185,8 +185,8 @@ export function ConfirmModal({
         <div className={cn(
           'rounded-xl border px-4 py-3 text-sm leading-6',
           danger
-            ? 'border-red-100 bg-red-50/70 text-red-800'
-            : 'border-teal-100 bg-teal-50/70 text-slate-600',
+            ? 'border-[var(--color-danger-bg)] bg-[var(--color-danger-bg)] text-[var(--color-danger)]'
+            : 'border-[var(--color-nav-light)] bg-[var(--color-nav-light)] text-[var(--color-text-secondary)]',
         )}>
           {description}
         </div>
