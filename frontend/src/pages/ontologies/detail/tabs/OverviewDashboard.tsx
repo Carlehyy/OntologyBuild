@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Activity, CheckCircle2, ChevronRight, CircleAlert, Clock3, Database,
-  GitBranch, Loader2, ShieldCheck, Sparkles, Workflow, Zap,
+  Activity, CheckCircle2, ChevronRight, CircleAlert, Database,
+  GitBranch, Loader2, Sparkles, Workflow, Zap,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 import type { OntologyDetail } from '@/types/ontology'
@@ -38,24 +38,9 @@ interface Overview {
   health?: { level: 'info' | 'warn' | 'action'; message: string; hint?: string; target?: string }[]
 }
 
-interface FactRow {
-  id: string
-  subjectLabel: string
-  propertyName: string
-  value: unknown
-  present?: boolean
-  kind: string
-  source: string
-  recordedAt: string | null
-}
-
-const FACT_META: Record<string, { label: string; color: string; className: string }> = {
-  property: { label: '属性', color: '#7c5ce0', className: 'fact-property' },
-  derived: { label: '派生', color: '#9d7ee8', className: 'fact-derived' },
-  link: { label: '链接', color: '#3b82f6', className: 'fact-link' },
-  decision: { label: '决策', color: '#f59e0b', className: 'fact-decision' },
-  object: { label: '存在', color: '#ef6464', className: 'fact-object' },
-  absence: { label: '缺席', color: '#aeb8c6', className: 'fact-absence' },
+const FACT_KIND_LABEL: Record<string, string> = {
+  property: '属性', derived: '派生', link: '链接',
+  decision: '决策', object: '存在', absence: '缺席',
 }
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -75,12 +60,6 @@ const formatRuntimeDay = (date: string) => {
   const value = new Date(`${date}T00:00:00`)
   if (Number.isNaN(value.getTime())) return date
   return value.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
-}
-
-const formatValue = (value: unknown, max = 30) => {
-  if (value === null || value === undefined) return '∅'
-  const text = typeof value === 'object' ? JSON.stringify(value) : String(value)
-  return text.length > max ? `${text.slice(0, max)}…` : text
 }
 
 /* KPI 数字滚动：数据到达或变化时从旧值缓动到新值；
@@ -147,12 +126,6 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
     queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/overview`) as Promise<Overview>,
     refetchInterval: 30000,
   })
-  const factsQuery = useQuery<FactRow[]>({
-    queryKey: ['recent-facts', ontologyId],
-    queryFn: () => apiClientV2.get(
-      `/formal/ontologies/${ontologyId}/facts/recent?limit=6&current_release_only=true`) as Promise<FactRow[]>,
-    refetchInterval: 30000,
-  })
   const runtimeDayCount = overviewQuery.data?.runtime.daily7d?.length || 7
   useEffect(() => {
     setRuntimeRange([0, Math.max(runtimeDayCount - 1, 0)])
@@ -183,12 +156,11 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   }
 
   const ov = overviewQuery.data
-  const facts = factsQuery.data ?? []
   // 只把"需要用户处理"的建议（warn/action）摆上总览；info 级属于常规引导，不打扰。
   const healthItems = (ov.health ?? []).filter(item => item.level !== 'info')
   const factParts = Object.entries(ov.facts.byKind)
     .filter(([, value]) => value > 0)
-    .sort(([a], [b]) => (FACT_META[a] ? 0 : 1) - (FACT_META[b] ? 0 : 1))
+    .sort(([a], [b]) => (FACT_KIND_LABEL[a] ? 0 : 1) - (FACT_KIND_LABEL[b] ? 0 : 1))
   const sourceEntries = Object.entries(ov.data.instancesBySource).sort((a, b) => b[1] - a[1])
   // daily7d 只信后端按日返回的数据；没有就如实呈现空态，绝不把 7 日汇总堆到"今天"。
   const runtimeDays = ov.runtime.daily7d ?? []
@@ -294,7 +266,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             <span className="kpi-label">当前版本事实流</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
             <strong>{kpiFactsTotal}<small>条</small></strong>
-            <p>{factParts.slice(0, 3).map(([kind, value]) => `${FACT_META[kind]?.label || kind} ${value}`).join(' · ') || '尚无事实记录'}</p>
+            <p>{factParts.slice(0, 3).map(([kind, value]) => `${FACT_KIND_LABEL[kind] || kind} ${value}`).join(' · ') || '尚无事实记录'}</p>
             {ov.runtime.pendingApprovals > 0
               ? <em className="kpi-status is-warning"><CircleAlert size={15} />{ov.runtime.pendingApprovals} 条动作待人工审批</em>
               : <em className="kpi-status is-purple"><GitBranch size={15} />追加式留痕，可回放与追溯</em>}
@@ -388,63 +360,6 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
               <time dateTime={runtimeDays.at(-1)?.date}>{formatRuntimeDay(runtimeDays.at(-1)?.date || '')}</time>
             </div>
           </div>
-          )}
-        </section>
-      </div>
-
-      <div className="overview-row overview-row-facts">
-        <section className="overview-panel fact-composition">
-          <PanelTitle title="事实类型构成" sub={`累计事实 ${ov.facts.total}`} />
-          <div className="fact-stack">
-            {factParts.length ? factParts.map(([kind, count]) => (
-              <span key={kind} style={{ width: `${Math.max(count / Math.max(ov.facts.total, 1) * 100, 1)}%`, background: FACT_META[kind]?.color || '#64748b' }}>
-                {count / Math.max(ov.facts.total, 1) > .08 ? `${FACT_META[kind]?.label || kind} ${count} (${(count / ov.facts.total * 100).toFixed(1)}%)` : ''}
-              </span>
-            )) : <span className="fact-empty">暂无事实</span>}
-          </div>
-          <div className="fact-legend-row">
-            <div className="fact-legend">
-              {factParts.map(([kind, count]) => <span key={kind}><i style={{ background: FACT_META[kind]?.color || '#64748b' }} />{FACT_META[kind]?.label || kind} {count} ({(count / Math.max(ov.facts.total, 1) * 100).toFixed(1)}%)</span>)}
-            </div>
-            <p><ShieldCheck size={18} />事实追加不修改，可按时间回放与追溯</p>
-          </div>
-        </section>
-
-        <section className="overview-panel recent-facts">
-          <PanelTitle title="最近发生了什么" sub={`${ov.release.version} 事实流 · 追加不修改`} action={<button className="overview-link-button" onClick={() => onGoGroup('governance')}>查看全部 <ChevronRight size={15} /></button>} />
-          {factsQuery.isLoading ? <div className="recent-empty"><Loader2 className="spin" size={18} />正在读取事实流…</div> : factsQuery.isError ? (
-            <div className="recent-empty" role="alert">
-              <CircleAlert size={18} />事实流读取失败
-              <button
-                type="button"
-                onClick={() => void factsQuery.refetch()}
-                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-              >
-                重试
-              </button>
-            </div>
-          ) : facts.length === 0 ? (
-            <div className="recent-empty"><Sparkles size={20} />还没有事实记录；数据灌入或动作执行后会在这里留痕。</div>
-          ) : (
-            <div className="recent-list">
-              {facts.slice(0, 6).map((fact, index) => (
-                <div className="recent-row" key={fact.id}>
-                  <span className="timeline-dot" style={{ background: FACT_META[fact.kind]?.color || '#64748b' }}>{index === 5 ? '' : <i />}</span>
-                  <span className={`fact-chip ${FACT_META[fact.kind]?.className || 'fact-property'}`}>{FACT_META[fact.kind]?.label || fact.kind}</span>
-                  <strong title={fact.subjectLabel}>{fact.subjectLabel}</strong>
-                  <code title={fact.propertyName}>{fact.propertyName}</code>
-                  <span className="fact-equals">=</span>
-                  <span
-                    className="fact-value"
-                    title={fact.present === false ? '属性已删除' : formatValue(fact.value, 100)}
-                  >
-                    {fact.present === false ? '（已删除）' : formatValue(fact.value)}
-                  </span>
-                  <span className="fact-source">{SOURCE_LABEL[fact.source] || fact.source}</span>
-                  <time><Clock3 size={12} />{formatDateTime(fact.recordedAt, true)}</time>
-                </div>
-              ))}
-            </div>
           )}
         </section>
       </div>
