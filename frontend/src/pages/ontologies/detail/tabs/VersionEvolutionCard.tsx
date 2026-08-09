@@ -499,6 +499,7 @@ export default function VersionEvolutionCard({ ontologyId }: { ontologyId: strin
         <div className="evolution-hint">拖拽平移 · 滚轮缩放</div>
       </div>
 
+      {graph.steps.length > 1 && (
       <footer className="evolution-footer">
         <button type="button" className="evolution-play-button" onClick={() => playing ? setPlaying(false) : play()}>
           {playing ? <><Pause size={12} fill="currentColor" />暂停</> : <><Play size={12} fill="currentColor" />播放</>}
@@ -515,6 +516,7 @@ export default function VersionEvolutionCard({ ontologyId }: { ontologyId: strin
         <div className="evolution-progress" aria-hidden="true"><i style={{ width: `${graph.steps.length ? visibleStep / graph.steps.length * 100 : 0}%` }} /></div>
         <span className="evolution-step-label">{visibleStep} / {graph.steps.length}</span>
       </footer>
+      )}
     </section>
   )
 }

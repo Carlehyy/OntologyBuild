@@ -164,36 +164,37 @@ def ontology_overview(ontology_id: str, db: Session):
         by_kind[kind or "property"] = by_kind.get(kind or "property", 0) + 1
 
     # —— 健康检查（可操作的下一步建议）——
+    # target 指向本体详情页 Tab key（GROUPS），前端据此一键跳转处理。
     health: list[dict] = []
     if not object_types:
-        health.append({"level": "info", "message": "还没有对象实体",
+        health.append({"level": "info", "message": "还没有对象实体", "target": "design",
                        "hint": "打开图谱编辑器开始建模，或在「数据映射」由数据生成类型"})
     no_pk = [
         item.get("displayName") or item.get("name") or str(item.get("id") or "")
         for item in object_types if not item.get("primaryKey")
     ]
     if no_pk:
-        health.append({"level": "warn", "message": f"{len(no_pk)} 个对象实体未设主键：{', '.join(no_pk[:3])}{'…' if len(no_pk) > 3 else ''}",
+        health.append({"level": "warn", "message": f"{len(no_pk)} 个对象实体未设主键：{', '.join(no_pk[:3])}{'…' if len(no_pk) > 3 else ''}", "target": "design",
                        "hint": "无主键会影响数据灌入去重与动作的实例定位"})
     if object_types and not instances:
-        health.append({"level": "info", "message": "模型已就绪但还没有实例数据",
+        health.append({"level": "info", "message": "模型已就绪但还没有实例数据", "target": "data-mapping",
                        "hint": "到「数据映射」把 curated 数据灌进来"})
     if mappings_stat["autoCreate"] > 0:
-        health.append({"level": "warn", "message": f"{mappings_stat['autoCreate']} 条映射未绑定对象实体（将由数据自建类型）",
+        health.append({"level": "warn", "message": f"{mappings_stat['autoCreate']} 条映射未绑定对象实体（将由数据自建类型）", "target": "data-mapping",
                        "hint": "建议在映射维护里显式绑定，防止产生平行类型"})
     if snapshot_sentinels and all(
             sentinel_flag(item, "muted", False) for item in snapshot_sentinels):
-        health.append({"level": "warn", "message": "所有哨兵都处于影子（静默）状态",
+        health.append({"level": "warn", "message": "所有哨兵都处于影子（静默）状态", "target": "governance",
                        "hint": "确认规律无误后，在哨兵面板解除静默让治理真正生效"})
     if not snapshot_sentinels and instances:
-        health.append({"level": "info", "message": "已有数据但还没有哨兵",
+        health.append({"level": "info", "message": "已有数据但还没有哨兵", "target": "design",
                        "hint": "在图谱编辑器建哨兵，让平台替你盯住状态变化"})
     err_firings = sum(1 for f in firings_7d if f.status == "error")
     if err_firings:
-        health.append({"level": "warn", "message": f"近 7 天有 {err_firings} 次哨兵评估出错",
+        health.append({"level": "warn", "message": f"近 7 天有 {err_firings} 次哨兵评估出错", "target": "governance",
                        "hint": "查看运行历史的哨兵触发记录，多为条件表达式写错"})
     if pending_n > 0:
-        health.append({"level": "action", "message": f"{pending_n} 个动作等待审批",
+        health.append({"level": "action", "message": f"{pending_n} 个动作等待审批", "target": "governance",
                        "hint": "到「治理与推演 → 治理驾驶舱」批准或拒绝"})
 
     return _ok({

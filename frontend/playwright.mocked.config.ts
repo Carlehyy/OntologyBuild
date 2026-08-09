@@ -30,6 +30,7 @@ export default defineConfig({
     '**/mcp-client-config.spec.ts',
     '**/models.spec.ts',
     '**/ontology_domain_source.spec.ts',
+    '**/ontology_overview_responsive.spec.ts',
     '**/ontology_structure_initial_view.spec.ts',
     '**/ontology_runtime_state_conflict.spec.ts',
     '**/ontology_safe_recovery.spec.ts',

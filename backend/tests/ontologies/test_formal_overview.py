@@ -113,6 +113,12 @@ def test_overview_returns_daily_runtime_buckets(client, auth_headers, ontology, 
     assert sum(item["actionRuns"]["failed"] for item in daily) == 1
     assert runtime["firings7d"] == {"total": 2, "fired": 1, "error": 1}
     assert runtime["actionRuns7d"] == {"total": 2, "success": 1, "failed": 1}
+    assert response.json()["data"]["health"] == [
+        {"level": "info", "message": "还没有对象实体", "target": "design",
+         "hint": "打开图谱编辑器开始建模，或在「数据映射」由数据生成类型"},
+        {"level": "warn", "message": "近 7 天有 1 次哨兵评估出错", "target": "governance",
+         "hint": "查看运行历史的哨兵触发记录，多为条件表达式写错"},
+    ]
 
 
 def test_overview_is_scoped_to_current_release_snapshot(
@@ -230,6 +236,12 @@ def test_overview_is_scoped_to_current_release_snapshot(
         "total": 1, "success": 1, "failed": 0,
     }
     assert body["facts"] == {"total": 1, "byKind": {"property": 1}}
+    assert body["health"] == [
+        {"level": "info", "message": "已有数据但还没有哨兵", "target": "design",
+         "hint": "在图谱编辑器建哨兵，让平台替你盯住状态变化"},
+        {"level": "action", "message": "1 个动作等待审批", "target": "governance",
+         "hint": "到「治理与推演 → 治理驾驶舱」批准或拒绝"},
+    ]
 
     pending = client.get(
         f"/api/v2/formal/ontologies/{ontology_id}/pending-actions"

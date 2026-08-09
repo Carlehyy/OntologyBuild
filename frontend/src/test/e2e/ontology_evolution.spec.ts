@@ -867,6 +867,15 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await runtimeStart.press('ArrowRight')
   await expect(runtimeStart).toHaveValue('1')
   await expect(runtimeSummary).toContainText('6 日聚合')
+
+  // 待处理事项横条把后端 health 建议露出，点击直达对应 Tab。
+  const healthStrip = page.getByLabel('待处理事项')
+  await expect(healthStrip).toBeVisible()
+  await expect(healthStrip).toContainText('1 个动作等待审批')
+  await healthStrip.getByRole('button', { name: /1 个动作等待审批/ }).click()
+  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}\\?tab=governance`))
+  await page.getByRole('button', { name: '本体总览', exact: true }).click()
+  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}$`))
   await api<any>(request, token, 'post',
     `/api/v2/formal/ontologies/${ontology.id}/action-logs/${pendingAction.id}/decide`,
     { decision: 'rejected' })

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Activity, CheckCircle2, ChevronRight, CircleAlert, Clock3, Database,
-  GitBranch, Loader2, ShieldCheck, Sparkles, Workflow,
+  GitBranch, Loader2, ShieldCheck, Sparkles, Workflow, Zap,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 import type { OntologyDetail } from '@/types/ontology'
@@ -34,6 +34,7 @@ interface Overview {
     }[]
   }
   facts: { total: number; byKind: Record<string, number> }
+  health?: { level: 'info' | 'warn' | 'action'; message: string; hint?: string; target?: string }[]
 }
 
 interface FactRow {
@@ -149,6 +150,8 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
 
   const ov = overviewQuery.data
   const facts = factsQuery.data ?? []
+  // 只把"需要用户处理"的建议（warn/action）摆上总览；info 级属于常规引导，不打扰。
+  const healthItems = (ov.health ?? []).filter(item => item.level !== 'info')
   const factParts = Object.entries(ov.facts.byKind)
     .filter(([, value]) => value > 0)
     .sort(([a], [b]) => (FACT_META[a] ? 0 : 1) - (FACT_META[b] ? 0 : 1))
@@ -181,7 +184,28 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   const runtimeRangeSpan = Math.max(runtimeDays.length - 1, 1)
 
   return (
-    <main className="overview-dashboard" aria-label="本体总览">
+    <main className={`overview-dashboard${healthItems.length ? ' has-health' : ''}`} aria-label="本体总览">
+      {healthItems.length > 0 && (
+        <section className="overview-health" aria-label="待处理事项">
+          {healthItems.slice(0, 3).map(item => (
+            <button
+              key={`${item.level}-${item.message}`}
+              type="button"
+              className={`overview-health-item is-${item.level}`}
+              title={item.hint || item.message}
+              onClick={() => item.target && onGoGroup(item.target)}
+            >
+              {item.level === 'action' ? <Zap size={13} /> : <CircleAlert size={13} />}
+              <span className="overview-health-message">{item.message}</span>
+              {item.hint && <span className="overview-health-hint">{item.hint}</span>}
+              {item.target && <ChevronRight size={13} className="overview-health-go" aria-hidden="true" />}
+            </button>
+          ))}
+          {healthItems.length > 3 && (
+            <span className="overview-health-more">还有 {healthItems.length - 3} 条待处理</span>
+          )}
+        </section>
+      )}
       <div className="overview-hero-grid">
         <section className="overview-panel ontology-profile">
           <PanelTitle title="本体概况" sub="当前发布投影" />
@@ -192,7 +216,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
               <span className="profile-domain">{ontology.domain || '未分类'}</span>
             </div>
           </div>
-          <p className="profile-description">{ontology.description || '暂无本体描述。可在本体管理中补充业务范围与使用说明。'}</p>
+          <p className="profile-description" title={ontology.description || undefined}>{ontology.description || '暂无本体描述。可在本体管理中补充业务范围与使用说明。'}</p>
           <dl className="profile-meta profile-meta--compact">
             <div><dt>当前发布</dt><dd>{ov.release.version}</dd></div>
             <div><dt>更新时间</dt><dd>{formatDateTime(ontology.updated_at)}</dd></div>
@@ -205,6 +229,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
         <section className="overview-panel kpi-rail" aria-label="关键指标">
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('design')}>
             <span className="kpi-label">当前发布结构</span>
+            <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
             <strong>{ov.model.objectTypes}<small>对象实体</small></strong>
             <p>关系 {ov.model.linkTypes} · 动作 {ov.model.actions} · 函数 {ov.model.functions} · 哨兵 {ov.model.sentinels.total}</p>
             {ov.model.actions === 0
@@ -215,6 +240,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           </button>
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('data')}>
             <span className="kpi-label">当前实例投影</span>
+            <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
             <strong>{ov.data.instances}<small>对象实例</small></strong>
             <p>链接实例 {ov.data.linkInstances}</p>
             <em className="kpi-status is-neutral">
@@ -223,6 +249,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           </button>
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('data-mapping')}>
             <span className="kpi-label">数据映射</span>
+            <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
             <strong>{ov.data.mappings.bound}<small>/ {ov.data.mappings.total} 已显式绑定</small></strong>
             <p>名称匹配 {ov.data.mappings.nameMatch} · 数据自建 {ov.data.mappings.autoCreate}</p>
             <em className={`kpi-status ${ov.data.mappings.total === 0 ? 'is-neutral' : ov.data.mappings.bound === ov.data.mappings.total ? '' : 'is-warning'}`}>
@@ -235,6 +262,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           </button>
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('governance')}>
             <span className="kpi-label">当前版本事实流</span>
+            <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
             <strong>{ov.facts.total}<small>条</small></strong>
             <p>{factParts.slice(0, 3).map(([kind, value]) => `${FACT_META[kind]?.label || kind} ${value}`).join(' · ') || '尚无事实记录'}</p>
             {ov.runtime.pendingApprovals > 0
