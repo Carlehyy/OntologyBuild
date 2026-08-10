@@ -75,3 +75,30 @@ export function parseTracebackLines(traceback: string): number[] {
   }
   return [...lines].sort((a, b) => a - b)
 }
+
+/**
+ * 轻量 Python 源码整理（不做 AST 级重排，那需要 black；缩进由编辑器
+ * indentSelection 完成）：
+ *   Tab → 4 空格；去行尾空白；3+ 连续空行收敛为 2 行；保证单个文末换行。
+ */
+export function tidyPythonSource(source: string): string {
+  const lines = source.replace(/\t/g, '    ').split('\n')
+  const out: string[] = []
+  let blankRun = 0
+  for (const line of lines) {
+    const trimmedEnd = line.replace(/[ \u00a0]+$/g, '')
+    if (trimmedEnd === '') {
+      blankRun += 1
+      if (blankRun > 2) continue
+      // 空行不保留任何空白字符
+      out.push('')
+    } else {
+      blankRun = 0
+      out.push(trimmedEnd)
+    }
+  }
+  // 去掉开头多余空行，结尾只留一个换行
+  while (out.length > 0 && out[0] === '') out.shift()
+  while (out.length > 0 && out[out.length - 1] === '') out.pop()
+  return out.join('\n') + '\n'
+}

@@ -1,14 +1,16 @@
 """Release-fenced instance browser, CRUD, and fact-history services."""
 from __future__ import annotations
 
+from collections import Counter
+import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 import inspect
 from typing import Callable, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import String, cast, func, or_, select, text
+from sqlalchemy import String, and_, cast, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.ontology_formal import (
@@ -383,10 +385,12 @@ def instance_browser_objects(
         page: int,
         page_size: int,
         keyword: Optional[str],
+        filters: Optional[str],
+        source: Optional[str],
         db: Session):
     project = _require_ontology(db, ontology_id)
     release, snapshot = _current_release_view(db, project)
-    _release_catalog_item(
+    catalog_item = _release_catalog_item(
         snapshot["objectTypes"], object_type_id, "对象实体",
     )
     query = db.query(ObjectInstance).filter(
@@ -404,6 +408,17 @@ def instance_browser_objects(
             _json_value_match(ObjectInstance.properties, term, "obj_prop_kw", db),
             _json_value_match(ObjectInstance.computed, term, "obj_comp_kw", db),
         ))
+    # 精确属性过滤：properties / computed 任一值域命中即算（键已按快照校验）。
+    for index, (name, values) in enumerate(
+            _parse_browser_filters(filters, catalog_item.get("properties") or [])):
+        query = query.filter(or_(
+            _json_property_filter(
+                ObjectInstance.properties, name, values, f"obj_fp{index}", db),
+            _json_property_filter(
+                ObjectInstance.computed, name, values, f"obj_fc{index}", db),
+        ))
+    if source and source.strip():
+        query = query.filter(ObjectInstance.source == source.strip())
     total = query.count()
     items = query.order_by(
         ObjectInstance.updated_at.desc(), ObjectInstance.id.asc(),
@@ -427,10 +442,11 @@ def instance_browser_links(
         page: int,
         page_size: int,
         keyword: Optional[str],
+        filters: Optional[str],
         db: Session):
     project = _require_ontology(db, ontology_id)
     release, snapshot = _current_release_view(db, project)
-    _release_catalog_item(snapshot["linkTypes"], link_type_id, "实体关系")
+    catalog_item = _release_catalog_item(snapshot["linkTypes"], link_type_id, "实体关系")
     query = db.query(LinkInstance).filter(
         LinkInstance.ontology_id == ontology_id,
         LinkInstance.ontology_release_id == release.id,
@@ -457,6 +473,11 @@ def instance_browser_links(
             LinkInstance.source_object_id.in_(endpoint_hits),
             LinkInstance.target_object_id.in_(endpoint_hits),
         ))
+    # 关系仅有 properties 值域参与精确过滤。
+    for index, (name, values) in enumerate(
+            _parse_browser_filters(filters, catalog_item.get("properties") or [])):
+        query = query.filter(_json_property_filter(
+            LinkInstance.properties, name, values, f"link_fp{index}", db))
     total = query.count()
     items = query.order_by(
         LinkInstance.created_at.desc(), LinkInstance.id.asc(),
@@ -487,6 +508,274 @@ def instance_browser_links(
         "total": total,
         "page": page,
         "pageSize": page_size,
+    })
+
+
+# ============================================================
+#  实例浏览：精确属性过滤 + 数据画像统计
+# ============================================================
+
+_STATS_ROW_LIMIT = 20_000
+_STATS_DAYS = 30
+_CATEGORY_DISTINCT_LIMIT = 12
+_CATEGORY_TOP_VALUES = 8
+_HISTOGRAM_BUCKETS = 10
+
+
+def _parse_browser_filters(
+        raw: Optional[str],
+        schema_properties: list[dict]) -> list[tuple[str, list]]:
+    """解析精确属性过滤参数：{"status": "delayed", "risk_score": [80, 90]}。
+
+    键必须是发布快照中声明的属性名（fail-closed，未知键直接 422，
+    不静默忽略）；值为标量或标量列表（键内 OR、跨键 AND）。
+    返回 ``(属性名, 原始标量值列表)`` 对，保持声明顺序。
+    """
+    if raw is None or not str(raw).strip():
+        return []
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, detail={
+            "code": "invalid_filter",
+            "message": "filters 必须是合法的 JSON 对象",
+        }) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(422, detail={
+            "code": "invalid_filter",
+            "message": "filters 必须是合法的 JSON 对象",
+        })
+    declared = {str(prop.get("name")) for prop in schema_properties if prop.get("name")}
+    parsed: list[tuple[str, list]] = []
+    for key, value in payload.items():
+        name = str(key)
+        if name not in declared:
+            raise HTTPException(422, detail={
+                "code": "invalid_filter",
+                "message": f"属性「{name}」不在当前发布版本的类型定义中",
+            })
+        values = value if isinstance(value, list) else [value]
+        if not values:
+            raise HTTPException(422, detail={
+                "code": "invalid_filter",
+                "message": f"属性「{name}」的过滤值不能为空列表",
+            })
+        for item in values:
+            if item is None or isinstance(item, (dict, list)):
+                raise HTTPException(422, detail={
+                    "code": "invalid_filter",
+                    "message": f"属性「{name}」的过滤值仅支持标量",
+                })
+        parsed.append((name, values))
+    return parsed
+
+
+def _json_property_filter(column, key: str, values: list, param: str, db: Session):
+    """JSON 文档指定键的值域精确等值匹配（键内多值 OR）。
+
+    键已按发布快照校验，值走 bindparam。PostgreSQL 用 json_each_text
+    （文本域），SQLite 用 json_each + CAST TEXT；布尔按方言归一化
+    （PG 'true'/'false'，SQLite '1'/'0'），数字 str() 化。
+    ``param`` 是本次查询内唯一的 bindparam 前缀。
+    """
+    dialect = db.get_bind().dialect.name
+
+    def normalize(value) -> str:
+        if isinstance(value, bool):
+            if dialect == "postgresql":
+                return "true" if value else "false"
+            return "1" if value else "0"
+        return str(value)
+
+    table_name = column.class_.__table__.name
+    column_name = column.property.columns[0].name
+    binds: dict[str, str] = {f"{param}_key": key}
+    placeholders = []
+    for index, value in enumerate(values):
+        name = f"{param}_v{index}"
+        binds[name] = normalize(value)
+        placeholders.append(f":{name}")
+    in_clause = ", ".join(placeholders)
+    if dialect == "postgresql":
+        return text(
+            f'EXISTS (SELECT 1 FROM json_each_text("{table_name}"."{column_name}")'
+            f' AS jv("k", "v") WHERE jv."k" = :{param}_key'
+            f' AND jv."v" IN ({in_clause}))'
+        ).bindparams(**binds)
+    if dialect == "sqlite":
+        return text(
+            f'EXISTS (SELECT 1 FROM json_each("{table_name}"."{column_name}")'
+            f' WHERE json_each."key" = :{param}_key'
+            f' AND CAST(json_each."value" AS TEXT) IN ({in_clause}))'
+        ).bindparams(**binds)
+    # 宽松回退：键片段 + 值片段组合匹配（不错杀，仅未覆盖方言使用）。
+    return and_(
+        cast(column, String).like(f'%"{key}"%'),
+        or_(*[cast(column, String).like(f'%"{value}"%') for value in values]),
+    )
+
+
+def _daily_bucket(timestamps, days: int = _STATS_DAYS) -> list[dict]:
+    """近 N 天（含今天，UTC 口径）逐日计数，零填充，日期升序。"""
+    today = datetime.now(timezone.utc).date()
+    counts: Counter = Counter()
+    for ts in timestamps:
+        if ts is None:
+            continue
+        day = ts.date() if isinstance(ts, datetime) else ts
+        if today - timedelta(days=days - 1) <= day <= today:
+            counts[day.isoformat()] += 1
+    return [
+        {
+            "date": (today - timedelta(days=offset)).isoformat(),
+            "count": counts.get((today - timedelta(days=offset)).isoformat(), 0),
+        }
+        for offset in range(days - 1, -1, -1)
+    ]
+
+
+def _histogram(values: list[float], buckets: int = _HISTOGRAM_BUCKETS) -> list[dict]:
+    low, high = min(values), max(values)
+    if low == high:
+        return [{"from": low, "to": high, "count": len(values)}]
+    width = (high - low) / buckets
+    counts = [0] * buckets
+    for value in values:
+        index = min(int((value - low) / width), buckets - 1)
+        counts[index] += 1
+    return [
+        {"from": low + i * width, "to": low + (i + 1) * width, "count": counts[i]}
+        for i in range(buckets)
+    ]
+
+
+def _profile_field(prop: dict, rows: list) -> dict:
+    """单字段画像：按 schema 类型分派 category/number/date/text 四种形态。"""
+    name = str(prop.get("name"))
+    label = prop.get("displayName") or name
+    prop_type = str(prop.get("type") or "").lower()
+    bag_name = "computed" if prop.get("source") == "computed" else "properties"
+    present = []
+    for row in rows:
+        bag = getattr(row, bag_name) or {}
+        value = bag.get(name)
+        if value is not None and value != "":
+            present.append(value)
+    base = {
+        "name": name,
+        "label": label,
+        "type": prop.get("type"),
+        "coverage": round(len(present) / len(rows), 4) if rows else 0,
+    }
+    if prop_type in ("number", "integer", "float", "double"):
+        numbers = [
+            float(value) for value in present
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ]
+        if not numbers:
+            return {**base, "kind": "number"}
+        return {
+            **base,
+            "kind": "number",
+            "min": min(numbers),
+            "max": max(numbers),
+            "avg": round(sum(numbers) / len(numbers), 4),
+            "histogram": _histogram(numbers),
+        }
+    if prop_type in ("date", "datetime"):
+        texts = [str(value) for value in present]
+        result = {**base, "kind": "date"}
+        if texts:
+            result["min"] = min(texts)
+            result["max"] = max(texts)
+        return result
+    # string / bool / 其他标量：低基数 → category（含 top 值分布），高基数 → text。
+    scalars = [
+        value for value in present
+        if isinstance(value, (str, int, float, bool))
+    ]
+    counter: Counter = Counter(scalars)
+    base["distinct"] = len(counter)
+    if 0 < len(counter) <= _CATEGORY_DISTINCT_LIMIT:
+        top = counter.most_common(_CATEGORY_TOP_VALUES)
+        return {
+            **base,
+            "kind": "category",
+            "values": [{"value": value, "count": count} for value, count in top],
+            "otherCount": sum(count for _, count in counter.most_common()[_CATEGORY_TOP_VALUES:]),
+        }
+    return {**base, "kind": "text"}
+
+
+def instance_browser_stats(
+        ontology_id: str,
+        object_type_id: Optional[str],
+        link_type_id: Optional[str],
+        db: Session):
+    """实例浏览器数据画像：发布版作用域内的类型级统计（只读）。
+
+    值分布在 Python 内存聚合，绕开 PostgreSQL/SQLite 的 JSON SQL 方言分歧；
+    行数超过 _STATS_ROW_LIMIT 时截断并以 truncated 标记告知前端。
+    """
+    if (object_type_id is None) == (link_type_id is None):
+        raise HTTPException(422, detail={
+            "code": "invalid_stats_request",
+            "message": "object_type_id 与 link_type_id 必须且只能提供一个",
+        })
+    project = _require_ontology(db, ontology_id)
+    release, snapshot = _current_release_view(db, project)
+
+    if link_type_id is not None:
+        _release_catalog_item(snapshot["linkTypes"], link_type_id, "实体关系")
+        base = db.query(LinkInstance).filter(
+            LinkInstance.ontology_id == ontology_id,
+            LinkInstance.ontology_release_id == release.id,
+            LinkInstance.link_type_id == link_type_id,
+        )
+        total = base.count()
+        rows = base.limit(_STATS_ROW_LIMIT + 1).all()
+        truncated = len(rows) > _STATS_ROW_LIMIT
+        rows = rows[:_STATS_ROW_LIMIT]
+        return _ok({
+            "release": _instance_browser_release(release),
+            "kind": "link",
+            "linkTypeId": link_type_id,
+            "total": total,
+            "truncated": truncated,
+            "createdDaily": _daily_bucket([row.created_at for row in rows]),
+        })
+
+    catalog_item = _release_catalog_item(
+        snapshot["objectTypes"], object_type_id, "对象实体")
+    base = db.query(ObjectInstance).filter(
+        ObjectInstance.ontology_id == ontology_id,
+        ObjectInstance.ontology_release_id == release.id,
+        ObjectInstance.object_type_id == object_type_id,
+    )
+    total = base.count()
+    rows = base.limit(_STATS_ROW_LIMIT + 1).all()
+    truncated = len(rows) > _STATS_ROW_LIMIT
+    rows = rows[:_STATS_ROW_LIMIT]
+    by_source = [
+        {"source": source, "count": count}
+        for source, count in Counter(
+            row.source or "unknown" for row in rows
+        ).most_common()
+    ]
+    return _ok({
+        "release": _instance_browser_release(release),
+        "kind": "object",
+        "objectTypeId": object_type_id,
+        "total": total,
+        "truncated": truncated,
+        "createdDaily": _daily_bucket([row.created_at for row in rows]),
+        "updatedDaily": _daily_bucket([row.updated_at for row in rows]),
+        "bySource": by_source,
+        "fields": [
+            _profile_field(prop, rows)
+            for prop in (catalog_item.get("properties") or [])
+            if prop.get("name")
+        ],
     })
 
 

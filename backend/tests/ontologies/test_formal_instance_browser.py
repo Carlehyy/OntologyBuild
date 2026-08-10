@@ -593,3 +593,224 @@ def test_instance_browser_rejects_adoption_when_mappings_are_unreleased(
         ontology_id=ontology_id,
         event_subtype="legacy_projection_adopted",
     ).count() == 0
+
+
+def test_instance_browser_stats_profiles_object_fields(
+        client, auth_headers, ontology, db):
+    ontology_id = ontology["id"]
+    release = db.query(OntologyVersion).filter_by(
+        id=ontology["current_release_id"],
+    ).one()
+    _seed_release_instance_data(ontology_id, release, db)
+    snapshot = dict(release.snapshot_formal)
+    snapshot["objectTypes"] = [*snapshot["objectTypes"], {
+        "id": "ot-metric",
+        "name": "Metric",
+        "displayName": "指标",
+        "primaryKey": "prop-metric-name",
+        "properties": [
+            {"id": "prop-metric-name", "name": "name", "type": "string"},
+            {"id": "prop-metric-value", "name": "value",
+             "displayName": "数值", "type": "number"},
+            {"id": "prop-metric-day", "name": "day",
+             "displayName": "日期", "type": "date"},
+        ],
+    }]
+    release.snapshot_formal = snapshot
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.add_all([
+        ObjectInstance(
+            id="metric-1", ontology_id=ontology_id,
+            ontology_release_id=release.id, object_type_id="ot-metric",
+            properties={"name": "m1", "value": 10, "day": "2026-07-01"},
+            source="pipeline", created_at=now, updated_at=now,
+        ),
+        ObjectInstance(
+            id="metric-2", ontology_id=ontology_id,
+            ontology_release_id=release.id, object_type_id="ot-metric",
+            properties={"name": "m2", "value": 20, "day": "2026-07-03"},
+            source="pipeline", created_at=now, updated_at=now,
+        ),
+        ObjectInstance(
+            id="metric-3", ontology_id=ontology_id,
+            ontology_release_id=release.id, object_type_id="ot-metric",
+            properties={"name": "m3"},
+            source="manual", created_at=now, updated_at=now,
+        ),
+    ])
+    db.commit()
+
+    response = client.get(
+        f"/api/v2/formal/ontologies/{ontology_id}/instance-browser/stats",
+        params={"object_type_id": "ot-order"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()["data"]
+    assert body["kind"] == "object"
+    assert body["total"] == 3
+    assert body["truncated"] is False
+    assert len(body["createdDaily"]) == 30
+    assert body["createdDaily"][-1]["date"] == now.date().isoformat()
+    assert sum(item["count"] for item in body["createdDaily"]) == 3
+    assert {item["source"]: item["count"] for item in body["bySource"]} == {
+        "pipeline": 1, "collector": 1, "manual": 1,
+    }
+    fields = {item["name"]: item for item in body["fields"]}
+    assert fields["order_no"]["kind"] == "category"
+    assert fields["order_no"]["coverage"] == 1.0
+    assert sorted(
+        (v["value"], v["count"]) for v in fields["order_no"]["values"]
+    ) == [("A-001", 1), ("A-002", 1), ("A-003", 1)]
+    assert fields["order_no"]["otherCount"] == 0
+    # computed 属性（risk）从 computed 值域取数。
+    assert fields["risk"]["kind"] == "category"
+    assert sorted(v["value"] for v in fields["risk"]["values"]) == ["中", "低", "高"]
+
+    metric = client.get(
+        f"/api/v2/formal/ontologies/{ontology_id}/instance-browser/stats",
+        params={"object_type_id": "ot-metric"},
+        headers=auth_headers,
+    ).json()["data"]
+    metric_fields = {item["name"]: item for item in metric["fields"]}
+    assert metric_fields["value"]["kind"] == "number"
+    assert metric_fields["value"]["min"] == 10.0
+    assert metric_fields["value"]["max"] == 20.0
+    assert metric_fields["value"]["avg"] == 15.0
+    assert metric_fields["value"]["coverage"] == 0.6667
+    assert sum(
+        bucket["count"] for bucket in metric_fields["value"]["histogram"]
+    ) == 2
+    assert metric_fields["value"]["histogram"][0]["from"] == 10.0
+    assert metric_fields["day"]["kind"] == "date"
+    assert metric_fields["day"]["min"] == "2026-07-01"
+    assert metric_fields["day"]["max"] == "2026-07-03"
+    assert metric_fields["name"]["kind"] == "category"
+
+    links = client.get(
+        f"/api/v2/formal/ontologies/{ontology_id}/instance-browser/stats",
+        params={"link_type_id": "lt-owner"},
+        headers=auth_headers,
+    ).json()["data"]
+    assert links["kind"] == "link"
+    assert links["total"] == 1
+    assert sum(item["count"] for item in links["createdDaily"]) == 1
+
+
+def test_instance_browser_stats_rejects_invalid_requests(
+        client, auth_headers, ontology, db):
+    ontology_id = ontology["id"]
+    release = db.query(OntologyVersion).filter_by(
+        id=ontology["current_release_id"],
+    ).one()
+    _seed_release_instance_data(ontology_id, release, db)
+    url = f"/api/v2/formal/ontologies/{ontology_id}/instance-browser/stats"
+
+    neither = client.get(url, headers=auth_headers)
+    assert neither.status_code == 422
+    assert neither.json()["detail"]["code"] == "invalid_stats_request"
+
+    both = client.get(
+        url,
+        params={"object_type_id": "ot-order", "link_type_id": "lt-owner"},
+        headers=auth_headers,
+    )
+    assert both.status_code == 422
+
+    unpublished = client.get(
+        url, params={"object_type_id": "ot-rogue"}, headers=auth_headers)
+    assert unpublished.status_code == 404
+    assert unpublished.json()["detail"]["code"] == "release_type_not_found"
+
+
+def test_instance_browser_objects_precise_filters(
+        client, auth_headers, ontology, db):
+    ontology_id = ontology["id"]
+    release = db.query(OntologyVersion).filter_by(
+        id=ontology["current_release_id"],
+    ).one()
+    _seed_release_instance_data(ontology_id, release, db)
+    url = f"/api/v2/formal/ontologies/{ontology_id}/instance-browser/objects"
+
+    def fetch(**params):
+        response = client.get(
+            url, params={"object_type_id": "ot-order", **params},
+            headers=auth_headers,
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["data"]
+
+    single = fetch(filters='{"customer": "甲方"}')
+    assert [item["id"] for item in single["items"]] == ["order-1"]
+    assert single["total"] == 1
+
+    # computed 值域同样参与精确匹配
+    computed_hit = fetch(filters='{"risk": "高"}')
+    assert [item["id"] for item in computed_hit["items"]] == ["order-3"]
+
+    multi_or = fetch(filters='{"customer": ["甲方", "乙方"]}')
+    assert {item["id"] for item in multi_or["items"]} == {"order-1", "order-2"}
+
+    cross_and = fetch(filters='{"customer": "甲方", "risk": "低"}')
+    assert [item["id"] for item in cross_and["items"]] == ["order-1"]
+
+    stacked = fetch(keyword="A-00", filters='{"customer": "甲方"}')
+    assert [item["id"] for item in stacked["items"]] == ["order-1"]
+
+    by_source = fetch(source="pipeline")
+    assert [item["id"] for item in by_source["items"]] == ["order-1"]
+
+    none_hit = fetch(filters='{"customer": "不存在"}')
+    assert none_hit["total"] == 0
+
+    unknown_key = client.get(
+        url,
+        params={"object_type_id": "ot-order", "filters": '{"runtime_extra": "x"}'},
+        headers=auth_headers,
+    )
+    assert unknown_key.status_code == 422
+    assert unknown_key.json()["detail"]["code"] == "invalid_filter"
+
+    bad_json = client.get(
+        url,
+        params={"object_type_id": "ot-order", "filters": "not-json"},
+        headers=auth_headers,
+    )
+    assert bad_json.status_code == 422
+
+    null_value = client.get(
+        url,
+        params={"object_type_id": "ot-order", "filters": '{"customer": null}'},
+        headers=auth_headers,
+    )
+    assert null_value.status_code == 422
+
+
+def test_instance_browser_links_precise_filters(
+        client, auth_headers, ontology, db):
+    ontology_id = ontology["id"]
+    release = db.query(OntologyVersion).filter_by(
+        id=ontology["current_release_id"],
+    ).one()
+    _seed_release_instance_data(ontology_id, release, db)
+    url = f"/api/v2/formal/ontologies/{ontology_id}/instance-browser/links"
+
+    matched = client.get(
+        url,
+        params={
+            "link_type_id": "lt-owner",
+            "filters": '{"since": "2026-01-01T00:00:00Z"}',
+        },
+        headers=auth_headers,
+    )
+    assert matched.status_code == 200, matched.text
+    body = matched.json()["data"]
+    assert [item["id"] for item in body["items"]] == ["link-1"]
+
+    unknown_key = client.get(
+        url,
+        params={"link_type_id": "lt-owner", "filters": '{"secret": "draft"}'},
+        headers=auth_headers,
+    )
+    assert unknown_key.status_code == 422
+    assert unknown_key.json()["detail"]["code"] == "invalid_filter"

@@ -26,6 +26,7 @@ export default defineConfig({
     '**/governance_story_narrative.spec.ts',
     '**/instance_browser_readonly.spec.ts',
     '**/instance_data_interactions.spec.ts',
+    '**/instance_data_overview.spec.ts',
     '**/instance_dataset_navigation.spec.ts',
     '**/mapping_primary_key.spec.ts',
     '**/mapping_review_automation.spec.ts',

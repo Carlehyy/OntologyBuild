@@ -2,18 +2,53 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import CodeMirror from '@uiw/react-codemirror'
 import { EditorView } from '@codemirror/view'
+import { indentSelection } from '@codemirror/commands'
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
+import { tags } from '@lezer/highlight'
 import { python } from '@codemirror/lang-python'
+import '@fontsource/jetbrains-mono/400.css'
+import '@fontsource/jetbrains-mono/600.css'
 import {
   ArrowLeft, Play, Square, Save, Loader2, CheckCircle2, Circle, XCircle, AlertTriangle,
-  FileCode2, Terminal, RotateCcw, Keyboard, History, X, HelpCircle, Rocket,
+  FileCode2, Terminal, RotateCcw, Keyboard, History, HelpCircle, Rocket, Wand2, Download,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline, ScriptExecutionResult, ScriptVersion } from '@/api/v2/pipelines'
 import { useToast } from '@/components/ui/Toast'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import {
+  Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
+} from '@/components/ui/sheet'
 import PipelineEditWizard from '../PipelineEditWizard'
 import { PYTHON_SCRIPT_TEMPLATE } from './template'
-import { inferColumnTypes, parseTracebackLines, TYPE_LABELS } from './scriptUtils'
+import { inferColumnTypes, parseTracebackLines, tidyPythonSource, TYPE_LABELS } from './scriptUtils'
+
+// 编辑器观感：JetBrains Mono + 1.6 行高；去掉聚焦时编辑器与内容区的虚线轮廓
+const editorTheme = EditorView.theme({
+  '&': {
+    fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  },
+  '.cm-content': {
+    fontFamily: 'inherit',
+    lineHeight: '1.6',
+    outline: 'none',
+  },
+  '.cm-editor.cm-focused': { outline: 'none' },
+})
+
+// Python 语法高亮（GitHub light 风格）：默认浅色主题对比太弱，关键字/字符串/
+// 注释/数字/函数/类名用高区分度配色，读代码时一眼可辨结构
+const pythonHighlight = syntaxHighlighting(HighlightStyle.define([
+  { tag: tags.keyword, color: '#cf222e', fontWeight: '600' },
+  { tag: [tags.string, tags.docComment], color: '#0a3069' },
+  { tag: tags.comment, color: '#6e7781', fontStyle: 'italic' },
+  { tag: [tags.number, tags.bool, tags.null], color: '#0550ae', fontWeight: '600' },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: '#8250df' },
+  { tag: [tags.className, tags.definition(tags.variableName)], color: '#953800' },
+  { tag: tags.propertyName, color: '#116329' },
+  { tag: tags.operator, color: '#cf222e' },
+  { tag: tags.escape, color: '#0550ae' },
+]))
 
 const PREVIEW_ROWS = 20
 
@@ -73,19 +108,6 @@ const EMPTY_RESULT: Omit<ScriptExecutionResult, 'ok' | 'error'> = {
   duration_ms: 0,
 }
 
-function useIsWideScreen() {
-  const [wide, setWide] = useState(
-    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 1280px)').matches,
-  )
-  useEffect(() => {
-    const mq = window.matchMedia('(min-width: 1280px)')
-    const onChange = () => setWide(mq.matches)
-    mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
-  }, [])
-  return wide
-}
-
 export default function PythonScriptPage() {
   const { pipelineId } = useParams<{ pipelineId: string }>()
   const navigate = useNavigate()
@@ -122,7 +144,6 @@ export default function PythonScriptPage() {
     { kind: 'revert' } | { kind: 'restore'; version: ScriptVersion } | null
   >(null)
 
-  const isWide = useIsWideScreen()
   const [splitPct, setSplitPct] = useState(() => {
     const raw = Number(localStorage.getItem(SPLIT_KEY))
     return raw >= 30 && raw <= 70 ? raw : 50
@@ -331,6 +352,45 @@ export default function PythonScriptPage() {
     view.focus()
   }, [])
 
+  // 一键格式化：语法感知自动缩进（全文）+ 空白整理（Tab→空格、行尾空白、多余空行）
+  const handleFormat = useCallback(() => {
+    const view = editorViewRef.current
+    if (!view || isPublished) return
+    view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } })
+    indentSelection({ state: view.state, dispatch: view.dispatch })
+    const before = view.state.doc.toString()
+    const tidied = tidyPythonSource(before)
+    if (tidied !== before) {
+      const cursor = view.state.selection.main.head
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: tidied },
+        selection: { anchor: Math.min(cursor, tidied.length) },
+      })
+    }
+    view.dispatch({ selection: { anchor: view.state.selection.main.head } })
+    view.focus()
+    toast({ tone: 'success', title: '已格式化', description: '已自动缩进并整理空白（Tab→空格、行尾空白、多余空行）。' })
+  }, [isPublished, toast])
+
+  // 导出当前编辑器内容为 .py 文件：固定名 + 年月日时分，便于按时间归档
+  const handleExport = useCallback(() => {
+    if (!script.trim()) {
+      toast({ tone: 'warning', title: '脚本内容为空，无可导出内容' })
+      return
+    }
+    const now = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`
+    const filename = `python_script_${stamp}.py`
+    const url = URL.createObjectURL(new Blob([script], { type: 'text/x-python;charset=utf-8' }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = filename
+    anchor.click()
+    URL.revokeObjectURL(url)
+    toast({ tone: 'success', title: '脚本已导出', description: filename })
+  }, [script, toast])
+
   // 快捷键：Ctrl/⌘+Enter 执行，Ctrl/⌘+S 保存
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -419,84 +479,133 @@ export default function PythonScriptPage() {
   }
 
   return (
-    <div className="space-y-4 pb-4">
-      {/* 页头：返回 + 名称 + 徽章 + 保存状态 + 发布向导入口 */}
-      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
-        <button
-          onClick={() => navigate('/data/pipelines')}
-          className="flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-gray-600 transition hover:bg-gray-50"
-        >
-          <ArrowLeft size={13} /> 返回
-        </button>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <h2 className="truncate font-semibold text-gray-900">{pipeline.name}</h2>
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
-              <FileCode2 size={10} /> Python 脚本
-            </span>
-            <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] ${
-              isPublished
-                ? 'border-teal-200 bg-teal-50 text-teal-700'
-                : 'border-slate-200 bg-slate-100 text-slate-600'}`}
-            >
-              {isPublished ? '已发布' : '未发布'}
-            </span>
-          </div>
-          {pipeline.description && (
-            <p className="mt-0.5 truncate text-xs text-gray-400">{pipeline.description}</p>
-          )}
-        </div>
-        <div className="shrink-0 text-right text-[11px] leading-4">
-          {isPublished ? (
-            <span className="text-slate-400">脚本已封版，只读</span>
-          ) : dirty ? (
-            <span className="flex items-center gap-1 text-amber-600">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
-              有未保存修改 · 草稿已自动缓存
-            </span>
-          ) : (
-            <span className="flex items-center gap-1 text-slate-400">
-              <CheckCircle2 size={11} className="text-teal-600" />
-              已保存{pipeline.updated_at ? ` · ${formatClock(pipeline.updated_at)}` : ''}
-            </span>
-          )}
-        </div>
-        {!isPublished && (
-          <button
-            onClick={() => setShowWizard(true)}
-            className="flex shrink-0 items-center gap-1.5 rounded-xl border border-teal-700 px-3 py-1.5 text-xs font-medium text-teal-700 transition hover:bg-teal-50"
-            title="打开编辑向导：执行预览 → 设置字段契约 → 发布"
-          >
-            <Rocket size={13} /> 发布向导
-          </button>
-        )}
-      </div>
-
-      {isPublished && (
-        <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          <AlertTriangle size={13} className="shrink-0" />
-          流水线已发布，脚本已封版只读；仍可执行脚本核对输出。如需变更，请新建流水线。
-        </div>
-      )}
-      {!isPublished && draftRestoredAt && (
-        <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
-          <FileCode2 size={13} className="shrink-0" />
-          <span className="flex-1">已恢复你上次未保存的编辑草稿（{formatClock(draftRestoredAt)}）。</span>
-          <button onClick={handleDiscardDraft} className="shrink-0 rounded border border-sky-300 bg-white px-2 py-0.5 font-medium hover:bg-sky-100">
-            放弃草稿
-          </button>
-        </div>
-      )}
-
-      {/* 主区：宽屏左编辑器右结果（可拖拽分栏），窄屏纵向堆叠 */}
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      {/* 本体助手式布局：左右两个自包含面板 + 拖拽分隔，整页不滚动、面板内滚动 */}
       <div
         ref={splitContainerRef}
-        className={isWide ? 'grid items-start' : 'space-y-4'}
-        style={isWide ? { gridTemplateColumns: `minmax(0,${splitPct}fr) 14px minmax(0,${100 - splitPct}fr)` } : undefined}
+        className="scrollbar-none grid min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-1"
+        style={{ gridTemplateColumns: `minmax(460px, ${splitPct}fr) 10px minmax(400px, ${100 - splitPct}fr)` }}
       >
-        {/* 脚本编辑区（浅色 IDE） */}
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2.5">
+        {/* 左：脚本工作台（顶部描述信息 / 中部编辑器 / 底部操作栏） */}
+        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+          {/* 面板头：当前脚本描述信息 */}
+          <div className="flex h-14 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-600">
+              <FileCode2 size={16} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <h3 className="truncate text-sm font-semibold text-gray-900">{pipeline.name}</h3>
+                <span className="inline-flex shrink-0 items-center rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">
+                  Python 脚本
+                </span>
+                <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] ${
+                  isPublished
+                    ? 'border-teal-200 bg-teal-50 text-teal-700'
+                    : 'border-slate-200 bg-slate-100 text-slate-600'}`}
+                >
+                  {isPublished ? '已发布' : '未发布'}
+                </span>
+              </div>
+              <p className="truncate text-[11px] text-gray-400">
+                {pipeline.description || 'Python 脚本流水线'}
+                {isPublished && ' · 脚本已封版，只读'}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {!isPublished && (
+                <button
+                  onClick={() => setShowWizard(true)}
+                  className="flex h-8 items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition hover:border-teal-300 hover:bg-teal-100"
+                  title="打开编辑向导：执行预览 → 设置字段契约 → 发布"
+                >
+                  <Rocket size={13} /> 发布向导
+                </button>
+              )}
+              <div className="relative">
+                <button
+                  onClick={() => setShowHelp(v => !v)}
+                  className={`flex h-8 w-8 items-center justify-center rounded-md border transition ${
+                    showHelp
+                      ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
+                      : 'border-slate-200 text-gray-400 hover:bg-gray-50 hover:text-gray-600'}`}
+                  title="输出约定、执行环境与平台限制"
+                >
+                  <HelpCircle size={15} />
+                </button>
+                {showHelp && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setShowHelp(false)} />
+                    <div className="absolute right-0 z-20 mt-1.5 w-80 rounded-xl border border-slate-200 bg-white p-4 text-xs leading-5 text-gray-600 shadow-xl">
+                      <h4 className="mb-2 text-sm font-semibold text-gray-900">输出约定与执行环境</h4>
+                      <ul className="list-disc space-y-1.5 pl-4">
+                        <li>最终结果赋值给 <code className="rounded bg-slate-100 px-1 font-mono">result</code>，类型 list[dict]：每行一个 {'{列名: 值}'} 对象；pandas DataFrame 可直接赋值。</li>
+                        <li>执行不落库；「保存」时平台重新执行并复验输出格式，通过才写入。</li>
+                        <li>执行环境自带 requests / httpx / pandas / pymysql / openpyxl 等依赖。</li>
+                        <li>单次输出上限 50,000 行{timeoutLimit ? `；执行时限 ${timeoutLimit} 秒` : ''}，超限执行会失败。</li>
+                        <li>流水线发布后脚本封版只读；变更需新建流水线。</li>
+                      </ul>
+                    </div>
+                  </>
+                )}
+              </div>
+              <button
+                onClick={() => navigate('/data/pipelines')}
+                className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-gray-400 transition hover:bg-gray-50 hover:text-gray-600"
+                title="返回数据流水线"
+              >
+                <ArrowLeft size={15} />
+              </button>
+            </div>
+          </div>
+
+          {isPublished && (
+            <div className="flex shrink-0 items-center gap-2 border-b border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+              <AlertTriangle size={13} className="shrink-0" />
+              流水线已发布，脚本已封版只读；仍可执行脚本核对输出。如需变更，请新建流水线。
+            </div>
+          )}
+          {!isPublished && draftRestoredAt && (
+            <div className="flex shrink-0 items-center gap-2 border-b border-sky-100 bg-sky-50 px-4 py-2 text-xs text-sky-800">
+              <FileCode2 size={13} className="shrink-0" />
+              <span className="flex-1">已恢复你上次未保存的编辑草稿（{formatClock(draftRestoredAt)}）。</span>
+              <button onClick={handleDiscardDraft} className="shrink-0 rounded border border-sky-300 bg-white px-2 py-0.5 font-medium hover:bg-sky-100">
+                放弃草稿
+              </button>
+            </div>
+          )}
+
+          {/* 编辑器填满面板剩余高度 */}
+          <div className="min-h-0 flex-1">
+            <CodeMirror
+              value={script}
+              onChange={setScript}
+              extensions={[python(), pythonHighlight, editorTheme]}
+              theme="light"
+              readOnly={isPublished}
+              height="100%"
+              placeholder="# 在此编写取数脚本，最终结果赋值给 result"
+              onCreateEditor={view => { editorViewRef.current = view }}
+              basicSetup={{
+                lineNumbers: true,
+                foldGutter: true,
+                autocompletion: true,
+                bracketMatching: true,
+                closeBrackets: true,
+                indentOnInput: true,
+                highlightActiveLine: true,
+                highlightActiveLineGutter: true,
+              }}
+              style={{
+                fontSize: '13.5px',
+                height: '100%',
+                backgroundColor: isPublished ? '#f8fafc' : undefined,
+              }}
+            />
+          </div>
+
+          {/* 底部操作栏 */}
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-slate-200 bg-white px-4 py-2.5">
             {executing ? (
               <button
                 onClick={handleCancel}
@@ -520,7 +629,7 @@ export default function PythonScriptPage() {
                 <button
                   onClick={handleSave}
                   disabled={!canSave}
-                  title={canSave ? '保存脚本（⌘/Ctrl+S；平台会重新执行并复验输出格式）' : '保存前请先通过下方三项检查'}
+                  title={canSave ? '保存脚本（⌘/Ctrl+S；平台会重新执行并复验输出格式）' : '保存前请先通过上方三项检查'}
                   className="flex items-center gap-1.5 rounded-xl border border-teal-700 px-4 py-1.5 text-sm font-medium text-teal-700 transition hover:bg-teal-50 active:translate-y-px disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400"
                 >
                   {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
@@ -536,6 +645,14 @@ export default function PythonScriptPage() {
                     <RotateCcw size={13} /> 放弃修改
                   </button>
                 )}
+                <button
+                  onClick={handleFormat}
+                  disabled={executing || saving}
+                  className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
+                  title="一键格式化：语法感知自动缩进 + 整理空白（Tab→空格、行尾空白、多余空行）"
+                >
+                  <Wand2 size={13} /> 格式化
+                </button>
               </>
             )}
             <button
@@ -546,124 +663,101 @@ export default function PythonScriptPage() {
             >
               <History size={13} /> 历史版本
             </button>
-            <div className="relative ml-auto">
-              <button
-                onClick={() => setShowHelp(v => !v)}
-                className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] transition ${
-                  showHelp
-                    ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
-                    : 'border-slate-200 text-gray-500 hover:bg-gray-50'}`}
-                title="输出约定、执行环境与平台限制"
-              >
-                <HelpCircle size={12} />
-                输出约定：<code className="font-mono text-indigo-600">result</code> = list[dict]
-              </button>
-              {showHelp && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setShowHelp(false)} />
-                  <div className="absolute right-0 z-20 mt-1.5 w-80 rounded-xl border border-slate-200 bg-white p-4 text-xs leading-5 text-gray-600 shadow-xl">
-                    <h4 className="mb-2 text-sm font-semibold text-gray-900">输出约定与执行环境</h4>
-                    <ul className="list-disc space-y-1.5 pl-4">
-                      <li>最终结果赋值给 <code className="rounded bg-slate-100 px-1 font-mono">result</code>，类型 list[dict]：每行一个 {'{列名: 值}'} 对象；pandas DataFrame 可直接赋值。</li>
-                      <li>执行不落库；「保存」时平台重新执行并复验输出格式，通过才写入。</li>
-                      <li>执行环境自带 requests / httpx / pandas / pymysql / openpyxl 等依赖。</li>
-                      <li>单次输出上限 50,000 行{timeoutLimit ? `；执行时限 ${timeoutLimit} 秒` : ''}，超限执行会失败。</li>
-                      <li>流水线发布后脚本封版只读；变更需新建流水线。</li>
-                    </ul>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* 保存门槛 checklist：可保存的三个条件一目了然 */}
-          {!isPublished && (
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-slate-100 bg-slate-50/60 px-4 py-2">
-              <SaveCheckItem done={script.trim().length > 0} label="脚本非空" />
-              <SaveCheckItem done={executedScript === script && script.trim().length > 0} label="已执行当前内容" />
-              <SaveCheckItem done={!scriptDirtySinceValidation} label="输出格式通过校验" />
-              <span className={`ml-auto text-[11px] ${canSave ? 'text-teal-600' : 'text-gray-400'}`}>
-                {canSave ? '可以保存：保存时平台会重新执行并复验' : '三项全部通过后保存可点'}
-              </span>
-            </div>
-          )}
-
-          <CodeMirror
-            value={script}
-            onChange={setScript}
-            extensions={[python()]}
-            theme="light"
-            readOnly={isPublished}
-            height="clamp(340px, 52vh, 780px)"
-            placeholder="# 在此编写取数脚本，最终结果赋值给 result"
-            onCreateEditor={view => { editorViewRef.current = view }}
-            basicSetup={{
-              lineNumbers: true,
-              foldGutter: true,
-              autocompletion: true,
-              bracketMatching: true,
-              closeBrackets: true,
-              indentOnInput: true,
-              highlightActiveLine: true,
-              highlightActiveLineGutter: true,
-            }}
-            style={{
-              fontSize: '13px',
-              backgroundColor: isPublished ? '#f8fafc' : undefined,
-            }}
-          />
-          <div className="flex items-center justify-between border-t border-slate-100 px-4 py-1.5 text-[11px] text-gray-400">
-            <span className="hidden items-center gap-2 sm:flex">
+            <button
+              onClick={handleExport}
+              disabled={executing || saving}
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
+              title="导出当前脚本为 .py 文件（文件名含时间戳，便于归档）"
+            >
+              <Download size={13} /> 导出脚本
+            </button>
+            <span className="text-[11px] text-gray-400">
+              {dirty
+                ? <span className="flex items-center gap-1 text-amber-600"><span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />有未保存修改 · 草稿已自动缓存</span>
+                : savedScript
+                  ? `最近保存时间 · ${formatClock(pipeline.updated_at ?? undefined)}`
+                  : '尚未保存'}
+            </span>
+            <span className="ml-auto hidden items-center gap-2 text-[11px] text-gray-400 lg:flex">
               <Keyboard size={12} />
               <span><kbd className="rounded border border-slate-200 bg-slate-50 px-1 font-mono">⌘/Ctrl+Enter</kbd> 执行</span>
               <span><kbd className="rounded border border-slate-200 bg-slate-50 px-1 font-mono">⌘/Ctrl+S</kbd> 保存</span>
+              <span className="font-mono">{script.split('\n').length} 行</span>
             </span>
-            <span className="font-mono">{script.split('\n').length} 行</span>
           </div>
+        </section>
+
+        {/* 分栏拖拽手柄 */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整编辑器与结果区分栏比例"
+          onPointerDown={onSplitDragStart}
+          className="group flex h-full cursor-col-resize items-center justify-center"
+        >
+          <div className="h-16 w-1 rounded-full bg-slate-200 transition group-hover:bg-teal-500 group-active:bg-teal-600" />
         </div>
 
-        {/* 分栏拖拽手柄（仅宽屏） */}
-        {isWide && (
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="调整编辑器与结果区分栏比例"
-            onPointerDown={onSplitDragStart}
-            className="group flex h-full cursor-col-resize items-center justify-center"
-          >
-            <div className="h-16 w-1 rounded-full bg-slate-200 transition group-hover:bg-teal-500 group-active:bg-teal-600" />
+        {/* 右：脚本输出面板 */}
+        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+          <div className="flex h-14 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-teal-50 text-teal-600">
+              <Terminal size={16} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="truncate text-sm font-semibold text-gray-900">脚本输出</h3>
+              <p className="truncate text-[11px] text-gray-400">执行结果、格式校验与数据样本</p>
+            </div>
+            {executing && (
+              <span className="shrink-0 font-mono text-[11px] tabular-nums text-gray-400">
+                已执行 {elapsedSec}s{timeoutLimit ? ` / ${timeoutLimit}s` : ''}
+              </span>
+            )}
           </div>
-        )}
-
-        {/* 执行结果 */}
-        <ResultPanel
-          result={result}
-          resultKind={resultKind}
-          executing={executing}
-          saving={saving}
-          elapsedSec={elapsedSec}
-          timeoutLimit={timeoutLimit}
-          onCancel={handleCancel}
-          sampleColumns={sampleColumns}
-          columnTypes={columnTypes}
-          tracebackLines={tracebackLines}
-          onJumpToLine={jumpToLine}
-          showNextSteps={showNextSteps && !isPublished}
-          onOpenWizard={() => setShowWizard(true)}
-          onDismissNextSteps={() => setShowNextSteps(false)}
-        />
+          <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/40 p-3">
+            <ResultPanel
+              result={result}
+              resultKind={resultKind}
+              executing={executing}
+              saving={saving}
+              elapsedSec={elapsedSec}
+              timeoutLimit={timeoutLimit}
+              onCancel={handleCancel}
+              sampleColumns={sampleColumns}
+              columnTypes={columnTypes}
+              tracebackLines={tracebackLines}
+              onJumpToLine={jumpToLine}
+              nonEmpty={script.trim().length > 0}
+              executedCurrent={executedScript === script && script.trim().length > 0}
+              nextStep={
+                isPublished
+                  ? null
+                  : showNextSteps && resultKind === 'save' && result?.ok && result.format_valid
+                    ? 'publish'
+                    : result?.ok && result.format_valid && dirty
+                      ? 'save'
+                      : null
+              }
+              onOpenWizard={() => setShowWizard(true)}
+              onDismissNextSteps={() => setShowNextSteps(false)}
+            />
+          </div>
+        </section>
       </div>
 
       {/* 历史版本抽屉 */}
-      {showVersions && (
-        <VersionsDrawer
-          versions={versions}
-          loading={versionsLoading}
-          readOnly={!!isPublished}
-          onClose={() => setShowVersions(false)}
-          onRestore={version => setConfirm({ kind: 'restore', version })}
-        />
-      )}
+      <VersionsDrawer
+        open={showVersions}
+        versions={versions}
+        loading={versionsLoading}
+        readOnly={!!isPublished}
+        onClose={() => setShowVersions(false)}
+        onRestore={version => {
+          // 先关抽屉再弹确认：避免 Radix modal 的指针事件锁覆盖确认框
+          setShowVersions(false)
+          setConfirm({ kind: 'restore', version })
+        }}
+      />
 
       {/* 发布向导 */}
       {showWizard && (
@@ -698,22 +792,38 @@ export default function PythonScriptPage() {
   )
 }
 
-function SaveCheckItem({ done, label }: { done: boolean; label: string }) {
+function CheckItem({ label, tone }: { label: string; tone: 'pass' | 'fail' | 'warn' | 'idle' }) {
+  const icon = tone === 'pass'
+    ? <CheckCircle2 size={12} className="text-teal-600" />
+    : tone === 'fail'
+      ? <XCircle size={12} className="text-red-500" />
+      : tone === 'warn'
+        ? <AlertTriangle size={12} className="text-amber-500" />
+        : <Circle size={12} />
+  const color = tone === 'pass'
+    ? 'text-teal-700'
+    : tone === 'fail'
+      ? 'text-red-600'
+      : tone === 'warn'
+        ? 'text-amber-600'
+        : 'text-gray-400'
   return (
-    <span className={`inline-flex items-center gap-1 text-[11px] ${done ? 'text-teal-700' : 'text-gray-400'}`}>
-      {done ? <CheckCircle2 size={12} className="text-teal-600" /> : <Circle size={12} />}
+    <span className={`inline-flex items-center gap-1 text-[11px] ${color}`}>
+      {icon}
       {label}
     </span>
   )
 }
 
 function VersionsDrawer({
+  open,
   versions,
   loading,
   readOnly,
   onClose,
   onRestore,
 }: {
+  open: boolean
   versions: ScriptVersion[] | null
   loading: boolean
   readOnly: boolean
@@ -722,35 +832,15 @@ function VersionsDrawer({
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
-  // Esc 关闭抽屉（与点击遮罩等效）
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
-
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/45 backdrop-blur-[2px]" onClick={onClose}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="脚本历史版本"
-        className="absolute inset-y-0 right-0 flex w-[540px] max-w-full flex-col bg-white shadow-2xl"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-3.5">
-          <div>
-            <h3 className="text-base font-semibold text-slate-950">脚本历史版本</h3>
-            <p className="mt-0.5 text-xs text-slate-400">
-              每次保存冻结一版，最多保留最近 20 版；恢复后需重新执行校验才能保存
-            </p>
-          </div>
-          <button onClick={onClose} aria-label="关闭" className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-900">
-            <X size={18} />
-          </button>
-        </div>
+    <Sheet open={open} onOpenChange={value => { if (!value) onClose() }}>
+      <SheetContent aria-label="脚本历史版本">
+        <SheetHeader>
+          <SheetTitle>脚本历史版本</SheetTitle>
+          <SheetDescription>
+            每次保存冻结一版，最多保留最近 20 版；恢复后需重新执行校验才能保存
+          </SheetDescription>
+        </SheetHeader>
         <div className="flex-1 overflow-y-auto p-4">
           {loading ? (
             <div className="flex items-center justify-center gap-2 py-16 text-sm text-gray-400">
@@ -802,8 +892,8 @@ function VersionsDrawer({
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </SheetContent>
+    </Sheet>
   )
 }
 
@@ -819,7 +909,9 @@ function ResultPanel({
   columnTypes,
   tracebackLines,
   onJumpToLine,
-  showNextSteps,
+  nonEmpty,
+  executedCurrent,
+  nextStep,
   onOpenWizard,
   onDismissNextSteps,
 }: {
@@ -834,13 +926,15 @@ function ResultPanel({
   columnTypes: Record<string, string>
   tracebackLines: number[]
   onJumpToLine: (line: number) => void
-  showNextSteps: boolean
+  nonEmpty: boolean
+  executedCurrent: boolean
+  nextStep: 'save' | 'publish' | null
   onOpenWizard: () => void
   onDismissNextSteps: () => void
 }) {
   if (executing || saving) {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white p-10 text-sm text-gray-500">
+      <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white p-10 text-sm text-gray-500">
         <div className="flex items-center gap-3">
           <Loader2 size={16} className="animate-spin text-teal-700" />
           {executing ? '正在内核中执行脚本，请稍候…' : '正在重新执行并校验输出格式…'}
@@ -861,41 +955,87 @@ function ResultPanel({
       </div>
     )
   }
-  if (!result) {
-    return (
-      <div className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-slate-200 bg-white/60 p-10 text-center">
-        <Play size={26} className="text-slate-300" />
-        <p className="text-sm font-medium text-gray-500">点击「执行」查看脚本输出</p>
-        <p className="max-w-md text-xs leading-5 text-gray-400">
-          这里会展示行数、列结构（含推断类型）、数据样本与打印输出。
-        </p>
-      </div>
-    )
-  }
 
-  const success = result.ok && result.format_valid
+  const success = !!result && result.ok && result.format_valid
+  const formatTone: 'pass' | 'fail' | 'warn' | 'idle' = !result
+    ? 'idle'
+    : !result.ok
+      ? 'fail'
+      : result.format_valid
+        ? 'pass'
+        : 'warn'
+
+  // 列类型概览：第 4 张指标卡——列数之外回答「这些列是什么类型」，
+  // 直接为发布向导的字段契约预热
+  const typeCounts = new Map<string, number>()
+  for (const col of sampleColumns) {
+    const type = columnTypes[col]
+    if (type) typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1)
+  }
+  const typeBreakdown = [...typeCounts.entries()]
+    .map(([type, count]) => `${TYPE_LABELS[type as keyof typeof TYPE_LABELS] ?? type} ${count}`)
+    .join(' · ')
+
   return (
-    <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
-      {/* 状态头 */}
-      <div className="flex flex-wrap items-center gap-2">
-        {success ? (
-          <span className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-700">
-            <CheckCircle2 size={12} />
-            {resultKind === 'save' ? '保存成功' : '执行成功'} · 输出格式校验通过
-          </span>
-        ) : result.ok ? (
-          <span className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
-            <AlertTriangle size={12} /> 执行成功，但输出格式不符合平台要求
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-600">
-            <XCircle size={12} /> {resultKind === 'save' ? '保存失败' : '执行失败'}
-          </span>
+    <div className="space-y-3">
+      {/* 1. 当前脚本校验结果 */}
+      <div className="space-y-2.5 rounded-xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h4 className="text-xs font-semibold text-gray-700">当前脚本校验结果</h4>
+          {!result ? (
+            <span className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-gray-400">
+              <Circle size={12} /> 尚未执行
+            </span>
+          ) : success ? (
+            <span className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-700">
+              <CheckCircle2 size={12} />
+              {resultKind === 'save' ? '保存成功' : '执行成功'} · 输出格式校验通过
+            </span>
+          ) : result.ok ? (
+            <span className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
+              <AlertTriangle size={12} /> 执行成功，但输出格式不符合平台要求
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-600">
+              <XCircle size={12} /> {resultKind === 'save' ? '保存失败' : '执行失败'}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          <CheckItem tone={nonEmpty ? 'pass' : 'idle'} label="脚本非空" />
+          <CheckItem tone={executedCurrent ? 'pass' : 'idle'} label="已执行当前内容" />
+          <CheckItem tone={formatTone} label="输出格式符合规范" />
+        </div>
+        {result?.error && (
+          <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">{result.error}</p>
+        )}
+        {result?.traceback && (
+          <div className="overflow-hidden rounded-lg border border-red-100">
+            {tracebackLines.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 border-b border-red-100 bg-red-50 px-3 py-2">
+                <span className="text-[11px] text-red-500">定位到编辑器：</span>
+                {tracebackLines.map(line => (
+                  <button
+                    key={line}
+                    onClick={() => onJumpToLine(line)}
+                    className="rounded border border-red-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-red-600 transition hover:bg-red-100"
+                    title="跳转到脚本对应行"
+                  >
+                    第 {line} 行
+                  </button>
+                ))}
+              </div>
+            )}
+            <pre className="max-h-56 overflow-auto bg-red-50/60 p-3.5 font-mono text-[11px] leading-5 text-red-900">{result.traceback}</pre>
+          </div>
+        )}
+        {result?.format_error && (
+          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{result.format_error}</p>
         )}
       </div>
 
-      {/* 保存成功后的下一步引导：保存 ≠ 上线，发布后才可被调度 */}
-      {success && showNextSteps && (
+      {/* 2. 下一步操作 */}
+      {nextStep === 'publish' && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2.5">
           <Rocket size={14} className="shrink-0 text-teal-700" />
           <p className="flex-1 text-xs leading-5 text-teal-800">
@@ -915,53 +1055,38 @@ function ResultPanel({
           </button>
         </div>
       )}
+      {nextStep === 'save' && (
+        <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50/70 px-3 py-2.5 text-xs text-sky-800">
+          <Save size={13} className="shrink-0" />
+          下一步：保存脚本（保存时平台会重新执行并复验输出格式），随后前往发布向导完成发布。
+        </div>
+      )}
 
-      {/* 成功指标 */}
-      {result.ok && (
-        <div className="grid grid-cols-3 gap-2 sm:max-w-md">
+      {/* 3. 执行数据：行数 / 列数 / 耗时 / 列类型，四卡横排 */}
+      {result?.ok && (
+        <div className="grid grid-cols-4 gap-2">
           {[
-            { label: '输出行数', value: result.row_count.toLocaleString() },
-            { label: '输出列数', value: String(result.columns.length) },
-            { label: '执行耗时', value: `${(result.duration_ms / 1000).toFixed(1)}s` },
+            { label: '输出行数', value: result.row_count.toLocaleString(), sub: '' },
+            { label: '输出列数', value: String(result.columns.length), sub: '' },
+            { label: '执行耗时', value: `${(result.duration_ms / 1000).toFixed(1)}s`, sub: '' },
+            {
+              label: '列类型',
+              value: sampleColumns.length > 0 ? `${typeCounts.size} 种` : '-',
+              sub: typeBreakdown,
+            },
           ].map(item => (
-            <div key={item.label} className="rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2">
+            <div key={item.label} className="rounded-xl border border-slate-100 bg-white px-3 py-2" title={item.sub || undefined}>
               <div className="text-[11px] text-gray-400">{item.label}</div>
-              <div className="font-mono text-lg font-semibold tabular-nums text-gray-800">{item.value}</div>
+              <div className="truncate font-mono text-lg font-semibold tabular-nums text-gray-800">{item.value}</div>
+              {item.sub && <div className="truncate text-[10px] text-gray-400">{item.sub}</div>}
             </div>
           ))}
         </div>
       )}
 
-      {result.error && (
-        <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">{result.error}</p>
-      )}
-      {result.traceback && (
-        <div className="overflow-hidden rounded-lg border border-red-100">
-          {tracebackLines.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 border-b border-red-100 bg-red-50 px-3 py-2">
-              <span className="text-[11px] text-red-500">定位到编辑器：</span>
-              {tracebackLines.map(line => (
-                <button
-                  key={line}
-                  onClick={() => onJumpToLine(line)}
-                  className="rounded border border-red-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-red-600 transition hover:bg-red-100"
-                  title="跳转到脚本对应行"
-                >
-                  第 {line} 行
-                </button>
-              ))}
-            </div>
-          )}
-          <pre className="max-h-56 overflow-auto bg-red-50/60 p-3.5 font-mono text-[11px] leading-5 text-red-900">{result.traceback}</pre>
-        </div>
-      )}
-      {result.format_error && (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{result.format_error}</p>
-      )}
-
-      {/* 数据样本：表头带推断类型（与字段契约词表一致，为发布第 3 步预热） */}
-      {result.ok && result.sample.length > 0 && (
-        <div className="overflow-x-auto rounded-xl border border-slate-200">
+      {/* 4. 数据样本：表头带推断类型（与字段契约词表一致，为发布第 3 步预热） */}
+      {result?.ok && result.sample.length > 0 && (
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
           <table className="w-full text-xs">
             <thead className="border-b border-slate-200 bg-slate-50">
               <tr>
@@ -995,17 +1120,28 @@ function ResultPanel({
         </div>
       )}
 
-      {result.ok && result.row_count === 0 && (
+      {result?.ok && result.row_count === 0 && (
         <p className="text-xs text-gray-400">脚本输出 0 行。</p>
       )}
 
-      {result.stdout && (
-        <details className="rounded-xl border border-slate-200">
+      {/* 5. 脚本打印输出：默认折叠，展开可见全部内容 */}
+      {result?.stdout && (
+        <details className="rounded-xl border border-slate-200 bg-white">
           <summary className="flex cursor-pointer items-center gap-1.5 px-3 py-2 text-xs text-gray-500 transition hover:text-black">
-            <Terminal size={12} /> 脚本打印输出（stdout 尾部）
+            <Terminal size={12} /> 脚本打印输出（stdout，{result.stdout.split('\n').length} 行）
           </summary>
-          <pre className="max-h-56 overflow-auto border-t border-slate-200 bg-slate-50 p-3.5 font-mono text-[11px] leading-5 text-slate-700">{result.stdout}</pre>
+          <pre className="max-h-72 overflow-auto border-t border-slate-200 bg-slate-50 p-3.5 font-mono text-[11px] leading-5 text-slate-700">{result.stdout}</pre>
         </details>
+      )}
+
+      {!result && (
+        <div className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-slate-200 bg-white/60 p-10 text-center">
+          <Play size={26} className="text-slate-300" />
+          <p className="text-sm font-medium text-gray-500">点击「执行」查看脚本输出</p>
+          <p className="max-w-md text-xs leading-5 text-gray-400">
+            这里会展示行数、列结构（含推断类型）、数据样本与打印输出。
+          </p>
+        </div>
       )}
     </div>
   )

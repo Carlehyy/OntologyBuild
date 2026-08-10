@@ -9,6 +9,8 @@
    ═══════════════════════════════════════════════ */
 
 :root {
+  color-scheme: light;
+
   /* ── shadcn 语义 token（浅色，对齐平台既有外观） ── */
   --radius: 0.5rem;
   --background: #eef1f5;
@@ -134,6 +136,8 @@
 
 /* ── 深色主题：覆盖同一组 token，由主题切换在 <html> 上切换 .dark ── */
 .dark {
+  color-scheme: dark;
+
   /* ── shadcn 语义 token（深色） ── */
   --background: #0d1117;
   --foreground: #e6e9ef;

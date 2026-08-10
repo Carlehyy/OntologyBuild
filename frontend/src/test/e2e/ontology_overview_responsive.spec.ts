@@ -130,8 +130,13 @@ test('矮屏（1280x720）下 KPI 栏不被压碎，内容改为滚动呈现', a
   await expect(page.locator('.kpi-cell').first().locator('strong')).toBeVisible()
   // 装不下时外壳必须可滚动，而不是 overflow:hidden 裁掉内容。
   await expect(shell).toHaveCSS('overflow-y', 'auto')
-  await page.locator('.recent-facts').scrollIntoViewIfNeeded()
-  await expect(page.getByRole('heading', { name: '最近发生了什么' })).toBeVisible()
+  // 运行趋势图由 ECharts 渲染。
+  await expect(page.locator('.runtime-trend-chart canvas').first()).toBeVisible()
+  // 已下线的两个事实面板不再渲染。
+  await expect(page.getByRole('heading', { name: '事实类型构成' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: '最近发生了什么' })).toHaveCount(0)
+  await page.locator('.runtime-summary').scrollIntoViewIfNeeded()
+  await expect(page.getByRole('heading', { name: '近 7 日运行汇总' })).toBeVisible()
 
   // 待处理事项横条可见，且可点击直达对应 Tab。
   const health = page.getByLabel('待处理事项')
@@ -141,7 +146,7 @@ test('矮屏（1280x720）下 KPI 栏不被压碎，内容改为滚动呈现', a
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontologyId}\\?tab=governance`))
 })
 
-test('大屏（1920x1080）且无待办时保持一屏无滚动', async ({ page }) => {
+test('大屏（1920x1080）下完整呈现：趋势图可见，页面收敛为三个面板', async ({ page }) => {
   await mockOverview(page, { withHealth: false })
   await page.setViewportSize({ width: 1920, height: 1080 })
   await page.goto(`/#/ontologies/${ontologyId}`, { waitUntil: 'domcontentloaded' })
@@ -150,14 +155,19 @@ test('大屏（1920x1080）且无待办时保持一屏无滚动', async ({ page 
   await expect(page.getByLabel('待处理事项')).toHaveCount(0)
 
   const shell = page.locator('.ontology-overview-shell')
-  const metrics = await shell.evaluate(element => ({
-    clientHeight: element.clientHeight,
-    scrollHeight: element.scrollHeight,
-  }))
-  expect(metrics.scrollHeight - metrics.clientHeight).toBeLessThan(3)
+  await expect(shell).toHaveCSS('overflow-y', 'auto')
   const kpiBox = await page.locator('.kpi-rail').boundingBox()
   expect(kpiBox).not.toBeNull()
   expect(kpiBox!.height).toBeGreaterThan(160)
+  await expect(page.locator('.runtime-trend-chart canvas').first()).toBeVisible()
+  // 视口有富余时内容垂直伸展到底：图表吸收剩余高度而非底部留白。
+  const chartBox = await page.locator('.runtime-trend-chart').boundingBox()
+  expect(chartBox).not.toBeNull()
+  expect(chartBox!.height).toBeGreaterThan(300)
+  // 事实类型构成 / 最近发生了什么已下线，页面只剩概况、KPI、运行汇总三个面板。
+  await expect(page.locator('.overview-panel')).toHaveCount(3)
+  await expect(page.getByRole('heading', { name: '事实类型构成' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: '最近发生了什么' })).toHaveCount(0)
 })
 
 test('版本演化只有单个快照节点时隐藏播放与进度控制', async ({ page }) => {

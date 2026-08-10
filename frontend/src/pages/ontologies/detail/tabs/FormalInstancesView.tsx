@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link as RouterLink } from 'react-router-dom'
+import { Link as RouterLink, useSearchParams } from 'react-router-dom'
 import {
   AlertCircle,
   ArrowUpRight,
@@ -14,6 +14,7 @@ import {
   Loader2,
   RefreshCw,
   Search,
+  X,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 import { ConfirmModal } from '@/components/ui/Modal'
@@ -32,10 +33,18 @@ import type {
   SchemaProperty,
   Selection,
 } from './instanceBrowserTypes'
-import { formatInstanceDateTime } from './instanceValueDisplay'
+import { formatInstanceDateTime, instanceSourceLabel } from './instanceValueDisplay'
+import {
+  formatFilterValue,
+  serializeFilters,
+  type ActiveFilters,
+  type FilterValue,
+} from './instanceStatsFormat'
 import { FullValue, SourceChip } from './InstanceValueText'
 import InstanceDetailDrawer from './InstanceDetailDrawer'
 import InstanceSummaryBar from './InstanceSummaryBar'
+import InstanceOverviewSection from './InstanceOverviewSection'
+import InstanceTypeProfileSection from './InstanceTypeProfileSection'
 
 function errorMessage(error: unknown) {
   if (!error || typeof error !== 'object') return '数据加载失败，请稍后重试'
@@ -106,17 +115,21 @@ export default function FormalInstancesView({
 }) {
   const base = `/formal/ontologies/${ontologyId}/instance-browser`
   const queryClient = useQueryClient()
+  const [searchParams] = useSearchParams()
   const isAdmin = useAuthStore(state => state.user?.role === 'admin')
   const { toast } = useToast()
   const [selection, setSelection] = useState<Selection | null>(null)
   const [draftKeyword, setDraftKeyword] = useState('')
   const [keyword, setKeyword] = useState('')
+  const [filters, setFilters] = useState<ActiveFilters>({})
+  const [sourceFilter, setSourceFilter] = useState<string | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [pageDraft, setPageDraft] = useState('1')
   const [showAdoptConfirm, setShowAdoptConfirm] = useState(false)
   const [drawerRow, setDrawerRow] = useState<ObjectRow | null>(null)
   const tableScrollRef = useRef<HTMLDivElement>(null)
+  const browserRef = useRef<HTMLDivElement>(null)
   const [scrollHint, setScrollHint] = useState({ left: false, right: false })
 
   const catalogQuery = useQuery<InstanceCatalog>({
@@ -168,15 +181,31 @@ export default function FormalInstancesView({
         ? catalog.linkTypes.some(item => item.id === selection.id)
         : false
     if (selectionExists) return
+    // 从数据映射页「查看实例」跳入：type=object:<id> / link:<id> 优先选中对应类型
+    const requested = searchParams.get('type')?.match(/^(object|link):(.+)$/)
+    if (requested) {
+      const [, kind, id] = requested
+      const exists = kind === 'object'
+        ? catalog.objectTypes.some(item => item.id === id)
+        : catalog.linkTypes.some(item => item.id === id)
+      if (exists) {
+        setSelection({ kind: kind as Selection['kind'], id })
+        return
+      }
+    }
     const firstObject = catalog.objectTypes.find(item => item.instanceCount > 0) || catalog.objectTypes[0]
     const firstLink = catalog.linkTypes.find(item => item.instanceCount > 0) || catalog.linkTypes[0]
     setSelection(firstObject
       ? { kind: 'object', id: firstObject.id }
       : firstLink ? { kind: 'link', id: firstLink.id } : null)
-  }, [catalog, selection])
+  }, [catalog, searchParams, selection])
 
+  const serializedFilters = serializeFilters(filters)
   const dataQuery = useQuery<InstancePage<ObjectRow | LinkRow>>({
-    queryKey: ['instance-browser-page', ontologyId, selection?.kind, selection?.id, page, pageSize, keyword],
+    queryKey: [
+      'instance-browser-page', ontologyId, selection?.kind, selection?.id,
+      page, pageSize, keyword, serializedFilters, sourceFilter,
+    ],
     enabled: Boolean(selection),
     placeholderData: (previousData, previousQuery) => {
       const previousKey = previousQuery?.queryKey
@@ -192,6 +221,8 @@ export default function FormalInstancesView({
           page,
           page_size: pageSize,
           keyword: keyword || undefined,
+          filters: serializedFilters || undefined,
+          ...(selection.kind === 'object' && sourceFilter ? { source: sourceFilter } : {}),
         },
       })
     },
@@ -248,6 +279,8 @@ export default function FormalInstancesView({
     setPage(1)
     setDraftKeyword('')
     setKeyword('')
+    setFilters({})
+    setSourceFilter(null)
     setDrawerRow(null)
   }
 
@@ -259,8 +292,49 @@ export default function FormalInstancesView({
     setPage(1)
     setDraftKeyword(endpoint.label)
     setKeyword(endpoint.label)
+    setFilters({})
+    setSourceFilter(null)
     setDrawerRow(null)
   }
+
+  const scrollToBrowser = useCallback(() => {
+    browserRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [])
+
+  // 图表联动：点击字段值分布条 = 精确属性过滤（toggle）；点击来源 = 来源过滤。
+  const toggleFilterValue = (name: string, value: FilterValue) => {
+    setFilters(current => {
+      const existing = current[name] ?? []
+      const nextValues = existing.includes(value)
+        ? existing.filter(item => item !== value)
+        : [...existing, value]
+      const next = { ...current }
+      if (nextValues.length) next[name] = nextValues
+      else delete next[name]
+      return next
+    })
+    setPage(1)
+    scrollToBrowser()
+  }
+
+  const toggleSourceFilter = (source: string) => {
+    setSourceFilter(current => (current === source ? null : source))
+    setPage(1)
+    scrollToBrowser()
+  }
+
+  const selectTypeFromChart = (next: Selection) => {
+    selectType(next)
+    scrollToBrowser()
+  }
+
+  const clearAllFilters = () => {
+    setFilters({})
+    setSourceFilter(null)
+    setPage(1)
+  }
+
+  const hasActiveFilters = Boolean(serializedFilters) || sourceFilter !== null
 
   const applySearch = () => {
     setPage(1)
@@ -334,8 +408,25 @@ export default function FormalInstancesView({
   }
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(230px,280px)_minmax(0,1fr)] overflow-hidden bg-white">
-      <aside className="flex min-h-0 flex-col border-r border-slate-200 bg-slate-50/70">
+    <div className="min-h-full bg-white">
+      <div className="mx-auto flex min-h-full max-w-[1600px] flex-col gap-5 p-5">
+        {/* ① 数据概览：KPI + 类型分布/来源构成/近7天活动（复用已加载数据） */}
+        {catalog && (
+          <InstanceOverviewSection
+            catalog={catalog}
+            overview={overviewQuery.data}
+            onSelectType={selectTypeFromChart}
+            onFilterSource={toggleSourceFilter}
+            onScrollToBrowser={scrollToBrowser}
+          />
+        )}
+
+        {/* ② 实例浏览器：实体模型目录 + 实例表格（先选类型，再看数据） */}
+        <div
+          ref={browserRef}
+          className="grid shrink-0 grid-cols-1 rounded-xl border border-slate-200 md:grid-cols-[minmax(230px,280px)_minmax(0,1fr)]"
+        >
+      <aside className="flex max-h-64 min-h-0 flex-col self-start rounded-t-xl border-b border-slate-200 bg-slate-50/70 md:sticky md:top-4 md:max-h-[calc(100vh-3rem)] md:rounded-l-xl md:rounded-tr-none md:border-b-0 md:border-r">
         <div className="shrink-0 border-b border-slate-200 px-4 py-3.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
@@ -393,8 +484,8 @@ export default function FormalInstancesView({
         </nav>
       </aside>
 
-      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-        <header data-testid="instance-data-header" className="shrink-0 border-b border-slate-200 bg-white px-5 py-3.5">
+      <section className="flex min-w-0 flex-col">
+        <header data-testid="instance-data-header" className="shrink-0 border-b border-slate-200 bg-white px-5 py-3.5 md:rounded-tr-xl">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -454,6 +545,33 @@ export default function FormalInstancesView({
               )}
             </form>
           </div>
+          {hasActiveFilters && (
+            <div className="mt-2.5 flex flex-wrap items-center gap-1.5" data-testid="active-filters">
+              <span className="text-[11px] text-slate-400">当前过滤</span>
+              {sourceFilter !== null && (
+                <FilterChip
+                  label={`来源 = ${instanceSourceLabel(sourceFilter)}`}
+                  onRemove={() => setSourceFilter(null)}
+                />
+              )}
+              {Object.entries(filters).flatMap(([name, values]) =>
+                values.map(value => (
+                  <FilterChip
+                    key={`${name}=${String(value)}`}
+                    label={`${name} = ${formatFilterValue(value)}`}
+                    onRemove={() => toggleFilterValue(name, value)}
+                  />
+                )))
+              }
+              <button
+                type="button"
+                onClick={clearAllFilters}
+                className="rounded-full px-2 py-0.5 text-[11px] text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+              >
+                全部清除
+              </button>
+            </div>
+          )}
         </header>
 
         {catalog && (
@@ -525,7 +643,7 @@ export default function FormalInstancesView({
           <div
             ref={tableScrollRef}
             onScroll={updateScrollHints}
-            className="h-full overflow-auto bg-white"
+            className="overflow-x-auto bg-white"
           >
             {dataQuery.isLoading ? (
               <div className="flex h-full min-h-64 items-center justify-center gap-2 text-xs text-slate-400">
@@ -596,7 +714,7 @@ export default function FormalInstancesView({
           )}
         </div>
 
-        <footer className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-t border-slate-200 bg-slate-50/70 px-5 py-1.5">
+        <footer className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 rounded-b-xl border-t border-slate-200 bg-slate-50/70 px-5 py-1.5 md:rounded-bl-none md:rounded-br-xl">
           <div className="flex items-center gap-3 whitespace-nowrap text-xs text-slate-400">
             <span className="tabular-nums">{total ? `显示 ${rangeStart}–${rangeEnd} / ${total} 条` : '暂无记录'}</span>
             <span className="hidden text-slate-300 lg:inline">
@@ -658,6 +776,19 @@ export default function FormalInstancesView({
           </div>
         </footer>
       </section>
+        </div>
+
+        {/* ③ 类型数据画像：跟随浏览器选中类型，点击字段分布条可精确过滤上方表格 */}
+        {selection && selectedType && (
+          <InstanceTypeProfileSection
+            ontologyId={ontologyId}
+            selection={selection}
+            typeNode={selectedType}
+            activeFilters={filters}
+            onFilterProp={toggleFilterValue}
+          />
+        )}
+      </div>
       <ConfirmModal
         open={showAdoptConfirm}
         onClose={() => setShowAdoptConfirm(false)}
@@ -668,6 +799,22 @@ export default function FormalInstancesView({
         loading={adoptMutation.isPending}
       />
     </div>
+  )
+}
+
+function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 text-[11px] text-teal-700">
+      {label}
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`移除过滤 ${label}`}
+        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full transition hover:bg-teal-100"
+      >
+        <X size={10} />
+      </button>
+    </span>
   )
 }
 

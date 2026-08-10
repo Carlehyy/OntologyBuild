@@ -29,6 +29,8 @@ export interface ObjectTypeNode {
   name: string
   displayName?: string
   description?: string
+  icon?: string | null
+  color?: string | null
   primaryKey?: string | null
   properties: SchemaProperty[]
   instanceCount: number
@@ -40,6 +42,8 @@ export interface LinkTypeNode {
   name: string
   displayName?: string
   description?: string
+  icon?: string | null
+  color?: string | null
   sourceObjectTypeId: string
   targetObjectTypeId: string
   cardinality?: string
@@ -125,11 +129,18 @@ export interface InstanceFact {
   recordedAt?: string | null
 }
 
-// /overview 响应中本页汇总条用到的子集。
+// /overview 响应中本页汇总条与概览区用到的子集。
 export interface FormalOverviewSummary {
   data?: {
     instances?: number
     instancesBySource?: Record<string, number>
     linkInstances?: number
+  }
+  runtime?: {
+    daily7d?: Array<{
+      date: string
+      firings?: { fired?: number; error?: number }
+      actionRuns?: { success?: number; failed?: number }
+    }>
   }
 }

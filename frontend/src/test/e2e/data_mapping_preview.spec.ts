@@ -5,19 +5,25 @@ interface MockOptions {
   datasetStatus?: 'approved' | 'rejected'
   withInstances?: boolean
   withUnmappedObject?: boolean
+  noMappings?: boolean
+  darkTheme?: boolean
 }
 
 async function mockMappingPreview(page: Page, options: MockOptions = {}) {
   const columns = Array.from({ length: 8 }, (_, index) => `field_${index + 1}`)
   const datasetStatus = options.datasetStatus ?? 'approved'
   let applyAttempts = 0
-  await page.addInitScript(() => {
+  const requests = { objectsTypeId: '' }
+  await page.addInitScript(opts => {
     localStorage.setItem('token', 'e2e-token')
     localStorage.setItem('auth-store', JSON.stringify({
       state: { token: 'e2e-token', user: { id: 'u1', username: 'tester', role: 'admin' } },
       version: 0,
     }))
-  })
+    if (opts.darkTheme) {
+      localStorage.setItem('theme', JSON.stringify({ state: { theme: 'dark' }, version: 0 }))
+    }
+  }, { darkTheme: Boolean(options.darkTheme) })
 
   await page.route(/^https?:\/\/[^/]+\/api\/v[12]\//, async (route: Route) => {
     const url = new URL(route.request().url())
@@ -47,7 +53,7 @@ async function mockMappingPreview(page: Page, options: MockOptions = {}) {
         }] : []),
       ],
       linkTypes: [],
-      mappings: [{
+      mappings: options.noMappings ? [] : [{
         id: 'mapping-1', curatedDatasetId: 'dataset-wide', targetObjectTypeId: 'object-order',
         entityClass: 'Order',
         fieldMapping: { field_1: 'id', __applied_dataset_version_id__: 'dataset-version-23' },
@@ -119,10 +125,40 @@ async function mockMappingPreview(page: Page, options: MockOptions = {}) {
       url.pathname === '/api/v2/formal/ontologies/ontology-preview/instances'
       && options.withInstances
     ) return ok([{ id: 'inst-1', objectTypeId: 'object-order' }])
+    if (url.pathname === '/api/v2/formal/ontologies/ontology-preview/instance-browser/catalog') {
+      return ok({
+        release: { id: 'release-1', version: 'v1' },
+        objectTypes: [{
+          id: 'object-order', name: 'Order', displayName: '订单', primaryKey: 'id',
+          properties: [{ id: 'id', name: 'id', displayName: '订单编号', type: 'string', required: true }],
+          instanceCount: 1,
+          associatedDatasets: [{
+            id: 'dataset-wide', name: '订单宽表', kind: 'curated', roles: ['实体数据'], available: true,
+          }],
+        }],
+        linkTypes: [],
+        legacyProjection: {
+          objectInstances: 0, linkInstances: 0, total: 0,
+          canAdopt: false, recommendedAction: 'none', blockingReasons: [],
+        },
+      })
+    }
+    if (url.pathname === '/api/v2/formal/ontologies/ontology-preview/instance-browser/objects') {
+      requests.objectsTypeId = url.searchParams.get('object_type_id') || ''
+      return ok({
+        release: { id: 'release-1', version: 'v1' },
+        items: [{
+          id: 'inst-1', objectTypeId: 'object-order',
+          properties: { id: 'ORD-1001' }, computed: {},
+          createdAt: '2026-07-26T00:00:00Z', updatedAt: '2026-07-26T00:00:00Z',
+        }],
+        total: 1, page: 1, pageSize: 20,
+      })
+    }
     if (url.pathname.startsWith('/api/v2/formal/ontologies/ontology-preview/')) return ok([])
     return ok([])
   })
-  return { applyAttempts: () => applyAttempts }
+  return { applyAttempts: () => applyAttempts, requests }
 }
 
 test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async ({ page }) => {
@@ -281,4 +317,52 @@ test('侧栏齿轮携带元素上下文跳转字段级映射视图', async ({ pa
   await page.getByRole('button', { name: '查看该元素字段映射' }).click()
   await expect(page).toHaveURL(/\/ontologies\/ontology-preview\/graph\?view=mapping&focus=object(%3A|:)object-order$/)
   await expect(page.getByTestId('mapping-workspace')).toBeVisible()
+})
+
+test('数据供给全景：桑基图渲染出数据流，行与图联动', async ({ page }) => {
+  await mockMappingPreview(page)
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  await expect(page.getByText('数据供给全景')).toBeVisible()
+  const chart = page.getByTestId('mapping-flow-chart')
+  await expect(chart).toBeVisible()
+  // 1 个数据集 + 1 个对象 + 1 条流 → SVG 渲染出矢量节点
+  await expect.poll(async () => chart.locator('svg path').count()).toBeGreaterThan(0)
+  // 全部元素已映射时不显示"未接入数据流"caption
+  await expect(page.locator('.dmo-flow-caption')).toHaveCount(0)
+  // 行选中后图表保持渲染（selectedKey 联动不破坏画布）
+  await page.locator('.dmo-map-row').first().click()
+  await expect(chart).toBeVisible()
+})
+
+test('无映射本体显示诚实空态而非空画布', async ({ page }) => {
+  await mockMappingPreview(page, { noMappings: true })
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  await expect(page.getByText('暂无数据流')).toBeVisible()
+  await expect(page.getByTestId('mapping-flow-chart')).toHaveCount(0)
+  // 唯一的对象元素不在图中，caption 如实告知去向
+  await expect(page.locator('.dmo-flow-caption')).toContainText('1 个本体元素未接入数据流')
+})
+
+test('实例数链接跳转实例数据 Tab 并选中对应类型', async ({ page }) => {
+  const { requests } = await mockMappingPreview(page, { withInstances: true })
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  const link = page.locator('.dmo-instance-link').first()
+  await expect(link).toBeVisible()
+  await link.click()
+  await expect(page).toHaveURL(/tab=data&type=object(%3A|:)object-order/)
+  // 实例数据页消费 type 参数：按选中的对象类型请求实例列表
+  await expect.poll(() => requests.objectsTypeId).toBe('object-order')
+})
+
+test('深色模式：页面与桑基图随主题渲染', async ({ page }) => {
+  await mockMappingPreview(page, { darkTheme: true })
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  await expect(page.locator('html')).toHaveClass(/dark/)
+  await expect(page.getByTestId('mapping-flow-chart')).toBeVisible()
+  await expect.poll(async () => page.locator('.dmo-flow-canvas svg path').count()).toBeGreaterThan(0)
+  await expect(page.locator('.dmo-card')).toHaveCSS('background-color', 'rgb(22, 28, 38)')
 })

@@ -24,8 +24,9 @@ logger = logging.getLogger(__name__)
 
 # 与 n8n 引擎（steward/runner.py _MAX_ROWS）一致的单次输出安全上限
 _MAX_ROWS = 50_000
-# 回传展示用的 stdout 尾部长度（防止内核打印撑爆内存/响应体）
-_STDOUT_TAIL_CHARS = 4000
+# 回传展示用的 stdout 长度上限（防止内核打印撑爆内存/响应体）。
+# 页面侧默认折叠、展开可见全部内容，因此上限放宽到 200K 字符。
+_STDOUT_TAIL_CHARS = 200_000
 
 _RESULT_BEGIN = "__OB_RESULT_BEGIN__"
 _RESULT_END = "__OB_RESULT_END__"

@@ -227,6 +227,8 @@ def instance_browser_objects(
         page: int = Query(1, ge=1),
         page_size: int = Query(20, ge=1, le=100),
         keyword: Optional[str] = Query(None, max_length=200),
+        filters: Optional[str] = Query(None, max_length=2000),
+        source: Optional[str] = Query(None, max_length=50),
         db: Session = Depends(get_db),
         _=Depends(get_current_user)):
     return instance_service.instance_browser_objects(
@@ -235,6 +237,8 @@ def instance_browser_objects(
         page,
         page_size,
         keyword,
+        filters,
+        source,
         db,
     )
 
@@ -246,6 +250,7 @@ def instance_browser_links(
         page: int = Query(1, ge=1),
         page_size: int = Query(20, ge=1, le=100),
         keyword: Optional[str] = Query(None, max_length=200),
+        filters: Optional[str] = Query(None, max_length=2000),
         db: Session = Depends(get_db),
         _=Depends(get_current_user)):
     return instance_service.instance_browser_links(
@@ -254,6 +259,23 @@ def instance_browser_links(
         page,
         page_size,
         keyword,
+        filters,
+        db,
+    )
+
+
+@router.get("/{ontology_id}/instance-browser/stats")
+def instance_browser_stats(
+        ontology_id: str,
+        object_type_id: Optional[str] = Query(None, min_length=1),
+        link_type_id: Optional[str] = Query(None, min_length=1),
+        db: Session = Depends(get_db),
+        _=Depends(get_current_user)):
+    """类型级数据画像：分布/趋势/来源统计，只读且锁定当前发布版。"""
+    return instance_service.instance_browser_stats(
+        ontology_id,
+        object_type_id,
+        link_type_id,
         db,
     )
 

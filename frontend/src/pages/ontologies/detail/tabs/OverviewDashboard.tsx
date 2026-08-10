@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Activity, CheckCircle2, ChevronRight, CircleAlert, Clock3, Database,
-  GitBranch, Loader2, ShieldCheck, Sparkles, Workflow, Zap,
+  Activity, CheckCircle2, ChevronRight, CircleAlert, Database,
+  GitBranch, Loader2, Sparkles, Workflow, Zap,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 import type { OntologyDetail } from '@/types/ontology'
+import RuntimeTrendChart from './RuntimeTrendChart'
 import VersionEvolutionCard from './VersionEvolutionCard'
 import './overview-dashboard.css'
 
@@ -37,24 +38,9 @@ interface Overview {
   health?: { level: 'info' | 'warn' | 'action'; message: string; hint?: string; target?: string }[]
 }
 
-interface FactRow {
-  id: string
-  subjectLabel: string
-  propertyName: string
-  value: unknown
-  present?: boolean
-  kind: string
-  source: string
-  recordedAt: string | null
-}
-
-const FACT_META: Record<string, { label: string; color: string; className: string }> = {
-  property: { label: '属性', color: '#7c5ce0', className: 'fact-property' },
-  derived: { label: '派生', color: '#9d7ee8', className: 'fact-derived' },
-  link: { label: '链接', color: '#3b82f6', className: 'fact-link' },
-  decision: { label: '决策', color: '#f59e0b', className: 'fact-decision' },
-  object: { label: '存在', color: '#ef6464', className: 'fact-object' },
-  absence: { label: '缺席', color: '#aeb8c6', className: 'fact-absence' },
+const FACT_KIND_LABEL: Record<string, string> = {
+  property: '属性', derived: '派生', link: '链接',
+  decision: '决策', object: '存在', absence: '缺席',
 }
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -76,10 +62,32 @@ const formatRuntimeDay = (date: string) => {
   return value.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
 }
 
-const formatValue = (value: unknown, max = 30) => {
-  if (value === null || value === undefined) return '∅'
-  const text = typeof value === 'object' ? JSON.stringify(value) : String(value)
-  return text.length > max ? `${text.slice(0, max)}…` : text
+/* KPI 数字滚动：数据到达或变化时从旧值缓动到新值；
+   prefers-reduced-motion 下直接呈现最终值。 */
+function useCountUp(target: number, duration = 620) {
+  const [display, setDisplay] = useState(0)
+  const fromRef = useRef(0)
+  useEffect(() => {
+    const from = fromRef.current
+    if (from === target) return
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      fromRef.current = target
+      setDisplay(target)
+      return
+    }
+    const started = performance.now()
+    let raf = 0
+    const tick = (now: number) => {
+      const progress = Math.min((now - started) / duration, 1)
+      const eased = 1 - Math.pow(1 - progress, 3)
+      setDisplay(Math.round(from + (target - from) * eased))
+      if (progress < 1) raf = requestAnimationFrame(tick)
+      else fromRef.current = target
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [target, duration])
+  return display
 }
 
 function NetworkMark() {
@@ -118,16 +126,15 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
     queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/overview`) as Promise<Overview>,
     refetchInterval: 30000,
   })
-  const factsQuery = useQuery<FactRow[]>({
-    queryKey: ['recent-facts', ontologyId],
-    queryFn: () => apiClientV2.get(
-      `/formal/ontologies/${ontologyId}/facts/recent?limit=6&current_release_only=true`) as Promise<FactRow[]>,
-    refetchInterval: 30000,
-  })
   const runtimeDayCount = overviewQuery.data?.runtime.daily7d?.length || 7
   useEffect(() => {
     setRuntimeRange([0, Math.max(runtimeDayCount - 1, 0)])
   }, [ontologyId, runtimeDayCount])
+
+  const kpiObjectTypes = useCountUp(overviewQuery.data?.model.objectTypes ?? 0)
+  const kpiInstances = useCountUp(overviewQuery.data?.data.instances ?? 0)
+  const kpiMappingsBound = useCountUp(overviewQuery.data?.data.mappings.bound ?? 0)
+  const kpiFactsTotal = useCountUp(overviewQuery.data?.facts.total ?? 0)
 
   if (!overviewQuery.data) {
     if (overviewQuery.isError) {
@@ -149,12 +156,11 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   }
 
   const ov = overviewQuery.data
-  const facts = factsQuery.data ?? []
   // 只把"需要用户处理"的建议（warn/action）摆上总览；info 级属于常规引导，不打扰。
   const healthItems = (ov.health ?? []).filter(item => item.level !== 'info')
   const factParts = Object.entries(ov.facts.byKind)
     .filter(([, value]) => value > 0)
-    .sort(([a], [b]) => (FACT_META[a] ? 0 : 1) - (FACT_META[b] ? 0 : 1))
+    .sort(([a], [b]) => (FACT_KIND_LABEL[a] ? 0 : 1) - (FACT_KIND_LABEL[b] ? 0 : 1))
   const sourceEntries = Object.entries(ov.data.instancesBySource).sort((a, b) => b[1] - a[1])
   // daily7d 只信后端按日返回的数据；没有就如实呈现空态，绝不把 7 日汇总堆到"今天"。
   const runtimeDays = ov.runtime.daily7d ?? []
@@ -168,10 +174,6 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
     success: summary.success + day.actionRuns.success,
     failed: summary.failed + day.actionRuns.failed,
   }), { fired: 0, error: 0, success: 0, failed: 0 })
-  const maxDailyRuntime = Math.max(...runtimeDays.flatMap(day => [
-    day.firings.fired + day.firings.error,
-    day.actionRuns.success + day.actionRuns.failed,
-  ]), 1)
   const selectedRuntimeTotal = selectedRuntime.fired + selectedRuntime.error
     + selectedRuntime.success + selectedRuntime.failed
   const runtimeStartLabel = hasRuntimeDays ? formatRuntimeDay(runtimeDays[runtimeRangeStart].date) : ''
@@ -184,7 +186,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   const runtimeRangeSpan = Math.max(runtimeDays.length - 1, 1)
 
   return (
-    <main className={`overview-dashboard${healthItems.length ? ' has-health' : ''}`} aria-label="本体总览">
+    <main className="overview-dashboard" aria-label="本体总览">
       {healthItems.length > 0 && (
         <section className="overview-health" aria-label="待处理事项">
           {healthItems.slice(0, 3).map(item => (
@@ -230,7 +232,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('design')}>
             <span className="kpi-label">当前发布结构</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
-            <strong>{ov.model.objectTypes}<small>对象实体</small></strong>
+            <strong>{kpiObjectTypes}<small>对象实体</small></strong>
             <p>关系 {ov.model.linkTypes} · 动作 {ov.model.actions} · 函数 {ov.model.functions} · 哨兵 {ov.model.sentinels.total}</p>
             {ov.model.actions === 0
               ? <em className="kpi-status is-neutral"><CircleAlert size={15} />暂无动作类型</em>
@@ -241,7 +243,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('data')}>
             <span className="kpi-label">当前实例投影</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
-            <strong>{ov.data.instances}<small>对象实例</small></strong>
+            <strong>{kpiInstances}<small>对象实例</small></strong>
             <p>链接实例 {ov.data.linkInstances}</p>
             <em className="kpi-status is-neutral">
               {sourceEntries.map(([source, count]) => `${SOURCE_LABEL[source] || source} ${count}`).join(' · ') || '暂无实例数据'}
@@ -250,7 +252,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('data-mapping')}>
             <span className="kpi-label">数据映射</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
-            <strong>{ov.data.mappings.bound}<small>/ {ov.data.mappings.total} 已显式绑定</small></strong>
+            <strong>{kpiMappingsBound}<small>/ {ov.data.mappings.total} 已显式绑定</small></strong>
             <p>名称匹配 {ov.data.mappings.nameMatch} · 数据自建 {ov.data.mappings.autoCreate}</p>
             <em className={`kpi-status ${ov.data.mappings.total === 0 ? 'is-neutral' : ov.data.mappings.bound === ov.data.mappings.total ? '' : 'is-warning'}`}>
               {ov.data.mappings.total === 0
@@ -263,8 +265,8 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('governance')}>
             <span className="kpi-label">当前版本事实流</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
-            <strong>{ov.facts.total}<small>条</small></strong>
-            <p>{factParts.slice(0, 3).map(([kind, value]) => `${FACT_META[kind]?.label || kind} ${value}`).join(' · ') || '尚无事实记录'}</p>
+            <strong>{kpiFactsTotal}<small>条</small></strong>
+            <p>{factParts.slice(0, 3).map(([kind, value]) => `${FACT_KIND_LABEL[kind] || kind} ${value}`).join(' · ') || '尚无事实记录'}</p>
             {ov.runtime.pendingApprovals > 0
               ? <em className="kpi-status is-warning"><CircleAlert size={15} />{ov.runtime.pendingApprovals} 条动作待人工审批</em>
               : <em className="kpi-status is-purple"><GitBranch size={15} />追加式留痕，可回放与追溯</em>}
@@ -301,42 +303,9 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           <div className="runtime-trend">
             <div className="runtime-trend-heading">
               <span>每日运行趋势</span>
-              <div className="runtime-trend-legend" aria-hidden="true">
-                <span><i className="tone-teal" />哨兵</span>
-                <span><i className="tone-blue" />动作</span>
-                <span><i className="tone-issue" />异常</span>
-              </div>
             </div>
-            <div className={`runtime-daily-chart ${selectedRuntimeTotal === 0 ? 'is-empty' : ''}`} role="img" aria-label={`${runtimeRangeLabel} 每日运行趋势`}>
-              <span className="runtime-gridline runtime-gridline--top" aria-hidden="true" />
-              <span className="runtime-gridline runtime-gridline--mid" aria-hidden="true" />
-              {runtimeDays.map((day, index) => {
-                const inRange = index >= runtimeRangeStart && index <= runtimeRangeEnd
-                const sentinelTotal = day.firings.fired + day.firings.error
-                const actionTotal = day.actionRuns.success + day.actionRuns.failed
-                return (
-                  <div className={`runtime-day ${inRange ? 'is-selected' : ''}`} key={day.date}>
-                    <div className="runtime-day-bars">
-                      <span
-                        className="runtime-day-stack runtime-day-stack--sentinel"
-                        title={`${formatRuntimeDay(day.date)}：哨兵命中 ${day.firings.fired}，错误 ${day.firings.error}`}
-                      >
-                        <i style={{ height: `${Math.max(day.firings.fired / maxDailyRuntime * 68, day.firings.fired ? 5 : 2)}px` }} />
-                        <b style={{ height: `${Math.max(day.firings.error / maxDailyRuntime * 68, day.firings.error ? 5 : 2)}px` }} />
-                      </span>
-                      <span
-                        className="runtime-day-stack runtime-day-stack--action"
-                        title={`${formatRuntimeDay(day.date)}：动作成功 ${day.actionRuns.success}，失败 ${day.actionRuns.failed}`}
-                      >
-                        <i style={{ height: `${Math.max(day.actionRuns.success / maxDailyRuntime * 68, day.actionRuns.success ? 5 : 2)}px` }} />
-                        <b style={{ height: `${Math.max(day.actionRuns.failed / maxDailyRuntime * 68, day.actionRuns.failed ? 5 : 2)}px` }} />
-                      </span>
-                    </div>
-                    <time dateTime={day.date}>{formatRuntimeDay(day.date)}</time>
-                    <span className="runtime-day-total">{sentinelTotal + actionTotal || '—'}</span>
-                  </div>
-                )
-              })}
+            <div className={`runtime-trend-chart ${selectedRuntimeTotal === 0 ? 'is-empty' : ''}`} role="img" aria-label={`${runtimeRangeLabel} 每日运行趋势`}>
+              <RuntimeTrendChart days={runtimeDays} rangeStart={runtimeRangeStart} rangeEnd={runtimeRangeEnd} />
               {selectedRuntimeTotal === 0 && (
                 <div className="runtime-empty-note">
                   <Sparkles size={17} />
@@ -391,63 +360,6 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
               <time dateTime={runtimeDays.at(-1)?.date}>{formatRuntimeDay(runtimeDays.at(-1)?.date || '')}</time>
             </div>
           </div>
-          )}
-        </section>
-      </div>
-
-      <div className="overview-row overview-row-facts">
-        <section className="overview-panel fact-composition">
-          <PanelTitle title="事实类型构成" sub={`累计事实 ${ov.facts.total}`} />
-          <div className="fact-stack">
-            {factParts.length ? factParts.map(([kind, count]) => (
-              <span key={kind} style={{ width: `${Math.max(count / Math.max(ov.facts.total, 1) * 100, 1)}%`, background: FACT_META[kind]?.color || '#64748b' }}>
-                {count / Math.max(ov.facts.total, 1) > .08 ? `${FACT_META[kind]?.label || kind} ${count} (${(count / ov.facts.total * 100).toFixed(1)}%)` : ''}
-              </span>
-            )) : <span className="fact-empty">暂无事实</span>}
-          </div>
-          <div className="fact-legend-row">
-            <div className="fact-legend">
-              {factParts.map(([kind, count]) => <span key={kind}><i style={{ background: FACT_META[kind]?.color || '#64748b' }} />{FACT_META[kind]?.label || kind} {count} ({(count / Math.max(ov.facts.total, 1) * 100).toFixed(1)}%)</span>)}
-            </div>
-            <p><ShieldCheck size={18} />事实追加不修改，可按时间回放与追溯</p>
-          </div>
-        </section>
-
-        <section className="overview-panel recent-facts">
-          <PanelTitle title="最近发生了什么" sub={`${ov.release.version} 事实流 · 追加不修改`} action={<button className="overview-link-button" onClick={() => onGoGroup('governance')}>查看全部 <ChevronRight size={15} /></button>} />
-          {factsQuery.isLoading ? <div className="recent-empty"><Loader2 className="spin" size={18} />正在读取事实流…</div> : factsQuery.isError ? (
-            <div className="recent-empty" role="alert">
-              <CircleAlert size={18} />事实流读取失败
-              <button
-                type="button"
-                onClick={() => void factsQuery.refetch()}
-                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-              >
-                重试
-              </button>
-            </div>
-          ) : facts.length === 0 ? (
-            <div className="recent-empty"><Sparkles size={20} />还没有事实记录；数据灌入或动作执行后会在这里留痕。</div>
-          ) : (
-            <div className="recent-list">
-              {facts.slice(0, 6).map((fact, index) => (
-                <div className="recent-row" key={fact.id}>
-                  <span className="timeline-dot" style={{ background: FACT_META[fact.kind]?.color || '#64748b' }}>{index === 5 ? '' : <i />}</span>
-                  <span className={`fact-chip ${FACT_META[fact.kind]?.className || 'fact-property'}`}>{FACT_META[fact.kind]?.label || fact.kind}</span>
-                  <strong title={fact.subjectLabel}>{fact.subjectLabel}</strong>
-                  <code title={fact.propertyName}>{fact.propertyName}</code>
-                  <span className="fact-equals">=</span>
-                  <span
-                    className="fact-value"
-                    title={fact.present === false ? '属性已删除' : formatValue(fact.value, 100)}
-                  >
-                    {fact.present === false ? '（已删除）' : formatValue(fact.value)}
-                  </span>
-                  <span className="fact-source">{SOURCE_LABEL[fact.source] || fact.source}</span>
-                  <time><Clock3 size={12} />{formatDateTime(fact.recordedAt, true)}</time>
-                </div>
-              ))}
-            </div>
           )}
         </section>
       </div>

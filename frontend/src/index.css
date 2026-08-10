@@ -84,6 +84,11 @@
     background-color: #f8fbff;
   }
 
+  /* 深色模式下画布随主题翻转（浅色值保持 #f8fbff 不变） */
+  .dark .workspace-topology-surface {
+    background-color: var(--card);
+  }
+
   .scrollbar-none {
     scrollbar-width: none;
     -ms-overflow-style: none;
@@ -113,4 +118,10 @@
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background: var(--color-border-hover);
   }
+}
+
+/* 脚本编辑器：去掉聚焦时的点状轮廓（@uiw 默认主题注入的 1px dotted outline，
+   theme 扩展在顺序上压不过它，这里用 !important 显式覆盖） */
+.cm-editor.cm-focused {
+  outline: none !important;
 }

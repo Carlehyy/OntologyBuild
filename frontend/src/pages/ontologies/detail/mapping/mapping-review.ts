@@ -102,3 +102,80 @@ export function formatFullDateTime(iso: string | null | undefined): string {
   if (Number.isNaN(date.getTime())) return ''
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
 }
+
+/* ═══════════ 数据供给全景（桑基图）模型派生 ═══════════ */
+
+export interface FlowRowInput {
+  /** `object:<id>` / `relation:<id>`，同时作为图节点 id。 */
+  key: string
+  kind: 'object' | 'relation'
+  name: string
+  mappingExists: boolean
+  instanceCount: number
+  /** 该行映射引用的可见数据集（已去重）。 */
+  datasets: Array<{ id: string; name: string }>
+}
+
+export interface FlowNode {
+  /** 图内唯一 id（数据集为 `dataset:<id>`，元素为行 key）。 */
+  id: string
+  displayName: string
+  kind: 'dataset' | 'object' | 'relation'
+  depth: 0 | 1
+}
+
+export interface FlowLink {
+  source: string
+  target: string
+  /** 桑基流宽值；0 实例链路用 0.4 细流保底。 */
+  value: number
+  /** 真实实例数（tooltip 展示用）。 */
+  realValue: number
+}
+
+export interface FlowModel {
+  nodes: FlowNode[]
+  links: FlowLink[]
+  /** 有映射的元素数；为 0 时调用方应渲染空态而非图表。 */
+  mappedCount: number
+}
+
+/** 从未配置元素不进图（没有流可画）；0 实例链路给细流保持拓扑可见。 */
+export function buildFlowModel(rows: readonly FlowRowInput[]): FlowModel {
+  const nodes: FlowNode[] = []
+  const links: FlowLink[] = []
+  const seenDatasets = new Set<string>()
+  let mappedCount = 0
+  for (const row of rows) {
+    if (!row.mappingExists || row.datasets.length === 0) continue
+    mappedCount += 1
+    nodes.push({ id: row.key, displayName: row.name, kind: row.kind, depth: 1 })
+    for (const dataset of row.datasets) {
+      const datasetNodeId = `dataset:${dataset.id}`
+      if (!seenDatasets.has(datasetNodeId)) {
+        seenDatasets.add(datasetNodeId)
+        nodes.push({ id: datasetNodeId, displayName: dataset.name, kind: 'dataset', depth: 0 })
+      }
+      links.push({
+        source: datasetNodeId,
+        target: row.key,
+        value: Math.max(row.instanceCount, 0.4),
+        realValue: row.instanceCount,
+      })
+    }
+  }
+  return { nodes, links, mappedCount }
+}
+
+export type FlowNodeClick =
+  | { type: 'preview-dataset'; datasetId: string }
+  | { type: 'select-element'; key: string }
+  | null
+
+/** 桑基图节点点击路由：数据集节点 → 数据预览；本体元素节点 → 选中清单行。 */
+export function resolveFlowNodeClick(data: { id?: string; kind?: string } | undefined): FlowNodeClick {
+  if (!data?.id || !data.kind) return null
+  if (data.kind === 'dataset') return { type: 'preview-dataset', datasetId: data.id.replace(/^dataset:/, '') }
+  if (data.kind === 'object' || data.kind === 'relation') return { type: 'select-element', key: data.id }
+  return null
+}
