@@ -6,17 +6,35 @@ import { indentSelection } from '@codemirror/commands'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { python } from '@codemirror/lang-python'
+import '@fontsource/jetbrains-mono/400.css'
+import '@fontsource/jetbrains-mono/600.css'
 import {
   ArrowLeft, Play, Square, Save, Loader2, CheckCircle2, Circle, XCircle, AlertTriangle,
-  FileCode2, Terminal, RotateCcw, Keyboard, History, X, HelpCircle, Rocket, Wand2,
+  FileCode2, Terminal, RotateCcw, Keyboard, History, HelpCircle, Rocket, Wand2, Download,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline, ScriptExecutionResult, ScriptVersion } from '@/api/v2/pipelines'
 import { useToast } from '@/components/ui/Toast'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import {
+  Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
+} from '@/components/ui/sheet'
 import PipelineEditWizard from '../PipelineEditWizard'
 import { PYTHON_SCRIPT_TEMPLATE } from './template'
 import { inferColumnTypes, parseTracebackLines, tidyPythonSource, TYPE_LABELS } from './scriptUtils'
+
+// 编辑器观感：JetBrains Mono + 1.6 行高；去掉聚焦时编辑器与内容区的虚线轮廓
+const editorTheme = EditorView.theme({
+  '&': {
+    fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  },
+  '.cm-content': {
+    fontFamily: 'inherit',
+    lineHeight: '1.6',
+    outline: 'none',
+  },
+  '.cm-editor.cm-focused': { outline: 'none' },
+})
 
 // Python 语法高亮（GitHub light 风格）：默认浅色主题对比太弱，关键字/字符串/
 // 注释/数字/函数/类名用高区分度配色，读代码时一眼可辨结构
@@ -354,6 +372,25 @@ export default function PythonScriptPage() {
     toast({ tone: 'success', title: '已格式化', description: '已自动缩进并整理空白（Tab→空格、行尾空白、多余空行）。' })
   }, [isPublished, toast])
 
+  // 导出当前编辑器内容为 .py 文件：固定名 + 年月日时分，便于按时间归档
+  const handleExport = useCallback(() => {
+    if (!script.trim()) {
+      toast({ tone: 'warning', title: '脚本内容为空，无可导出内容' })
+      return
+    }
+    const now = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`
+    const filename = `python_script_${stamp}.py`
+    const url = URL.createObjectURL(new Blob([script], { type: 'text/x-python;charset=utf-8' }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = filename
+    anchor.click()
+    URL.revokeObjectURL(url)
+    toast({ tone: 'success', title: '脚本已导出', description: filename })
+  }, [script, toast])
+
   // 快捷键：Ctrl/⌘+Enter 执行，Ctrl/⌘+S 保存
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -472,12 +509,7 @@ export default function PythonScriptPage() {
               </div>
               <p className="truncate text-[11px] text-gray-400">
                 {pipeline.description || 'Python 脚本流水线'}
-                {' · '}
-                {isPublished
-                  ? '脚本已封版，只读'
-                  : dirty
-                    ? '有未保存修改 · 草稿已自动缓存'
-                    : `已保存${pipeline.updated_at ? ` · ${formatClock(pipeline.updated_at)}` : ''}`}
+                {isPublished && ' · 脚本已封版，只读'}
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
@@ -543,24 +575,12 @@ export default function PythonScriptPage() {
             </div>
           )}
 
-          {/* 保存门槛 checklist：可保存的三个条件一目了然 */}
-          {!isPublished && (
-            <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-slate-100 bg-slate-50/60 px-4 py-2">
-              <SaveCheckItem done={script.trim().length > 0} label="脚本非空" />
-              <SaveCheckItem done={executedScript === script && script.trim().length > 0} label="已执行当前内容" />
-              <SaveCheckItem done={!scriptDirtySinceValidation} label="输出格式通过校验" />
-              <span className={`ml-auto text-[11px] ${canSave ? 'text-teal-600' : 'text-gray-400'}`}>
-                {canSave ? '可以保存：保存时平台会重新执行并复验' : '三项全部通过后保存可点'}
-              </span>
-            </div>
-          )}
-
           {/* 编辑器填满面板剩余高度 */}
           <div className="min-h-0 flex-1">
             <CodeMirror
               value={script}
               onChange={setScript}
-              extensions={[python(), pythonHighlight]}
+              extensions={[python(), pythonHighlight, editorTheme]}
               theme="light"
               readOnly={isPublished}
               height="100%"
@@ -577,7 +597,7 @@ export default function PythonScriptPage() {
                 highlightActiveLineGutter: true,
               }}
               style={{
-                fontSize: '13px',
+                fontSize: '13.5px',
                 height: '100%',
                 backgroundColor: isPublished ? '#f8fafc' : undefined,
               }}
@@ -643,6 +663,21 @@ export default function PythonScriptPage() {
             >
               <History size={13} /> 历史版本
             </button>
+            <button
+              onClick={handleExport}
+              disabled={executing || saving}
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
+              title="导出当前脚本为 .py 文件（文件名含时间戳，便于归档）"
+            >
+              <Download size={13} /> 导出脚本
+            </button>
+            <span className="text-[11px] text-gray-400">
+              {dirty
+                ? <span className="flex items-center gap-1 text-amber-600"><span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />有未保存修改 · 草稿已自动缓存</span>
+                : savedScript
+                  ? `最近保存时间 · ${formatClock(pipeline.updated_at ?? undefined)}`
+                  : '尚未保存'}
+            </span>
             <span className="ml-auto hidden items-center gap-2 text-[11px] text-gray-400 lg:flex">
               <Keyboard size={12} />
               <span><kbd className="rounded border border-slate-200 bg-slate-50 px-1 font-mono">⌘/Ctrl+Enter</kbd> 执行</span>
@@ -692,7 +727,17 @@ export default function PythonScriptPage() {
               columnTypes={columnTypes}
               tracebackLines={tracebackLines}
               onJumpToLine={jumpToLine}
-              showNextSteps={showNextSteps && !isPublished}
+              nonEmpty={script.trim().length > 0}
+              executedCurrent={executedScript === script && script.trim().length > 0}
+              nextStep={
+                isPublished
+                  ? null
+                  : showNextSteps && resultKind === 'save' && result?.ok && result.format_valid
+                    ? 'publish'
+                    : result?.ok && result.format_valid && dirty
+                      ? 'save'
+                      : null
+              }
               onOpenWizard={() => setShowWizard(true)}
               onDismissNextSteps={() => setShowNextSteps(false)}
             />
@@ -701,15 +746,18 @@ export default function PythonScriptPage() {
       </div>
 
       {/* 历史版本抽屉 */}
-      {showVersions && (
-        <VersionsDrawer
-          versions={versions}
-          loading={versionsLoading}
-          readOnly={!!isPublished}
-          onClose={() => setShowVersions(false)}
-          onRestore={version => setConfirm({ kind: 'restore', version })}
-        />
-      )}
+      <VersionsDrawer
+        open={showVersions}
+        versions={versions}
+        loading={versionsLoading}
+        readOnly={!!isPublished}
+        onClose={() => setShowVersions(false)}
+        onRestore={version => {
+          // 先关抽屉再弹确认：避免 Radix modal 的指针事件锁覆盖确认框
+          setShowVersions(false)
+          setConfirm({ kind: 'restore', version })
+        }}
+      />
 
       {/* 发布向导 */}
       {showWizard && (
@@ -744,22 +792,38 @@ export default function PythonScriptPage() {
   )
 }
 
-function SaveCheckItem({ done, label }: { done: boolean; label: string }) {
+function CheckItem({ label, tone }: { label: string; tone: 'pass' | 'fail' | 'warn' | 'idle' }) {
+  const icon = tone === 'pass'
+    ? <CheckCircle2 size={12} className="text-teal-600" />
+    : tone === 'fail'
+      ? <XCircle size={12} className="text-red-500" />
+      : tone === 'warn'
+        ? <AlertTriangle size={12} className="text-amber-500" />
+        : <Circle size={12} />
+  const color = tone === 'pass'
+    ? 'text-teal-700'
+    : tone === 'fail'
+      ? 'text-red-600'
+      : tone === 'warn'
+        ? 'text-amber-600'
+        : 'text-gray-400'
   return (
-    <span className={`inline-flex items-center gap-1 text-[11px] ${done ? 'text-teal-700' : 'text-gray-400'}`}>
-      {done ? <CheckCircle2 size={12} className="text-teal-600" /> : <Circle size={12} />}
+    <span className={`inline-flex items-center gap-1 text-[11px] ${color}`}>
+      {icon}
       {label}
     </span>
   )
 }
 
 function VersionsDrawer({
+  open,
   versions,
   loading,
   readOnly,
   onClose,
   onRestore,
 }: {
+  open: boolean
   versions: ScriptVersion[] | null
   loading: boolean
   readOnly: boolean
@@ -768,35 +832,15 @@ function VersionsDrawer({
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
-  // Esc 关闭抽屉（与点击遮罩等效）
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
-
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/45 backdrop-blur-[2px]" onClick={onClose}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="脚本历史版本"
-        className="absolute inset-y-0 right-0 flex w-[540px] max-w-full flex-col bg-white shadow-2xl"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-3.5">
-          <div>
-            <h3 className="text-base font-semibold text-slate-950">脚本历史版本</h3>
-            <p className="mt-0.5 text-xs text-slate-400">
-              每次保存冻结一版，最多保留最近 20 版；恢复后需重新执行校验才能保存
-            </p>
-          </div>
-          <button onClick={onClose} aria-label="关闭" className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-900">
-            <X size={18} />
-          </button>
-        </div>
+    <Sheet open={open} onOpenChange={value => { if (!value) onClose() }}>
+      <SheetContent aria-label="脚本历史版本">
+        <SheetHeader>
+          <SheetTitle>脚本历史版本</SheetTitle>
+          <SheetDescription>
+            每次保存冻结一版，最多保留最近 20 版；恢复后需重新执行校验才能保存
+          </SheetDescription>
+        </SheetHeader>
         <div className="flex-1 overflow-y-auto p-4">
           {loading ? (
             <div className="flex items-center justify-center gap-2 py-16 text-sm text-gray-400">
@@ -848,8 +892,8 @@ function VersionsDrawer({
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </SheetContent>
+    </Sheet>
   )
 }
 
@@ -865,7 +909,9 @@ function ResultPanel({
   columnTypes,
   tracebackLines,
   onJumpToLine,
-  showNextSteps,
+  nonEmpty,
+  executedCurrent,
+  nextStep,
   onOpenWizard,
   onDismissNextSteps,
 }: {
@@ -880,13 +926,15 @@ function ResultPanel({
   columnTypes: Record<string, string>
   tracebackLines: number[]
   onJumpToLine: (line: number) => void
-  showNextSteps: boolean
+  nonEmpty: boolean
+  executedCurrent: boolean
+  nextStep: 'save' | 'publish' | null
   onOpenWizard: () => void
   onDismissNextSteps: () => void
 }) {
   if (executing || saving) {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white p-10 text-sm text-gray-500">
+      <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white p-10 text-sm text-gray-500">
         <div className="flex items-center gap-3">
           <Loader2 size={16} className="animate-spin text-teal-700" />
           {executing ? '正在内核中执行脚本，请稍候…' : '正在重新执行并校验输出格式…'}
@@ -907,41 +955,87 @@ function ResultPanel({
       </div>
     )
   }
-  if (!result) {
-    return (
-      <div className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-slate-200 bg-white/60 p-10 text-center">
-        <Play size={26} className="text-slate-300" />
-        <p className="text-sm font-medium text-gray-500">点击「执行」查看脚本输出</p>
-        <p className="max-w-md text-xs leading-5 text-gray-400">
-          这里会展示行数、列结构（含推断类型）、数据样本与打印输出。
-        </p>
-      </div>
-    )
-  }
 
-  const success = result.ok && result.format_valid
+  const success = !!result && result.ok && result.format_valid
+  const formatTone: 'pass' | 'fail' | 'warn' | 'idle' = !result
+    ? 'idle'
+    : !result.ok
+      ? 'fail'
+      : result.format_valid
+        ? 'pass'
+        : 'warn'
+
+  // 列类型概览：第 4 张指标卡——列数之外回答「这些列是什么类型」，
+  // 直接为发布向导的字段契约预热
+  const typeCounts = new Map<string, number>()
+  for (const col of sampleColumns) {
+    const type = columnTypes[col]
+    if (type) typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1)
+  }
+  const typeBreakdown = [...typeCounts.entries()]
+    .map(([type, count]) => `${TYPE_LABELS[type as keyof typeof TYPE_LABELS] ?? type} ${count}`)
+    .join(' · ')
+
   return (
-    <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
-      {/* 状态头 */}
-      <div className="flex flex-wrap items-center gap-2">
-        {success ? (
-          <span className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-700">
-            <CheckCircle2 size={12} />
-            {resultKind === 'save' ? '保存成功' : '执行成功'} · 输出格式校验通过
-          </span>
-        ) : result.ok ? (
-          <span className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
-            <AlertTriangle size={12} /> 执行成功，但输出格式不符合平台要求
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-600">
-            <XCircle size={12} /> {resultKind === 'save' ? '保存失败' : '执行失败'}
-          </span>
+    <div className="space-y-3">
+      {/* 1. 当前脚本校验结果 */}
+      <div className="space-y-2.5 rounded-xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h4 className="text-xs font-semibold text-gray-700">当前脚本校验结果</h4>
+          {!result ? (
+            <span className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-gray-400">
+              <Circle size={12} /> 尚未执行
+            </span>
+          ) : success ? (
+            <span className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-700">
+              <CheckCircle2 size={12} />
+              {resultKind === 'save' ? '保存成功' : '执行成功'} · 输出格式校验通过
+            </span>
+          ) : result.ok ? (
+            <span className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
+              <AlertTriangle size={12} /> 执行成功，但输出格式不符合平台要求
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-600">
+              <XCircle size={12} /> {resultKind === 'save' ? '保存失败' : '执行失败'}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          <CheckItem tone={nonEmpty ? 'pass' : 'idle'} label="脚本非空" />
+          <CheckItem tone={executedCurrent ? 'pass' : 'idle'} label="已执行当前内容" />
+          <CheckItem tone={formatTone} label="输出格式符合规范" />
+        </div>
+        {result?.error && (
+          <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">{result.error}</p>
+        )}
+        {result?.traceback && (
+          <div className="overflow-hidden rounded-lg border border-red-100">
+            {tracebackLines.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 border-b border-red-100 bg-red-50 px-3 py-2">
+                <span className="text-[11px] text-red-500">定位到编辑器：</span>
+                {tracebackLines.map(line => (
+                  <button
+                    key={line}
+                    onClick={() => onJumpToLine(line)}
+                    className="rounded border border-red-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-red-600 transition hover:bg-red-100"
+                    title="跳转到脚本对应行"
+                  >
+                    第 {line} 行
+                  </button>
+                ))}
+              </div>
+            )}
+            <pre className="max-h-56 overflow-auto bg-red-50/60 p-3.5 font-mono text-[11px] leading-5 text-red-900">{result.traceback}</pre>
+          </div>
+        )}
+        {result?.format_error && (
+          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{result.format_error}</p>
         )}
       </div>
 
-      {/* 保存成功后的下一步引导：保存 ≠ 上线，发布后才可被调度 */}
-      {success && showNextSteps && (
+      {/* 2. 下一步操作 */}
+      {nextStep === 'publish' && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2.5">
           <Rocket size={14} className="shrink-0 text-teal-700" />
           <p className="flex-1 text-xs leading-5 text-teal-800">
@@ -961,53 +1055,38 @@ function ResultPanel({
           </button>
         </div>
       )}
+      {nextStep === 'save' && (
+        <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50/70 px-3 py-2.5 text-xs text-sky-800">
+          <Save size={13} className="shrink-0" />
+          下一步：保存脚本（保存时平台会重新执行并复验输出格式），随后前往发布向导完成发布。
+        </div>
+      )}
 
-      {/* 成功指标 */}
-      {result.ok && (
-        <div className="grid grid-cols-3 gap-2 sm:max-w-md">
+      {/* 3. 执行数据：行数 / 列数 / 耗时 / 列类型，四卡横排 */}
+      {result?.ok && (
+        <div className="grid grid-cols-4 gap-2">
           {[
-            { label: '输出行数', value: result.row_count.toLocaleString() },
-            { label: '输出列数', value: String(result.columns.length) },
-            { label: '执行耗时', value: `${(result.duration_ms / 1000).toFixed(1)}s` },
+            { label: '输出行数', value: result.row_count.toLocaleString(), sub: '' },
+            { label: '输出列数', value: String(result.columns.length), sub: '' },
+            { label: '执行耗时', value: `${(result.duration_ms / 1000).toFixed(1)}s`, sub: '' },
+            {
+              label: '列类型',
+              value: sampleColumns.length > 0 ? `${typeCounts.size} 种` : '-',
+              sub: typeBreakdown,
+            },
           ].map(item => (
-            <div key={item.label} className="rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2">
+            <div key={item.label} className="rounded-xl border border-slate-100 bg-white px-3 py-2" title={item.sub || undefined}>
               <div className="text-[11px] text-gray-400">{item.label}</div>
-              <div className="font-mono text-lg font-semibold tabular-nums text-gray-800">{item.value}</div>
+              <div className="truncate font-mono text-lg font-semibold tabular-nums text-gray-800">{item.value}</div>
+              {item.sub && <div className="truncate text-[10px] text-gray-400">{item.sub}</div>}
             </div>
           ))}
         </div>
       )}
 
-      {result.error && (
-        <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">{result.error}</p>
-      )}
-      {result.traceback && (
-        <div className="overflow-hidden rounded-lg border border-red-100">
-          {tracebackLines.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 border-b border-red-100 bg-red-50 px-3 py-2">
-              <span className="text-[11px] text-red-500">定位到编辑器：</span>
-              {tracebackLines.map(line => (
-                <button
-                  key={line}
-                  onClick={() => onJumpToLine(line)}
-                  className="rounded border border-red-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-red-600 transition hover:bg-red-100"
-                  title="跳转到脚本对应行"
-                >
-                  第 {line} 行
-                </button>
-              ))}
-            </div>
-          )}
-          <pre className="max-h-56 overflow-auto bg-red-50/60 p-3.5 font-mono text-[11px] leading-5 text-red-900">{result.traceback}</pre>
-        </div>
-      )}
-      {result.format_error && (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{result.format_error}</p>
-      )}
-
-      {/* 数据样本：表头带推断类型（与字段契约词表一致，为发布第 3 步预热） */}
-      {result.ok && result.sample.length > 0 && (
-        <div className="overflow-x-auto rounded-xl border border-slate-200">
+      {/* 4. 数据样本：表头带推断类型（与字段契约词表一致，为发布第 3 步预热） */}
+      {result?.ok && result.sample.length > 0 && (
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
           <table className="w-full text-xs">
             <thead className="border-b border-slate-200 bg-slate-50">
               <tr>
@@ -1041,17 +1120,28 @@ function ResultPanel({
         </div>
       )}
 
-      {result.ok && result.row_count === 0 && (
+      {result?.ok && result.row_count === 0 && (
         <p className="text-xs text-gray-400">脚本输出 0 行。</p>
       )}
 
-      {result.stdout && (
-        <details className="rounded-xl border border-slate-200">
+      {/* 5. 脚本打印输出：默认折叠，展开可见全部内容 */}
+      {result?.stdout && (
+        <details className="rounded-xl border border-slate-200 bg-white">
           <summary className="flex cursor-pointer items-center gap-1.5 px-3 py-2 text-xs text-gray-500 transition hover:text-black">
-            <Terminal size={12} /> 脚本打印输出（stdout 尾部）
+            <Terminal size={12} /> 脚本打印输出（stdout，{result.stdout.split('\n').length} 行）
           </summary>
-          <pre className="max-h-56 overflow-auto border-t border-slate-200 bg-slate-50 p-3.5 font-mono text-[11px] leading-5 text-slate-700">{result.stdout}</pre>
+          <pre className="max-h-72 overflow-auto border-t border-slate-200 bg-slate-50 p-3.5 font-mono text-[11px] leading-5 text-slate-700">{result.stdout}</pre>
         </details>
+      )}
+
+      {!result && (
+        <div className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-slate-200 bg-white/60 p-10 text-center">
+          <Play size={26} className="text-slate-300" />
+          <p className="text-sm font-medium text-gray-500">点击「执行」查看脚本输出</p>
+          <p className="max-w-md text-xs leading-5 text-gray-400">
+            这里会展示行数、列结构（含推断类型）、数据样本与打印输出。
+          </p>
+        </div>
       )}
     </div>
   )

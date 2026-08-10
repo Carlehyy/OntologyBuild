@@ -85,8 +85,10 @@ const config: Config = {
       },
       animation: {
         'fade-in': 'fadeIn 0.3s ease-out',
+        'fade-out': 'fadeOut 0.2s ease-in forwards',
         'slide-up': 'slideUp 0.3s ease-out',
         'slide-in-right': 'slideInRight 0.3s ease-out',
+        'slide-out-right': 'slideOutRight 0.2s ease-in forwards',
         'slide-in-left': 'slideInLeft 0.3s ease-out',
         'pulse-soft': 'pulseSoft 2s ease-in-out infinite',
       },
@@ -94,6 +96,14 @@ const config: Config = {
         fadeIn: {
           '0%': { opacity: '0' },
           '100%': { opacity: '1' },
+        },
+        fadeOut: {
+          '0%': { opacity: '1' },
+          '100%': { opacity: '0' },
+        },
+        slideOutRight: {
+          '0%': { opacity: '1', transform: 'translateX(0)' },
+          '100%': { opacity: '0', transform: 'translateX(20px)' },
         },
         slideUp: {
           '0%': { opacity: '0', transform: 'translateY(10px)' },
