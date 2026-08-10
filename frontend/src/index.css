@@ -116,7 +116,11 @@
 }
 
 /* 脚本编辑器：去掉聚焦时的点状轮廓（@uiw 默认主题注入的 1px dotted outline，
-   theme 扩展在顺序上压不过它，这里用 !important 显式覆盖） */
+   theme 扩展在顺序上压不过它，这里用 !important 显式覆盖）；同理字体也直接
+   用 !important 落到内容区，避免被默认主题的 monospace 抢回。 */
 .cm-editor.cm-focused {
   outline: none !important;
+}
+.cm-editor .cm-content {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
 }
