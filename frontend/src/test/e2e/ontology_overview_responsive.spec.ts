@@ -160,6 +160,10 @@ test('大屏（1920x1080）下完整呈现：趋势图可见，页面收敛为�
   expect(kpiBox).not.toBeNull()
   expect(kpiBox!.height).toBeGreaterThan(160)
   await expect(page.locator('.runtime-trend-chart canvas').first()).toBeVisible()
+  // 视口有富余时内容垂直伸展到底：图表吸收剩余高度而非底部留白。
+  const chartBox = await page.locator('.runtime-trend-chart').boundingBox()
+  expect(chartBox).not.toBeNull()
+  expect(chartBox!.height).toBeGreaterThan(300)
   // 事实类型构成 / 最近发生了什么已下线，页面只剩概况、KPI、运行汇总三个面板。
   await expect(page.locator('.overview-panel')).toHaveCount(3)
   await expect(page.getByRole('heading', { name: '事实类型构成' })).toHaveCount(0)

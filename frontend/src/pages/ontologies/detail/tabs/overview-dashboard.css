@@ -8,7 +8,9 @@
   --ov-purple: #7658d8;
   --ov-amber: #f59b23;
   --ov-side-width: 34%;
-  display: grid;
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
   gap: 14px;
   color: var(--ov-ink);
   font-variant-numeric: tabular-nums;
@@ -98,8 +100,12 @@
 
 .overview-hero-grid {
   display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
   grid-template-columns: minmax(420px, var(--ov-side-width)) minmax(0, 1fr);
-  grid-template-rows: auto auto;
+  /* 视口有富余时运行汇总行吸收全部剩余高度（图表随之伸展），
+     高度不足时 min-content 保底，溢出交给外壳滚动，绝不压碎内容。 */
+  grid-template-rows: auto minmax(min-content, 1fr);
   gap: 14px;
   align-items: stretch;
 }
@@ -323,7 +329,7 @@
 
 .overview-hero-grid > .runtime-summary { grid-column: 2; grid-row: 2; }
 
-.runtime-summary { padding: 20px 24px; }
+.runtime-summary { display: flex; flex-direction: column; padding: 20px 24px; }
 
 .runtime-highlights { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 11px; }
 .runtime-highlight { display: grid; min-width: 0; grid-template-columns: 36px minmax(64px, .7fr) minmax(108px, 1fr); align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #e5ecef; border-radius: 11px; background: #f7fafb; }
@@ -345,10 +351,10 @@
 .runtime-highlight .tone-blue { background: #3478ee; }
 .runtime-highlight .tone-amber { background: #e6a148; }
 
-.runtime-trend { margin-top: 10px; padding: 9px 12px 8px; border: 1px solid #e8edf2; border-radius: 11px; background-color: #fbfcfd; background-image: radial-gradient(circle at 88% -20%, rgba(52, 120, 238, .08), transparent 42%), radial-gradient(circle at 5% 120%, rgba(9, 155, 136, .08), transparent 38%); }
+.runtime-trend { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; margin-top: 10px; padding: 9px 12px 8px; border: 1px solid #e8edf2; border-radius: 11px; background-color: #fbfcfd; background-image: radial-gradient(circle at 88% -20%, rgba(52, 120, 238, .08), transparent 42%), radial-gradient(circle at 5% 120%, rgba(9, 155, 136, .08), transparent 38%); }
 .runtime-trend-heading { display: flex; min-height: 20px; align-items: center; justify-content: space-between; gap: 12px; }
 .runtime-trend-heading > span { color: #526076; font-size: 10px; font-weight: 700; }
-.runtime-trend-chart { position: relative; height: 212px; margin-top: 6px; }
+.runtime-trend-chart { position: relative; min-height: 212px; flex: 1 1 auto; margin-top: 6px; }
 .runtime-empty-note { position: absolute; top: 50%; left: 50%; z-index: 3; display: flex; min-width: 260px; align-items: center; justify-content: center; gap: 8px; border: 1px solid rgba(215, 226, 233, .85); border-radius: 10px; padding: 8px 12px; background: rgba(255, 255, 255, .92); color: #7b8899; box-shadow: 0 8px 22px rgba(41, 63, 90, .07); transform: translate(-50%, -50%); pointer-events: none; }
 .runtime-empty-note svg { flex: 0 0 auto; color: #6b8dca; }
 .runtime-empty-note > span { color: #59687c; font-size: 10px; font-weight: 650; }
