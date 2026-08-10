@@ -23,17 +23,12 @@ import PipelineEditWizard from '../PipelineEditWizard'
 import { PYTHON_SCRIPT_TEMPLATE } from './template'
 import { inferColumnTypes, parseTracebackLines, tidyPythonSource, TYPE_LABELS } from './scriptUtils'
 
-// 编辑器观感：JetBrains Mono + 1.6 行高；去掉聚焦时编辑器与内容区的虚线轮廓
+// 编辑器观感：1.6 行高；字体（JetBrains Mono）与聚焦虚线去除在 index.css 全局
+// 覆盖（@uiw 默认主题在扩展顺序上会后置，主题扩展压不住，见 index.css 注释）
 const editorTheme = EditorView.theme({
-  '&': {
-    fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-  },
   '.cm-content': {
-    fontFamily: 'inherit',
     lineHeight: '1.6',
-    outline: 'none',
   },
-  '.cm-editor.cm-focused': { outline: 'none' },
 })
 
 // Python 语法高亮（GitHub light 风格）：默认浅色主题对比太弱，关键字/字符串/
