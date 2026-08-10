@@ -424,9 +424,9 @@ export default function FormalInstancesView({
         {/* ② 实例浏览器：实体模型目录 + 实例表格（先选类型，再看数据） */}
         <div
           ref={browserRef}
-          className="grid h-[min(76vh,780px)] min-h-[520px] shrink-0 grid-cols-1 overflow-hidden rounded-xl border border-slate-200 md:grid-cols-[minmax(230px,280px)_minmax(0,1fr)]"
+          className="grid shrink-0 grid-cols-1 rounded-xl border border-slate-200 md:grid-cols-[minmax(230px,280px)_minmax(0,1fr)]"
         >
-      <aside className="flex max-h-64 min-h-0 flex-col border-b border-slate-200 bg-slate-50/70 md:max-h-none md:border-b-0 md:border-r">
+      <aside className="flex max-h-64 min-h-0 flex-col self-start rounded-t-xl border-b border-slate-200 bg-slate-50/70 md:sticky md:top-4 md:max-h-[calc(100vh-3rem)] md:rounded-l-xl md:rounded-tr-none md:border-b-0 md:border-r">
         <div className="shrink-0 border-b border-slate-200 px-4 py-3.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
@@ -484,8 +484,8 @@ export default function FormalInstancesView({
         </nav>
       </aside>
 
-      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-        <header data-testid="instance-data-header" className="shrink-0 border-b border-slate-200 bg-white px-5 py-3.5">
+      <section className="flex min-w-0 flex-col">
+        <header data-testid="instance-data-header" className="shrink-0 border-b border-slate-200 bg-white px-5 py-3.5 md:rounded-tr-xl">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -643,7 +643,7 @@ export default function FormalInstancesView({
           <div
             ref={tableScrollRef}
             onScroll={updateScrollHints}
-            className="h-full overflow-auto bg-white"
+            className="overflow-x-auto bg-white"
           >
             {dataQuery.isLoading ? (
               <div className="flex h-full min-h-64 items-center justify-center gap-2 text-xs text-slate-400">
@@ -714,7 +714,7 @@ export default function FormalInstancesView({
           )}
         </div>
 
-        <footer className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-t border-slate-200 bg-slate-50/70 px-5 py-1.5">
+        <footer className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 rounded-b-xl border-t border-slate-200 bg-slate-50/70 px-5 py-1.5 md:rounded-bl-none md:rounded-br-xl">
           <div className="flex items-center gap-3 whitespace-nowrap text-xs text-slate-400">
             <span className="tabular-nums">{total ? `显示 ${rangeStart}–${rangeEnd} / ${total} 条` : '暂无记录'}</span>
             <span className="hidden text-slate-300 lg:inline">
