@@ -200,15 +200,18 @@ test.describe('Python 脚本编辑页', () => {
     executeGate.release?.()
   })
 
-  test('保存门槛 checklist 随执行状态推进', async ({ page }) => {
+  test('校验结果卡随执行状态推进', async ({ page }) => {
     await mockScriptPage(page)
     await page.goto(`/#/data/pipelines/script/${PIPELINE_ID}`)
 
-    // 初始：脚本非空 ✓，但未执行、未校验
-    await expect(page.getByText('三项全部通过后保存可点')).toBeVisible()
+    // 初始：校验结果卡显示「尚未执行」
+    await expect(page.getByText('当前脚本校验结果')).toBeVisible()
+    await expect(page.getByText('尚未执行')).toBeVisible()
+
+    // 执行成功：徽章推进、保存解锁
     await page.getByRole('button', { name: /^执行$/ }).click()
     await expect(page.getByText('执行成功 · 输出格式校验通过')).toBeVisible()
-    await expect(page.getByText('可以保存：保存时平台会重新执行并复验')).toBeVisible()
+    await expect(page.getByRole('button', { name: /保存/ })).toBeEnabled()
   })
 
   test('未保存修改自动缓存草稿，刷新后恢复并提示', async ({ page }) => {

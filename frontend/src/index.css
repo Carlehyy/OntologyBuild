@@ -114,3 +114,9 @@
     background: var(--color-border-hover);
   }
 }
+
+/* 脚本编辑器：去掉聚焦时的点状轮廓（@uiw 默认主题注入的 1px dotted outline，
+   theme 扩展在顺序上压不过它，这里用 !important 显式覆盖） */
+.cm-editor.cm-focused {
+  outline: none !important;
+}
