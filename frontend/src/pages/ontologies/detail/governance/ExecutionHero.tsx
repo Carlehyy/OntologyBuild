@@ -1,7 +1,8 @@
-/* 治理 Hero:进页 3 秒回答“有没有待办、哨兵是否在线、自动化是否健康”。
-   ⓪ KPI 总览条(整卡可点,平滑滚动到区块);
-   ⓪ 近 7 日执行心电图(命中/成功/失败迷你柱图);
-   ⓪ 2.5D 等距流程图:数据→实例→哨兵→动作→事实,真实计数驱动。 */
+/* 治理 Hero(参考数据任务池的简洁排版):
+   ⓪ KPI 极简统计条(小 label + 大数字 + 副标题,整格可点平滑滚动);
+   ⓪ 本体执行链 —— 手绘 SVG 等距图:数据资产→实例→哨兵→动作→事实,
+   真实计数驱动,坐标完全可控,无 CSS 3D 裁剪问题;
+   ⓪ 近 7 日执行心电图(命中/成功/失败迷你柱图,含零数据空态)。 */
 import {
   Database, Boxes, ShieldAlert, Rocket, ScrollText,
   HandMetal, Loader2,
@@ -19,7 +20,7 @@ export interface HeroFlowCounts {
   factsTotal: number
 }
 
-function KpiCard({ icon: Icon, iconCls, label, value, detail, onClick }: {
+function StatCell({ icon: Icon, iconCls, label, value, detail, onClick }: {
   icon: any; iconCls: string; label: string; value: string; detail: string
   onClick: () => void
 }) {
@@ -27,25 +28,28 @@ function KpiCard({ icon: Icon, iconCls, label, value, detail, onClick }: {
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-3 rounded-xl border bg-white px-4 py-3 text-left transition hover:border-gray-300 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+      className="group relative px-4 py-1.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 rounded-lg"
     >
-      <Icon size={16} className={`${iconCls} shrink-0`} />
-      <span className="min-w-0 flex-1">
-        <span className="flex flex-wrap items-baseline gap-x-2">
-          <span className="text-xl font-semibold tabular-nums text-gray-800 whitespace-nowrap">{value}</span>
-          <span className="text-xs text-gray-400 whitespace-nowrap">{label}</span>
-        </span>
-        <span className="mt-0.5 block truncate text-[11px] text-gray-400" title={detail}>{detail}</span>
+      <span className="flex items-center justify-between gap-2">
+        <span className="text-xs text-gray-400">{label}</span>
+        <Icon size={13} className={`${iconCls} opacity-70 transition group-hover:opacity-100`} />
       </span>
+      <span className="mt-0.5 block text-xl font-semibold tabular-nums text-gray-800">{value}</span>
+      <span className="mt-0.5 block truncate text-[11px] text-gray-400" title={detail}>{detail}</span>
     </button>
   )
 }
 
-function DailySpark({ data }: { data: DailySparkDatum[] }) {
+function DailySpark({ data, isRefreshing }: { data: DailySparkDatum[]; isRefreshing: boolean }) {
   const max = Math.max(1, ...data.map(day => Math.max(day.fired + day.firedError, day.runSuccess + day.runFailed)))
   const totalEvents = data.reduce((sum, day) => sum + day.fired + day.firedError + day.runSuccess + day.runFailed, 0)
   return (
-    <div data-testid="governance-daily-spark" className="flex h-full flex-col">
+    <div data-testid="governance-daily-spark" className="relative flex h-full flex-col">
+      {isRefreshing && (
+        <span className="absolute -top-1 right-0 inline-flex items-center gap-1 text-[10px] text-teal-600">
+          <Loader2 size={10} className="animate-spin" /> 同步中
+        </span>
+      )}
       <div className="flex items-center justify-between text-[11px] text-gray-400">
         <span>近 7 日执行心电图</span>
         <span className="flex items-center gap-2">
@@ -90,107 +94,158 @@ function DailySpark({ data }: { data: DailySparkDatum[] }) {
   )
 }
 
-interface IsoNode {
+/* ═══ SVG 等距流程图 ═══ */
+
+interface IsoTone {
+  top: string
+  left: string
+  right: string
+  text: string
+}
+
+interface IsoNodeDef {
   key: string
   icon: any
   label: string
   value: string
-  tone: string
-  x: number
-  y: number
-  z: number
+  tone: IsoTone
   onClick?: () => void
 }
 
-function IsoFlow({ counts, onNavigate }: {
+const SLAB_HALF = 42
+const SLAB_RISE = 13
+const SLAB_DEPTH = 9
+
+/** 单个等距节点:顶面平行四边形 + 左右两个侧面,图标嵌于顶面,文字在下方。 */
+function IsoSlab({ cx, cy, node, order }: {
+  cx: number
+  cy: number
+  node: IsoNodeDef
+  order: number
+}) {
+  const { tone } = node
+  const topFace = `${cx - SLAB_HALF},${cy} ${cx},${cy - SLAB_RISE} ${cx + SLAB_HALF},${cy} ${cx},${cy + SLAB_RISE}`
+  const leftFace = `${cx - SLAB_HALF},${cy} ${cx},${cy + SLAB_RISE} ${cx},${cy + SLAB_RISE + SLAB_DEPTH} ${cx - SLAB_HALF},${cy + SLAB_DEPTH}`
+  const rightFace = `${cx},${cy + SLAB_RISE} ${cx + SLAB_HALF},${cy} ${cx + SLAB_HALF},${cy + SLAB_DEPTH} ${cx},${cy + SLAB_RISE + SLAB_DEPTH}`
+  const labelY = cy + SLAB_RISE + SLAB_DEPTH + 16
+  const Tag = node.onClick ? 'g' : 'g'
+  return (
+    <g
+      className="gov-iso-float"
+      data-order={order}
+      role={node.onClick ? 'button' : undefined}
+      tabIndex={node.onClick ? 0 : undefined}
+      aria-label={node.onClick ? `查看${node.label}详情` : node.label}
+      onClick={node.onClick}
+      onKeyDown={node.onClick
+        ? event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              node.onClick!()
+            }
+          }
+        : undefined}
+      style={node.onClick ? { cursor: 'pointer', outline: 'none' } : undefined}
+    >
+      <title>{node.onClick ? `查看${node.label}详情` : node.label}</title>
+      <Tag>
+        <polygon points={topFace} fill={tone.top} stroke={tone.right} strokeWidth="1" />
+        <polygon points={leftFace} fill={tone.left} opacity="0.85" />
+        <polygon points={rightFace} fill={tone.right} opacity="0.7" />
+        <g transform={`translate(${cx - 7} ${cy - 7})`} style={{ color: tone.text }}>
+          <node.icon size={14} />
+        </g>
+        <text x={cx} y={labelY} textAnchor="middle" fontSize="11" fontWeight="600" fill={tone.text}>
+          {node.label}
+        </text>
+        <text x={cx} y={labelY + 13} textAnchor="middle" fontSize="10" fill="#64748b">
+          {node.value}
+        </text>
+      </Tag>
+    </g>
+  )
+}
+
+function IsoFlowSvg({ counts, onNavigate }: {
   counts: HeroFlowCounts
   onNavigate: (section: 'pending' | 'autonomy' | 'sentinels' | 'facts') => void
 }) {
-  const nodes: IsoNode[] = [
-    { key: 'data', icon: Database, label: '数据资产', value: `${counts.datasetsBound} 已绑定`, tone: 'text-sky-600 border-sky-200 bg-sky-50/90', x: 2, y: 46, z: 0 },
-    { key: 'instances', icon: Boxes, label: '实例', value: `${counts.instances} 个`, tone: 'text-blue-600 border-blue-200 bg-blue-50/90', x: 23, y: 34, z: 10 },
-    { key: 'sentinels', icon: ShieldAlert, label: '哨兵', value: `${counts.sentinelsOnline}/${counts.sentinelsTotal} 在线`, tone: 'text-rose-600 border-rose-200 bg-rose-50/90', x: 44, y: 22, z: 20, onClick: () => onNavigate('sentinels') },
-    { key: 'actions', icon: Rocket, label: '动作', value: `${counts.pendingCount} 待裁决 · ${counts.autoRuns} 自动`, tone: 'text-amber-600 border-amber-200 bg-amber-50/90', x: 65, y: 10, z: 30, onClick: () => onNavigate('autonomy') },
-    { key: 'facts', icon: ScrollText, label: '事实', value: `${counts.factsTotal} 条留痕`, tone: 'text-indigo-600 border-indigo-200 bg-indigo-50/90', x: 83, y: 0, z: 40, onClick: () => onNavigate('facts') },
+  const nodes: IsoNodeDef[] = [
+    { key: 'data', icon: Database, label: '数据资产', value: `${counts.datasetsBound} 已绑定`, tone: { top: '#f0f9ff', left: '#bae6fd', right: '#7dd3fc', text: '#0369a1' } },
+    { key: 'instances', icon: Boxes, label: '实例', value: `${counts.instances} 个`, tone: { top: '#eff6ff', left: '#bfdbfe', right: '#93c5fd', text: '#1d4ed8' } },
+    { key: 'sentinels', icon: ShieldAlert, label: '哨兵', value: `${counts.sentinelsOnline}/${counts.sentinelsTotal} 在线`, tone: { top: '#fff1f2', left: '#fecdd3', right: '#fda4af', text: '#be123c' }, onClick: () => onNavigate('sentinels') },
+    { key: 'actions', icon: Rocket, label: '动作', value: `${counts.pendingCount} 待裁决 · ${counts.autoRuns} 自动`, tone: { top: '#fffbeb', left: '#fde68a', right: '#fcd34d', text: '#b45309' }, onClick: () => onNavigate('autonomy') },
+    { key: 'facts', icon: ScrollText, label: '事实', value: `${counts.factsTotal} 条留痕`, tone: { top: '#eef2ff', left: '#c7d2fe', right: '#a5b4fc', text: '#4338ca' }, onClick: () => onNavigate('facts') },
   ]
-  const center = (node: IsoNode) => ({ x: node.x + 8, y: node.y + 20 })
+  const positions = nodes.map((_, index) => ({
+    cx: 66 + index * 106,
+    cy: 138 - index * 26,
+  }))
   return (
-    <div data-testid="governance-iso-flow" className="gov-iso-stage relative h-52 overflow-hidden rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 via-white to-teal-50/40">
-      <div
-        className="gov-iso-plane absolute inset-x-8 top-6 bottom-[-30%]"
-        style={{
-          backgroundImage:
-            'linear-gradient(to right, rgba(100,116,139,.12) 1px, transparent 1px), linear-gradient(to bottom, rgba(100,116,139,.12) 1px, transparent 1px)',
-          backgroundSize: '26px 26px',
-        }}
-      >
-        <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-          {nodes.slice(0, -1).map((node, index) => {
-            const from = center(node)
-            const to = center(nodes[index + 1])
-            return (
-              <line
-                key={node.key}
-                x1={from.x} y1={from.y} x2={to.x} y2={to.y}
-                className="gov-iso-edge"
-                stroke="rgba(13,148,136,.55)"
-                strokeWidth="0.7"
-              />
-            )
-          })}
-        </svg>
-        {nodes.map((node, index) => (
-          <div
-            key={node.key}
-            className="gov-iso-node absolute"
-            style={{ left: `${node.x}%`, top: `${node.y}%`, transform: `translateZ(${node.z}px)` }}
-          >
-            <div className="gov-iso-float" data-order={index + 1}>
-              <button
-                type="button"
-                onClick={node.onClick}
-                disabled={!node.onClick}
-                title={node.onClick ? `查看${node.label}详情` : node.label}
-                className={`flex w-24 flex-col items-center gap-0.5 rounded-xl border px-2 py-2 shadow-[0_10px_24px_rgba(15,23,42,0.12)] backdrop-blur transition-shadow enabled:hover:shadow-[0_16px_32px_rgba(15,23,42,0.18)] disabled:cursor-default ${node.tone}`}
-                style={{ transform: 'rotateZ(32deg) rotateX(-55deg)', transformOrigin: 'center' }}
-              >
-                <node.icon size={15} />
-                <span className="text-[10px] font-medium">{node.label}</span>
-                <span className="text-[10px] tabular-nums opacity-80">{node.value}</span>
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-      <p className="absolute left-3 top-2.5 text-[11px] font-medium text-slate-500">
+    <div data-testid="governance-iso-flow" className="relative">
+      <p className="text-[11px] font-medium text-slate-500">
         本体执行链 · 数据如何变成动作与事实
       </p>
+      <svg
+        viewBox="0 0 540 190"
+        className="mt-1 h-auto w-full"
+        role="img"
+        aria-label="本体执行链流程图:数据资产、实例、哨兵、动作、事实"
+      >
+        <defs>
+          <linearGradient id="gov-iso-floor" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#f8fafc" />
+            <stop offset="100%" stopColor="#f0fdfa" />
+          </linearGradient>
+        </defs>
+        <rect x="0" y="0" width="540" height="190" rx="10" fill="url(#gov-iso-floor)" />
+        {nodes.slice(0, -1).map((_, index) => {
+          const from = positions[index]
+          const to = positions[index + 1]
+          return (
+            <line
+              key={nodes[index].key}
+              x1={from.cx + SLAB_HALF - 4}
+              y1={from.cy - 2}
+              x2={to.cx - SLAB_HALF + 4}
+              y2={to.cy + 2}
+              className="gov-iso-edge"
+              stroke="#0d9488"
+              strokeOpacity="0.55"
+              strokeWidth="1.4"
+            />
+          )
+        })}
+        {nodes.map((node, index) => (
+          <IsoSlab
+            key={node.key}
+            cx={positions[index].cx}
+            cy={positions[index].cy}
+            node={node}
+            order={index + 1}
+          />
+        ))}
+      </svg>
     </div>
   )
 }
 
-export default function ExecutionHero({
+export function KpiStatBar({
   kpis,
-  dailySpark,
-  flowCounts,
-  isRefreshing,
   onNavigate,
 }: {
   kpis: GovernanceKpis
-  dailySpark: DailySparkDatum[]
-  flowCounts: HeroFlowCounts
-  isRefreshing: boolean
   onNavigate: (section: 'pending' | 'autonomy' | 'sentinels' | 'facts') => void
 }) {
   const pct = (v: number | null) => (v === null ? '—' : `${Math.round(v * 100)}%`)
   return (
-    <div className="space-y-3">
-      <div data-testid="governance-kpi-strip" className="gov-stagger grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard icon={HandMetal} iconCls="text-blue-500" label="待审批"
+    <div data-testid="governance-kpi-strip" className="rounded-xl border bg-white px-2 py-2">
+      <div className="grid grid-cols-2 divide-x divide-slate-100 lg:grid-cols-4">
+        <StatCell icon={HandMetal} iconCls="text-blue-500" label="待审批"
           value={String(kpis.pendingCount)}
           detail={kpis.pendingCount > 0 ? '需要人工裁决' : '全部已处理'}
           onClick={() => onNavigate('pending')} />
-        <KpiCard icon={ShieldAlert} iconCls="text-rose-500" label="哨兵在线"
+        <StatCell icon={ShieldAlert} iconCls="text-rose-500" label="哨兵在线"
           value={kpis.sentinelsTotal > 0 ? `${kpis.sentinelsOnline}/${kpis.sentinelsTotal}` : '—'}
           detail={kpis.sentinelsTotal === 0
             ? '尚未配置哨兵'
@@ -198,30 +253,40 @@ export default function ExecutionHero({
               ? `影子 ${kpis.sentinelsMuted} · 停用 ${kpis.sentinelsDisabled}`
               : '全部在线'}
           onClick={() => onNavigate('sentinels')} />
-        <KpiCard icon={Rocket} iconCls="text-amber-500" label="自治动作"
+        <StatCell icon={Rocket} iconCls="text-amber-500" label="自治动作"
           value={kpis.actionsTotal > 0 ? String(kpis.actionsTotal) : '—'}
           detail={kpis.actionsTotal === 0
             ? '尚未配置动作'
             : `自动 ${kpis.levelCounts.L2} · 人审 ${kpis.levelCounts.L1} · 影子 ${kpis.levelCounts.L0}`}
           onClick={() => onNavigate('autonomy')} />
-        <KpiCard icon={ScrollText} iconCls="text-indigo-500" label="决策批准率"
+        <StatCell icon={ScrollText} iconCls="text-indigo-500" label="决策批准率"
           value={kpis.approvalRate !== null ? pct(kpis.approvalRate) : '—'}
           detail={kpis.decisionsTotal > 0
             ? `累计 ${kpis.decisionsTotal} 次(批准 ${kpis.decisionsApproved} · 拒绝 ${kpis.decisionsRejected})`
             : '暂无人工决策'}
           onClick={() => onNavigate('autonomy')} />
       </div>
+    </div>
+  )
+}
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_1.35fr]">
-        <div className="relative rounded-xl border bg-white px-4 py-3">
-          {isRefreshing && (
-            <span className="absolute right-3 top-3 inline-flex items-center gap-1 text-[10px] text-teal-600">
-              <Loader2 size={10} className="animate-spin" /> 同步中
-            </span>
-          )}
-          <DailySpark data={dailySpark} />
-        </div>
-        <IsoFlow counts={flowCounts} onNavigate={onNavigate} />
+/** 主舞台右侧的情境栏:本体执行链(SVG)在上、执行心电图在下,随滚动吸附。 */
+export function ExecutionContextRail({
+  dailySpark,
+  flowCounts,
+  isRefreshing,
+  onNavigate,
+}: {
+  dailySpark: DailySparkDatum[]
+  flowCounts: HeroFlowCounts
+  isRefreshing: boolean
+  onNavigate: (section: 'pending' | 'autonomy' | 'sentinels' | 'facts') => void
+}) {
+  return (
+    <div className="rounded-xl border bg-white p-4">
+      <IsoFlowSvg counts={flowCounts} onNavigate={onNavigate} />
+      <div className="mt-3 border-t border-slate-100 pt-3">
+        <DailySpark data={dailySpark} isRefreshing={isRefreshing} />
       </div>
     </div>
   )

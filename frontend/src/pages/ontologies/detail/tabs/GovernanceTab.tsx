@@ -9,7 +9,7 @@ import {
   CheckCircle2, HandMetal, Rocket, ShieldAlert, ScrollText,
   Loader2, RefreshCw,
 } from 'lucide-react'
-import ExecutionHero, { type HeroFlowCounts } from '../governance/ExecutionHero'
+import { ExecutionContextRail, KpiStatBar, type HeroFlowCounts } from '../governance/ExecutionHero'
 import PendingStoryList, { type PendingLog } from '../governance/PendingStoryList'
 import AutonomyJourney from '../governance/AutonomyJourney'
 import SentinelRadar from '../governance/SentinelRadar'
@@ -418,92 +418,100 @@ export default function GovernanceTab({
         }`}>{msg.text}</div>
       )}
 
-      <ExecutionHero
-        kpis={kpis}
-        dailySpark={dailySpark}
-        flowCounts={flowCounts}
-        isRefreshing={isRefreshing}
-        onNavigate={navigateHero}
-      />
+      <KpiStatBar kpis={kpis} onNavigate={navigateHero} />
 
-      {/* ① 待审批 —— 待你裁决的故事 */}
-      <div ref={pendingRef} className="rounded-xl border bg-white p-5">
-        <SectionHead icon={HandMetal} iconCls="text-blue-500" title="待审批"
-          badge={pending.length > 0 && (
-            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-700">
-              {pending.length} 项待处理
-            </span>
+      {/* ①+⓪ 主舞台:待审批(62%) × 情境栏(38%,吸附跟随)
+          用户来这一页是为了裁决,任务居左占主视觉;执行链与心电图
+          以情境栏身份守在右侧,讲清“为什么会弹出这些故事”。 */}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(330px,1fr)]">
+        <div ref={pendingRef} className="rounded-xl border bg-white p-5">
+          <SectionHead icon={HandMetal} iconCls="text-blue-500" title="待审批"
+            badge={pending.length > 0 && (
+              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                {pending.length} 项待处理
+              </span>
+            )}
+            sub="每条都是一段「起因 → 判定 → 后果」的故事 · 批准/拒绝都会留痕" />
+          {pending.length === 0 ? (
+            <div className="flex flex-col items-center gap-1.5 py-4 text-center">
+              <CheckCircle2 size={16} className="text-emerald-500" />
+              <p className="text-xs text-gray-400">没有等待审批的动作。开启动作的「需人工审批」后，真实执行会先在这里等你拍板。</p>
+            </div>
+          ) : (
+            <PendingStoryList
+              ontologyId={ontologyId}
+              pending={pending}
+              firings={firings}
+              sentinels={sentinels}
+              actions={workspaceActions}
+              objectTypeName={objectTypeName}
+              canDecide={canDecide}
+              busyId={busy}
+              onApprove={log => {
+                setApproveError(null)
+                setApproveTarget(log)
+              }}
+              onReject={log => {
+                setRejectError(null)
+                setRejectTarget(log)
+              }}
+            />
           )}
-          sub="每条都是一段「起因 → 判定 → 后果」的故事 · 批准/拒绝都会留痕" />
-        {pending.length === 0 ? (
-          <div className="flex flex-col items-center gap-1.5 py-4 text-center">
-            <CheckCircle2 size={16} className="text-emerald-500" />
-            <p className="text-xs text-gray-400">没有等待审批的动作。开启动作的「需人工审批」后，真实执行会先在这里等你拍板。</p>
-          </div>
-        ) : (
-          <PendingStoryList
-            ontologyId={ontologyId}
-            pending={pending}
-            firings={firings}
-            sentinels={sentinels}
-            actions={workspaceActions}
-            objectTypeName={objectTypeName}
-            canDecide={canDecide}
-            busyId={busy}
-            onApprove={log => {
-              setApproveError(null)
-              setApproveTarget(log)
-            }}
-            onReject={log => {
-              setRejectError(null)
-              setRejectTarget(log)
-            }}
+        </div>
+
+        <aside className="space-y-3 self-start xl:sticky xl:top-4">
+          <ExecutionContextRail
+            dailySpark={dailySpark}
+            flowCounts={flowCounts}
+            isRefreshing={isRefreshing}
+            onNavigate={navigateHero}
           />
-        )}
+        </aside>
       </div>
 
-      {/* ② 放权旅程 */}
-      <div ref={autonomyRef} className="rounded-xl border bg-white p-5">
-        <SectionHead icon={Rocket} iconCls="text-amber-500" title="自治等级"
-          sub="放权旅程:影子 → 人审 → 自动,自治是按历史执行效果挣来的" />
-        {autonomy.length === 0 ? (
-          <div className="py-3 text-center">
-            <p className="text-xs text-gray-400">还没有动作。请在版本草稿中创建动作并绑定哨兵，发布后再在这里管理放权等级。</p>
-            <button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
-              className="mt-2 inline-flex items-center gap-1 text-xs text-amber-600 hover:underline">
-              去版本草稿创建动作
-            </button>
-          </div>
-        ) : (
-          <div className="gov-stagger space-y-2.5">
-            {autonomy.map(stat => (
-              <AutonomyJourney
-                key={stat.actionId}
-                stat={stat}
-                timeline={buildAutonomyTimeline(releaseLogs, stat.actionId)}
-                onGoPending={() => scrollToSection(pendingRef)}
-                onGoVersions={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
-              />
-            ))}
-          </div>
-        )}
+      {/* ②③ 放权旅程 × 值守雷达 左右对仗 */}
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <div ref={autonomyRef} className="rounded-xl border bg-white p-5">
+          <SectionHead icon={Rocket} iconCls="text-amber-500" title="自治等级"
+            sub="放权旅程:影子 → 人审 → 自动,自治是按历史执行效果挣来的" />
+          {autonomy.length === 0 ? (
+            <div className="py-3 text-center">
+              <p className="text-xs text-gray-400">还没有动作。请在版本草稿中创建动作并绑定哨兵，发布后再在这里管理放权等级。</p>
+              <button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
+                className="mt-2 inline-flex items-center gap-1 text-xs text-amber-600 hover:underline">
+                去版本草稿创建动作
+              </button>
+            </div>
+          ) : (
+            <div className="gov-stagger space-y-2.5">
+              {autonomy.map(stat => (
+                <AutonomyJourney
+                  key={stat.actionId}
+                  stat={stat}
+                  timeline={buildAutonomyTimeline(releaseLogs, stat.actionId)}
+                  onGoPending={() => scrollToSection(pendingRef)}
+                  onGoVersions={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div ref={sentinelsRef} className="rounded-xl border bg-white p-5">
+          <SectionHead icon={ShieldAlert} iconCls="text-rose-500" title="哨兵"
+            sub="值守雷达:平台正在替你盯什么"
+            extra={<button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
+              className="inline-flex items-center gap-1 text-xs text-rose-500 hover:underline">
+              在版本草稿中修改</button>} />
+          <SentinelRadar
+            sentinels={sentinels}
+            firings={firings}
+            onGoVersions={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
+          />
+        </div>
       </div>
 
-      {/* ③ 哨兵 */}
-      <div ref={sentinelsRef} className="rounded-xl border bg-white p-5">
-        <SectionHead icon={ShieldAlert} iconCls="text-rose-500" title="哨兵"
-          sub="值守雷达:平台正在替你盯什么"
-          extra={<button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
-            className="inline-flex items-center gap-1 text-xs text-rose-500 hover:underline">
-            在版本草稿中修改</button>} />
-        <SentinelRadar
-          sentinels={sentinels}
-          firings={firings}
-          onGoVersions={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
-        />
-      </div>
-
-      {/* ④ 事实流 */}
+      {/* ④ 事实流:全宽审计底 */}
       <div ref={factsRef} className="rounded-xl border bg-white p-5">
         <SectionHead icon={ScrollText} iconCls="text-indigo-500" title="事实流"
           sub="追加不修改 · 每个变化都有出处与因果 · 最近 50 条" />

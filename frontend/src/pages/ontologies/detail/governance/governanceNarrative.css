@@ -93,26 +93,20 @@
 }
 .gov-level-current { animation: govLevelGlow 2.4s ease-in-out infinite; }
 
-/* ═══ 2.5D 等距流程图 ═══ */
-.gov-iso-stage {
-  perspective: 900px;
+/* ═══ 执行链 SVG 等距图 ═══ */
+@keyframes isoFloatY {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
 }
-.gov-iso-plane {
-  transform: rotateX(55deg) rotateZ(-32deg);
-  transform-style: preserve-3d;
-}
-.gov-iso-node {
-  transform-style: preserve-3d;
-}
-@keyframes isoFloat {
-  0%, 100% { transform: translateZ(0); }
-  50% { transform: translateZ(8px); }
-}
-.gov-iso-float { animation: isoFloat 4.5s ease-in-out infinite; }
+.gov-iso-float { animation: isoFloatY 4.5s ease-in-out infinite; }
 .gov-iso-float[data-order='2'] { animation-delay: .9s; }
 .gov-iso-float[data-order='3'] { animation-delay: 1.8s; }
 .gov-iso-float[data-order='4'] { animation-delay: 2.7s; }
 .gov-iso-float[data-order='5'] { animation-delay: 3.6s; }
+.gov-iso-float:focus-visible polygon:first-child {
+  stroke: #0d9488;
+  stroke-width: 2;
+}
 @keyframes isoFlowDash {
   to { stroke-dashoffset: -18; }
 }
