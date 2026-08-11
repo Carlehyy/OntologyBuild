@@ -332,3 +332,51 @@ def test_update_ontology_card_metadata(client, auth_headers):
     assert updated.status_code == 200, updated.text
     assert updated.json()["data"]["name"] == "财务管理本体"
     assert updated.json()["data"]["icon"] == "landmark"
+
+
+def test_assistant_card_click_increments_and_lists(client, auth_headers):
+    created = client.post(
+        "/api/v1/ontologies",
+        json={"name": "助手卡片计数", "domain": "供应链"},
+        headers=auth_headers,
+    ).json()["data"]
+
+    listed = client.get("/api/v1/ontologies", headers=auth_headers)
+    card = next(
+        item for item in listed.json()["data"]["items"]
+        if item["id"] == created["id"]
+    )
+    assert card["assistant_card_clicks"] == 0
+
+    first = client.post(
+        f"/api/v1/ontologies/{created['id']}/assistant-card-clicks",
+        headers=auth_headers,
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["data"] == {"id": created["id"], "assistant_card_clicks": 1}
+
+    second = client.post(
+        f"/api/v1/ontologies/{created['id']}/assistant-card-clicks",
+        headers=auth_headers,
+    )
+    assert second.json()["data"]["assistant_card_clicks"] == 2
+
+    listed = client.get("/api/v1/ontologies", headers=auth_headers)
+    card = next(
+        item for item in listed.json()["data"]["items"]
+        if item["id"] == created["id"]
+    )
+    assert card["assistant_card_clicks"] == 2
+
+
+def test_assistant_card_click_unknown_ontology_returns_404(client, auth_headers):
+    r = client.post(
+        "/api/v1/ontologies/not-exist/assistant-card-clicks",
+        headers=auth_headers,
+    )
+    assert r.status_code == 404
+
+
+def test_assistant_card_click_requires_auth(client):
+    r = client.post("/api/v1/ontologies/not-exist/assistant-card-clicks")
+    assert r.status_code == 403

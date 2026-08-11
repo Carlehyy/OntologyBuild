@@ -187,6 +187,32 @@ def get_ontology(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_
     release = _resolved_release_map(db, [p]).get(p.current_release_id)
     return {"data": _project_payload(p, OntologyOut, release)}
 
+
+@router.post("/{ontology_id}/assistant-card-clicks")
+def record_assistant_card_click(
+    ontology_id: str,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    """本体助手卡片确认选中一次的全局计数（不按用户区分）。
+
+    只由助手卡片轮播的确认选中触发；下拉框切换与深链进入不调用本端点。
+    SQL 侧原子自增，避免并发点击丢失计数。
+    """
+    updated = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id,
+    ).update(
+        {OntologyProject.assistant_card_clicks: OntologyProject.assistant_card_clicks + 1},
+        synchronize_session=False,
+    )
+    if not updated:
+        raise HTTPException(404, "Not found")
+    db.commit()
+    clicks = db.query(OntologyProject.assistant_card_clicks).filter(
+        OntologyProject.id == ontology_id,
+    ).scalar()
+    return {"data": {"id": ontology_id, "assistant_card_clicks": clicks}}
+
 @router.put("/{ontology_id}")
 def update_ontology(ontology_id: str, body: OntologyUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     p = require_ontology_access(db, ontology_id, current_user, write=True)
