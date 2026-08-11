@@ -116,9 +116,11 @@ class Settings(BaseSettings):
     # 可选 OfficeCLI 适配器。核心会话空间不依赖它；配置后才向探索 Agent 暴露
     # docx/xlsx/pptx 的结构化增删改工具，避免生产镜像隐式下载第三方二进制。
     exploration_officecli_path: str = ""
-    # 数据集版本保留数（每个版本都是全量快照，不清理会 O(N²) 膨胀）；0 = 不清理。
-    # 活跃消费方只需「最新 + 前一版（审核 diff）」，被审核/媒体钉住的版本由
-    # _prune_versions 永久豁免，因此 5 已覆盖全部真实需求并给存储留足余量。
+    # 数据集版本元数据 + 行级变更集（changeset）的保留窗口；0 = 不清理。
+    # curated 数据集的行数据已迁入 lake_ds_* 物理表，版本行承载元数据与变更集，
+    # 历史整份快照（data_blob）不再是新版版本的存储形态。活跃消费方只需
+    # 「最新 + 前一版（审核 diff）」，被审核/媒体钉住的版本由 _prune_versions
+    # 永久豁免，因此 5 已覆盖全部真实需求并给存储留足余量。
     dataset_version_keep: int = 5
     # Immutable DatasetVersion outbox poll interval.  The worker uses database
     # claims, so multiple API replicas may poll safely.

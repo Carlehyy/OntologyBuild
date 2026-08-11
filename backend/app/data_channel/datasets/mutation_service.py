@@ -753,6 +753,25 @@ def delete_dataset(
         db.query(PipelineFileAsset).filter(
             PipelineFileAsset.dataset_version_id.in_(ver_ids)
         ).delete(synchronize_session=False)
+    # 湖表资产防御性清理：curated 不会走到这里（上方 400 拦截），但变更集与
+    # 物理表按数据集维度显式清理不依赖 FK 开关，幂等无副作用
+    from app.data_channel.datasets import lake_store
+    from app.data_channel.datasets.models import (
+        DatasetChangeset, DatasetChangesetRow)
+    changeset_ids = [
+        row[0]
+        for row in db.query(DatasetChangeset.id)
+        .filter(DatasetChangeset.dataset_id == dataset_id)
+        .all()
+    ]
+    if changeset_ids:
+        db.query(DatasetChangesetRow).filter(
+            DatasetChangesetRow.changeset_id.in_(changeset_ids)
+        ).delete(synchronize_session=False)
+        db.query(DatasetChangeset).filter(
+            DatasetChangeset.dataset_id == dataset_id
+        ).delete(synchronize_session=False)
+    lake_store.drop_lake_table(db, dataset_id)
     db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).delete(synchronize_session=False)
     db.delete(ds)
     db.commit()

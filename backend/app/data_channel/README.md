@@ -23,7 +23,10 @@ data_channel/
 
 ## 关键边界
 
-- `datasets/` 的 `DatasetVersion` 是数据快照；成品审核绑定精确版本，不能只看
+- `datasets/` 的 `DatasetVersion` 是版本元数据锚点；成品（curated）数据集
+  的行数据存于每数据集一张的物理湖表（`lake_ds_*`），版本间差异记录在
+  `v2_dataset_changesets(_rows)` 行级变更集；非 curated 数据集仍是
+  `data_blob` 整份快照。成品审核绑定精确版本，不能只看
   数据集名称或沿用旧版本审批。
 - `pipelines/router.py` 的端点主体委派到同目录 service，但仍保留授权/owner
   查询、n8n 生命周期锁、task reference 查询和兼容 wiring，不能描述为纯

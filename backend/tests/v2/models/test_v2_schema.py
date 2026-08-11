@@ -74,6 +74,8 @@ def test_all_v2_tables_registered():
         "v2_datasets",
         "v2_dataset_versions",
         "v2_dataset_version_events",
+        "v2_dataset_changesets",
+        "v2_dataset_changeset_rows",
         "v2_dataset_write_locks",
         "v2_storage_deletion_outbox",
         "v2_media_items",

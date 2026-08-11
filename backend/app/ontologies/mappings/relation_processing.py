@@ -663,7 +663,7 @@ class RelationProcessingMixin:
         """
         from app.models.relation import Relation
         from app.data_channel.curated.approved_version_reader import (
-            latest_dataset_version, load_all_rows_with_edits)
+            latest_dataset_version)
         from app.models.v2.dataset import Dataset
         from app.models.v2.curated import CuratedDataset
         from app.config import settings
@@ -676,9 +676,18 @@ class RelationProcessingMixin:
                 Dataset.id == link.edge_dataset_id).first()
             if edge_dataset:
                 if edge_dataset.kind == "curated":
-                    edge_rows = load_all_rows_with_edits(
-                        self._db, link.edge_dataset_id,
-                        require_approved=True, version=edge_version)
+                    from app.data_channel.curated.approved_version_reader import (
+                        iter_rows_with_edits)
+                    # 湖表版本分批流式读取 + 批内叠加行编辑；下游的
+                    # cardinality 推断与存量边对账结构上需要全量值集，
+                    # 收集点收拢于此（峰值内存 = 一份全量 + 一批）
+                    edge_rows = [
+                        row
+                        for batch in iter_rows_with_edits(
+                            self._db, link.edge_dataset_id,
+                            require_approved=True, version=edge_version)
+                        for row in batch
+                    ]
                 else:
                     from app.services.v2.dataset_service import DatasetService
                     edge_rows = DatasetService(self._db).load_all_rows(

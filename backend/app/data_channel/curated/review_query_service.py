@@ -15,11 +15,63 @@ from app.data_channel.curated.approved_version_reader import (
     encode_row_pk,
     review_matches_version,
 )
+from app.data_channel.datasets import lake_store
 from app.data_channel.datasets.lake_gate import split_pk
-from app.data_channel.pipeline_tasks.merge import compute_lake_impact
+from app.data_channel.datasets.models import DatasetChangeset, DatasetChangesetRow
+from app.data_channel.pipeline_tasks.merge import _slim_row, compute_lake_impact
 from app.models.v2.curated import CuratedReview
 from app.models.v2.dataset import Dataset
 from app.services.v2.dataset_service import DatasetReadError, DatasetService
+
+
+def _delta_from_changeset(
+    db: Session,
+    version,
+    primary_key_columns: list[str],
+    *,
+    sample_limit: int = 200,
+) -> dict | None:
+    """湖表版本的 delta 直接取其变更集（计数 + 逐行样本）。
+
+    形状对齐 merge.compute_lake_impact；样本按 row_pk 排序（确定性），slim
+    截断沿用 merge._slim_row。变更集缺失（异常状态）返回 None 由调用方回退
+    内存计算。
+    """
+    changeset = db.query(DatasetChangeset).filter(
+        DatasetChangeset.version_id == version.id).first()
+    if changeset is None:
+        return None
+
+    def _sample(change_type: str) -> list:
+        return (db.query(DatasetChangesetRow)
+                .filter(DatasetChangesetRow.changeset_id == changeset.id,
+                        DatasetChangesetRow.change_type == change_type)
+                .order_by(DatasetChangesetRow.row_pk)
+                .limit(sample_limit)
+                .all())
+
+    added = _sample("added")
+    updated = _sample("updated")
+    deleted = _sample("deleted")
+    total_after = int(version.rowcount or 0)
+    return {
+        "keyed_by": list(primary_key_columns) if primary_key_columns else None,
+        "total_before": total_after - changeset.added_count + changeset.deleted_count,
+        "total_after": total_after,
+        "added_count": changeset.added_count,
+        "updated_count": changeset.updated_count,
+        "deleted_count": changeset.deleted_count,
+        "unchanged_count": max(
+            0, total_after - changeset.added_count - changeset.updated_count),
+        "added_sample": [_slim_row(r.new_row or {}) for r in added],
+        "updated_sample": [{"before": _slim_row(r.old_row or {}),
+                            "after": _slim_row(r.new_row or {})}
+                           for r in updated],
+        "deleted_sample": [_slim_row(r.old_row or {}) for r in deleted],
+        "sample_truncated": (changeset.added_count > sample_limit
+                             or changeset.updated_count > sample_limit
+                             or changeset.deleted_count > sample_limit),
+    }
 
 
 def build_review_diff(
@@ -123,11 +175,17 @@ def build_review_diff(
     current_index = versions.index(current_version)
     previous_version = versions[current_index - 1] if current_index > 0 else None
 
+    def _load_rows_for_version(version) -> list[dict]:
+        """湖表版本经物理表 + 变更集回放；blob 版本走遗留解析（严格读）。"""
+        if lake_store.version_uses_lake(dataset, version):
+            return lake_store.rows_at_version(db, dataset, version.version_no)
+        return dataset_service.load_all_rows(dataset_id, version.version_no)
+
     try:
         current_rows = apply_all_row_edits(
             db,
             dataset_id,
-            dataset_service.load_all_rows(dataset_id, current_version.version_no),
+            _load_rows_for_version(current_version),
             dataset_version_id=current_version.id,
             include_review_id=selected_review.id if selected_review else None,
         )
@@ -135,16 +193,15 @@ def build_review_diff(
             apply_all_row_edits(
                 db,
                 dataset_id,
-                dataset_service.load_all_rows(
-                    dataset_id,
-                    previous_version.version_no,
-                ),
+                _load_rows_for_version(previous_version),
                 dataset_version_id=previous_version.id,
             )
             if previous_version
             else []
         )
     except DatasetReadError as exc:
+        raise HTTPException(422, f"版本数据读取失败：{exc}") from exc
+    except lake_store.LakeStoreError as exc:
         raise HTTPException(422, f"版本数据读取失败：{exc}") from exc
     except ValueError as exc:
         raise HTTPException(
@@ -155,12 +212,19 @@ def build_review_diff(
             },
         ) from exc
 
-    delta = compute_lake_impact(
-        previous_rows,
-        current_rows,
-        primary_key_columns,
-        sample_limit=200,
-    )
+    # 湖表版本的 delta 直接取该版本的变更集（版本间真实差异）；blob 版本保持
+    # 内存计算（叠加编辑后的三视图 diff，与历史行为逐字段一致）
+    delta = None
+    if lake_store.version_uses_lake(dataset, current_version):
+        delta = _delta_from_changeset(
+            db, current_version, primary_key_columns)
+    if delta is None:
+        delta = compute_lake_impact(
+            previous_rows,
+            current_rows,
+            primary_key_columns,
+            sample_limit=200,
+        )
     current_page = current_rows[offset : offset + limit]
     current_row_primary_keys: list[str | None] = []
     if primary_key_columns:

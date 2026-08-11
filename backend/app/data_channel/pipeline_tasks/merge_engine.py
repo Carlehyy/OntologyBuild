@@ -1,15 +1,20 @@
 """
 资产湖合并引擎（DuckDB 下推实现）。
 
+【已退役】运行时入湖路径已切换 lake_store 物理湖表（行级 upsert + 变更集），
+本模块不再被任何运行时代码引用；文件按兼容纪律保留，仅供等价测试对照
+与历史回溯，不得新增调用方。
+
 参考实现（语义权威）保留在 merge.py：merge_rows / compute_lake_impact /
 _row_signature 等函数定义了合并、去重、软删除、审计 diff 与序列化的外部行为。
 本模块把「读湖中全量 → 合并 → 主键校验 → 审计 diff → parquet 序列化」整段
 下推到 DuckDB：parquet 基座零 Python 行物化，单次运行成本与内存只随增量批次
 而非湖中总量增长。
 
-外部行为与参考实现逐字节等价（合并读回行集、merge_meta、lake_impact、
-LakeGateError 文案、columns_typed），由等价性测试
-tests/v2/pipeline/test_merge_engine_equivalence.py 锁死。
+外部行为曾与参考实现逐字节等价（合并读回行集、merge_meta、lake_impact、
+LakeGateError 文案、columns_typed）。等价性测试已随存储切换改写为
+「lake_store 物理表 upsert vs merge_rows 参考实现」矩阵，仍位于
+tests/v2/pipeline/test_merge_engine_equivalence.py。
 
 已知边界（等价测试不覆盖，参考实现在这些路径上行为本就退化）：
 - 手工构造的非平台产出 parquet 基座（含非字符串物理列 / NULL 单元格）：

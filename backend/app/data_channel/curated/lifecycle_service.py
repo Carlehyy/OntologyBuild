@@ -98,6 +98,28 @@ def delete_curated(
             .filter(PipelineFileAsset.dataset_version_id.in_(version_ids))
             .delete(synchronize_session=False)
         )
+    # 变更集随数据集显式清理（不依赖 SQLite FK 强制开关）；物理湖表幂等 DROP
+    from app.data_channel.datasets import lake_store
+    from app.data_channel.datasets.models import (
+        DatasetChangeset, DatasetChangesetRow)
+    changeset_ids = [
+        row[0]
+        for row in db.query(DatasetChangeset.id)
+        .filter(DatasetChangeset.dataset_id == dataset_id)
+        .all()
+    ]
+    if changeset_ids:
+        (
+            db.query(DatasetChangesetRow)
+            .filter(DatasetChangesetRow.changeset_id.in_(changeset_ids))
+            .delete(synchronize_session=False)
+        )
+        (
+            db.query(DatasetChangeset)
+            .filter(DatasetChangeset.dataset_id == dataset_id)
+            .delete(synchronize_session=False)
+        )
+    lake_store.drop_lake_table(db, dataset_id)
     (
         db.query(DatasetVersion)
         .filter(DatasetVersion.dataset_id == dataset_id)
