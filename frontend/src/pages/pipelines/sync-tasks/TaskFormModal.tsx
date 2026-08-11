@@ -284,7 +284,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                     )}
                     <span className="text-xs text-slate-400 ml-auto">共 {activeCurated.rowcount} 行 · {activeCurated.columns.length} 列</span>
                   </div>
-                  <CuratedDataPreview key={activeCurated.id} datasetId={activeCurated.id} totalRows={activeCurated.rowcount} contractColumns={contractColumns} />
+                  <CuratedDataPreview key={activeCurated.id} datasetId={activeCurated.id} totalRows={activeCurated.rowcount} contractColumns={contractColumns} reviewStatus={activeCurated.review_status} />
                 </div>
               )}
 
@@ -582,16 +582,20 @@ function PipelineSchemaPanel({ pipeline }: { pipeline: SelectablePipeline }) {
 }
 
 /** 成品数据集分页预览面板 */
-function CuratedDataPreview({ datasetId, totalRows, contractColumns }: {
+function CuratedDataPreview({ datasetId, totalRows, contractColumns, reviewStatus }: {
   datasetId: string
   totalRows: number
   contractColumns: NonNullable<SelectablePipeline['contract']>['columns']
+  reviewStatus?: string
 }) {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState<CuratedPreview | null>(null)
   const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(1)
   const pageSize = 10
+  // 预览接口只放行已通过审核的当前版本；未审核时点开会吃 409 并静默置空，
+  // 改为前置禁用并说明原因。
+  const previewable = reviewStatus === 'approved'
 
   useEffect(() => { setOpen(false); setData(null); setPage(1) }, [datasetId])
 
@@ -613,7 +617,9 @@ function CuratedDataPreview({ datasetId, totalRows, contractColumns }: {
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)}
-        className="flex w-full items-center justify-center gap-1.5 py-2.5 text-xs text-emerald-700 transition hover:bg-emerald-50/60">
+        disabled={!previewable}
+        title={previewable ? undefined : '当前版本未通过审核'}
+        className="flex w-full items-center justify-center gap-1.5 py-2.5 text-xs text-emerald-700 transition hover:bg-emerald-50/60 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-transparent">
         <Table2 size={12} /> 查看实际数据（分页预览）
       </button>
     )

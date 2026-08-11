@@ -65,6 +65,8 @@ def enqueue_pipeline_run(
     run = PipelineRun(
         pipeline_id=pipeline_id,
         status="pending",
+        # UI 手动运行：真实列与历史过滤口径一致（stats 缺键 ≡ manual）
+        trigger_type="manual",
         started_at=datetime.now(timezone.utc),
     )
     db.add(run)
@@ -154,7 +156,14 @@ def run_pipeline_synchronously(
     *,
     require_production_executable_fn: Callable[[Pipeline], None],
 ) -> dict:
-    """Run through the unchanged task entry without Celery dispatch."""
+    """Run through the unchanged task entry without Celery dispatch.
+
+    同步直跑入口仅面向开发/测试（无需 Celery/Redis）；生产环境按 404 处理，
+    不暴露绕过队列与并发治理的执行路径（判据与
+    require_production_executable 的 environment 口径一致）。
+    """
+    if settings.environment == "production":
+        raise HTTPException(404, "Not Found")
     pipeline = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pipeline:
         raise HTTPException(404, "Pipeline not found")
@@ -163,6 +172,8 @@ def run_pipeline_synchronously(
     run = PipelineRun(
         pipeline_id=pipeline_id,
         status="pending",
+        # 同步运行（开发/测试入口）：真实列与历史过滤口径一致
+        trigger_type="manual",
         started_at=datetime.now(timezone.utc),
     )
     db.add(run)

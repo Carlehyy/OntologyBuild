@@ -88,6 +88,25 @@ def test_enqueue_pipeline_run_missing_pipeline_is_404(db):
     assert exc_info.value.status_code == 404
 
 
+def test_run_sync_is_not_reachable_in_production(monkeypatch, db):
+    """同步直跑入口仅面向开发/测试：生产环境 404 且不创建运行记录。"""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "environment", "production")
+    pipeline = _published_pipeline(db)
+
+    with pytest.raises(HTTPException) as exc_info:
+        execution_service.run_pipeline_synchronously(
+            pipeline.id,
+            db,
+            require_production_executable_fn=lambda _pipeline: None,
+        )
+    assert exc_info.value.status_code == 404
+    assert (
+        db.query(PipelineRun).filter_by(pipeline_id=pipeline.id).count() == 0
+    )
+
+
 def _create_import_job(tmp_path, monkeypatch) -> str:
     from app.config import settings
     from app.data_channel.datasets.import_jobs import create_import_job

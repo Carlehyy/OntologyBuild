@@ -197,6 +197,8 @@ export interface CuratedDataset {
   version_no: number
   /** 湖中已固化的主键契约（逗号分隔）；非空即锁定，不可在任务里改写 */
   primary_key: string
+  /** 当前版本的审核状态；仅 approved 可预览实际数据，其余一律禁用预览 */
+  review_status?: string
   columns: CuratedColumn[]
 }
 

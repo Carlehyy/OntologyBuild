@@ -16,6 +16,7 @@ from app.data_channel.pipeline_tasks.query_service import (
     _with_pipeline_info,
     selectable_pipelines,
 )
+from app.models.v2.curated import CuratedReview
 from app.models.v2.dataset import Dataset, DatasetVersion
 from app.models.v2.pipeline import Pipeline, PipelineRun
 
@@ -103,6 +104,18 @@ def _seed_selectable(db):
                        data_blob=fallback_bytes,
                        data_size=len(fallback_bytes)),
     ])
+    db.add_all([
+        # 绑定当前版本（v-full-2）的审核决定 → approved
+        CuratedReview(
+            id="review-full-current", curated_dataset_id="ds-full",
+            dataset_version_id="v-full-2", status="approved",
+        ),
+        # 绑定旧版本的审核不背书当前版本 → 仍按待审核暴露
+        CuratedReview(
+            id="review-fallback-stale", curated_dataset_id="ds-fallback",
+            dataset_version_id="v-fallback-0", status="approved",
+        ),
+    ])
     db.commit()
 
 
@@ -142,6 +155,7 @@ def test_selectable_pipelines_output_is_pinned(db):
             "rowcount": 7,          # 最新版本 v2 的行数
             "version_no": 2,
             "primary_key": "order_id",
+            "review_status": "approved",   # 审核绑定当前版本 v-full-2
             "columns": [
                 {"name": "order_id", "type": "string"},
                 {"name": "amount", "type": "float"},
@@ -153,6 +167,7 @@ def test_selectable_pipelines_output_is_pinned(db):
             "rowcount": 2,
             "version_no": 1,
             "primary_key": "",
+            "review_status": "pending_review",   # 旧版本审核不背书当前版本
             "columns": [
                 {"name": "订单号", "type": "string"},
                 {"name": "金额", "type": "string"},

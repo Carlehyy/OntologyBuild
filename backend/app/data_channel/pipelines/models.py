@@ -69,6 +69,10 @@ class PipelineRun(Base):
         nullable=True,
     )  # 由哪条调度任务触发（血缘）
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending|running|success|failed|cancelled
+    # 触发方式（manual|scheduled）真实列：全局历史按触发方式过滤是高频查询，
+    # 走 stats JSON 只能全表扫描；写入路径与 stats["trigger_type"] 同步填列，
+    # 存量行由迁移 0063 回填，NULL 与缺键同义（按 manual 计）。
+    trigger_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     stats: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -82,6 +86,7 @@ class PipelineRun(Base):
         Index("ix_v2_pipeline_runs_pipeline_created", "pipeline_id", "created_at"),
         Index("ix_v2_pipeline_runs_task_created", "task_id", "created_at"),
         Index("ix_v2_pipeline_runs_created_at", "created_at"),
+        Index("ix_v2_pipeline_runs_trigger_type", "trigger_type"),
     )
 
 

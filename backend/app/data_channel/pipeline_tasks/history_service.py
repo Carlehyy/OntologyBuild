@@ -51,21 +51,17 @@ def _apply_history_filters(
     if status:
         query = query.filter(PipelineRun.status == status)
     if trigger_type:
-        trigger_expression = (
-            PipelineRun.stats["trigger_type"].as_string()
-        )
+        # 触发方式走真实索引列（迁移 0063：写入路径同步填列、存量已回填）；
+        # NULL 与 stats 缺键同义按 manual 计，stats JSON 键保留不动（HTTP 契约）。
         if trigger_type == "manual":
             query = query.filter(
                 or_(
-                    PipelineRun.stats.is_(None),
-                    trigger_expression.is_(None),
-                    trigger_expression == "manual",
+                    PipelineRun.trigger_type.is_(None),
+                    PipelineRun.trigger_type == "manual",
                 )
             )
         else:
-            query = query.filter(
-                trigger_expression == trigger_type
-            )
+            query = query.filter(PipelineRun.trigger_type == trigger_type)
     if created_from:
         query = query.filter(
             PipelineRun.created_at

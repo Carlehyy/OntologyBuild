@@ -113,6 +113,53 @@ def list_pipelines(
             .all()
         )
 
+    # 当前页流水线的 n8n 治理记录与最近运行各用一次批量查询取回，
+    # 避免逐条流水线一次 N8nPipeline + 一次 last_run 的 N+1。
+    steward_ids = []
+    for pipeline in pipeline_rows:
+        if is_n8n_pipeline_fn(pipeline):
+            steward_id = (
+                (pipeline.definition or {}).get("n8n") or {}
+            ).get("steward_id")
+            if steward_id:
+                steward_ids.append(steward_id)
+    n8n_records = {}
+    if steward_ids:
+        n8n_records = {
+            record.id: record
+            for record in db.query(N8nPipeline)
+            .filter(N8nPipeline.id.in_(steward_ids))
+            .all()
+        }
+    last_runs = {}
+    if pipeline_ids:
+        latest_created = (
+            db.query(
+                PipelineRun.pipeline_id,
+                func.max(PipelineRun.created_at).label("mx"),
+            )
+            .filter(PipelineRun.pipeline_id.in_(pipeline_ids))
+            .group_by(PipelineRun.pipeline_id)
+            .subquery()
+        )
+        # 只取展示列：stats 是重 JSON 列，不参与最近运行摘要
+        last_run_rows = (
+            db.query(
+                PipelineRun.pipeline_id,
+                PipelineRun.status,
+                PipelineRun.started_at,
+                PipelineRun.error_log,
+            )
+            .join(
+                latest_created,
+                (PipelineRun.pipeline_id == latest_created.c.pipeline_id)
+                & (PipelineRun.created_at == latest_created.c.mx),
+            )
+            .all()
+        )
+        for row in last_run_rows:
+            last_runs.setdefault(row.pipeline_id, row)
+
     results = []
     for pipeline in pipeline_rows:
         item = format_pipeline_fn(pipeline)
@@ -120,19 +167,14 @@ def list_pipelines(
         if is_n8n_pipeline_fn(pipeline):
             n8n_definition = (pipeline.definition or {}).get("n8n") or {}
             steward_id = n8n_definition.get("steward_id")
-            if steward_id:
-                record = db.query(N8nPipeline).filter(
-                    N8nPipeline.id == steward_id
-                ).first()
-                if record:
-                    item["definition"] = dict(item.get("definition") or {})
-                    item["definition"]["n8n"] = {
-                        **n8n_definition,
-                        "n8n_workflow_id": record.n8n_workflow_id,
-                    }
-        last_run = db.query(PipelineRun).filter(
-            PipelineRun.pipeline_id == pipeline.id
-        ).order_by(PipelineRun.created_at.desc()).first()
+            record = n8n_records.get(steward_id) if steward_id else None
+            if record:
+                item["definition"] = dict(item.get("definition") or {})
+                item["definition"]["n8n"] = {
+                    **n8n_definition,
+                    "n8n_workflow_id": record.n8n_workflow_id,
+                }
+        last_run = last_runs.get(pipeline.id)
         if last_run:
             item["last_run_status"] = last_run.status
             item["last_run_at"] = (
