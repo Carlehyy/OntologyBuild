@@ -231,27 +231,22 @@ export function OntologyNetworkView({
   }, [graph.cx, graph.cy])
 
   if (objectTypes.length === 0) {
+    // 未选择本体时页面层已切换为卡片轮播，这里只剩「已选但无结构」的空态。
     return (
       <div className="flex h-full flex-col items-center justify-center bg-gradient-to-br from-slate-50 via-sky-50/60 to-emerald-50/50 px-6 text-center dark:from-[#121820] dark:via-[#121820] dark:to-[#121820]">
         <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-sky-100 bg-white text-sky-500 shadow-sm">
           <Network size={24} />
         </div>
-        {oid ? (
-          <>
-            <h3 className="text-sm font-semibold text-slate-800">当前本体暂无可视化对象</h3>
-            <p className="mt-1 text-xs text-slate-500">
-              在建模工作区配置对象实体和实体关系后，这里将自动展示本体拓扑图
-            </p>
-            <button
-              onClick={() => navigate(`/ontologies/${oid}`)}
-              className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-4 py-2 text-sm font-medium text-teal-600 transition-colors hover:bg-teal-100"
-            >
-              <ExternalLink size={14} />前往本体模型工作台
-            </button>
-          </>
-        ) : (
-          <h3 className="text-sm font-semibold text-slate-600">请在上方选择本体</h3>
-        )}
+        <h3 className="text-sm font-semibold text-slate-800">当前本体暂无可视化对象</h3>
+        <p className="mt-1 text-xs text-slate-500">
+          在建模工作区配置对象实体和实体关系后，这里将自动展示本体拓扑图
+        </p>
+        <button
+          onClick={() => navigate(`/ontologies/${oid}`)}
+          className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-4 py-2 text-sm font-medium text-teal-600 transition-colors hover:bg-teal-100"
+        >
+          <ExternalLink size={14} />前往本体模型工作台
+        </button>
       </div>
     )
   }

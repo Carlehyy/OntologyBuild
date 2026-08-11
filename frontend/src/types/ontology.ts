@@ -15,6 +15,8 @@ export interface OntologyListItem {
   relation_count: number
   action_count: number
   sentinel_count: number
+  /** 本体助手卡片的全局选用次数；旧后端可能不返回，前端按 0 处理。 */
+  assistant_card_clicks?: number
   created_by: string
   created_at: string
   updated_at: string

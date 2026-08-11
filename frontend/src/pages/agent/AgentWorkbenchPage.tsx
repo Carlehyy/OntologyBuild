@@ -7,7 +7,7 @@
  *   - 回答带对象引用；改数据只出「提案卡」，用户确认 + HITL 审批才真执行
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   AlertTriangle, ArrowLeftRight, BadgeCheck, BellRing, Bot, FileSearch,
@@ -41,6 +41,7 @@ import {
   type ChatMsg,
 } from './components/AgentWorkbenchPresentation'
 import { OntologyNetworkView } from './components/OntologyNetworkView'
+import { OntologyCardCarousel } from './components/OntologyCardCarousel'
 import type { GraphAssistantSignal } from './InstanceKnowledgeGraph'
 import { useOntologyStore } from '../../palantir-graph/store/ontologyStore'
 
@@ -89,6 +90,16 @@ export default function AgentWorkbenchPage() {
 
   const selectedOntology = releasedOntologyList.find((item: any) => item.id === oid)
   const releaseId = selectedOntology?.current_release_id || ''
+
+  const queryClient = useQueryClient()
+  // 卡片确认选中：先写入 URL 触发加载，再 fire-and-forget 记录全局选用次数。
+  // 计数失败不影响选中流程；成功后刷新列表缓存，下次进入轮播按最新热度排序。
+  const selectOntologyFromCard = useCallback((item: any) => {
+    selectOntology(item.id)
+    ontologyApi.recordAssistantCardClick(item.id)
+      .then(() => queryClient.invalidateQueries({ queryKey: ['ontologies'] }))
+      .catch(() => {})
+  }, [selectOntology, queryClient])
 
   const { data: models = [] } = useQuery({ queryKey: ['models'], queryFn: () => modelApi.list() as any })
   const llmModels = Array.isArray(models) ? (models as any[]).filter((m: any) => m.config_type === 'llm' || !m.config_type) : []
@@ -437,6 +448,11 @@ export default function AgentWorkbenchPage() {
                   <p className="text-xs leading-relaxed text-red-500/80">{syncError || '请稍后刷新模型结构。'}</p>
                 </div>
               </div>
+            ) : !oid ? (
+              <OntologyCardCarousel
+                items={releasedOntologyList}
+                onSelect={selectOntologyFromCard}
+              />
             ) : (
               <OntologyNetworkView
                 objectTypes={objectTypes}

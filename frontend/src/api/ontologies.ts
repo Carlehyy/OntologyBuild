@@ -31,6 +31,9 @@ export const ontologyApi = {
   update: (id: string, body: Partial<OntologyDetail>) => apiClient.put<OntologyDetail>(`/ontologies/${id}`, body),
   delete: (id: string) => apiClient.delete(`/ontologies/${id}`),
   importStructure: (body: unknown) => apiClient.post<OntologyImportResult>('/ontologies/import', body),
+  // 本体助手卡片确认选中一次的全局计数；失败不应打断选中流程，调用方自行吞错。
+  recordAssistantCardClick: (id: string) =>
+    apiClient.post<{ id: string; assistant_card_clicks: number }>(`/ontologies/${id}/assistant-card-clicks`),
 
   // Graph
   getGraph: (oid: string) => apiClient.get<{ nodes: object[]; edges: object[]; meta: object }>(`/ontologies/${oid}/graph`),
