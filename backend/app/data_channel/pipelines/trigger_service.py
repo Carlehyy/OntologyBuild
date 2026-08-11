@@ -29,6 +29,8 @@ def execute_pipeline(pipeline_id: str, triggered_by: str = "") -> dict:
         run = PipelineRun(
             pipeline_id=pipeline_id,
             status="pending",
+            # 同步链式触发：真实列与历史过滤口径一致（stats 缺键 ≡ manual）
+            trigger_type="manual",
             started_at=datetime.now(timezone.utc),
             stats={"triggered_by": triggered_by} if triggered_by else {},
         )

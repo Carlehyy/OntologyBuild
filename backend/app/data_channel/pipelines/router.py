@@ -344,7 +344,7 @@ def get_run(run_id: str, db: Session = Depends(get_db)):
 
 @router.post("/{pipeline_id}/run-sync")
 def run_pipeline_sync(pipeline_id: str, db: Session = Depends(get_db)):
-    """同步执行 Pipeline（无需 Celery/Redis，适用于开发/测试）。
+    """同步执行 Pipeline（无需 Celery/Redis，仅开发/测试可用；生产环境 404）。
 
     运行成败只落在 PipelineRun 上，不改 pipeline.status——发布是显式动作。
     """

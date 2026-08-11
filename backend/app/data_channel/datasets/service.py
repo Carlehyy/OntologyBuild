@@ -452,6 +452,41 @@ def stored_columns(raw: bytes) -> list[str]:
     return _csv_table(text, limit=0)[0]
 
 
+def infer_stored_columns(db: Session, dataset) -> list[str]:
+    """无 schema 列信息的老数据集的轻量列推断（列名去重、保持物理顺序）。
+
+    湖表版本读物理表首页行键；blob/对象存储版本只解析表头
+    （stored_columns），不再物化整份数据。原始文件 bytes 列（content）
+    从不入列清单。读取失败按无列处理——容错口径与 UI preview 一致，
+    仅供展示侧回退使用。
+    """
+    from app.data_channel.datasets import lake_store
+
+    version = (
+        db.query(DatasetVersion)
+        .filter(DatasetVersion.dataset_id == dataset.id)
+        .order_by(DatasetVersion.version_no.desc())
+        .first()
+    )
+    try:
+        if lake_store.version_uses_lake(dataset, version):
+            keys: list[str] = []
+            for row in lake_store.page_rows(db, dataset, 0, 20):
+                keys.extend(str(key) for key in row.keys())
+        else:
+            raw = DatasetService(db).load_version_bytes(dataset.id, None)
+            keys = [str(key) for key in stored_columns(raw)] if raw else []
+    except Exception:
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for key in keys:
+        if key != "content" and key not in seen:
+            seen.add(key)
+            names.append(key)
+    return names
+
+
 def enqueue_storage_deletions(db: Session, storage_uris: list[str]) -> list[str]:
     """把对象清理记录加入调用方当前事务，不在这里提交。
 
