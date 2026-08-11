@@ -7,38 +7,24 @@
 - append_dedup  去重追加：追加后按整行内容去重（无主键场景防重复导入）
 - upsert        主键合并：按主键去重保留最新，可选软删除列打 __deleted__ 标记
 
-参考实现：语义权威，供等价性属性测试对照；流水线入湖的运行时路径已切换
-merge_engine（DuckDB 下推）。本模块函数不得删除——merge_rows /
+参考实现：语义权威，供等价性测试对照；流水线入湖的运行时路径已切换
+lake_store 物理湖表（merge_engine 曾短暂下推 DuckDB，现已退役）。
+本模块函数不得删除——merge_rows /
 compute_lake_impact / _row_signature 同时被行级审核（curated review）使用。
+normalize_write_mode / _apply_soft_delete / VALID_WRITE_MODES 已下沉到
+write_modes.py 叶子模块，此处再导出保持既有导入表面。
 """
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import Any
 
 from app.data_channel.datasets.service import snapshot_cell_text
-
-
-VALID_WRITE_MODES = frozenset({"overwrite", "append", "append_dedup", "upsert"})
-
-
-def normalize_write_mode(mode: Any) -> str:
-    """把历史空值规整为 overwrite，并拒绝任何未知入库方式。
-
-    旧实现把所有未识别值都落入 overwrite 分支。这会让拼写错误或新旧版本
-    不兼容的任务静默变成全量覆盖，属于不可接受的数据破坏风险。空值仍按
-    历史约定解释为 overwrite，其余值必须属于平台公开支持的模式。
-    """
-    if mode is None or str(mode).strip() == "":
-        return "overwrite"
-    normalized = str(mode).strip().lower()
-    if normalized not in VALID_WRITE_MODES:
-        allowed = ", ".join(sorted(VALID_WRITE_MODES))
-        raise ValueError(
-            f"不支持的入库方式「{mode}」。允许值：{allowed}；"
-            f"为避免误覆盖资产，系统不会把未知方式回退为 overwrite。")
-    return normalized
+from app.data_channel.pipeline_tasks.write_modes import (  # noqa: F401 — 再导出
+    VALID_WRITE_MODES,
+    _apply_soft_delete,
+    normalize_write_mode,
+)
 
 
 def load_latest_rows(db, dataset_id: str) -> list[dict]:
@@ -103,27 +89,10 @@ def _dedup_by_row(rows: list[dict]) -> list[dict]:
     return out
 
 
-def _apply_soft_delete(rows: list[dict], deleted_col: str) -> list[dict]:
-    """软删除标记：deleted_col 为真值的行加 __deleted__，不物理删除"""
-    if not deleted_col or not rows:
-        return rows
-    truthy = {"1", "true", "yes", "y", "t", "是", "删除", "已删除"}
-    for r in rows:
-        v = r.get(deleted_col)
-        is_del = str(v).strip().lower() in truthy if v is not None else False
-        if is_del:
-            r["__deleted__"] = True
-            r["__deleted_at__"] = datetime.utcnow().isoformat()
-        else:
-            r.pop("__deleted__", None)
-            r.pop("__deleted_at__", None)
-    return rows
-
-
 def merge_rows(old: list[dict], new: list[dict], opts: dict[str, Any]) -> tuple[list[dict], dict]:
     """按入库方式合并，返回 (合并后的全量行, 合并统计)
 
-    参考实现：语义权威，供等价性属性测试对照；运行时路径已切换 merge_engine。
+    参考实现：语义权威，供等价性测试对照；运行时路径已切换 lake_store 物理湖表。
     """
     opts = opts or {}
     mode = normalize_write_mode(opts.get("mode"))
@@ -168,7 +137,7 @@ def compute_lake_impact(before: list[dict], after: list[dict],
                         pk_cols: list[str], sample_limit: int = 50) -> dict:
     """本次入库对资产湖的行级影响 = diff(入库前全量, 入库后全量)。
 
-    参考实现：语义权威，供等价性属性测试对照；运行时路径已切换 merge_engine。
+    参考实现：语义权威，供等价性测试对照；运行时路径已切换 lake_store 物理湖表。
     有主键 → 按主键组合识别同一行，能区分「更新」（键在、内容变）。
     无主键 → 退化为整行内容比对，只有「新增/删除」，没有「更新」。
     返回计数 + 各类别的行样本（截断），供执行记录逐条追溯审计。

@@ -46,6 +46,47 @@ def _slim_ctx_meta(meta: dict | None) -> dict:
     return {k: v for k, v in (meta or {}).items() if k in ("rows_before", "rows_after")}
 
 
+def _lake_impact_from_changeset(db, changeset, pk_cols: list[str],
+                                rows_before: int, rows_after: int) -> dict:
+    """从行级变更集生成审计 diff，形状与 merge.compute_lake_impact 完全一致。
+
+    计数取变更集真实计数；样本按 row_pk 排序取前 50（确定性顺序），
+    超长值截断沿用 merge._slim_row；sample_truncated 由计数判断。
+    """
+    from app.data_channel.datasets.models import DatasetChangesetRow
+    from app.data_channel.pipeline_tasks.merge import _slim_row
+
+    def _sample(change_type: str) -> list:
+        return (db.query(DatasetChangesetRow)
+                .filter(DatasetChangesetRow.changeset_id == changeset.id,
+                        DatasetChangesetRow.change_type == change_type)
+                .order_by(DatasetChangesetRow.row_pk)
+                .limit(50)
+                .all())
+
+    added = _sample("added")
+    updated = _sample("updated")
+    deleted = _sample("deleted")
+    return {
+        "keyed_by": list(pk_cols) if pk_cols else None,
+        "total_before": rows_before,
+        "total_after": rows_after,
+        "added_count": changeset.added_count,
+        "updated_count": changeset.updated_count,
+        "deleted_count": changeset.deleted_count,
+        "unchanged_count": max(
+            0, rows_after - changeset.added_count - changeset.updated_count),
+        "added_sample": [_slim_row(r.new_row or {}) for r in added],
+        "updated_sample": [{"before": _slim_row(r.old_row or {}),
+                            "after": _slim_row(r.new_row or {})}
+                           for r in updated],
+        "deleted_sample": [_slim_row(r.old_row or {}) for r in deleted],
+        "sample_truncated": (changeset.added_count > 50
+                             or changeset.updated_count > 50
+                             or changeset.deleted_count > 50),
+    }
+
+
 def _curated_name(pl, source: dict, multi_source: bool, table_name: str | None = None) -> str:
     """产物 curated 数据集的命名规则——入湖与 dry-run 预检必须用同一套派生。"""
     stem = Path(source["filename"]).stem
@@ -187,10 +228,10 @@ def resolve_curated_target(db, pl, source: dict, multi_source: bool,
 
 
 def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, multi_source: bool, table_name: str | None = None, write_opts: dict | None = None, contract_columns: list[str] | None = None) -> dict:
-    """入湖是「读湖中全量→内存合并→写新版本」的读改写，全程持数据集写锁。
+    """入湖是物理湖表上的行级 upsert（lake_store），全程持数据集写锁。
 
     任务调度与手动运行并发落同一 curated 数据集时后到者等待；不锁则双方
-    各自基于旧版本合并，先提交的增量被后提交者静默覆盖。锁键优先用已绑定
+    各自基于旧状态写入，先提交的增量被后提交者静默覆盖。锁键优先用已绑定
     数据集的 id（改名后名字会变、id 不变）；首建场景退回名字锁，
     get-or-create 也在锁内，同名数据集的创建竞争一并串行化。
     """
@@ -200,6 +241,18 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
     # 在任何空输出短路/目标创建之前验证，未知模式不能借 skip_empty 伪装成功。
     if write_opts is not None:
         write_opts = {**write_opts, "mode": normalize_write_mode(write_opts.get("mode"))}
+
+    # 单批来数超内存上限即拒绝执行（当前执行器是全量内存物化，超限会拖垮
+    # 进程）：让 pipeline_max_in_memory_rows 名副其实。
+    from app.config import settings
+    max_in_memory = int(getattr(settings, "pipeline_max_in_memory_rows", 0) or 0)
+    if max_in_memory > 0 and len(data) > max_in_memory:
+        from app.data_channel.datasets.lake_gate import LakeGateError
+        raise LakeGateError(
+            f"本次流水线输出 {len(data)} 行，超过平台单批内存处理上限 "
+            f"pipeline_max_in_memory_rows={max_in_memory}（环境变量 "
+            "PIPELINE_MAX_IN_MEMORY_ROWS）。为保护执行进程，本次运行已拒绝；"
+            "请在流水线中过滤/拆分来数，或联系管理员调大该配置。")
 
     bound_ds, ds_name = resolve_curated_target(db, pl, source, multi_source, table_name)
     # 已有资产与 DatasetService/人工维护共用 dataset::{id} 锁；首建尚无 id，
@@ -270,13 +323,21 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
     effective_pk = gate["pk"]
 
     # 入库方式：任务触发时按 write_mode 与资产湖已有数据合并；
-    # 手动运行不带 write_opts，保持原行为（本次输出即新版本 = 全量覆盖）
+    # 手动运行不带 write_opts，保持原行为（本次输出即新版本 = 全量覆盖）。
+    # 存储层是 lake_store 物理湖表（行级 upsert + 版本元数据 + 行级变更集），
+    # 不再读整份基座 blob、也不再写整份 Parquet 快照。
+    from app.data_channel.datasets import lake_store
+    from app.data_channel.pipeline_tasks.merge import _apply_soft_delete
+
     merge_meta: dict = {}
-    lake_rows = data
     lake_impact: dict | None = None
-    lake_parquet: bytes | None = None
     lake_rowcount = len(data)
-    lake_columns_typed: list[dict] | None = None
+    mode = "overwrite"  # 手动/预览确认运行 = 全量覆盖（现行语义）
+    soft_col = ""
+    if write_opts is not None:
+        mode = write_opts["mode"]  # 上游已 normalize_write_mode
+        soft_col = str(write_opts.get("soft_delete_column") or "")
+    pk_cols = split_pk(effective_pk)
     if write_opts:
         if not data and write_opts.get("skip_empty", True):
             # 空输出保护：本次流水线输出 0 行，跳过入库，避免误清空资产
@@ -293,66 +354,77 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
                 "skipped": "empty_output",
                 "meta": _slim_ctx_meta(ctx.meta),
             }
-        from app.data_channel.pipeline_tasks.merge_engine import merge_lake_increment
-        from app.data_channel.datasets.service import version_has_content
-        from app.models.v2.dataset import DatasetVersion as _DSV
-        # 基座原始字节：与 load_latest_rows 同一读取语义——读取/解析失败抛
-        # DatasetReadError 让本次运行失败；只有尚无版本/版本无内容才是空基座
-        base_ver = (db.query(_DSV).filter(_DSV.dataset_id == curated_ds.id)
-                    .order_by(_DSV.version_no.desc()).first())
-        base_bytes = (svc.load_version_bytes(curated_ds.id, base_ver.version_no)
-                      if version_has_content(base_ver) else None)
-        # 合并/去重/主键校验/审计 diff/parquet 序列化整体下推 DuckDB
-        # （merge_engine），运行成本与内存只随增量批次而非湖中总量增长；
-        # 生效主键照旧用仲裁结果（湖中已声明的契约优先于任务本次填写）。
-        # upsert 软删除会对 data 就地打标（与参考实现 merge_rows 一致）。
-        outcome = merge_lake_increment(
-            base_bytes=base_bytes,
-            base_version_no=base_ver.version_no if base_ver is not None else None,
-            new_rows=data,
-            write_opts={**write_opts, "primary_key": effective_pk},
-            pk_cols=split_pk(effective_pk),
-            dataset_name=curated_ds.name,
-            dataset_id=curated_ds.id,
-            # 空增量（skip_empty=False）时质量分以湖中全量为样本，需物化合并行
-            need_merged_rows=not data,
-        )
-        merge_meta = outcome.merge_meta
-        lake_impact = outcome.lake_impact
-        lake_parquet = outcome.parquet_bytes
-        lake_rowcount = outcome.rowcount
-        lake_columns_typed = outcome.columns_typed
-        lake_rows = outcome.merged_rows or []
+
+    # 迁移未覆盖的数据集（无物理表但有 blob 历史）：先以遗留基座懒引导，
+    # rows_before/审计 diff 才能取到真实基座（overwrite 的审计口径也是
+    # 「与上一版本内容的差异」，同样需要基座）
+    svc.bootstrap_lake_base(curated_ds)
+    lake_rows_before = lake_store.count_rows(db, curated_ds)
+    # 软删除来数打标前置于契约固化：output_sample / last_output_columns 与
+    # 现行链（merge_engine 就地打标后再记账）一致；upsert_run 内会按同一
+    # 函数再应用一次（幂等，仅刷新标记时间戳）
+    if mode == "upsert" and soft_col:
+        _apply_soft_delete(data, soft_col)
 
     schema_to_publish: dict | None = None
-    if data or lake_rows:
+    if data or (mode != "overwrite" and lake_rows_before):
         # 契约字段与当前版本内容一起发布；任何错误都必须让整次入湖失败。
+        # 湖中列预算与 lake_store 内部演化同一并集规则：overwrite = 本批输出
+        # 列（资产重建）；增量 = 历史并集（既有列保留既有类型，新列按本批推断）
+        batch_typed = infer_columns_typed(data) if data else []
+        if mode == "overwrite":
+            lake_columns_typed = batch_typed
+        else:
+            old_schema = dict(curated_ds.schema_json or {})
+            existing_cols = [str(c) for c in old_schema.get("columns") or []]
+            prev_typed = {str(item.get("name")): item
+                          for item in old_schema.get("columns_typed") or []
+                          if isinstance(item, dict) and item.get("name")}
+            batch_by_name = {item["name"]: item for item in batch_typed}
+            projected = existing_cols + [
+                item["name"] for item in batch_typed
+                if item["name"] not in existing_cols]
+            lake_columns_typed = [
+                prev_typed.get(name) or batch_by_name.get(name)
+                or {"name": name, "type": "string"}
+                for name in projected]
         schema_to_publish = persist_contract(
             curated_ds, pk=effective_pk,
             pk_source=gate["pk_source"],
-            lake_rows=lake_rows, lake_columns_typed=lake_columns_typed,
+            lake_columns_typed=lake_columns_typed,
             output_rows=data,
             column_definitions=column_defs,
             allow_redeclare=(write_opts or {}).get("mode") in (None, "", "overwrite"))
-        sample = data or lake_rows
+        # 空增量时质量分以湖中现状为样本（首页近似，避免物化全湖）
+        sample = data or lake_store.page_rows(db, curated_ds, 0, 1000)
         schema_to_publish["quality_score"] = _compute_quality_score(
             sample, ctx.meta)
         schema_to_publish["route"] = source["route"]
         schema_to_publish["source_dataset_id"] = source["dataset_id"]
         schema_to_publish["pipeline_id"] = pl.id
         schema_to_publish["output_key"] = output_key
-        if merge_meta:
-            schema_to_publish["write_mode"] = merge_meta.get("mode")
+        if write_opts:
+            schema_to_publish["write_mode"] = mode
         if table_name:
             schema_to_publish["transform_output_table"] = table_name
+    if schema_to_publish is not None:
+        # 版本内容与解释它的逻辑契约必须同一事务发布（upsert_run 内提交）。
+        curated_ds.schema_json = schema_to_publish
+        db.flush()
 
-    from app.data_channel.datasets.service import rows_to_parquet_bytes
-    ver = svc.create_version(
-        curated_ds.id,
-        # write_opts 路径快照由 merge_engine 直出（与 rows_to_parquet_bytes 读回等价）
-        lake_parquet if lake_parquet is not None else rows_to_parquet_bytes(lake_rows),
-        rowcount=lake_rowcount,
-        schema_json=schema_to_publish, _lock_held=True)
+    ver, changeset = lake_store.upsert_run(
+        db, curated_ds, data, mode, pk_cols, soft_delete_column=soft_col)
+    # 版本保留窗口（元数据 + 变更集；回放链完整性规则见 _prune_versions）：
+    # 与 blob 路径的 _create_version_locked 尾部一致，机会式清理
+    svc._prune_versions_best_effort(curated_ds.id)
+    lake_rowcount = int(ver.rowcount or 0)
+    if write_opts:
+        merge_meta = {"mode": mode,
+                      # legacy 口径：overwrite 的合并基座固定为空，rows_before 恒 0
+                      "rows_before": (0 if mode == "overwrite" else lake_rows_before),
+                      "rows_new": len(data), "rows_after": lake_rowcount}
+        lake_impact = _lake_impact_from_changeset(
+            db, changeset, pk_cols, lake_rows_before, lake_rowcount)
 
     # 审计：本次流水线输出样本（入库前的产物），供执行记录追溯「流水线的输出是什么」
     from app.data_channel.pipeline_tasks.merge import _slim_row

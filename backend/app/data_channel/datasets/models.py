@@ -68,9 +68,10 @@ class DatasetVersion(Base):
     dataset_id: Mapped[str] = mapped_column(String, ForeignKey("v2_datasets.id", ondelete="CASCADE"), nullable=False)
     version_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     rowcount: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    # 结构化/半结构化/成品数据的权威快照直接保存在平台数据库中。storage_uri
-    # 仅用于非结构化文件和迁移前的历史数据集版本，不能再被管理员 MinIO 配置
-    # 隐式重定向。
+    # 结构化/半结构化数据的权威快照直接保存在平台数据库中；成品（curated）
+    # 数据集自 0062 起改为物理湖表（lake_ds_*）+ 行级变更集，新版本本列恒为
+    # NULL。storage_uri 仅用于非结构化文件和迁移前的历史数据集版本，不能再被
+    # 管理员 MinIO 配置隐式重定向。
     # Deferred loading keeps dataset listings/version metadata queries from
     # materializing full snapshots; readers fetch it only for the selected version.
     data_blob: Mapped[bytes | None] = mapped_column(
@@ -131,6 +132,51 @@ class DatasetVersionEvent(Base):
         DateTime(timezone=True), nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc))
+
+
+class DatasetChangeset(Base):
+    """成品数据集版本的行级变更集（物理湖表 + 版本元数据下的差异载体）。
+
+    change_type=baseline 仅记计数（迁移灌入物理表时的初始全量基线）；
+    change_type=run 由 lake_store.upsert_run 逐行记录 old/new，是审核 diff
+    与版本逆向回放的唯一依据。一个版本至多一个变更集。
+    """
+    __tablename__ = "v2_dataset_changesets"
+    __table_args__ = (
+        Index("ix_v2_dataset_changesets_dataset_id", "dataset_id"),
+        Index("uq_v2_dataset_changesets_version_id", "version_id", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    dataset_id: Mapped[str] = mapped_column(String, ForeignKey("v2_datasets.id", ondelete="CASCADE"), nullable=False)
+    version_id: Mapped[str] = mapped_column(String, ForeignKey("v2_dataset_versions.id", ondelete="CASCADE"), nullable=False)
+    change_type: Mapped[str] = mapped_column(String(20), nullable=False)  # baseline|run
+    added_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    updated_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    deleted_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    # 变更集规范哈希（排序逐行明细 + 计数的紧凑 JSON 之 SHA-256），同版本行的
+    # checksum，供版本不可变性与跨存储一致性校验。
+    checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class DatasetChangesetRow(Base):
+    """变更集逐行明细：added 记 new_row，deleted 记 old_row，updated 两者皆记。
+
+    row_pk 与行级审核同一编码口径：单主键为纯文本，复合主键为紧凑 JSON 数组
+    （row_pk_encoding='json-array' 前端契约）。
+    """
+    __tablename__ = "v2_dataset_changeset_rows"
+    __table_args__ = (
+        Index("ix_v2_dataset_changeset_rows_changeset_row_pk", "changeset_id", "row_pk"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    changeset_id: Mapped[str] = mapped_column(String, ForeignKey("v2_dataset_changesets.id", ondelete="CASCADE"), nullable=False)
+    row_pk: Mapped[str] = mapped_column(String(1000), nullable=False)
+    change_type: Mapped[str] = mapped_column(String(10), nullable=False)  # added|updated|deleted
+    old_row: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    new_row: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class DatasetWriteLock(Base):

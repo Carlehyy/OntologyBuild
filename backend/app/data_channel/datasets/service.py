@@ -13,6 +13,9 @@ from sqlalchemy.orm import Session
 from app.models.v2.dataset import (
     Dataset, DatasetVersion, DatasetVersionEvent, StorageDeletionOutbox,
 )
+from app.data_channel.datasets.snapshot_text import (  # noqa: F401 — 再导出
+    snapshot_cell_text,
+)
 from app.services.storage_service import (
     StorageService,
     get_storage_service,
@@ -40,10 +43,18 @@ def dataset_kind_uses_database(kind: str | None) -> bool:
 
 
 def version_has_content(version: DatasetVersion | None) -> bool:
-    """Return payload presence without materializing a deferred database blob."""
-    return bool(version and (
-        version.data_size is not None or bool(version.storage_uri)
-    ))
+    """Return payload presence without materializing a deferred database blob.
+
+    湖表版本（curated 物理表路径）没有 blob/storage_uri 载荷：rowcount 非空
+    且 checksum（变更集规范哈希）非空即视为有内容。该分支只能由
+    lake_store.upsert_run 产生——非 curated 版本总有 data_size（平台数据库
+    快照）或 storage_uri（迁移前/非结构化对象），判据对非 curated 语义不变。
+    """
+    if not version:
+        return False
+    if version.data_size is not None or bool(version.storage_uri):
+        return True
+    return version.rowcount is not None and bool(version.checksum)
 
 
 def detach_run_version_lineage(db, version_ids: list[str]) -> int:
@@ -92,17 +103,6 @@ def rows_to_csv_bytes(rows: list[dict], columns: list[str]) -> bytes:
     for row in rows:
         writer.writerow({c: _cell(row.get(c)) for c in columns})
     return buf.getvalue().encode("utf-8")
-
-
-def snapshot_cell_text(value) -> str:
-    """Canonical text representation used by tabular lake snapshots."""
-    if value is None:
-        return ""
-    if isinstance(value, (bytes, bytearray)):
-        return f"<{len(value)} bytes>"
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False)
-    return str(value)
 
 
 def rows_to_parquet_bytes(rows: list[dict]) -> bytes:
@@ -813,10 +813,37 @@ class DatasetService:
         ]
         detach_run_version_lineage(self._db, deletable_ids)
 
+        # 变更集回放链完整性：rows_at_version 依赖「当前表 + 目标版本之后的
+        # 全部 run 变更集」逆向回放。最旧幸存版本（保留窗口内或被审核/媒体
+        # 豁免）之后的变更集是回放链的必需环节，其版本元数据与变更集一并
+        # 保留——湖表版本无 blob 载荷，保留元数据代价极小；只有回放链不再
+        # 需要的变更集才随版本删除。
+        from app.data_channel.datasets.models import (
+            DatasetChangeset, DatasetChangesetRow)
+        surviving_nos = [v.version_no for v in versions
+                         if v.id not in deletable_ids]
+        oldest_surviving_no = min(surviving_nos) if surviving_nos else None
+        changeset_by_version: dict[str, str] = dict(
+            self._db.query(DatasetChangeset.version_id, DatasetChangeset.id)
+            .filter(DatasetChangeset.dataset_id == dataset_id)
+            .all())
+
         removed = 0
         for v in candidates:
             if v.id in media_ver_ids or v.id in reviewed_ver_ids:
                 continue
+            changeset_id = changeset_by_version.get(v.id)
+            if (changeset_id is not None and oldest_surviving_no is not None
+                    and v.version_no > oldest_surviving_no):
+                continue  # 回放链需要：版本元数据与变更集一并保留
+            if changeset_id is not None:
+                # 显式级联删除变更集明细（不依赖 SQLite FK 强制开关）
+                self._db.query(DatasetChangesetRow).filter(
+                    DatasetChangesetRow.changeset_id == changeset_id
+                ).delete(synchronize_session=False)
+                self._db.query(DatasetChangeset).filter(
+                    DatasetChangeset.id == changeset_id
+                ).delete(synchronize_session=False)
             storage_uris = [v.storage_uri] if v.storage_uri else []
             # File rows cascade with DatasetVersion. Queue their private MinIO
             # objects before deleting the version so metadata and object
@@ -901,10 +928,26 @@ class DatasetService:
         入湖合并基座、需要「必须完整」语义的消费方一律用这个，不要用
         preview()——它容错返回空列表，会把「读失败」伪装成「湖是空的」。
         数据集尚无版本/内容为空 → 返回 []（这是合法状态，不是错误）。
+        curated 湖表版本（无 blob 载荷）分流到物理表：最新版本流式收集，
+        历史版本经变更集逆向回放。
         """
         ver = self._resolve_version(dataset_id, version_no)
         if not version_has_content(ver):
             return []
+        ds = self.get_dataset(dataset_id)
+        if ds is not None:
+            from app.data_channel.datasets import lake_store
+            if lake_store.version_uses_lake(ds, ver):
+                try:
+                    latest = self._resolve_version(dataset_id, None)
+                    if latest is not None and latest.id == ver.id:
+                        return [row for batch in lake_store.stream_rows(
+                            self._db, ds) for row in batch]
+                    return lake_store.rows_at_version(
+                        self._db, ds, ver.version_no)
+                except Exception as e:
+                    raise DatasetReadError(
+                        f"数据集 {dataset_id} v{ver.version_no} 物理湖表读取失败：{e}") from e
         raw = self.load_version_bytes(dataset_id, ver.version_no)
         if not raw:
             return []
@@ -924,10 +967,27 @@ class DatasetService:
         offset：跳过前 N 行数据行（表头不计），配合 limit 做分页预览。
         容错语义：读取/解析失败返回 []，仅适合 UI 展示；「必须完整」的
         场景（如合并基座）用 load_all_rows()。
+        curated 湖表版本分流到物理表：最新版本走主键序真分页，历史版本经
+        变更集回放后切片。
         """
         ver = self._resolve_version(dataset_id, version_no)
         if not version_has_content(ver):
             return []
+        ds = self.get_dataset(dataset_id)
+        if ds is not None:
+            from app.data_channel.datasets import lake_store
+            if lake_store.version_uses_lake(ds, ver):
+                try:
+                    latest = self._resolve_version(dataset_id, None)
+                    if latest is not None and latest.id == ver.id:
+                        return lake_store.page_rows(
+                            self._db, ds, offset, limit)
+                    rows = lake_store.rows_at_version(
+                        self._db, ds, ver.version_no)
+                    offset = max(0, offset)
+                    return rows[offset:] if limit is None else rows[offset:offset + limit]
+                except Exception:
+                    return []
         try:
             raw = self.load_version_bytes(dataset_id, ver.version_no)
             if not raw:
@@ -935,3 +995,71 @@ class DatasetService:
             return _parse_stored_rows(raw, limit=limit, offset=offset)
         except Exception:
             return []
+
+    def bootstrap_lake_base(self, dataset) -> bool:
+        """迁移未覆盖数据集的懒引导：从最新含载荷版本灌物理表 + baseline 变更集。
+
+        0062 迁移时对象存储不可达（或当时无可用列契约）的 curated 数据集没有
+        物理表；其首次入湖（含 overwrite）必须先以遗留 blob 为基座：增量模式
+        不以基座合并会丢湖中存量；overwrite 虽全量替换内容，但审计 diff
+        （lake_impact/变更集）的语义是「与上一版本内容的差异」，空基座会把
+        删除/更新全部误记为新增。基座读取失败抛 DatasetReadError 让本次运行
+        失败（与 merge.load_latest_rows 的严格读口径一致）。随调用方事务提交
+        （本方法不 commit）。
+        """
+        from app.data_channel.datasets import lake_store
+        from app.data_channel.datasets.lake_gate import split_pk
+
+        if not lake_store.uses_lake_table(dataset):
+            return False
+        schema = dict(getattr(dataset, "schema_json", None) or {})
+        if schema.get("lake_columns"):
+            return False  # 已有物理表契约（表已建或曾经建过）
+        if lake_store.lake_table_exists(self._db, dataset.id):
+            return False
+        last_ver = (self._db.query(DatasetVersion)
+                    .filter(DatasetVersion.dataset_id == dataset.id)
+                    .order_by(DatasetVersion.version_no.desc()).first())
+        if not version_has_content(last_ver):
+            return False
+        rows = self.load_all_rows(dataset.id, last_ver.version_no)
+        columns = lake_store.lake_columns_from_rows(rows) or [
+            str(c) for c in schema.get("columns") or []]
+        if not columns:
+            return False  # 空内容版本且无列契约：无可引导，按新资产处理
+        mapping = lake_store.build_lake_column_mapping(columns)
+        pk_cols = [c for c in split_pk(schema.get("primary_key"))
+                   if c in mapping]
+        conn = self._db.connection()
+        table = lake_store.lake_table_definition(
+            lake_store.lake_table_name(dataset.id), mapping, pk_cols)
+        table.create(bind=conn)
+        normalized = lake_store.normalize_lake_rows(rows, mapping, pk_cols)
+        if pk_cols:
+            # 历史快照理论上已过主键校验；防御性末现去重，避免脏历史撞 PK 约束
+            pk_physical = [mapping[c] for c in pk_cols]
+            seen: dict[tuple, int] = {}
+            for index, row in enumerate(normalized):
+                seen[tuple(row[p] for p in pk_physical)] = index
+            normalized = [normalized[i] for i in sorted(seen.values())]
+        for start in range(0, len(normalized), 1000):
+            conn.execute(table.insert(), normalized[start:start + 1000])
+        from app.data_channel.datasets.models import DatasetChangeset
+        self._db.add(DatasetChangeset(
+            id=str(uuid.uuid4()),
+            dataset_id=dataset.id,
+            version_id=last_ver.id,
+            change_type="baseline",
+            added_count=len(normalized),
+            updated_count=0,
+            deleted_count=0,
+            checksum=lake_store.compute_changeset_checksum(
+                dataset.id, "baseline", len(normalized), 0, 0, []),
+        ))
+        schema["lake_columns"] = mapping
+        dataset.schema_json = schema
+        self._db.flush()
+        logger.info("数据集 %s（%s）从遗留版本 v%s 懒引导物理湖表：%s 行",
+                    dataset.id, dataset.name, last_ver.version_no,
+                    len(normalized))
+        return True

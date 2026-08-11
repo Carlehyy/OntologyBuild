@@ -343,14 +343,38 @@ class ReviewService:
                 "message": "审核绑定的数据版本已不存在，不能继续提交编辑。",
             })
         try:
-            rows = DatasetService(self._db).load_all_rows(
-                review.curated_dataset_id, version.version_no)
+            # 湖表版本（且即当前最新版）按主键分批 IN 校验，不再全量物化；
+            # blob 版本或历史湖表版本走全量严格读（含变更集回放）兜底
+            from app.data_channel.curated.approved_version_reader import (
+                latest_dataset_version,
+            )
+            from app.data_channel.datasets import lake_store
+            from app.models.v2.dataset import Dataset
+
+            dataset = self._db.query(Dataset).filter(
+                Dataset.id == review.curated_dataset_id).first()
+            latest = latest_dataset_version(self._db, review.curated_dataset_id)
+            # 物理表当前态即审核绑定版本（即最新版）时按主键分批 IN 校验；
+            # lake_columns 映射是湖表资产已建表的权威标记（缺失=未建表/异常，
+            # 回退全量读由 load_all_rows 的湖表分流兜底）
+            use_lake = (
+                dataset is not None and latest is not None
+                and latest.id == version.id
+                and lake_store.version_uses_lake(dataset, version)
+                and bool((dataset.schema_json or {}).get("lake_columns")))
+            if use_lake:
+                existing = lake_store.rows_by_pks(self._db, dataset, list(row_pks))
+            else:
+                rows = DatasetService(self._db).load_all_rows(
+                    review.curated_dataset_id, version.version_no)
+                existing = {
+                    encode_row_pk(row, pk_cols, dataset_name=review.curated_dataset_id): row
+                    for row in rows
+                }
         except DatasetReadError as exc:
             raise HTTPException(422, f"审核版本数据读取失败：{exc}") from None
-        existing = {
-            encode_row_pk(row, pk_cols, dataset_name=review.curated_dataset_id): row
-            for row in rows
-        }
+        except lake_store.LakeStoreError as exc:
+            raise HTTPException(422, f"审核版本数据读取失败：{exc}") from None
         missing = sorted(set(row_pks) - set(existing))
         if missing:
             raise HTTPException(409, detail={

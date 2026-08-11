@@ -54,16 +54,27 @@ def load_mapping_source_rows(
     from app.models.v2.dataset import Dataset
     from app.services.v2.dataset_service import DatasetService
     from app.data_channel.curated.approved_version_reader import (
-        ReviewApprovalError, latest_dataset_version, load_all_rows_with_edits)
+        ReviewApprovalError, latest_dataset_version)
 
     ds = db.query(Dataset).filter(Dataset.id == dataset_id).first()
     version = latest_dataset_version(db, dataset_id)
     if ds is not None:
         if ds.kind == "curated":
+            from app.data_channel.curated.approved_version_reader import (
+                iter_rows_with_edits)
             try:
-                rows = load_all_rows_with_edits(
-                    db, dataset_id, require_approved=require_approved,
-                    version=version)
+                # 湖表版本经 iter_rows_with_edits 分批流式读取 + 批内叠加行
+                # 编辑，不再全量物化整份 blob。build_all 下游（实体构建/关系
+                # join/Neo4j 对账）结构上仍需全量列表，收集点统一收拢于此：
+                # 峰值内存从「整份 blob 解析列表 + 叠加后列表」降为「一份全量
+                # + 一批」。
+                rows = [
+                    row
+                    for batch in iter_rows_with_edits(
+                        db, dataset_id,
+                        require_approved=require_approved, version=version)
+                    for row in batch
+                ]
             except ReviewApprovalError as e:
                 raise MappingSourceError(str(e)) from e
         else:

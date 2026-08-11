@@ -154,3 +154,26 @@ def test_pipeline_append_duplicate_pk_fails_before_new_version_is_written(db, mo
     versions = db.query(DatasetVersion).filter(
         DatasetVersion.dataset_id == first["curated_dataset_id"]).all()
     assert len(versions) == 1
+
+
+def test_pipeline_input_over_max_in_memory_rows_is_rejected(db, monkeypatch):
+    """死配置接入：单批来数超 pipeline_max_in_memory_rows 上限即拒绝执行。"""
+    from app.config import settings
+
+    storage = _Storage()
+    monkeypatch.setattr(
+        "app.data_channel.datasets.service.get_storage_service", lambda: storage)
+    monkeypatch.setattr(settings, "pipeline_max_in_memory_rows", 1)
+    pl = _pipeline("pipe-limit", "订单")
+    pl.column_definitions = []
+    source = {"dataset_id": None, "filename": "orders", "route": "A"}
+    ctx = SimpleNamespace(rows_in=2, meta={})
+    svc = DatasetService(db, storage=storage)
+
+    with pytest.raises(LakeGateError, match="pipeline_max_in_memory_rows"):
+        _save_curated_dataset(
+            db, svc, pl, source,
+            [{"order_id": "A-1"}, {"order_id": "A-2"}], ctx, False,
+            write_opts={"mode": "overwrite", "skip_empty": False})
+    # 未建资产、未写版本
+    assert db.query(Dataset).filter(Dataset.kind == "curated").count() == 0
