@@ -1,9 +1,13 @@
 """物理湖表性能基准：lake_store 行级 upsert / 分页 / 流式读 / 版本回放。
 
-规模与口径（任务书：50 万行基座）：
-- 基座 50 万行 × 8 列；基座大头用 Core 批量直插预置（仅基准 fixture 捷径，
-  避开来数字典的 Python 生成成本——该行级成本在记录里单独标注），
-  随后 5 万行增量 upsert / 50 万行 overwrite 走完整 upsert_run 路径计时；
+规模设计（CI shard 预算约束，与 test_merge_engine_perf.py 同一惯例）：
+- 默认 CI 规模：10 万行基座 + 1 万行增量。overwrite 全量替换与跨 overwrite
+  逆向回放是最重路径（50 万行本机即需 ~114s/~22s），CI 4 vCPU 上会撑爆
+  verify-backend shard 的 15 分钟超时（曾导致 run 31499091029 shard 1 被
+  取消）——O(N) 成本按 10 万行量测线性外推即可证明量级；
+- 本机全量规模：LAKE_PERF_SCALE=full 跑 50 万行基座 + 5 万行增量；
+- 基座大头用 Core 批量直插预置（仅基准 fixture 捷径，避开来数字典的
+  Python 生成成本——该行级成本在记录里单独标注）；
 - 方言 SQLite（本机临时文件）。PG 侧差异：TEMP 暂存与 PK 索引 JOIN 在 PG
   上通常不劣于 SQLite；OFFSET 深分页两方言同构（都需扫过前 N 行）。
 - tracemalloc 只追踪 Python 侧分配。
@@ -14,6 +18,7 @@ from __future__ import annotations
 
 import gc
 import json
+import os
 import platform
 import time
 import tracemalloc
@@ -27,8 +32,9 @@ from sqlalchemy.orm import sessionmaker
 from app.data_channel.datasets import lake_store
 from app.data_channel.datasets.models import Dataset
 
-BASE_ROWS = 500_000
-INC_ROWS = 50_000
+_FULL_SCALE = os.environ.get("LAKE_PERF_SCALE", "").strip().lower() == "full"
+BASE_ROWS = 500_000 if _FULL_SCALE else 100_000
+INC_ROWS = 50_000 if _FULL_SCALE else 10_000
 COLS = 8
 
 REPORT_PATH = (
@@ -69,7 +75,7 @@ def _record(scenario: str, wall: float, peak: int, note: str = "") -> dict:
 def _write_report():
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text(json.dumps({
-        "title": "lake_store 物理湖表基准（SQLite，50 万行基座）",
+        "title": f"lake_store 物理湖表基准（SQLite，{BASE_ROWS // 10_000} 万行基座）",
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "environment": {
             "python": platform.python_version(),
@@ -120,7 +126,7 @@ def lake_db(tmp_path_factory):
         conn.execute(table.insert(), batch)
     session.commit()
     gen_wall = time.perf_counter() - gen_start
-    _record("base_build_500k_direct_insert", gen_wall, 0,
+    _record(f"base_build_{BASE_ROWS}_direct_insert", gen_wall, 0,
             note="直插预置基座（含逐行规范化），仅供 fixture，不走 upsert_run")
     yield session, ds
     session.close()
@@ -135,8 +141,8 @@ def test_benchmark_lake_store(lake_db):
     (version, changeset), wall, peak = _measure(
         lambda: lake_store.upsert_run(session, ds, inc_rows, "upsert", ["id"]))
     assert changeset.updated_count == INC_ROWS
-    _record("upsert_inc_50k_on_base_500k", wall, peak,
-            note="TEMP 暂存 + SQL diff + DELETE/INSERT + 5 万条变更集逐行")
+    _record(f"upsert_inc_{INC_ROWS}_on_base_{BASE_ROWS}", wall, peak,
+            note="TEMP 暂存 + SQL diff + DELETE/INSERT + 增量条数级变更集逐行")
 
     # ── 50 万行 overwrite 全量替换 ────────────────────────────────
     overwrite_rows = [_row(i, tag="w") for i in range(BASE_ROWS)]
@@ -145,8 +151,8 @@ def test_benchmark_lake_store(lake_db):
             session, ds, overwrite_rows, "overwrite", ["id"]))
     assert v_over.rowcount == BASE_ROWS
     assert cs_over.added_count + cs_over.updated_count > 0
-    _record("overwrite_500k_full_replace", wall, peak,
-            note="全量替换：50 万 staged + 删除旧 50 万 + 变更集逐行（最重路径）")
+    _record(f"overwrite_{BASE_ROWS}_full_replace", wall, peak,
+            note="全量替换：整表 staged + 删除旧行 + 变更集逐行（最重路径）")
 
     # ── 深分页 vs 首页 ───────────────────────────────────────────
     page, wall_first, _ = _measure(
@@ -156,8 +162,8 @@ def test_benchmark_lake_store(lake_db):
     page, wall_deep, _ = _measure(
         lambda: lake_store.page_rows(session, ds, BASE_ROWS - 10_000, 100))
     assert len(page) == 100
-    rec = _record("page_rows_deep_offset_490k", wall_deep, 0,
-                  note="OFFSET 深分页（两方言同构需扫过前 49 万行）")
+    rec = _record(f"page_rows_deep_offset_{BASE_ROWS - 10_000}", wall_deep, 0,
+                  note=f"OFFSET 深分页（两方言同构需扫过前 {BASE_ROWS - 10_000} 行）")
     assert wall_first < 5 and wall_deep < 30
 
     # ── 全量流式读 ───────────────────────────────────────────────
@@ -165,7 +171,7 @@ def test_benchmark_lake_store(lake_db):
         len(batch) for batch in lake_store.stream_rows(
             session, ds, batch_size=5000)))
     assert total == BASE_ROWS
-    _record("stream_rows_full_500k", wall, peak,
+    _record(f"stream_rows_full_{BASE_ROWS}", wall, peak,
             note="5000/批全量流式收集计数（不持有全量列表）")
 
     # ── 逆向回放到上一版本（当前 50 万表 + 撤销 overwrite 变更集）────
