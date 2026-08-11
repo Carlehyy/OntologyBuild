@@ -168,8 +168,27 @@ test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async
   await expect(page.getByText('映射结果清单')).toBeVisible()
   await expect(page.getByText('数据血缘详情')).toBeVisible()
   await expect(page.getByText('把本体结构，接到真实数据上')).toHaveCount(0)
-  const filtersBox = await page.locator('.dmo-filters').boundingBox()
-  const searchBox = await page.locator('.dmo-search').boundingBox()
+  // 供给全景图是懒加载图表，落地前会把清单头部向下推；先等其 y 连续两次
+  // 采样不变，再在同一个 JS 任务内原子量测两个元素——分两次 await 读取会
+  // 在中间插入重排，造成对齐断言偶发失败。
+  const registerHead = page.locator('.dmo-register-head')
+  let anchor = await registerHead.boundingBox()
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await page.waitForTimeout(120)
+    const next = await registerHead.boundingBox()
+    const settled = anchor && next && Math.abs(next.y - anchor.y) < 1
+    anchor = next
+    if (settled) break
+  }
+  const { filtersBox, searchBox } = await page.evaluate(() => {
+    const read = (selector: string) => {
+      const element = document.querySelector(selector)
+      if (!element) return null
+      const { x, y, width, height } = element.getBoundingClientRect()
+      return { x, y, width, height }
+    }
+    return { filtersBox: read('.dmo-filters'), searchBox: read('.dmo-search') }
+  })
   expect(filtersBox).not.toBeNull()
   expect(searchBox).not.toBeNull()
   expect(filtersBox!.x + filtersBox!.width).toBeLessThanOrEqual(searchBox!.x)
