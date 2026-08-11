@@ -421,25 +421,29 @@ export default function FormalInstancesView({
           />
         )}
 
-        {/* ② 实例浏览器：实体模型目录 + 实例表格（先选类型，再看数据） */}
+        {/* ② 实例浏览器：实体模型目录 + 实例表格（先选类型，再看数据）。
+            md 起用 2×2 共享网格行：左右头部同行（分割线恒对齐，过滤 chips 撑高时也不错位），
+            目录与表格同行（目录撑满行高、竖向分割线贯通到底）。移动端正文顺序即堆叠顺序。 */}
         <div
           ref={browserRef}
-          className="grid shrink-0 grid-cols-1 rounded-xl border border-slate-200 md:grid-cols-[minmax(230px,280px)_minmax(0,1fr)]"
+          className="grid shrink-0 grid-cols-1 rounded-xl border border-slate-200 md:grid-cols-[minmax(230px,280px)_minmax(0,1fr)] md:grid-rows-[auto_minmax(0,1fr)]"
         >
-      <aside className="flex max-h-64 min-h-0 flex-col self-start rounded-t-xl border-b border-slate-200 bg-slate-50/70 md:sticky md:top-4 md:max-h-[calc(100vh-3rem)] md:rounded-l-xl md:rounded-tr-none md:border-b-0 md:border-r">
-        <div className="shrink-0 border-b border-slate-200 px-4 py-3.5">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-              <Database size={15} className="text-teal-600" />
-              实体模型目录
-            </div>
-            <span className="rounded-md border border-teal-100 bg-teal-50 px-1.5 py-0.5 text-[10px] font-medium text-teal-700">
-              已发布
-            </span>
+      <div className="flex items-center rounded-t-xl border-b border-slate-200 bg-slate-50/70 px-4 py-3.5 md:col-start-1 md:row-start-1 md:rounded-tr-none md:border-r">
+        <div className="flex w-full items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+            <Database size={15} className="text-teal-600" />
+            实体模型目录
           </div>
+          <span className="rounded-md border border-teal-100 bg-teal-50 px-1.5 py-0.5 text-[10px] font-medium text-teal-700">
+            已发布
+          </span>
         </div>
+      </div>
 
-        <nav className="min-h-0 flex-1 overflow-y-auto p-2.5" aria-label="实例类型目录">
+      <nav
+        aria-label="实例类型目录"
+        className="max-h-64 overflow-y-auto border-b border-slate-200 bg-slate-50/70 p-2.5 md:col-start-1 md:row-start-2 md:max-h-none md:rounded-bl-xl md:border-b-0 md:border-r"
+      >
           <TreeSection
             title="对象实体"
             count={catalog?.objectTypes.length || 0}
@@ -481,11 +485,9 @@ export default function FormalInstancesView({
           {!catalog?.objectTypes.length && !catalog?.linkTypes.length && (
             <p className="px-3 py-8 text-center text-xs text-slate-400">暂无实体模型</p>
           )}
-        </nav>
-      </aside>
+      </nav>
 
-      <section className="flex min-w-0 flex-col">
-        <header data-testid="instance-data-header" className="shrink-0 border-b border-slate-200 bg-white px-5 py-3.5 md:rounded-tr-xl">
+      <header data-testid="instance-data-header" className="border-b border-slate-200 bg-white px-5 py-3.5 md:col-start-2 md:row-start-1 md:rounded-tr-xl">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -572,8 +574,9 @@ export default function FormalInstancesView({
               </button>
             </div>
           )}
-        </header>
+      </header>
 
+      <section className="flex min-w-0 flex-col md:col-start-2 md:row-start-2">
         {catalog && (
           <InstanceSummaryBar catalog={catalog} overview={overviewQuery.data} />
         )}
