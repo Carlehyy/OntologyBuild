@@ -1101,12 +1101,12 @@ function InstanceTable({
           ))}
           {kind === 'object' ? (
             <>
-              <HeaderCell narrow>来源</HeaderCell>
-              <HeaderCell>创建时间</HeaderCell>
-              <HeaderCell>更新时间</HeaderCell>
+              <SystemHeaderCell label="来源" name="source" type="string" />
+              <SystemHeaderCell label="创建时间" name="created_at" type="datetime" />
+              <SystemHeaderCell label="更新时间" name="updated_at" type="datetime" />
             </>
           ) : (
-            <HeaderCell>创建时间</HeaderCell>
+            <SystemHeaderCell label="创建时间" name="created_at" type="datetime" />
           )}
         </tr>
       </thead>
@@ -1150,18 +1150,44 @@ function EndpointHeader({ label, side }: { label: string; side: 'source' | 'targ
 function HeaderCell({
   children,
   sticky = false,
-  narrow = false,
 }: {
   children: React.ReactNode
   sticky?: boolean
-  narrow?: boolean
 }) {
   return (
     <th scope="col" className={`border-b border-r border-slate-200 px-4 py-2.5 align-top font-medium ${
-      sticky ? 'sticky left-0 z-30 min-w-60 bg-slate-50/95' : narrow ? 'min-w-24' : 'min-w-48'
+      sticky ? 'sticky left-0 z-30 min-w-60 bg-slate-50/95' : 'min-w-48'
     }`}>
       {children}
     </th>
+  )
+}
+
+// 系统列是平台写入侧自动记录的溯源字段（非建模属性）。表头沿用业务列格式：
+// 中文名 + 徽标 + 英文名·类型，徽标用品牌色「系统」与 非空/PK/派生/运行字段 区分。
+function SystemHeaderCell({
+  label,
+  name,
+  type,
+}: {
+  label: string
+  name: string
+  type: string
+}) {
+  return (
+    <HeaderCell>
+      <div className="flex min-w-40 items-center gap-1.5">
+        <span className="font-medium text-slate-600">{label}</span>
+        <span
+          className="rounded bg-teal-50 px-1 py-0.5 text-[9px] font-semibold text-teal-700"
+          title="平台自动记录的系统字段"
+        >系统</span>
+      </div>
+      <div className="mt-1 flex items-center gap-1.5 font-mono text-[10px] font-normal text-slate-400">
+        <span>{name}</span>
+        <span>· {type}</span>
+      </div>
+    </HeaderCell>
   )
 }
 
