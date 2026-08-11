@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, JSON, Float, ForeignKey
+from sqlalchemy import String, DateTime, JSON, Float, ForeignKey, Integer, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -40,3 +40,32 @@ class OntologyLinkMapping(Base):
     # {边属性名: 连接表列名} —— 采集进 LinkInstance.properties（镜像 OntologyMapping.field_mapping）。
     field_mapping: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class MappingKnowledgeEntry(Base):
+    """人工确认过的「列→本体属性」映射知识（数据飞轮沉淀层）。
+
+    锚定点用语义名（object_name/property_name）而非本体内部 id，保证跨本体可复用；
+    只由人工保存过的映射回流写入，LLM 未确认产出永不入库，防止飞轮被污染。
+    """
+    __tablename__ = "v2_mapping_knowledge_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "column_key", "display_name", "col_type",
+            "object_name", "property_name",
+            name="uq_mapping_knowledge_anchor",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    # 归一化列名（小写、驼峰转下划线、去非字母数字）
+    column_key: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    # 中文显示名（可空，匹配时作为第二锚点）
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False, default="", index=True)
+    # 归一化类型（string/number/datetime/boolean/array/json）
+    col_type: Mapped[str] = mapped_column(String(20), nullable=False, default="string")
+    object_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    property_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    confirm_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    last_confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

@@ -30,6 +30,7 @@ export default defineConfig({
     '**/instance_dataset_navigation.spec.ts',
     '**/mapping_primary_key.spec.ts',
     '**/mapping_review_automation.spec.ts',
+    '**/mapping_suggestions.spec.ts',
     '**/mcp-client-config.spec.ts',
     '**/models.spec.ts',
     '**/ontology_domain_source.spec.ts',

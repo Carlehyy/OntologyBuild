@@ -251,6 +251,9 @@ app.include_router(graph_v2.router, prefix="/api/v2/ontologies", tags=["v2-graph
 app.include_router(search_v2.router, prefix="/api/v2/ontologies", tags=["v2-search"], dependencies=ontology_guard)
 app.include_router(curated_v2.router, prefix="/api/v2/curated", tags=["v2-curated"], dependencies=asset_lake_guard)
 app.include_router(mappings_v2.router, prefix="/api/v2/ontologies", tags=["v2-mappings"], dependencies=ontology_guard)
+# 草稿映射智能建议（知识库+规则+LLM 概念化裁决，全部进人工确认队列）
+from app.ontologies.mappings import suggestion_router as mapping_suggestion_router
+app.include_router(mapping_suggestion_router.router, prefix="/api/v2/ontologies", tags=["v2-mappings"], dependencies=ontology_guard)
 app.include_router(incremental_v2.router, prefix="/api/v2/incremental", tags=["v2-incremental"], dependencies=asset_lake_guard)
 app.include_router(logic_actions_v2.router, prefix="/api/v2/ontologies", tags=["v2-logic-actions"], dependencies=legacy_ontology_guard)
 app.include_router(versions_v2.router, prefix="/api/v2/ontologies", tags=["v2-versions"], dependencies=ontology_guard)
