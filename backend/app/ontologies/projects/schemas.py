@@ -96,6 +96,7 @@ class OntologyListItem(BaseModel):
     relation_count: int = 0
     action_count: int = 0
     sentinel_count: int = 0
+    assistant_card_clicks: int = 0
     created_by: str
     created_at: datetime
     updated_at: datetime

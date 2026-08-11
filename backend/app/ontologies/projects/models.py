@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, ForeignKey, Text
+from sqlalchemy import Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -33,6 +33,11 @@ class OntologyProject(Base):
         nullable=True,
     )
     build_mode: Mapped[str] = mapped_column(String(30), default="manual", nullable=True)
+    # 本体助手卡片的全局选用次数（不按用户区分）。只由助手卡片确认选中时
+    # 自增；下拉框切换与深链进入不计入，保证指标只反映卡片选用热度。
+    assistant_card_clicks: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False,
+    )
     created_by: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
