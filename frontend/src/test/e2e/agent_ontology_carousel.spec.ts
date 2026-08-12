@@ -132,6 +132,14 @@ test('未选择本体时展示卡片轮播并按选用次数排序', async ({ pa
   await expect(page.locator('[data-card-index="2"]')).toContainText('法律知识本体')
   await expect(page.locator('[data-card-index="0"]')).toContainText('×7')
   await expect(page.locator('[data-card-index="2"]').getByText('×0')).toHaveCount(0)
+
+  // 环形均匀布局：最热卡居中，次热在右，最冷卡环绕到左侧。
+  const centerBox = await page.locator('[data-card-index="0"]').boundingBox()
+  const rightBox = await page.locator('[data-card-index="1"]').boundingBox()
+  const leftBox = await page.locator('[data-card-index="2"]').boundingBox()
+  if (!centerBox || !rightBox || !leftBox) throw new Error('card bounding box missing')
+  expect(rightBox.x).toBeGreaterThan(centerBox.x)
+  expect(leftBox.x).toBeLessThan(centerBox.x)
 })
 
 test('点击侧边卡片仅聚焦，点击聚焦卡片才选中并计数', async ({ page }) => {
@@ -153,18 +161,13 @@ test('点击侧边卡片仅聚焦，点击聚焦卡片才选中并计数', async
   await expect(page.getByTestId('ontology-card-carousel')).toHaveCount(0)
 })
 
-test('箭头按钮与拖拽可以切换聚焦卡片', async ({ page }) => {
+test('箭头按钮与拖拽可以切换聚焦卡片，且支持无限循环', async ({ page }) => {
   await mockCarousel(page)
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/#/agent')
 
   const prevButton = page.getByLabel('上一张本体卡片')
   const nextButton = page.getByLabel('下一张本体卡片')
-  await expect(prevButton).toBeDisabled()
-  await nextButton.click()
-  await expect(page.locator('[data-card-index="1"]')).toHaveAttribute('aria-selected', 'true')
-  await prevButton.click()
-  await expect(page.locator('[data-card-index="0"]')).toHaveAttribute('aria-selected', 'true')
 
   const stage = page.getByTestId('ontology-card-carousel')
   const box = await stage.boundingBox()
@@ -177,6 +180,34 @@ test('箭头按钮与拖拽可以切换聚焦卡片', async ({ page }) => {
   await page.mouse.up()
   await expect(page.locator('[data-card-index="1"]')).toHaveAttribute('aria-selected', 'true')
   await expect(page).toHaveURL(/\/#\/agent$/)
+
+  await prevButton.click()
+  await expect(page.locator('[data-card-index="0"]')).toHaveAttribute('aria-selected', 'true')
+  // 已循环：在首张继续向前则环绕到末张，箭头不再禁用。
+  await expect(prevButton).toBeEnabled()
+  await prevButton.click()
+  await expect(page.locator('[data-card-index="2"]')).toHaveAttribute('aria-selected', 'true')
+  await nextButton.click()
+  await expect(page.locator('[data-card-index="0"]')).toHaveAttribute('aria-selected', 'true')
+})
+
+test('仅两张本体卡片时线性展示且不循环', async ({ page }) => {
+  await mockCarousel(page, {
+    items: [
+      released('ontology-1', '供应链本体', 7),
+      released('ontology-2', '医疗健康本体', 3, '医疗'),
+    ],
+  })
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/agent')
+
+  const prevButton = page.getByLabel('上一张本体卡片')
+  const nextButton = page.getByLabel('下一张本体卡片')
+  await expect(page.getByTestId('ontology-card-carousel').getByRole('option')).toHaveCount(2)
+  await expect(prevButton).toBeDisabled()
+  await nextButton.click()
+  await expect(page.locator('[data-card-index="1"]')).toHaveAttribute('aria-selected', 'true')
+  await expect(nextButton).toBeDisabled()
 })
 
 test('头部下拉选择保持可用（回归）', async ({ page }) => {

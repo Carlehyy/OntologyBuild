@@ -2,6 +2,10 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import { rankOntologyCards } from '../../../pages/agent/components/ontologyCardRanking.ts'
+import {
+  circularCardPosition,
+  normalizeCardIndex,
+} from '../../../pages/agent/components/ontologyCarouselMath.ts'
 
 const card = (
   name: string,
@@ -41,5 +45,48 @@ describe('rankOntologyCards', () => {
     const ranked = rankOntologyCards(source)
     assert.deepEqual(ranked.map(item => item.name), ['甲本体', '乙本体'])
     assert.deepEqual(source.map(item => item.name), ['乙本体', '甲本体'])
+  })
+})
+
+
+describe('circularCardPosition', () => {
+  it('焦点为 0 时左侧环绕展示排名末尾的卡', () => {
+    // 5 张卡：0 居中，1/2 在右（热度递减），4/3 环绕到左。
+    const positions = [0, 1, 2, 3, 4].map(index => circularCardPosition(index, 0, 5))
+    assert.deepEqual(positions, [0, 1, 2, -2, -1])
+  })
+
+  it('焦点推进后保持环形连续', () => {
+    const positions = [0, 1, 2, 3, 4].map(index => circularCardPosition(index, 2, 5))
+    assert.deepEqual(positions, [-2, -1, 0, 1, 2])
+  })
+
+  it('焦点越界时位置仍落在环形窗口内（无限轮播）', () => {
+    const positions = [0, 1, 2, 3, 4].map(index => circularCardPosition(index, 7, 5))
+    assert.deepEqual(positions, [-2, -1, 0, 1, 2])
+  })
+
+  it('1~2 张卡退化为线性位置，不环绕', () => {
+    assert.equal(circularCardPosition(1, 0, 2), 1)
+    assert.equal(circularCardPosition(0, 1, 2), -1)
+    assert.equal(circularCardPosition(0, 0, 1), 0)
+  })
+
+  it('偶数张卡时接缝卡固定在正半侧', () => {
+    const positions = [0, 1, 2, 3].map(index => circularCardPosition(index, 0, 4))
+    assert.deepEqual(positions, [0, 1, 2, -1])
+  })
+})
+
+describe('normalizeCardIndex', () => {
+  it('越界焦点规整到合法索引', () => {
+    assert.equal(normalizeCardIndex(5, 5), 0)
+    assert.equal(normalizeCardIndex(-1, 5), 4)
+    assert.equal(normalizeCardIndex(2.4, 5), 2)
+    assert.equal(normalizeCardIndex(2.6, 5), 3)
+  })
+
+  it('空列表安全返回 0', () => {
+    assert.equal(normalizeCardIndex(3, 0), 0)
   })
 })

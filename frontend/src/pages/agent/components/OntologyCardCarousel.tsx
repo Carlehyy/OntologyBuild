@@ -2,10 +2,13 @@
  * 本体卡片轮播：未选择本体时占据本体助手右侧工作区大区域。
  *
  * Coverflow 交互：
- *   - 鼠标按住左右拖拽浏览，松手吸附到最近卡片；
+ *   - 卡片环形布局：最热卡居中，右侧按选用次数递减，末尾卡环绕到左侧；
+ *   - 鼠标按住左右拖拽浏览，松手吸附；>=3 张时可单向无限循环；
  *   - 单击侧边卡片仅聚焦居中，单击聚焦卡片（或「开始使用」）才确认选中；
  *   - 左右箭头、指示点与键盘 ←/→/Enter 提供等价操作；
- *   - 卡片顺序由父级按全局选用次数排好（rankOntologyCards），这里只管呈现。
+ *   - 焦点动画由 requestAnimationFrame 逐帧驱动，环绕接缝处卡片从一侧
+ *     淡出、另一侧淡入，避免 CSS transition 造成的瞬移或横穿。
+ * 卡片顺序由父级按全局选用次数排好（rankOntologyCards），这里只管呈现。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -13,12 +16,22 @@ import { ChevronLeft, ChevronRight, Flame, Network, Sparkles } from 'lucide-reac
 import type { OntologyListItem } from '@/types/ontology'
 import { OntologyAvatar } from '@/components/OntologyAvatar'
 import { rankOntologyCards } from './ontologyCardRanking'
+import { circularCardPosition, normalizeCardIndex } from './ontologyCarouselMath'
 
 const CARD_WIDTH = 300
 const FOCUS_STEP_X = CARD_WIDTH * 0.7
 const CLICK_SLOP_PX = 6
+/** |pos| 超过该值的卡片完全移出视窗（不渲染交互），环绕接缝藏在该区域。 */
+const HIDE_BEYOND = 2.6
+/** |pos| 超过该值的卡片透明度降为 0，但保留在视窗内保证环绕时连续淡入。 */
+const FADE_BEYOND = 2
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
+
+const prefersReducedMotion = () =>
+  typeof window !== 'undefined'
+  && typeof window.matchMedia === 'function'
+  && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 function cardMetrics(item: OntologyListItem) {
   return [
@@ -36,27 +49,81 @@ export function OntologyCardCarousel({
   onSelect: (item: OntologyListItem) => void
 }) {
   const navigate = useNavigate()
-  const cards = useMemo(() => rankOntologyCards(items), [items])
-  const count = cards.length
+  const ranked = useMemo(() => rankOntologyCards(items), [items])
+  const count = ranked.length
+  const looped = count >= 3
+
   const [focus, setFocus] = useState(0)
   const [dragging, setDragging] = useState(false)
   const dragRef = useRef({ startX: 0, startFocus: 0, moved: false })
+  const focusRef = useRef(0)
+  const targetRef = useRef(0)
+  const rafRef = useRef<number | null>(null)
 
-  const activeIndex = clamp(Math.round(focus), 0, Math.max(count - 1, 0))
+  const activeIndex = normalizeCardIndex(focus, count)
 
+  const cancelAnimation = useCallback(() => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+    }
+  }, [])
+
+  const applyFocus = useCallback((next: number) => {
+    focusRef.current = next
+    targetRef.current = next
+    setFocus(next)
+  }, [])
+
+  const animateTo = useCallback((target: number) => {
+    targetRef.current = target
+    if (prefersReducedMotion()) {
+      cancelAnimation()
+      applyFocus(target)
+      return
+    }
+    if (rafRef.current !== null) return
+    const step = () => {
+      const delta = targetRef.current - focusRef.current
+      if (Math.abs(delta) < 0.002) {
+        applyFocus(targetRef.current)
+        rafRef.current = null
+        return
+      }
+      focusRef.current += delta * 0.16
+      setFocus(focusRef.current)
+      rafRef.current = requestAnimationFrame(step)
+    }
+    rafRef.current = requestAnimationFrame(step)
+  }, [applyFocus, cancelAnimation])
+
+  useEffect(() => cancelAnimation, [cancelAnimation])
+
+  // 列表在轮播展示期间被刷新（如计数回填）时，把焦点收回有效范围。
   useEffect(() => {
-    if (focus > count - 1) setFocus(Math.max(count - 1, 0))
-  }, [count, focus])
+    if (count === 0) return
+    if (!looped && focusRef.current > count - 1) applyFocus(count - 1)
+    if (looped) applyFocus(normalizeCardIndex(focusRef.current, count))
+  }, [count, looped, applyFocus])
 
+  /** 吸附到最近的整数焦点；looped 时不规整，保持环绕方向上的连续运动。 */
   const snapTo = useCallback((target: number) => {
-    setFocus(clamp(target, 0, Math.max(count - 1, 0)))
-  }, [count])
+    if (count === 0) return
+    animateTo(looped ? target : clamp(target, 0, count - 1))
+  }, [animateTo, count, looped])
+
+  /** 侧边卡片点击聚焦：沿环形最短路径滑过去。 */
+  const focusCard = useCallback((index: number) => {
+    const delta = circularCardPosition(index, focusRef.current, count)
+    animateTo(focusRef.current + delta)
+  }, [animateTo, count])
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || count === 0) return
     if ((e.target as Element).closest('button')) return
+    cancelAnimation()
     e.currentTarget.setPointerCapture(e.pointerId)
-    dragRef.current = { startX: e.clientX, startFocus: focus, moved: false }
+    dragRef.current = { startX: e.clientX, startFocus: focusRef.current, moved: false }
     setDragging(true)
   }
 
@@ -65,9 +132,13 @@ export function OntologyCardCarousel({
     const deltaX = e.clientX - dragRef.current.startX
     if (Math.abs(deltaX) > CLICK_SLOP_PX) dragRef.current.moved = true
     const raw = dragRef.current.startFocus - deltaX / FOCUS_STEP_X
-    // 边缘橡皮筋：越界拖拽施加阻尼，松手后回弹吸附。
+    if (looped) {
+      applyFocus(raw)
+      return
+    }
+    // 非循环（1~2 张卡）边缘橡皮筋：越界拖拽施加阻尼，松手后回弹吸附。
     const resisted = raw < 0 ? raw * 0.35 : raw > count - 1 ? count - 1 + (raw - (count - 1)) * 0.35 : raw
-    setFocus(resisted)
+    applyFocus(resisted)
   }
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -77,34 +148,34 @@ export function OntologyCardCarousel({
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
     if (dragRef.current.moved) {
-      snapTo(Math.round(focus))
+      snapTo(Math.round(focusRef.current))
       return
     }
     // 未拖动的按下-抬起视为点击：命中侧边卡片聚焦，命中聚焦卡片确认选中。
     const hit = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-card-index]')
     const hitIndex = hit ? Number((hit as HTMLElement).dataset.cardIndex) : NaN
     if (Number.isNaN(hitIndex)) return
-    if (hitIndex === activeIndex) onSelect(cards[hitIndex])
-    else snapTo(hitIndex)
+    if (hitIndex === activeIndex) onSelect(ranked[hitIndex])
+    else focusCard(hitIndex)
   }
 
   const handlePointerCancel = () => {
     if (!dragging) return
     setDragging(false)
-    snapTo(Math.round(focus))
+    snapTo(Math.round(focusRef.current))
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (count === 0) return
     if (e.key === 'ArrowLeft') {
       e.preventDefault()
-      snapTo(activeIndex - 1)
+      snapTo(Math.round(focusRef.current) - 1)
     } else if (e.key === 'ArrowRight') {
       e.preventDefault()
-      snapTo(activeIndex + 1)
+      snapTo(Math.round(focusRef.current) + 1)
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      onSelect(cards[activeIndex])
+      onSelect(ranked[activeIndex])
     }
   }
 
@@ -147,7 +218,7 @@ export function OntologyCardCarousel({
         data-testid="ontology-card-carousel"
         role="listbox"
         aria-label="已发布本体卡片轮播"
-        aria-activedescendant={`ontology-card-${cards[activeIndex]?.id}`}
+        aria-activedescendant={`ontology-card-${ranked[activeIndex]?.id}`}
         tabIndex={0}
         onKeyDown={handleKeyDown}
         onPointerDown={handlePointerDown}
@@ -156,18 +227,19 @@ export function OntologyCardCarousel({
         onPointerCancel={handlePointerCancel}
         className="scrollbar-none relative min-h-0 flex-1 cursor-grab touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-teal-300 active:cursor-grabbing"
       >
-        {cards.map((item, index) => {
-          const pos = index - focus
+        {ranked.map((item, index) => {
+          const pos = circularCardPosition(index, focus, count)
           const absPos = Math.abs(pos)
           const isFocused = index === activeIndex && !dragging
-          const hidden = absPos > 2.6
+          const hidden = absPos > HIDE_BEYOND
           const clicks = item.assistant_card_clicks ?? 0
           const style: React.CSSProperties = {
             width: CARD_WIDTH,
             left: '50%',
-            top: '50%',
+            // 垂直方向居中略偏上，给标题与指示点留出视觉余量。
+            top: '46%',
             zIndex: 100 - Math.round(absPos * 10),
-            opacity: hidden ? 0 : 1 - Math.min(absPos, 2) * 0.26,
+            opacity: absPos > FADE_BEYOND ? 0 : 1 - Math.min(absPos, 2) * 0.26,
             transform: [
               'translate(-50%, -50%)',
               `translateX(${pos * FOCUS_STEP_X}px)`,
@@ -175,9 +247,6 @@ export function OntologyCardCarousel({
               `perspective(1200px) rotateY(${clamp(-pos * 9, -24, 24)}deg)`,
               `scale(${1 - Math.min(absPos, 2.5) * 0.09})`,
             ].join(' '),
-            transition: dragging
-              ? 'none'
-              : 'transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.35s ease',
             pointerEvents: hidden ? 'none' : 'auto',
             visibility: hidden ? 'hidden' : 'visible',
           }
@@ -192,7 +261,7 @@ export function OntologyCardCarousel({
               aria-selected={index === activeIndex}
               aria-label={`本体卡片 ${item.name}`}
               style={style}
-              className={`absolute flex flex-col overflow-hidden rounded-2xl border bg-white shadow-xl motion-reduce:transition-none dark:bg-slate-800 ${
+              className={`absolute flex flex-col overflow-hidden rounded-2xl border bg-white shadow-xl will-change-transform dark:bg-slate-800 ${
                 index === activeIndex
                   ? 'border-teal-300 shadow-2xl ring-2 ring-teal-400/50 dark:border-teal-500'
                   : 'border-slate-200 dark:border-slate-700'
@@ -244,10 +313,10 @@ export function OntologyCardCarousel({
               <div className="mt-auto px-4 pb-4 pt-3">
                 <div
                   data-testid={index === activeIndex ? 'ontology-card-confirm' : undefined}
-                  className={`flex h-9 items-center justify-center gap-1.5 rounded-lg text-sm font-medium transition-all duration-300 ${
+                  className={`flex h-9 items-center justify-center gap-1.5 rounded-lg text-sm font-medium transition-colors duration-300 ${
                     index === activeIndex
-                      ? 'bg-teal-600 text-white shadow-sm opacity-100'
-                      : 'bg-slate-100 text-slate-400 opacity-70 dark:bg-slate-700'
+                      ? 'bg-teal-600 text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-400 dark:bg-slate-700'
                   }`}
                 >
                   {index === activeIndex ? (
@@ -266,8 +335,8 @@ export function OntologyCardCarousel({
             <button
               type="button"
               aria-label="上一张本体卡片"
-              disabled={activeIndex === 0}
-              onClick={() => snapTo(activeIndex - 1)}
+              disabled={!looped && activeIndex === 0}
+              onClick={() => snapTo(Math.round(focusRef.current) - 1)}
               className="absolute left-3 top-1/2 z-[110] flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-slate-500 shadow-md backdrop-blur transition-all hover:border-teal-300 hover:text-teal-600 disabled:cursor-not-allowed disabled:opacity-30 dark:border-slate-700 dark:bg-slate-800/90"
             >
               <ChevronLeft size={16} />
@@ -275,8 +344,8 @@ export function OntologyCardCarousel({
             <button
               type="button"
               aria-label="下一张本体卡片"
-              disabled={activeIndex >= count - 1}
-              onClick={() => snapTo(activeIndex + 1)}
+              disabled={!looped && activeIndex >= count - 1}
+              onClick={() => snapTo(Math.round(focusRef.current) + 1)}
               className="absolute right-3 top-1/2 z-[110] flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-slate-500 shadow-md backdrop-blur transition-all hover:border-teal-300 hover:text-teal-600 disabled:cursor-not-allowed disabled:opacity-30 dark:border-slate-700 dark:bg-slate-800/90"
             >
               <ChevronRight size={16} />
@@ -287,12 +356,12 @@ export function OntologyCardCarousel({
 
       {count > 1 && (
         <div className="flex shrink-0 items-center justify-center gap-1.5 pb-4 pt-2">
-          {cards.map((item, index) => (
+          {ranked.map((item, index) => (
             <button
               key={item.id}
               type="button"
               aria-label={`聚焦第 ${index + 1} 张本体卡片`}
-              onClick={() => snapTo(index)}
+              onClick={() => focusCard(index)}
               className={`h-1.5 rounded-full transition-all duration-300 ${
                 index === activeIndex
                   ? 'w-5 bg-teal-600'
