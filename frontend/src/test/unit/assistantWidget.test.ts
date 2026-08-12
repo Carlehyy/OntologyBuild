@@ -8,6 +8,7 @@ import {
   mapToolStepStatus,
   pickInitialConversationId,
   reduceStreamEvent,
+  widgetAnchor,
 } from '../../components/assistant-widget/logic.ts'
 
 const baseMessage = () => ({
@@ -197,5 +198,31 @@ describe('mapToolStepStatus', () => {
     assert.equal(mapToolStepStatus('denied'), 'error')
     assert.equal(mapToolStepStatus('expired'), 'error')
     assert.equal(mapToolStepStatus('unknown-future-status'), 'error')
+  })
+})
+
+describe('widgetAnchor', () => {
+  it('uses the default bottom-right anchor on regular pages', () => {
+    assert.equal(widgetAnchor('/overview'), 'default')
+    assert.equal(widgetAnchor('/super-assistant'), 'default')
+    assert.equal(widgetAnchor('/agent'), 'default')
+    assert.equal(widgetAnchor('/ontologies/ontology-1'), 'default')
+  })
+
+  it('lifts the fab on pages with their own bottom-right fixed controls', () => {
+    assert.equal(widgetAnchor('/ontologies/ontology-1/graph'), 'overlay')
+    assert.equal(widgetAnchor('/data/pipelines/sync-tasks'), 'lifted')
+    assert.equal(widgetAnchor('/data/pipelines/sync-tasks/detail'), 'lifted')
+  })
+
+  it('lifts the fab on events pages only for mobile', () => {
+    assert.equal(widgetAnchor('/events'), 'liftedMobileOnly')
+    assert.equal(widgetAnchor('/events/registry'), 'liftedMobileOnly')
+  })
+
+  it('does not over-match lookalike paths', () => {
+    assert.equal(widgetAnchor('/ontologies/ontology-1/graphs'), 'default')
+    assert.equal(widgetAnchor('/ontologies/ontology-1/graph/extra'), 'default')
+    assert.equal(widgetAnchor('/data/pipelines/sync-tasks-archive'), 'default')
   })
 })

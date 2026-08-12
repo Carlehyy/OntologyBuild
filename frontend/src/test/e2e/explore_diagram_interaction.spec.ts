@@ -210,7 +210,8 @@ test.describe('业务探索图表与图片交互', () => {
 
   test('HTTP 环境下消息和图表源码可降级复制，全局提示固定在右下角', async ({ page }) => {
     const toastViewport = page.locator('[aria-live="polite"][aria-atomic="false"]')
-    await expect(toastViewport).toHaveClass(/bottom-5/)
+    // 右下角固定位已让给悬浮 AI 助手，toast 栈锚定在助手上方（仍是右下角、非顶部）
+    await expect(toastViewport).toHaveClass(/bottom-\[5\.5rem\]/)
     await expect(toastViewport).not.toHaveClass(/top-20/)
 
     const messageCopy = page.getByRole('button', { name: '复制用户消息' })

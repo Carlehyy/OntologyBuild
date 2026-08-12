@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { ConfigProvider, Popover, theme as antdTheme } from 'antd'
 import antdZhCN from 'antd/locale/zh_CN'
 import { Bubble, Conversations, Sender, ThoughtChain, XProvider } from '@ant-design/x'
@@ -11,7 +11,7 @@ import {
 
 import type { SuperMessage } from '@/api/superAssistant'
 import { useToast } from '@/components/ui/Toast'
-import { buildChainSteps } from '@/components/assistant-widget/logic'
+import { WIDGET_PANEL_BOTTOM, WIDGET_Z, buildChainSteps, widgetAnchor } from '@/components/assistant-widget/logic'
 import { useAssistantWidgetStore } from '@/stores/assistantWidgetStore'
 import { useThemeStore } from '@/stores/themeStore'
 
@@ -125,6 +125,9 @@ export default function AssistantWidgetPanel() {
   const dark = useThemeStore(state => state.theme === 'dark')
   const navigate = useNavigate()
   const { toast } = useToast()
+  const anchor = widgetAnchor(useLocation().pathname)
+  const panelBottomClass = WIDGET_PANEL_BOTTOM[anchor]
+  const panelZClass = WIDGET_Z[anchor]
 
   const loadingList = useAssistantWidgetStore(state => state.loadingList)
   const loadingMessages = useAssistantWidgetStore(state => state.loadingMessages)
@@ -199,7 +202,14 @@ export default function AssistantWidgetPanel() {
       locale={antdZhCN}
       theme={{
         algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
-        token: { colorPrimary: '#0d9488', colorLink: '#0d9488', borderRadius: 8 },
+        token: {
+          colorPrimary: '#0d9488',
+          colorLink: '#0d9488',
+          borderRadius: 8,
+          // 面板层级按 widgetAnchor 分级（常规 z-40 / 全屏图谱页 z-[10000]）；
+          // 面板内的 antd 浮层（历史会话 Popover 等）统一抬到面板之上
+          zIndexPopupBase: 10010,
+        },
       }}
     >
       <XProvider locale={xZhCN}>
@@ -207,7 +217,7 @@ export default function AssistantWidgetPanel() {
           data-testid="assistant-widget-panel"
           aria-label="AI 助手悬浮窗"
           onKeyDown={event => { if (event.key === 'Escape') setOpen(false) }}
-          className="fixed bottom-[4.75rem] right-5 z-40 flex h-[min(600px,calc(100dvh-7rem))] w-[min(384px,calc(100vw-2.5rem))] flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_24px_64px_rgba(15,23,42,0.22)]"
+          className={`fixed ${panelBottomClass} right-5 ${panelZClass} flex h-[min(600px,calc(100dvh-7rem))] w-[min(384px,calc(100vw-2.5rem))] flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_24px_64px_rgba(15,23,42,0.22)]`}
         >
           <header className="flex h-12 shrink-0 items-center gap-1 border-b border-[var(--color-border)] px-3">
             <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white">
@@ -305,7 +315,7 @@ export default function AssistantWidgetPanel() {
               ) : <WidgetEmptyState />
             ) : (
               <Bubble.List
-                className="h-full px-3 py-3"
+                className="scrollbar-none h-full px-3 py-3"
                 items={bubbleItems}
                 role={bubbleRoles}
                 autoScroll
@@ -324,7 +334,12 @@ export default function AssistantWidgetPanel() {
               loading={streaming}
               disabled={composerBlocked || loadingList}
               placeholder="输入消息，Enter 发送 / Shift+Enter 换行"
-              autoSize={{ minRows: 1, maxRows: 5 }}
+              autoSize={{ minRows: 1, maxRows: 4 }}
+              styles={{
+                // 默认 paddingSM(12px) 让迷你窗输入框偏臃肿，收紧到 6/8px
+                root: { paddingBlock: 6, paddingInlineStart: 8, paddingInlineEnd: 8 },
+                input: { fontSize: 13, lineHeight: '20px' },
+              }}
             />
           </footer>
         </section>

@@ -226,6 +226,56 @@ test('跳转完整页携带当前会话并直达同一会话', async ({ page }) 
   await expect(page.getByTestId('assistant-widget-fab')).toBeVisible()
 })
 
+test('流式进行中点击停止可立即取消生成', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+
+  let cancelCalled = false
+  let releaseChat: () => void = () => undefined
+  await page.route('**/api/v2/super-assistant/**', async route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (path === '/api/v2/super-assistant/conversations' && request.method() === 'GET') {
+      return json(route, [conversationOne])
+    }
+    if (path === '/api/v2/super-assistant/conversations/conversation-1/messages') {
+      return json(route, [messageOf('conversation-1', 'user-1', 'user', '你好')])
+    }
+    if (path === '/api/v2/super-assistant/conversations/conversation-1/chat' && request.method() === 'POST') {
+      // 保持连接不闭合，模拟长生成过程，直到测试显式释放
+      await new Promise<void>(resolve => { releaseChat = resolve })
+      return json(route, {})
+    }
+    if (path.endsWith('/cancel')) {
+      cancelCalled = true
+      return json(route, {}, 202)
+    }
+    return json(route, [])
+  })
+
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/overview')
+  await page.getByTestId('assistant-widget-fab').click()
+  const panel = page.getByTestId('assistant-widget-panel')
+  const composer = panel.getByPlaceholder('输入消息，Enter 发送 / Shift+Enter 换行')
+  await expect(composer).toBeVisible()
+
+  await composer.fill('讲一个很长很长的故事')
+  await composer.press('Enter')
+
+  // 生成中：出现停止按钮；点击后本地立即取消，不等后端轮询感知
+  const stopButton = panel.locator('button[class*="loading-button"]')
+  await expect(stopButton).toBeVisible()
+  await stopButton.click()
+
+  await expect(panel.getByText('已停止生成')).toBeVisible()
+  await expect(stopButton).toHaveCount(0)
+  await expect(composer).toHaveValue('')
+  expect(cancelCalled).toBe(true)
+
+  releaseChat()
+})
+
 test('无菜单权限时面板展示不可用提示且输入被禁用', async ({ page }) => {
   await seedAuth(page)
   await mockPlatformShell(page)

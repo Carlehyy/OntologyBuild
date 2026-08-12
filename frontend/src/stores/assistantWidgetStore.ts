@@ -20,6 +20,7 @@ import { useAuthStore } from '@/stores/authStore'
  * 切换页面时进行中的 SSE 流式对话不中断。不做 localStorage 持久化：
  * 会话本体在服务端，刷新后重新拉取即可。
  */
+let activeStreamAbort: AbortController | null = null
 interface AssistantWidgetState {
   open: boolean
   /** 已完成首次初始化（会话列表拉取成功）的用户 id；切换账号后需重新初始化 */
@@ -163,6 +164,8 @@ export const useAssistantWidgetStore = create<AssistantWidgetState>()((set, get)
     const now = new Date().toISOString()
     const tempUserId = `widget-user-${Date.now()}`
     const tempAssistantId = `widget-assistant-${Date.now()}`
+    const streamAbort = new AbortController()
+    activeStreamAbort = streamAbort
     const optimistic: SuperMessage[] = [
       { id: tempUserId, conversation_id: conversationId, role: 'user', content: message, status: 'complete', steps: [], token_usage: {}, created_at: now },
       { id: tempAssistantId, conversation_id: conversationId, role: 'assistant', content: '', status: 'streaming', steps: [], token_usage: {}, created_at: now },
@@ -196,24 +199,41 @@ export const useAssistantWidgetStore = create<AssistantWidgetState>()((set, get)
           ...(result.clearPendingFor && state.pending?.toolRunId === result.clearPendingFor ? { pending: null } : {}),
           ...(result.errorText ? { actionError: result.errorText } : {}),
         }))
-      })
+      }, streamAbort.signal)
     } catch (error) {
-      set(state => ({
-        messages: state.messages.map(item => (item.id === tempAssistantId
-          ? { ...item, content: errorMessage(error, '生成失败'), status: 'error' }
-          : item)),
-      }))
+      if (streamAbort.signal.aborted) {
+        // 用户主动停止：本地立即生效，保留已生成的部分内容，乐观标记已取消
+        set(state => ({
+          messages: state.messages.map(item => (item.id === tempAssistantId
+            ? { ...item, status: 'cancelled' }
+            : item)),
+        }))
+      } else {
+        set(state => ({
+          messages: state.messages.map(item => (item.id === tempAssistantId
+            ? { ...item, content: errorMessage(error, '生成失败'), status: 'error' }
+            : item)),
+        }))
+      }
     } finally {
       set({ streaming: false, stopping: false, pending: null, thinkingRound: null, streamingConversationId: null })
+      activeStreamAbort = null
       try {
-        const [messages, conversations] = await Promise.all([
-          superAssistantApi.messages(conversationId),
-          superAssistantApi.conversations(),
-        ])
-        set(state => ({
-          conversations,
-          messages: state.activeId === conversationId ? messages : state.messages,
-        }))
+        if (streamAbort.signal.aborted) {
+          // 本地已取消：跳过消息回刷，避免服务端尚未感知取消时的 streaming 中间态覆盖本地取消态；
+          // 下次打开面板时 setOpen 的 refreshMessages 会与服务端终态对齐
+          const conversations = await superAssistantApi.conversations()
+          set({ conversations })
+        } else {
+          const [messages, conversations] = await Promise.all([
+            superAssistantApi.messages(conversationId),
+            superAssistantApi.conversations(),
+          ])
+          set(state => ({
+            conversations,
+            messages: state.activeId === conversationId ? messages : state.messages,
+          }))
+        }
       } catch { /* 服务端刷新失败时保留乐观状态，不影响继续使用 */ }
     }
   },
@@ -222,10 +242,12 @@ export const useAssistantWidgetStore = create<AssistantWidgetState>()((set, get)
     const conversationId = get().streamingConversationId
     if (!conversationId || get().stopping) return
     set({ stopping: true })
+    // 先本地断开流（即时反馈），再通知服务端取消（后端按轮询节奏感知，可能有秒级延迟）
+    activeStreamAbort?.abort()
     try {
       await superAssistantApi.cancel(conversationId)
     } catch (error) {
-      set({ stopping: false, actionError: errorMessage(error, '停止失败') })
+      set({ actionError: errorMessage(error, '停止失败') })
     }
   },
 
