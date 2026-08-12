@@ -309,6 +309,16 @@ from app.events import router as events_router
 app.include_router(events_router.router, prefix="/api/v2/events", tags=["events"], dependencies=events_guard)
 app.include_router(events_router.ingest_router, prefix="/api/v2/ingest", tags=["events-ingest"])
 
+# 世界模型（演化层）— 推演模型项目开发调试 + 调用记录（发布为推演服务属二期）
+world_model_guard = menu_guard("ontologies.world_model")
+from app.world_model import router as world_model_router
+app.include_router(
+    world_model_router.router,
+    prefix="/api/v2/world-model",
+    tags=["world-model"],
+    dependencies=world_model_guard,
+)
+
 def get_db():
     db = SessionLocal()
     try:
