@@ -99,6 +99,26 @@ def execute_script(script: str, *, timeout: int | None = None, cancel_event=None
     cancel_event（threading.Event）置位时在下一个轮询周期内取消执行，
     内核随 finally 销毁，远端不会留下空跑的执行。
     """
+    execution = execute_code(
+        script + _RESULT_EPILOGUE, timeout=timeout, cancel_event=cancel_event)
+    if not execution.error:
+        try:
+            # stdout 截断保留的是尾部，输出标记由收尾代码打印在最后，
+            # 因此在截断后文本上解析与既有行为等价。
+            execution.rows = _extract_rows(execution.stdout)
+        except PythonEngineError as exc:
+            execution.error = str(exc)
+    return execution
+
+
+def execute_code(code: str, *, timeout: int | None = None, cancel_event=None) -> ScriptExecution:
+    """在 Jupyter Kernel Gateway 上执行任意代码（含调用方注入的收尾代码）。
+
+    与 execute_script 共用内核生命周期，但不做 result 行提取——输出协议由
+    调用方自定义（如世界模型调试执行的 simulate 调用收尾），结果从
+    ScriptExecution.stdout 中按标记解析（见 extract_payload）。
+    失败语义与 execute_script 一致。
+    """
     timeout = timeout or settings.python_script_timeout_seconds
     base_url = (settings.python_kernel_gateway_url or "").strip().rstrip("/")
     if not base_url:
@@ -128,17 +148,12 @@ def execute_script(script: str, *, timeout: int | None = None, cancel_event=None
     execution = ScriptExecution(kernel_id=kernel_id)
     try:
         stdout_text, error_name, error_value, traceback_text = _run_on_kernel(
-            base_url, kernel_id, headers, script + _RESULT_EPILOGUE, timeout,
+            base_url, kernel_id, headers, code, timeout,
             cancel_event=cancel_event)
         execution.stdout = stdout_text[-_STDOUT_TAIL_CHARS:]
         execution.traceback = traceback_text
         if error_name:
             execution.error = f"脚本执行失败（{error_name}）：{error_value}"
-        else:
-            try:
-                execution.rows = _extract_rows(stdout_text)
-            except PythonEngineError as exc:
-                execution.error = str(exc)
     finally:
         execution.duration_ms = int((time.monotonic() - started) * 1000)
         _delete_kernel(base_url, kernel_id, headers)
@@ -250,7 +265,12 @@ def _clean_traceback(lines: list) -> str:
     return _ANSI_RE.sub("", "\n".join(str(line) for line in lines))
 
 
-def _extract_rows(stdout: str) -> list[dict]:
+def extract_payload(stdout: str) -> object:
+    """从内核 stdout 提取标记之间的 JSON 负载（通用的输出协议解析）。
+
+    execute_script 的 result 行与世界模型的 simulate 返回值共用同一对
+    输出标记；本函数只负责定位标记并解析 JSON，负载形态由调用方解释。
+    """
     begin = stdout.rfind(_RESULT_BEGIN)
     end = stdout.rfind(_RESULT_END)
     if begin == -1 or end == -1 or end < begin:
@@ -259,10 +279,13 @@ def _extract_rows(stdout: str) -> list[dict]:
             "（list[dict]，每行一个 {列名: 值} 对象）。")
     raw = stdout[begin + len(_RESULT_BEGIN):end].strip()
     try:
-        body = json.loads(raw)
+        return json.loads(raw)
     except ValueError as exc:
         raise PythonEngineError(f"脚本输出的 result 无法解析为 JSON：{exc}") from exc
-    return normalize_rows(body)
+
+
+def _extract_rows(stdout: str) -> list[dict]:
+    return normalize_rows(extract_payload(stdout))
 
 
 def _delete_kernel(base_url: str, kernel_id: str, headers: dict[str, str]) -> None:

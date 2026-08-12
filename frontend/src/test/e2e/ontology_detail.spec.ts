@@ -88,7 +88,8 @@ test.describe('Ontology Detail Page', () => {
     const ontologyId = await createOntology(request, token)
     try {
       await page.goto(`/#/ontologies/${ontologyId}`)
-      await page.getByRole('link', { name: '本体管理', exact: true }).click()
+      await page.getByRole('button', { name: '本体管理', exact: true }).click()
+      await page.getByRole('link', { name: '本体总览', exact: true }).click()
       await expect(page).toHaveURL(/\/#\/ontologies$/)
       await expect(page.getByRole('region', { name: '本体筛选' })).toBeVisible()
     } finally {

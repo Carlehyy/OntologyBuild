@@ -14,6 +14,7 @@ import {
   KeyRound,
   LayoutDashboard,
   Network,
+  Orbit,
   PlugZap,
   Repeat,
   Settings,
@@ -39,6 +40,8 @@ export const DEFAULT_NON_ADMIN_MENU_KEYS = [
   'super_assistant',
   'explore',
   'ontologies',
+  'ontologies.library',
+  'ontologies.world_model',
   'agent',
   'events',
   'data',
@@ -58,7 +61,12 @@ export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
   { key: 'super_assistant', to: '/super-assistant', icon: BrainCircuit, label: '超级助手', description: '通用智能协作入口', hiddenFromNavigation: true },
   { key: 'agent', to: '/agent', icon: Bot, label: '本体助手', description: '本体智能体与分析报告' },
   { key: 'explore', to: '/explore', icon: Compass, label: '业务探索', description: '业务建模与需求探索' },
-  { key: 'ontologies', to: '/ontologies', icon: Network, label: '本体管理', description: '本体、图谱与对象建模' },
+  {
+    key: 'ontologies', to: '/ontologies', icon: Network, label: '本体管理', description: '本体、图谱与对象建模', subItems: [
+      { key: 'ontologies.library', to: '/ontologies', icon: Network, label: '本体总览', description: '本体、图谱与对象建模' },
+      { key: 'ontologies.world_model', to: '/ontologies/world-model', icon: Orbit, label: '世界模型', description: '推演模型开发与调用记录' },
+    ],
+  },
   {
     key: 'data', to: '/data', icon: Database, label: '数据通道', description: '数据接入、加工与治理', subItems: [
       { key: 'data.pipelines', to: '/data/pipelines', icon: GitBranch, label: '数据流水线', description: '连接、转换与编排' },
@@ -139,7 +147,8 @@ export function menuKeyForPath(pathname: string): string | null {
   if (pathname === '/community' || pathname === '/community/') return 'community'
   if (pathname.startsWith('/community/skills')) return 'community.skills'
   if (pathname.startsWith('/community/plugins')) return 'community.plugins'
-  if (pathname.startsWith('/ontologies')) return 'ontologies'
+  if (pathname === '/ontologies/world-model' || pathname.startsWith('/ontologies/world-model/')) return 'ontologies.world_model'
+  if (pathname.startsWith('/ontologies')) return 'ontologies.library'
   if (pathname.startsWith('/agent')) return 'agent'
   if (pathname.startsWith('/overview')) return 'overview'
   if (pathname.startsWith('/super-assistant')) return 'super_assistant'
