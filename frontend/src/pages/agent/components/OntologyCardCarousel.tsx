@@ -11,21 +11,17 @@
  *     淡出、另一侧淡入，避免 CSS transition 造成的瞬移或横穿。
  * 卡片顺序由父级按全局选用次数排好（rankOntologyCards），这里只管呈现。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, Flame, Network, Sparkles } from 'lucide-react'
 import type { OntologyListItem } from '@/types/ontology'
 import { OntologyAvatar } from '@/components/OntologyAvatar'
 import { rankOntologyCards } from './ontologyCardRanking'
-import { circularCardPosition, normalizeCardIndex } from './ontologyCarouselMath'
+import { circularCardPosition, maxVisibleSideRings, normalizeCardIndex } from './ontologyCarouselMath'
 
 const CARD_WIDTH = 300
 const FOCUS_STEP_X = CARD_WIDTH * 0.7
 const CLICK_SLOP_PX = 6
-/** |pos| 超过该值的卡片完全移出视窗（不渲染交互），环绕接缝藏在该区域。 */
-const HIDE_BEYOND = 2.6
-/** |pos| 超过该值的卡片透明度降为 0，但保留在视窗内保证环绕时连续淡入。 */
-const FADE_BEYOND = 2
 /** 滚轮累积滚动量达到该阈值才切换一张，避免触控板一次手势连切多张。 */
 const WHEEL_SWITCH_THRESHOLD = 40
 /** 两次滚轮切换的最小间隔（毫秒），吸收触控板惯性滚动。 */
@@ -66,8 +62,24 @@ export function OntologyCardCarousel({
   const targetRef = useRef(0)
   const rafRef = useRef<number | null>(null)
   const stageRef = useRef<HTMLDivElement>(null)
+  const [stageWidth, setStageWidth] = useState(0)
 
   const activeIndex = normalizeCardIndex(focus, count)
+
+  // 依据面板宽度计算两侧最多完整展示的卡环数；分栏拖动或窗口缩放时随动。
+  useLayoutEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    const measure = () => setStageWidth(stage.clientWidth)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(stage)
+    return () => observer.disconnect()
+  }, [count])
+  const maxSide = maxVisibleSideRings(stageWidth, CARD_WIDTH, FOCUS_STEP_X)
+  // 淡出边界需早于环绕接缝（count/2），保证接缝处的环绕传送始终不可见。
+  const fadeBeyond = Math.min(maxSide + 0.45, looped ? count / 2 - 0.15 : 2)
+  const hideBeyond = fadeBeyond + 0.25
 
   const cancelAnimation = useCallback(() => {
     if (rafRef.current !== null) {
@@ -236,18 +248,6 @@ export function OntologyCardCarousel({
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-gradient-to-b from-slate-50/80 via-[#f8fbff] to-sky-50/50 dark:from-[#121820] dark:via-[#121820] dark:to-[#121820]">
-      <div className="flex shrink-0 items-end justify-between gap-3 px-6 pb-1 pt-5">
-        <div>
-          <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">选择一个本体，开始探索</h3>
-          <p className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">
-            滚轮滚动、按住拖拽或点击两侧卡片浏览，点击居中卡片进入本体工作区
-          </p>
-        </div>
-        <span className="shrink-0 rounded-full border border-sky-100 bg-white/80 px-2.5 py-1 text-[11px] font-medium text-sky-600 shadow-sm dark:border-slate-700 dark:bg-slate-800/80 dark:text-sky-300">
-          {count} 个已发布本体
-        </span>
-      </div>
-
       <div
         ref={stageRef}
         data-testid="ontology-card-carousel"
@@ -266,15 +266,15 @@ export function OntologyCardCarousel({
           const pos = circularCardPosition(index, focus, count)
           const absPos = Math.abs(pos)
           const isFocused = index === activeIndex && !dragging
-          const hidden = absPos > HIDE_BEYOND
+          const hidden = absPos > hideBeyond
           const clicks = item.assistant_card_clicks ?? 0
           const style: React.CSSProperties = {
             width: CARD_WIDTH,
             left: '50%',
-            // 垂直方向居中略偏上，给标题与指示点留出视觉余量。
+            // 垂直方向居中略偏上，给指示点留出视觉余量。
             top: '46%',
             zIndex: 100 - Math.round(absPos * 10),
-            opacity: absPos > FADE_BEYOND ? 0 : 1 - Math.min(absPos, 2) * 0.26,
+            opacity: absPos > fadeBeyond ? 0 : 1 - Math.min(absPos, 2) * 0.26,
             transform: [
               'translate(-50%, -50%)',
               `translateX(${pos * FOCUS_STEP_X}px)`,
@@ -309,7 +309,11 @@ export function OntologyCardCarousel({
               <div className="flex items-start gap-3 px-4 pb-3 pt-4">
                 <OntologyAvatar icon={item.icon || undefined} size="lg" />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-[15px] font-semibold text-slate-800 dark:text-slate-100" title={item.name}>
+                  <div
+                    data-testid="ontology-card-name"
+                    className="truncate text-[15px] font-semibold text-slate-800 dark:text-slate-100"
+                    title={item.name}
+                  >
                     {item.name}
                   </div>
                   <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
@@ -321,6 +325,7 @@ export function OntologyCardCarousel({
                     </span>
                     {clicks > 0 && (
                       <span
+                        data-testid="ontology-card-clicks"
                         title={`已被选用 ${clicks} 次`}
                         className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-600"
                       >

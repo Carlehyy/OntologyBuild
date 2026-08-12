@@ -562,7 +562,7 @@ export default function AgentWorkbenchPage() {
             </div>
           </div>
 
-          <div data-testid="agent-chat-region" className="workspace-topology-surface scrollbar-thin flex-1 overflow-auto px-4 py-4">
+          <div data-testid="agent-chat-region" className="workspace-topology-surface scrollbar-none flex-1 overflow-auto px-4 py-4">
             {messages.length === 0 ? (
               <div className="flex min-h-full flex-col justify-center py-8 text-center anim-scale-in">
                 <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-teal-600 text-white shadow-sm">
@@ -663,8 +663,10 @@ export default function AgentWorkbenchPage() {
             )}
           </div>
 
-          <div className="border-t border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4 pb-3 pt-3">
-            <div className="relative flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] py-1.5 pl-3 pr-1.5 transition-all focus-within:border-teal-400 focus-within:ring-2 focus-within:ring-teal-100">
+          {/* pt/pb 取 2.5 使输入栏高度精确为 67px：顶部分割线距视口底部 72px，
+              与侧边栏「折叠起来」上方的分割线保持同一水平线。 */}
+          <div data-testid="agent-input-bar" className="border-t border-[var(--color-border)] bg-white px-4 pb-2.5 pt-2.5">
+            <div className="relative flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-white py-1.5 pl-3 pr-1.5 transition-all focus-within:border-teal-400 focus-within:ring-2 focus-within:ring-teal-100">
               <input
                 placeholder={oid ? '问业务问题，或让它帮你预演一个操作…' : '请先选择一个本体'}
                 value={input}

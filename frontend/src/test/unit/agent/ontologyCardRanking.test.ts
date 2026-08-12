@@ -4,6 +4,7 @@ import { describe, it } from 'node:test'
 import { rankOntologyCards } from '../../../pages/agent/components/ontologyCardRanking.ts'
 import {
   circularCardPosition,
+  maxVisibleSideRings,
   normalizeCardIndex,
 } from '../../../pages/agent/components/ontologyCarouselMath.ts'
 
@@ -88,5 +89,24 @@ describe('normalizeCardIndex', () => {
 
   it('空列表安全返回 0', () => {
     assert.equal(normalizeCardIndex(3, 0), 0)
+  })
+})
+
+
+describe('maxVisibleSideRings', () => {
+  it('宽度足够时展示两环侧卡', () => {
+    // 第二环需要 2*210+123+4=547 的半宽 → 舞台约 1100+
+    assert.equal(maxVisibleSideRings(1120, 300, 210), 2)
+  })
+
+  it('中等宽度只展示一环侧卡', () => {
+    // 第一环需要 210+141+4=355 的半宽 → 舞台约 710+
+    assert.equal(maxVisibleSideRings(818, 300, 210), 1)
+    assert.equal(maxVisibleSideRings(720, 300, 210), 1)
+  })
+
+  it('窄宽度时不展示侧卡', () => {
+    assert.equal(maxVisibleSideRings(626, 300, 210), 0)
+    assert.equal(maxVisibleSideRings(0, 300, 210), 0)
   })
 })

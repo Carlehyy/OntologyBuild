@@ -119,7 +119,8 @@ async function mockCarousel(page: Page, options: { items?: unknown[] } = {}) {
 
 test('未选择本体时展示卡片轮播并按选用次数排序', async ({ page }) => {
   await mockCarousel(page)
-  await page.setViewportSize({ width: 1280, height: 900 })
+  // 宽视口下右侧面板约 818px：两侧各完整展示一张卡（侧卡位置断言依赖可见性）。
+  await page.setViewportSize({ width: 1600, height: 900 })
   await page.goto('/#/agent')
 
   const carousel = page.getByTestId('ontology-card-carousel')
@@ -131,6 +132,7 @@ test('未选择本体时展示卡片轮播并按选用次数排序', async ({ pa
   await expect(page.locator('[data-card-index="1"]')).toContainText('医疗健康本体')
   await expect(page.locator('[data-card-index="2"]')).toContainText('法律知识本体')
   await expect(page.locator('[data-card-index="0"]')).toContainText('×7')
+  await expect(page.locator('[data-card-index="0"]')).toContainText('哨兵引擎')
   await expect(page.locator('[data-card-index="2"]').getByText('×0')).toHaveCount(0)
 
   // 统计区：对象实体/实体关系/执行动作/哨兵引擎四格一行
@@ -183,7 +185,8 @@ test('长名称本体截断为省略号，且与点击次数徽章分行不重�
 
 test('点击侧边卡片仅聚焦，点击聚焦卡片才选中并计数', async ({ page }) => {
   const { clickCalls } = await mockCarousel(page)
-  await page.setViewportSize({ width: 1280, height: 900 })
+  // 宽视口保证侧边卡片完整可见、可点击。
+  await page.setViewportSize({ width: 1600, height: 900 })
   await page.goto('/#/agent')
 
   const sideCard = page.locator('[data-card-index="1"]')
@@ -236,7 +239,8 @@ test('鼠标滚轮可以切换聚焦卡片，向下滚等同向右、向上滚�
   await page.goto('/#/agent')
 
   const stage = page.getByTestId('ontology-card-carousel')
-  await expect(stage.getByRole('option')).toHaveCount(3)
+  // 隐藏（未完整落入面板的）侧卡不进 accessibility tree，按 DOM 计数
+  await expect(stage.locator('[data-card-index]')).toHaveCount(3)
   await stage.hover()
 
   // 向下滚 = 向右切换到下一张
@@ -262,7 +266,7 @@ test('仅两张本体卡片时线性展示且不循环', async ({ page }) => {
 
   const prevButton = page.getByLabel('上一张本体卡片')
   const nextButton = page.getByLabel('下一张本体卡片')
-  await expect(page.getByTestId('ontology-card-carousel').getByRole('option')).toHaveCount(2)
+  await expect(page.getByTestId('ontology-card-carousel').locator('[data-card-index]')).toHaveCount(2)
   await expect(prevButton).toBeDisabled()
   await nextButton.click()
   await expect(page.locator('[data-card-index="1"]')).toHaveAttribute('aria-selected', 'true')
@@ -277,6 +281,23 @@ test('头部下拉选择保持可用（回归）', async ({ page }) => {
   await page.getByLabel('选择本体').selectOption('ontology-1')
   await expect(page).toHaveURL(/\/#\/agent\?ontology_id=ontology-1$/)
   await expect(page.getByTestId('agent-ontology-panel')).toContainText('当前本体暂无可视化对象')
+})
+
+test('窄面板时侧卡整体淡出，只完整展示居中卡', async ({ page }) => {
+  await mockCarousel(page)
+  // 1280 宽视口下右侧面板约 626px，不足以完整容纳侧边卡片。
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/agent')
+
+  await expect(page.getByTestId('ontology-card-carousel')).toBeVisible()
+  await expect(page.locator('[data-card-index="0"]')).toBeVisible()
+  await expect(page.locator('[data-card-index="1"]')).toBeHidden()
+  await expect(page.locator('[data-card-index="2"]')).toBeHidden()
+  // 箭头切换仍然可用：居中卡换为下一张后原居中卡淡出
+  await page.getByLabel('下一张本体卡片').click()
+  await expect(page.locator('[data-card-index="1"]')).toHaveAttribute('aria-selected', 'true')
+  await expect(page.locator('[data-card-index="1"]')).toBeVisible()
+  await expect(page.locator('[data-card-index="0"]')).toBeHidden()
 })
 
 test('无已发布本体时展示空态与前往管理入口', async ({ page }) => {
