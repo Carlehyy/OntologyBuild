@@ -21,3 +21,27 @@ export function normalizeCardIndex(focus: number, count: number): number {
   if (count <= 0) return 0
   return ((Math.round(focus) % count) + count) % count
 }
+
+/** 第 p 环侧卡缩放后的视觉半宽（与组件内的 scale 规则一致）。 */
+function cardHalfWidthAt(ring: number, cardWidth: number): number {
+  const scale = ring === 0 ? 1 : 1 - Math.min(ring, 2.5) * 0.06
+  return (cardWidth / 2) * scale
+}
+
+/**
+ * 依据舞台宽度计算两侧最多完整展示的卡环数（0..2）：
+ * 侧卡要么完整落在面板内，要么整体淡出，避免半张卡被面板边缘裁掉。
+ */
+export function maxVisibleSideRings(
+  stageWidth: number,
+  cardWidth: number,
+  stepX: number,
+  maxRings = 2,
+): number {
+  const half = stageWidth / 2 - 4
+  let rings = 0
+  for (let ring = 1; ring <= maxRings; ring += 1) {
+    if (ring * stepX + cardHalfWidthAt(ring, cardWidth) <= half) rings = ring
+  }
+  return rings
+}

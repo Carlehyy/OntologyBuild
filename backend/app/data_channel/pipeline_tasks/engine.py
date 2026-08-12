@@ -260,6 +260,8 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
                 pipeline_id=pipeline_id,
                 task_id=task.id,
                 status="pending",
+                # 真实列与 stats 键同步填列：历史过滤走索引列，HTTP 契约不变
+                trigger_type=trigger_type,
                 started_at=datetime.utcnow(),
                 # 审计：执行时刻的任务配置快照——配置日后被改，这条记录仍还原当时口径
                 stats={

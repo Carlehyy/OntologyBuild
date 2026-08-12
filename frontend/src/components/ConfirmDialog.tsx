@@ -5,9 +5,11 @@ interface Props {
   onConfirm: () => void
   onCancel: () => void
   confirmLabel?: string
+  /** danger=破坏性操作（红色确认钮）；primary=普通确认（主题色钮） */
+  tone?: 'danger' | 'primary'
 }
 
-export default function ConfirmDialog({ open, title, message, onConfirm, onCancel, confirmLabel = '确认删除' }: Props) {
+export default function ConfirmDialog({ open, title, message, onConfirm, onCancel, confirmLabel = '确认删除', tone = 'danger' }: Props) {
   if (!open) return null
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
@@ -16,7 +18,12 @@ export default function ConfirmDialog({ open, title, message, onConfirm, onCance
         <p className="text-gray-600 text-sm mb-6">{message}</p>
         <div className="flex justify-end gap-3">
           <button onClick={onCancel} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">取消</button>
-          <button onClick={onConfirm} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700">{confirmLabel}</button>
+          <button
+            onClick={onConfirm}
+            className={tone === 'primary'
+              ? 'px-4 py-2 bg-teal-700 text-white rounded-lg text-sm hover:bg-teal-800'
+              : 'px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700'}
+          >{confirmLabel}</button>
         </div>
       </div>
     </div>

@@ -411,7 +411,7 @@ test.describe('业务探索图表与图片交互', () => {
     expect(new Set(colors).size).toBe(4)
   })
 
-  test('用户消息和助手回复均可一键复制，聊天滚动条使用细样式', async ({ page }) => {
+  test('用户消息和助手回复均可一键复制，聊天区域滚动条隐藏', async ({ page }) => {
     const userCopy = page.getByRole('button', { name: '复制用户消息' })
     const assistantCopy = page.getByRole('button', { name: '复制助手回复' })
 
@@ -425,7 +425,7 @@ test.describe('业务探索图表与图片交互', () => {
     await expect.poll(() => page.evaluate(() => sessionStorage.getItem('last-copied-text')))
       .toContain('下方是业务示意图')
 
-    await expect(page.getByTestId('exploration-chat-region')).toHaveCSS('scrollbar-width', 'thin')
+    await expect(page.getByTestId('exploration-chat-region')).toHaveCSS('scrollbar-width', 'none')
   })
 
   test('需求文档历史版本与详情标题栏的分割线保持水平对齐', async ({ page }) => {

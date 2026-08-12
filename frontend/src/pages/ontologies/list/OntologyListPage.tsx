@@ -56,6 +56,9 @@ function formatChangedAt(value: string) {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
   }).format(date)
 }
 
@@ -411,7 +414,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
       .filter(item => !keyword
         || `${item.name} ${item.description ?? ''}`.toLocaleLowerCase('zh-CN').includes(keyword))
       .filter(item => !domainFilter || item.domain === domainFilter)
-      .sort((a, b) => new Date(b.updated_at || b.created_at).getTime() - new Date(a.updated_at || a.created_at).getTime())
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
   }, [allItems, domainFilter, nameFilter])
 
   const refresh = () => {

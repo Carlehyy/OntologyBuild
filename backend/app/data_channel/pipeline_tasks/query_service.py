@@ -10,6 +10,10 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.data_channel.pipeline_tasks.models import PipelineTask
+from app.data_channel.pipeline_tasks.selection_service import (  # noqa: F401
+    _curated_columns,
+    selectable_pipelines,
+)
 from app.models.v2.pipeline import Pipeline, PipelineRun
 
 
@@ -211,199 +215,6 @@ def _with_pipeline_info(
     return items
 
 
-def _curated_columns(
-    db: Session,
-    dataset,
-    schema: dict,
-) -> list[dict]:
-    """Return curated dataset columns for contract selection and preview."""
-    typed = schema.get("columns_typed")
-    if isinstance(typed, list) and typed:
-        return [
-            {
-                "name": column.get("name"),
-                "type": column.get("type") or "string",
-            }
-            for column in typed
-            if isinstance(column, dict) and column.get("name")
-        ]
-    columns = schema.get("columns")
-    if isinstance(columns, list) and columns:
-        return [
-            {"name": column, "type": "string"}
-            for column in columns
-            if column
-        ]
-    # 回退：实读最新版本前若干行推断列（老数据集没有 schema_json 时）
-    from app.services.v2.dataset_service import DatasetService
-
-    rows = DatasetService(db).preview(dataset.id, None, limit=20)
-    names: list[str] = []
-    seen: set[str] = set()
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        for key in row.keys():
-            if key != "content" and key not in seen:
-                seen.add(key)
-                names.append(str(key))
-    return [{"name": name, "type": "string"} for name in names]
-
-
-def selectable_pipelines(
-    db: Session,
-    *,
-    curated_columns_fn: QueryDependency,
-    version_has_content_fn: QueryDependency,
-) -> dict:
-    """Return published and enabled pipelines usable by new tasks."""
-    from app.data_channel.datasets.lake_gate import (
-        contract_pk,
-        normalize_definitions,
-    )
-    from app.models.v2.dataset import Dataset, DatasetVersion
-
-    pipelines = (
-        db.query(Pipeline)
-        .filter(
-            Pipeline.status == "published",
-            Pipeline.enabled.isnot(False),
-        )
-        .all()
-    )
-
-    # 批量预取候选引用的数据集与各自最新版本，替代逐流水线逐产物的 N+1 查询。
-    # 最新版本 = 同 dataset_id 下 version_no 最大行（唯一约束保证无并列，
-    # 与 order_by(version_no.desc()).first() 语义一致）；DatasetVersion.data_blob
-    # 是 deferred 列，批量查询不会物化字节内容。
-    all_dataset_ids: list[str] = []
-    seen_dataset_ids: set[str] = set()
-    for pipeline in pipelines:
-        for dataset_id in (pipeline.target_curated_ids or []):
-            if dataset_id and dataset_id not in seen_dataset_ids:
-                seen_dataset_ids.add(dataset_id)
-                all_dataset_ids.append(dataset_id)
-    datasets_by_id: dict[str, Any] = {}
-    latest_version_by_dataset: dict[str, Any] = {}
-    if all_dataset_ids:
-        datasets_by_id = {
-            dataset.id: dataset
-            for dataset in db.query(Dataset)
-            .filter(Dataset.id.in_(all_dataset_ids))
-            .all()
-        }
-        latest_version_sub = (
-            db.query(
-                DatasetVersion.dataset_id,
-                func.max(DatasetVersion.version_no).label("mx"),
-            )
-            .filter(DatasetVersion.dataset_id.in_(all_dataset_ids))
-            .group_by(DatasetVersion.dataset_id)
-            .subquery()
-        )
-        latest_version_by_dataset = {
-            ver.dataset_id: ver
-            for ver in db.query(DatasetVersion)
-            .join(
-                latest_version_sub,
-                (DatasetVersion.dataset_id == latest_version_sub.c.dataset_id)
-                & (DatasetVersion.version_no == latest_version_sub.c.mx),
-            )
-            .all()
-        }
-
-    items: list[dict] = []
-    for pipeline in pipelines:
-        curated: list[dict] = []
-        total_rows = 0
-        for dataset_id in [
-            item
-            for item in (pipeline.target_curated_ids or [])
-            if item
-        ]:
-            dataset = datasets_by_id.get(dataset_id)
-            if not dataset:
-                continue
-            latest = latest_version_by_dataset.get(dataset_id)
-            has_data = bool(
-                latest
-                and (
-                    version_has_content_fn(latest)
-                    or (latest.rowcount or 0) > 0
-                )
-            )
-            if not has_data:
-                continue
-            schema = dict(dataset.schema_json or {})
-            rowcount = latest.rowcount or 0
-            curated.append(
-                {
-                    "id": dataset.id,
-                    "name": dataset.name,
-                    "rowcount": rowcount,
-                    "version_no": latest.version_no,
-                    "primary_key": schema.get("primary_key") or "",
-                    "columns": curated_columns_fn(
-                        db,
-                        dataset,
-                        schema,
-                    ),
-                }
-            )
-            total_rows += rowcount
-
-        definitions = normalize_definitions(
-            pipeline.column_definitions
-        )
-        contract = (
-            {
-                "primary_key": contract_pk(
-                    pipeline.column_definitions
-                ),
-                "columns": [
-                    {
-                        "name": definition["field_key"],
-                        "type": definition["field_type"],
-                        "field_name": definition["field_name"],
-                        "is_primary_key": (
-                            definition["is_primary_key"]
-                        ),
-                        "nullable": definition["nullable"],
-                    }
-                    for definition in definitions
-                ],
-            }
-            if definitions
-            else None
-        )
-
-        # 既无契约也无已产出数据：无从配置入库方式，不进候选
-        if not curated and not contract:
-            continue
-        items.append(
-            {
-                "id": pipeline.id,
-                "name": pipeline.name,
-                "version": pipeline.version,
-                "domain": pipeline.domain,
-                "status": pipeline.status,
-                "total_rows": total_rows,
-                "contract": contract,
-                "curated_datasets": curated,
-                "updated_at": (
-                    pipeline.updated_at.isoformat()
-                    if pipeline.updated_at
-                    else None
-                ),
-            }
-        )
-    items.sort(
-        key=lambda item: item["updated_at"] or "",
-        reverse=True,
-    )
-    return {"items": items, "total": len(items)}
-
-
 def stats_overview(
     db: Session,
     *,
@@ -488,8 +299,15 @@ def stats_overview(
             trend[key]["errors"] += 1
 
     # 右侧执行动态：按执行创建时间倒序展示最新 30 条真实记录，口径与统计一致。
+    # 只 select 展示需要的列——Pipeline 行含 definition/spec/validation_attestation
+    # 大 JSON，整行物化会随流水线定义体积放大每次轮询的响应。
     recent_runs = (
-        db.query(PipelineRun, PipelineTask, Pipeline)
+        db.query(
+            PipelineRun.id, PipelineRun.status, PipelineRun.stats,
+            PipelineRun.started_at, PipelineRun.created_at,
+            PipelineRun.finished_at, PipelineRun.error_log,
+            PipelineTask.id, PipelineTask.name, Pipeline.name,
+        )
         .join(PipelineTask, PipelineTask.id == PipelineRun.task_id)
         .join(Pipeline, Pipeline.id == PipelineRun.pipeline_id)
         .order_by(PipelineRun.created_at.desc())
@@ -518,26 +336,27 @@ def stats_overview(
         ],
         "recent_runs": [
             {
-                "id": run.id,
-                "task_id": task.id,
-                "task_name": task.name,
-                "pipeline_name": pipeline.name,
-                "status": run.status,
-                "trigger_type": (run.stats or {}).get(
+                "id": run_id,
+                "task_id": task_id,
+                "task_name": task_name,
+                "pipeline_name": pipeline_name,
+                "status": run_status,
+                "trigger_type": (run_stats or {}).get(
                     "trigger_type",
                     "manual",
                 ),
-                "started_at": utc_iso_fn(
-                    run.started_at or run.created_at
-                ),
-                "finished_at": utc_iso_fn(run.finished_at),
-                "rows_out": (run.stats or {}).get("rows_out", 0),
-                "lake_impact": (run.stats or {}).get(
+                "started_at": utc_iso_fn(started_at or created_at),
+                "finished_at": utc_iso_fn(finished_at),
+                "rows_out": (run_stats or {}).get("rows_out", 0),
+                "lake_impact": (run_stats or {}).get(
                     "lake_impact"
                 ),
-                "error_message": run.error_log or "",
+                "error_message": error_log or "",
             }
-            for run, task, pipeline in recent_runs
+            for (
+                run_id, run_status, run_stats, started_at, created_at,
+                finished_at, error_log, task_id, task_name, pipeline_name
+            ) in recent_runs
         ],
     }
 
@@ -553,6 +372,10 @@ def list_tasks(
     *,
     with_pipeline_info_fn: QueryDependency,
 ) -> dict:
+    # 单页上限 100（与历史接口同一量级）：任务列表会 join 流水线并附带
+    # 调度/影响摘要，超大 page_size 会把一次轮询放大成全表物化。
+    if page_size < 1 or page_size > 100:
+        raise HTTPException(422, "page_size 必须在 1 到 100 之间")
     query = db.query(PipelineTask)
     if search:
         query = query.join(

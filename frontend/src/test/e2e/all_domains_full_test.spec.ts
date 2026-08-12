@@ -56,7 +56,7 @@ async function login(page: Page): Promise<string> {
   await page.getByLabel('用户名', { exact: true }).fill(STACK_ADMIN_USERNAME)
   await page.getByLabel('密码', { exact: true }).fill(STACK_ADMIN_PASSWORD)
   await page.click('button[type="submit"]')
-  await page.waitForURL(appUrl('/overview'), { timeout: 10000 })
+  await page.waitForURL(appUrl('/agent'), { timeout: 10000 })
   const token = await page.evaluate(() => localStorage.getItem('token') || '')
   expect(token, 'JWT token must be set after login').toBeTruthy()
   return token

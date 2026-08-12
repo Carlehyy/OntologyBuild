@@ -56,10 +56,9 @@ export const DEFAULT_CUSTOM_MENU_KEYS = ['overview']
 export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
   { key: 'overview', to: '/overview', icon: LayoutDashboard, label: '平台概览', description: '平台运行与数据总览', hiddenFromNavigation: true },
   { key: 'super_assistant', to: '/super-assistant', icon: BrainCircuit, label: '超级助手', description: '通用智能协作入口', hiddenFromNavigation: true },
+  { key: 'agent', to: '/agent', icon: Bot, label: '本体助手', description: '本体智能体与分析报告' },
   { key: 'explore', to: '/explore', icon: Compass, label: '业务探索', description: '业务建模与需求探索' },
   { key: 'ontologies', to: '/ontologies', icon: Network, label: '本体管理', description: '本体、图谱与对象建模' },
-  { key: 'agent', to: '/agent', icon: Bot, label: '本体助手', description: '本体智能体与分析报告' },
-  { key: 'events', to: '/events', icon: ClipboardList, label: '事件登记', description: '业务事件采集与审计' },
   {
     key: 'data', to: '/data', icon: Database, label: '数据通道', description: '数据接入、加工与治理', subItems: [
       { key: 'data.pipelines', to: '/data/pipelines', icon: GitBranch, label: '数据流水线', description: '连接、转换与编排' },
@@ -67,6 +66,7 @@ export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
       { key: 'data.structured', to: '/data/structured', icon: Table2, label: '数据资产湖', description: '结构化数据资产' },
     ],
   },
+  { key: 'events', to: '/events', icon: ClipboardList, label: '事件登记', description: '业务事件采集与审计' },
   {
     key: 'api_hub', to: '/api-hub', icon: Waypoints, label: '接口代理', description: '接口接入、调用与授权', subItems: [
       { key: 'api_hub.interfaces', to: '/api-hub/interfaces', icon: PlugZap, label: '接口管理', description: '接口定义与代理配置' },
@@ -154,6 +154,53 @@ export function canAccessPath(user: User | null, pathname: string): boolean {
   return key === null || hasMenuAccess(user, key)
 }
 
+/** 顶栏标签标题的子页面后缀规则：命中即显示为“菜单名 · 后缀”。 */
+function tabSubTitleForPath(pathname: string): string | null {
+  if (/^\/ontologies\/[^/]+\/mapping-config$/.test(pathname)) return '映射配置'
+  if (/^\/ontologies\/[^/]+\/graph$/.test(pathname)) return '图谱'
+  if (/^\/ontologies\/[^/]+\/(entities|logic|actions)\//.test(pathname)) return '详情'
+  if (/^\/ontologies\/(?!new$)[^/]+$/.test(pathname)) return '详情'
+  if (/^\/agent\/reports(\/|$)/.test(pathname)) return '报告'
+  if (pathname === '/data/pipelines/steward') return '数据管家'
+  if (/^\/data\/pipelines\/script\//.test(pathname)) return '脚本'
+  return null
+}
+
+function labelForMenuKey(key: string): string | null {
+  for (const item of PLATFORM_NAV_ITEMS) {
+    if (item.key === key) return item.label
+    const child = item.subItems?.find(sub => sub.key === key)
+    if (child) return child.label
+  }
+  return null
+}
+
+/** 无菜单映射但值得拥有顶栏标签的页面（key 取路径本身）。 */
+const FALLBACK_TAB_PATHS: Record<string, string> = {
+  '/inbox': '收件箱',
+}
+
+export interface NavTabInfo {
+  key: string
+  title: string
+}
+
+/**
+ * 顶栏多标签页：把路径解析为标签，按叶子菜单项粒度（菜单域内的页内跳转
+ * 复用同一标签）。返回 null 表示该路径不产生标签（如 /no-access）。
+ */
+export function navTabForPath(pathname: string): NavTabInfo | null {
+  const key = menuKeyForPath(pathname)
+  if (!key) {
+    const title = FALLBACK_TAB_PATHS[pathname]
+    return title ? { key: pathname, title } : null
+  }
+  const label = labelForMenuKey(key)
+  if (!label) return null
+  const subTitle = tabSubTitleForPath(pathname)
+  return { key, title: subTitle ? `${label} · ${subTitle}` : label }
+}
+
 export function firstAccessiblePath(user: User | null): string {
   if (!user) return '/no-access'
   const first = PLATFORM_NAV_ITEMS.find(item => {
@@ -164,6 +211,15 @@ export function firstAccessiblePath(user: User | null): string {
   if (!first) return '/no-access'
   const firstSubItem = first.subItems?.find(child => hasMenuAccess(user, child.key))
   return firstSubItem?.to ?? first.to
+}
+
+/**
+ * 登录成功或访问根路径时的默认落地页：优先进入本体助手；
+ * 无本体助手权限（如只分配了部分菜单的 custom 用户）时退回第一个可访问页面。
+ */
+export function defaultLandingPath(user: User | null): string {
+  if (user && hasMenuAccess(user, 'agent')) return '/agent'
+  return firstAccessiblePath(user)
 }
 
 export const CONFIGURABLE_NAV_ITEMS = PLATFORM_NAV_ITEMS.filter(item => !item.adminOnly)

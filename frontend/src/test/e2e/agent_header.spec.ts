@@ -414,3 +414,21 @@ test('动态哨兵抽屉只展示后天规则且试跑通过后才能启用', as
   await dialog.getByRole('button', { name: '启用' }).click()
   await expect(dialog).toContainText('已启用')
 })
+
+
+test('输入栏白色背景、聊天区滚动条隐藏、顶部分割线与侧边栏折叠线水平对齐', async ({ page }) => {
+  await mockAgentHeader(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/agent')
+
+  const inputBar = page.getByTestId('agent-input-bar')
+  await expect(inputBar).toBeVisible()
+  await expect(inputBar).toHaveCSS('background-color', 'rgb(255, 255, 255)')
+  await expect(page.getByTestId('agent-chat-region')).toHaveCSS('scrollbar-width', 'none')
+
+  const sidebarFooter = page.getByRole('button', { name: '折叠起来' }).locator('xpath=..')
+  const barBox = await inputBar.boundingBox()
+  const footerBox = await sidebarFooter.boundingBox()
+  if (!barBox || !footerBox) throw new Error('bounding box missing')
+  expect(Math.abs(barBox.y - footerBox.y)).toBeLessThanOrEqual(1)
+})

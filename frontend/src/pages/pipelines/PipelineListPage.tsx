@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Plus, Search, Play, GitBranch, Trash2, Pencil, ChevronLeft, ChevronRight,
   X, Loader2, CheckCircle2, XCircle, Clock, Table2, ListChecks, Sparkles, ExternalLink,
-  AlertCircle, FileCode2,
+  AlertCircle, FileCode2, Copy,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
@@ -120,6 +120,8 @@ export default function PipelineListPage() {
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Pipeline | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [cloneTarget, setCloneTarget] = useState<Pipeline | null>(null)
+  const [cloning, setCloning] = useState(false)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -179,7 +181,7 @@ export default function PipelineListPage() {
     return true
   }, [filterEnabled, filterSource, filterStatus, search])
 
-  const insertPipelineLocally = (pl: Pipeline) => {
+  const insertPipelineLocally = (pl: Pipeline, toastTitle = '流水线已创建') => {
     if (matchesActiveFilters(pl)) {
       setTotal(current => current + 1)
       if (page === 1) {
@@ -188,7 +190,7 @@ export default function PipelineListPage() {
     }
     toast({
       tone: 'success',
-      title: '流水线已创建',
+      title: toastTitle,
       description: page === 1 && matchesActiveFilters(pl)
         ? `「${pl.name}」已加入当前列表。`
         : `「${pl.name}」已创建，可调整筛选或返回第一页查看。`,
@@ -270,6 +272,27 @@ export default function PipelineListPage() {
     }
   }
 
+  const handleClone = async () => {
+    if (!cloneTarget) return
+    const target = cloneTarget
+    setCloning(true)
+    try {
+      const cloned = await pipelinesApi.clone(target.id)
+      setCloneTarget(null)
+      insertPipelineLocally(cloned, '流水线已克隆')
+    } catch (e: unknown) {
+      const err = e as { detail?: string; message?: string }
+      setCloneTarget(null)
+      toast({
+        tone: 'error',
+        title: '流水线克隆失败',
+        description: err?.detail || err?.message || '请稍后重试。',
+      })
+    } finally {
+      setCloning(false)
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const resetFilters = () => {
     setSearch('')
@@ -301,7 +324,7 @@ export default function PipelineListPage() {
           onChange={e => { setFilterSource(e.target.value); setPage(1) }}
           className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-500"
         >
-          <option value="">全部来源</option>
+          <option value="">全部类型</option>
           <option value="n8n">n8n 流水线</option>
           <option value="python">Python 脚本</option>
         </select>
@@ -365,7 +388,7 @@ export default function PipelineListPage() {
                 <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: '22%' }}>
                   流水线信息
                 </th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '9%' }}>流水线来源</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '9%' }}>流水线类型</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '9%' }}>发布状态</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '10%' }}>启用状态</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '14%' }}>最近执行结果</th>
@@ -401,12 +424,12 @@ export default function PipelineListPage() {
                     </td>
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap">
                       {n8n ? (
-                        <span className="inline-flex whitespace-nowrap items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700"
+                        <span className="inline-flex w-[100px] justify-center whitespace-nowrap items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700"
                           title="由数据管家托管的 n8n 流水线：编排在数据管家，发布在编辑向导，启用由本列表开关控制">
                           <Sparkles size={10} /> n8n 流水线
                         </span>
                       ) : python ? (
-                        <span className="inline-flex whitespace-nowrap items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700"
+                        <span className="inline-flex w-[100px] justify-center whitespace-nowrap items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700"
                           title="Python 脚本流水线：在脚本编辑页编写取数脚本，输出 list[dict] 行数据入湖">
                           <FileCode2 size={10} /> Python 脚本
                         </span>
@@ -526,6 +549,15 @@ export default function PipelineListPage() {
                         >
                           <Play size={14} />
                         </button>
+                        {(n8n || python) && (
+                          <button
+                            onClick={() => setCloneTarget(pl)}
+                            className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
+                            title="克隆流水线结构为未发布草稿"
+                          >
+                            <Copy size={14} />
+                          </button>
+                        )}
                         <button
                           onClick={() => setDeleteTarget(pl)}
                           className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
@@ -618,6 +650,17 @@ export default function PipelineListPage() {
         confirmLabel={deleting ? '处理中...' : '确认归档'}
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      {/* 克隆确认：复制编排结构（n8n workflow / Python 脚本）与字段契约，副本未发布未启用 */}
+      <ConfirmDialog
+        open={!!cloneTarget}
+        title="克隆流水线"
+        message={`确认克隆流水线「${cloneTarget?.name}」？系统将复制其${cloneTarget && isN8nPipeline(cloneTarget) ? ' n8n 工作流编排' : ' Python 脚本'}与字段契约，生成未发布、未启用的草稿副本，名称在原名称后追加「_复制」尾缀（重名自动递增）。`}
+        confirmLabel={cloning ? '克隆中...' : '确认克隆'}
+        tone="primary"
+        onConfirm={handleClone}
+        onCancel={() => setCloneTarget(null)}
       />
     </div>
   )

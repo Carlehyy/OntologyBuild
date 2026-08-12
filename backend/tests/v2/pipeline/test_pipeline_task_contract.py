@@ -203,6 +203,14 @@ def test_task_search_includes_related_pipeline_name(db, monkeypatch):
     assert result["items"][0]["name"] == "每日入湖"
 
 
+@pytest.mark.parametrize("page_size", [0, 101])
+def test_list_tasks_caps_page_size_at_one_hundred(db, page_size):
+    with pytest.raises(HTTPException) as excinfo:
+        list_tasks(page_size=page_size, db=db)
+    assert excinfo.value.status_code == 422
+    assert "page_size" in excinfo.value.detail
+
+
 def test_stats_and_histories_use_shanghai_day_and_explicit_utc(
     db, monkeypatch,
 ):
@@ -251,6 +259,7 @@ def test_histories_support_filters_and_stable_pagination(db, monkeypatch):
             pipeline_id="pipe-contract",
             task_id=task["id"],
             status="success",
+            trigger_type="scheduled",
             stats={"trigger_type": "scheduled", "rows_out": 12},
             created_at=datetime(2026, 7, 18, 2, 0),
             started_at=datetime(2026, 7, 18, 2, 0),
@@ -260,6 +269,7 @@ def test_histories_support_filters_and_stable_pagination(db, monkeypatch):
             pipeline_id="pipe-contract",
             task_id=task["id"],
             status="failed",
+            trigger_type="manual",
             stats={"trigger_type": "manual"},
             created_at=datetime(2026, 7, 17, 2, 0),
             started_at=datetime(2026, 7, 17, 2, 0),
@@ -316,6 +326,7 @@ def test_all_histories_support_global_filters_and_pagination(db, monkeypatch):
             pipeline_id="pipe-contract",
             task_id=order_task["id"],
             status="success",
+            trigger_type="manual",
             stats={"trigger_type": "manual", "rows_out": 18},
             created_at=datetime(2026, 7, 18, 2, 0),
             started_at=datetime(2026, 7, 18, 2, 0),
@@ -325,6 +336,7 @@ def test_all_histories_support_global_filters_and_pagination(db, monkeypatch):
             pipeline_id="pipe-contract",
             task_id=refund_task["id"],
             status="failed",
+            trigger_type="scheduled",
             stats={"trigger_type": "scheduled"},
             error_log="目标数据集不可用",
             created_at=datetime(2026, 7, 17, 2, 0),

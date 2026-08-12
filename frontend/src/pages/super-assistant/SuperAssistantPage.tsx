@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Check, History, List, Loader2, MessageSquare, Pencil,
   Send, Settings2, Square, X,
@@ -15,6 +16,7 @@ import {
 } from '@/api/superAssistant'
 import { useToast } from '@/components/ui/Toast'
 import SessionHistoryPopover from '@/components/SessionHistoryPopover'
+import { pickInitialConversationId } from '@/components/assistant-widget/logic'
 import ConfigurationPanel, { errorText } from './components/AssistantConfiguration'
 import {
   ChatMessage, ConfirmationCard, ContextUsage, EmptyState,
@@ -25,6 +27,10 @@ import type { ModelConfig } from '@/types/ontology'
 
 export default function SuperAssistantPage() {
   const { toast } = useToast()
+  const [searchParams] = useSearchParams()
+  // 悬浮窗跳转携带的 ?conversation=：初次加载时优先选中，后续参数变化继续跟随
+  const initialRequestedIdRef = useRef(searchParams.get('conversation'))
+  const requestedConversationId = searchParams.get('conversation')
   const [conversations, setConversations] = useState<SuperConversation[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messages, setMessages] = useState<SuperMessage[]>([])
@@ -68,7 +74,8 @@ export default function SuperAssistantPage() {
 
       if (conversationResult.status === 'fulfilled') {
         setConversations(conversationResult.value)
-        if (conversationResult.value[0]) setSelectedId(conversationResult.value[0].id)
+        const initialId = pickInitialConversationId(conversationResult.value, initialRequestedIdRef.current)
+        if (initialId) setSelectedId(initialId)
       } else {
         failures.push(`会话：${errorText(conversationResult.reason, '加载失败')}`)
       }
@@ -105,6 +112,18 @@ export default function SuperAssistantPage() {
       .catch(error => toast({ tone: 'error', title: '会话消息加载失败', description: errorText(error) }))
     return () => { alive = false }
   }, [selectedId, toast])
+
+  // 已进入页面后，悬浮窗再次跳转携带新的 ?conversation= 时跟随切换。
+  // 用 lastAppliedParamRef 记录已消费的参数值：只在参数“变化”时跟随，
+  // 避免用户在页面内手动切换会话后被残留参数强制拉回。
+  const lastAppliedParamRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!requestedConversationId || requestedConversationId === lastAppliedParamRef.current) return
+    if (conversations.some(item => item.id === requestedConversationId)) {
+      lastAppliedParamRef.current = requestedConversationId
+      setSelectedId(requestedConversationId)
+    }
+  }, [requestedConversationId, conversations])
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) }, [messages, pending])
 

@@ -176,15 +176,13 @@ export default function SyncTasksTab() {
       if (search) params.search = search
       if (filterPipelineId) params.pipeline_id = filterPipelineId
 
-      const [listRes, statsRes, optionsRes] = await Promise.all([
+      const [listRes, statsRes] = await Promise.all([
         pipelineTasksApi.list(params),
         pipelineTasksApi.stats(),
-        pipelineTasksApi.pipelineOptions(),
       ])
       setTasks(listRes.items)
       setTotal(listRes.total)
       setStats(statsRes)
-      setPipelineOptions(optionsRes.items || [])
     } catch (err) {
       console.error('加载调度任务失败', err)
       setActionError('任务数据加载失败，请检查服务状态后重试')
@@ -195,7 +193,20 @@ export default function SyncTasksTab() {
 
   }, [page, pageSize, activeTab, search, filterPipelineId])
 
+  // 流水线筛选候选不随轮询拉取：初始加载一次，打开新建/编辑弹窗时刷新
+  // （弹窗内的可选流水线候选由 TaskFormModal 自行拉取，不复用此请求）。
+  const loadPipelineOptions = useCallback(async () => {
+    try {
+      const res = await pipelineTasksApi.pipelineOptions()
+      setPipelineOptions(res.items || [])
+    } catch (err) {
+      console.error('加载流水线筛选候选失败', err)
+    }
+  }, [])
+
   useEffect(() => { load() }, [load])
+  useEffect(() => { loadPipelineOptions() }, [loadPipelineOptions])
+  useEffect(() => { if (showForm) loadPipelineOptions() }, [showForm, loadPipelineOptions])
 
   useEffect(() => {
     const updateIndicator = () => {
@@ -218,10 +229,41 @@ export default function SyncTasksTab() {
 
   const loadRef = useRef(load)
   loadRef.current = load
+  // 轮询降载：列表存在运行中任务时保持 10s，否则降为 30s；
+  // 页面隐藏时暂停轮询，恢复可见时立即补一次刷新。
+  // （任务状态契约仅 idle/running/success/failed，running 即唯一活跃态）
+  const hasActiveTasks = useMemo(
+    () => tasks.some(task => task.status === 'running'),
+    [tasks],
+  )
   useEffect(() => {
-    const timer = setInterval(() => loadRef.current(), 10_000)
-    return () => clearInterval(timer)
-  }, [])
+    const intervalMs = hasActiveTasks ? 10_000 : 30_000
+    let timer: ReturnType<typeof setInterval> | undefined
+    const stop = () => {
+      if (timer !== undefined) {
+        clearInterval(timer)
+        timer = undefined
+      }
+    }
+    const start = () => {
+      stop()
+      timer = setInterval(() => loadRef.current(), intervalMs)
+    }
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        stop()
+        return
+      }
+      loadRef.current()
+      start()
+    }
+    if (document.visibilityState !== 'hidden') start()
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      stop()
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
+  }, [hasActiveTasks])
 
   useEffect(() => {
     const timer = setTimeout(() => { setSearch(searchInput); setPage(1) }, 250)

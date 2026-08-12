@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import HTTPException
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.data_channel.curated.contracts import CuratedDatasetResponse
@@ -87,14 +87,34 @@ def list_curated(
             [],
         ).append(review)
 
+    # 每个数据集的最新版本一次批量取回（按 dataset_id 分组 max(version_no)
+    # 再 join 取行），替代逐数据集一次查询的 N+1；唯一约束保证无并列，
+    # 与 order_by(version_no.desc()).first() 语义一致。
+    latest_version_by_dataset: dict[str, DatasetVersion] = {}
+    if dataset_ids:
+        latest_version_sub = (
+            db.query(
+                DatasetVersion.dataset_id,
+                func.max(DatasetVersion.version_no).label("mx"),
+            )
+            .filter(DatasetVersion.dataset_id.in_(dataset_ids))
+            .group_by(DatasetVersion.dataset_id)
+            .subquery()
+        )
+        latest_version_by_dataset = {
+            version.dataset_id: version
+            for version in db.query(DatasetVersion)
+            .join(
+                latest_version_sub,
+                (DatasetVersion.dataset_id == latest_version_sub.c.dataset_id)
+                & (DatasetVersion.version_no == latest_version_sub.c.mx),
+            )
+            .all()
+        }
+
     result = []
     for dataset in rows:
-        version = (
-            db.query(DatasetVersion)
-            .filter(DatasetVersion.dataset_id == dataset.id)
-            .order_by(DatasetVersion.version_no.desc())
-            .first()
-        )
+        version = latest_version_by_dataset.get(dataset.id)
         schema = (
             dataset.schema_json
             if isinstance(dataset.schema_json, dict)

@@ -26,6 +26,11 @@ src/
 `src/shared/` 仍是逐业务域迁移的目标结构；业务域迁移方案未经维护者批准并
 建立目标骨架时，继续维护当前权威路径，不要创建第三套并行实现。
 
+全局悬浮 AI 助手位于 `components/assistant-widget/`（挂载于 `Layout`，
+状态在 `stores/assistantWidgetStore.ts`）。其面板为懒加载分包，是仓库目前
+唯一使用 antd / Ant Design X 的组件岛；其余 UI 仍是 Tailwind + Radix +
+CSS 变量 token 体系，新增通用组件不要默认引入 antd。
+
 复杂页面当前在原业务目录内按“页面编排 + 同域组件”拆分：
 
 - 数据管家：`pages/pipelines/steward/DataStewardPage.tsx` 保留状态、请求和

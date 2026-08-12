@@ -36,7 +36,7 @@ import ApiHubPage from '@/pages/api-hub/ApiHubPage'
 import PublicManualDatasetPage from '@/pages/data-management/structured/PublicManualDatasetPage'
 import { ToastProvider } from '@/components/ui/Toast'
 import { AccessDeniedPage, NoAssignedPagesPage } from '@/pages/errors/AccessDeniedPage'
-import { canAccessPath, firstAccessiblePath } from '@/config/navigation'
+import { canAccessPath, defaultLandingPath, firstAccessiblePath } from '@/config/navigation'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1 } }
@@ -94,13 +94,13 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function HomeRedirect() {
   const token = useAuthStore(s => s.token)
   const user = useAuthStore(s => s.user)
-  return <Navigate to={token && user ? firstAccessiblePath(user) : '/login'} replace />
+  return <Navigate to={token && user ? defaultLandingPath(user) : '/login'} replace />
 }
 
 function UnknownRouteRedirect() {
   const token = useAuthStore(s => s.token)
   const user = useAuthStore(s => s.user)
-  return <Navigate to={token && user ? firstAccessiblePath(user) : '/login'} replace />
+  return <Navigate to={token && user ? defaultLandingPath(user) : '/login'} replace />
 }
 
 export default function App() {

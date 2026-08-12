@@ -299,7 +299,12 @@ class IncrementalOrchestrator:
         """触发 Pipeline 运行，返回 run_id"""
         from app.models.v2.pipeline import PipelineRun
 
-        run = PipelineRun(pipeline_id=pipeline_id, status="pending")
+        run = PipelineRun(
+            pipeline_id=pipeline_id,
+            status="pending",
+            # 审核事件级联触发：真实列与历史过滤口径一致（stats 缺键 ≡ manual）
+            trigger_type="manual",
+        )
         self._db.add(run)
         self._db.commit()
         self._db.refresh(run)

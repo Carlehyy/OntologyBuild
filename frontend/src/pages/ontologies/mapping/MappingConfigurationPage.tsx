@@ -11,15 +11,24 @@ import '@xyflow/react/dist/style.css'
 import {
   AlertCircle, ArrowLeft, ArrowRight, BookOpen, Boxes, Check, CheckCircle2,
   ChevronDown, ChevronRight, Database, Eye, GitBranch, KeyRound, LayoutGrid,
-  Link2, Loader2, Plus, Save, Search, Table2, Trash2, X,
+  Link2, Loader2, Plus, Save, Search, Sparkles, Table2, Trash2, X,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
+import {
+  fetchMappingSuggestions,
+  type MappingSuggestionResponse,
+} from '@/api/v2/mapping-suggestions'
 import {
   linkMappingForType, mappingTargetId, normalizeType, typesCompatible, userFieldMapping,
   useMappingData, type MappingDataset, type MappingLinkType,
   type MappingObjectType, type MappingProperty,
 } from '../detail/mapping/mapping-data'
 import { resolveObjectMappingPrimaryKey } from './object-mapping-primary-key'
+import {
+  buildSuggestionAdditions,
+  type SuggestionAcceptance,
+} from './suggestion-apply'
+import MappingSuggestionPanel from './MappingSuggestionPanel'
 import './mapping-configuration.css'
 
 type DatasetNodeData = {
@@ -181,6 +190,9 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null)
   const [curatedAutoApplyDatasetIds, setCuratedAutoApplyDatasetIds] = useState<Set<string>>(new Set())
   const [manualAutoApplyDatasetIds, setManualAutoApplyDatasetIds] = useState<Set<string>>(new Set())
+  const [suggestionOpen, setSuggestionOpen] = useState(false)
+  const [suggestionLoading, setSuggestionLoading] = useState(false)
+  const [suggestionResult, setSuggestionResult] = useState<MappingSuggestionResponse | null>(null)
   const initialized = useRef(false)
   const editable = data.workspaceEditable === true
 
@@ -710,6 +722,69 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
   }
   const clearConnectionFocus = () => { setFocusedNodeId(null); setFocusedEdgeId(null); setHoveredEdgeId(null) }
   const clearCanvas = () => { if (editable && nodes.length && window.confirm('清空画布会把现有映射标记为待删除，只有点击“保存配置”后才会同步数据库。')) { setNodes([]); setEdges([]); setDirty(true); setSelectedDatasetId(null); clearConnectionFocus() } }
+
+  const canvasDatasetIds = useMemo(
+    () => nodes
+      .filter((node): node is MappingNode & { data: DatasetNodeData } => node.data.kind === 'dataset')
+      .map(node => node.data.dataset.id),
+    [nodes],
+  )
+
+  const openSuggestions = async () => {
+    if (!versionId || !editable || !canvasDatasetIds.length || suggestionLoading) return
+    setSuggestionOpen(true)
+    setSuggestionLoading(true)
+    setSuggestionResult(null)
+    try {
+      const result = await fetchMappingSuggestions(ontologyId, versionId, canvasDatasetIds)
+      setSuggestionResult(result)
+    } catch (error) {
+      setSuggestionOpen(false)
+      setNotice({ tone: 'bad', text: `生成映射建议失败：${errorMessage(error)}` })
+    } finally {
+      setSuggestionLoading(false)
+    }
+  }
+
+  const applySuggestions = (accepted: SuggestionAcceptance[]) => {
+    const additions = buildSuggestionAdditions({
+      accepted,
+      nodeIds: new Set(nodes.map(node => node.id)),
+      existingEdges: edges,
+      datasetById,
+      objectById,
+    })
+    setNodes(current => {
+      let next = [...current]
+      for (const datasetId of additions.datasetIdsToAdd) {
+        const dataset = datasetById.get(datasetId)
+        if (!dataset) continue
+        next = [...next, {
+          id: `dataset:${dataset.id}`, type: 'dataset',
+          position: { x: 60, y: nextLaneY(next, 'dataset') },
+          data: { kind: 'dataset', dataset, onPreview: toggleDatasetPreview },
+        }]
+      }
+      for (const objectId of additions.objectIdsToAdd) {
+        const object = objectById.get(objectId)
+        if (!object) continue
+        next = [...next, {
+          id: `object:${object.id}`, type: 'object',
+          position: { x: targetLaneX(), y: nextLaneY(next, 'object') },
+          data: { kind: 'object', object },
+        }]
+      }
+      return next
+    })
+    setEdges(current => [...current, ...additions.edgesToAdd])
+    setDirty(true)
+    setSuggestionOpen(false)
+    setNotice({
+      tone: additions.skipped.length ? 'warn' : 'good',
+      text: `已应用 ${additions.edgesToAdd.length} 条建议连线${additions.skipped.length ? `，跳过 ${additions.skipped.length} 条（重复/类型不兼容/目标已占用）` : ''}。请检查画布后点击“保存配置”统一写入。`,
+    })
+  }
+
   const confirmLeavingWorkspace = () => (
     !dirty || window.confirm('当前还有未保存的映射更改，离开后这些前端草稿会丢失。确定离开吗？')
   )
@@ -756,7 +831,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       <header className="dmc-header">
         <div className="dmc-brand"><button onClick={returnToPreviousPage} aria-label="返回上一页" title="返回上一页"><ArrowLeft size={16} /></button><span><Link2 size={18} /></span><div><b>数据映射</b><small>{editable ? '草稿可编辑 · 对象实体、实体关系与数据资产字段映射' : `${data.workspaceMode === 'trial' ? '试跑快照' : data.workspaceMode === 'archived' ? '归档快照' : '发布快照'} · 只读查看`}</small></div></div>
         <label className="dmc-global-search"><Search size={14} /><input placeholder="搜索画布节点、数据集或本体属性…" onChange={event => { setLeftSearch(event.target.value); setRightSearch(event.target.value) }} /></label>
-        <div className="dmc-header-actions"><button className="dmc-model-switch" onClick={leaveWorkspace} title="返回模型结构"><Boxes size={15} /><span>模型结构</span></button><button onClick={() => setTutorialStep(0)} title="新手教程"><BookOpen size={15} /></button><button onClick={autoLayout} title="自动布局"><LayoutGrid size={15} /></button>{editable && <button onClick={clearCanvas} title="清空画布"><Trash2 size={15} /></button>}<span className="dmc-divider" />{editable ? <button className="dmc-save" disabled={!dirty || saving} onClick={saveAll}>{saving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}{saving ? '正在保存…' : dirty ? '保存配置' : '已保存'}</button> : <span className="dmc-readonly-badge"><Eye size={14} />只读快照</span>}</div>
+        <div className="dmc-header-actions"><button className="dmc-model-switch" onClick={leaveWorkspace} title="返回模型结构"><Boxes size={15} /><span>模型结构</span></button><button onClick={() => setTutorialStep(0)} title="新手教程"><BookOpen size={15} /></button><button onClick={autoLayout} title="自动布局"><LayoutGrid size={15} /></button>{editable && <button onClick={clearCanvas} title="清空画布"><Trash2 size={15} /></button>}{editable && <button className="dmc-suggest-open" data-testid="mapping-suggest-open" disabled={!canvasDatasetIds.length || suggestionLoading} onClick={openSuggestions} title={canvasDatasetIds.length ? '基于历史映射知识、名称规则与大模型概念化生成字段映射建议' : '先把左侧数据集加入画布，再生成智能建议'}>{suggestionLoading ? <Loader2 className="animate-spin" size={15} /> : <Sparkles size={15} />}<span>智能建议</span></button>}<span className="dmc-divider" />{editable ? <button className="dmc-save" disabled={!dirty || saving} onClick={saveAll}>{saving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}{saving ? '正在保存…' : dirty ? '保存配置' : '已保存'}</button> : <span className="dmc-readonly-badge"><Eye size={14} />只读快照</span>}</div>
       </header>
 
       {notice && <div className={`dmc-notice dmc-notice--${notice.tone}`}>{notice.tone === 'good' ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}<span>{notice.text}</span><button onClick={() => setNotice(null)}><X size={13} /></button></div>}
@@ -889,6 +964,17 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
           <div className="dmc-unmapped-summary"><AlertCircle size={13} /><span><b>{(rightKind === 'object' ? data.objectTypes : data.linkTypes).filter(target => !nodes.some(node => node.id === `${rightKind}:${target.id}`) && (rightKind === 'object' ? !data.mappings.some(mapping => mappingTargetId(mapping) === target.id) : !linkMappingForType(target as MappingLinkType, data.linkMappings))).length} 个尚未配置</b><small>加入画布后可建立字段映射</small></span></div>
         </aside>
       </div>
+
+      {suggestionOpen && (
+        <MappingSuggestionPanel
+          loading={suggestionLoading}
+          response={suggestionResult}
+          objectTypes={data.objectTypes}
+          datasetById={datasetById}
+          onClose={() => setSuggestionOpen(false)}
+          onApply={applySuggestions}
+        />
+      )}
 
       {tutorialStep !== null && <div className="dmc-tutorial" role="dialog" aria-modal="true"><div className="dmc-tutorial-card"><header><div><span><BookOpen size={15} /></span><div><b>数据映射快速入门</b><small>第 {tutorialStep + 1} 步，共 {tutorial.length} 步</small></div></div><button onClick={closeTutorial}><X size={15} /></button></header><main>{(() => { const StepIcon = tutorial[tutorialStep].icon; return <><span><StepIcon size={27} /></span><h3>{tutorial[tutorialStep].title}</h3><p>{tutorial[tutorialStep].text}</p></> })()}</main><footer><div>{tutorial.map((_, index) => <button key={index} data-active={index === tutorialStep} onClick={() => setTutorialStep(index)} />)}</div><span>{tutorialStep > 0 && <button onClick={() => setTutorialStep(step => (step || 1) - 1)}>上一步</button>}<button className="dmc-tutorial-next" onClick={() => tutorialStep === tutorial.length - 1 ? closeTutorial() : setTutorialStep(step => (step || 0) + 1)}>{tutorialStep === tutorial.length - 1 ? '开始配置' : '下一步'}<ArrowRight size={13} /></button></span></footer></div></div>}
     </div>
