@@ -227,7 +227,7 @@ function ProjectCard({
           <button
             type="button"
             onClick={onDevelop}
-            className="inline-flex h-7 items-center gap-1 rounded-md bg-teal-600 px-2.5 text-xs font-medium text-white transition-colors hover:bg-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+            className="inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md bg-teal-600 px-2.5 text-xs font-medium text-white transition-colors hover:bg-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
           >
             <Code2 size={13} /> 开发
           </button>
@@ -285,7 +285,7 @@ export default function WorldModelListTab() {
       refresh()
       setCreateOpen(false)
       toast({ tone: 'success', title: '推演模型已创建', description: '即将进入开发页编写推演脚本。' })
-      navigate(`/ontologies/world-model/models/${project.id}/develop`)
+      navigate(`/world-model/models/${project.id}/develop`)
     },
   })
   const updateMutation = useMutation({
@@ -392,7 +392,7 @@ export default function WorldModelListTab() {
             <ProjectCard
               key={item.id}
               item={item}
-              onDevelop={() => navigate(`/ontologies/world-model/models/${item.id}/develop`)}
+              onDevelop={() => navigate(`/world-model/models/${item.id}/develop`)}
               onEdit={() => setEditTarget(item)}
               onDelete={() => setDeleteTarget(item)}
             />

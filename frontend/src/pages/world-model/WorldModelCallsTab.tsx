@@ -10,7 +10,6 @@ import {
   Route,
   ScrollText,
   Search,
-  TimerReset,
   X,
   XCircle,
 } from 'lucide-react'
@@ -163,7 +162,13 @@ export default function WorldModelCallsTab() {
         <OverviewCard icon={<Route size={17} />} label="总调用次数" value={String(overview?.total ?? 0)} />
         <OverviewCard icon={<AlertCircle size={17} />} label="失败次数" value={String(overview?.failed ?? 0)} tone="danger" />
         <OverviewCard icon={<Gauge size={17} />} label="平均耗时" value={`${overview?.avg_duration_ms ?? 0} ms`} />
-        <OverviewCard icon={<TimerReset size={17} />} label="数据说明" value="发布后产生" />
+        <OverviewCard
+          icon={<CheckCircle2 size={17} />}
+          label="成功率"
+          value={overview && overview.total > 0
+            ? `${(((overview.total - overview.failed) / overview.total) * 100).toFixed(1).replace(/\.0$/, '')}%`
+            : '—'}
+        />
       </div>
 
       {/* 筛选栏 */}

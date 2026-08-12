@@ -32,8 +32,8 @@ import SuperAssistantPage from '@/pages/super-assistant/SuperAssistantPage'
 import SkillCommunityPage from '@/pages/community/SkillCommunityPage'
 import PluginCommunityPage from '@/pages/community/PluginCommunityPage'
 import OntologyGraphPage from '@/pages/ontologies/graph/OntologyGraphPage'
-import WorldModelPage from '@/pages/ontologies/world-model/WorldModelPage'
-import WorldModelDevelopPage from '@/pages/ontologies/world-model/WorldModelDevelopPage'
+import WorldModelPage from '@/pages/world-model/WorldModelPage'
+import WorldModelDevelopPage from '@/pages/world-model/WorldModelDevelopPage'
 import ApiHubPage from '@/pages/api-hub/ApiHubPage'
 import PublicManualDatasetPage from '@/pages/data-management/structured/PublicManualDatasetPage'
 import { ToastProvider } from '@/components/ui/Toast'
@@ -105,6 +105,13 @@ function UnknownRouteRedirect() {
   return <Navigate to={token && user ? defaultLandingPath(user) : '/login'} replace />
 }
 
+/** 旧世界模型路径（/ontologies/world-model/*）升级为一级路由后的兜底重定向，保留子路径与 query */
+function LegacyWorldModelRedirect() {
+  const location = useLocation()
+  const rest = location.pathname.replace(/^\/ontologies\/world-model/, '')
+  return <Navigate to={`/world-model${rest}${location.search}`} replace />
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={qc}>
@@ -146,10 +153,12 @@ export default function App() {
           {/* ── 业务探索（对话式业务建模 → 需求文档 → 本体草稿） ── */}
           <Route path="/explore" element={<ProtectedRoute><ExplorationPage /></ProtectedRoute>} />
 
-          {/* 世界模型（演化层）— 静态段优先于 /ontologies/:id 匹配 */}
-          <Route path="/ontologies/world-model" element={<Navigate to="/ontologies/world-model/models" replace />} />
-          <Route path="/ontologies/world-model/models/:modelId/develop" element={<ProtectedRoute><WorldModelDevelopPage /></ProtectedRoute>} />
-          <Route path="/ontologies/world-model/:tab" element={<ProtectedRoute><WorldModelPage /></ProtectedRoute>} />
+          {/* 世界模型（演化层）— 一级导航域；旧 /ontologies/world-model/* 路径保留重定向 */}
+          <Route path="/world-model" element={<Navigate to="/world-model/models" replace />} />
+          <Route path="/world-model/models/:modelId/develop" element={<ProtectedRoute><WorldModelDevelopPage /></ProtectedRoute>} />
+          <Route path="/world-model/:tab" element={<ProtectedRoute><WorldModelPage /></ProtectedRoute>} />
+          <Route path="/ontologies/world-model" element={<LegacyWorldModelRedirect />} />
+          <Route path="/ontologies/world-model/*" element={<LegacyWorldModelRedirect />} />
           <Route path="/ontologies" element={<ProtectedRoute><OntologyListPage /></ProtectedRoute>} />
           <Route path="/ontologies/new" element={<ProtectedRoute><OntologyListPage defaultCreateOpen /></ProtectedRoute>} />
           <Route path="/ontologies/:id" element={<ProtectedRoute><OntologyDetailPage /></ProtectedRoute>} />

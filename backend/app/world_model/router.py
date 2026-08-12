@@ -1,5 +1,5 @@
 """
-世界模型 API — 挂 /api/v2/world-model（menu key: ontologies.world_model）
+世界模型 API — 挂 /api/v2/world-model（menu key: world_model）
 
   项目管理：
   GET    /projects                      列表（keyword / engine_type / 分页）

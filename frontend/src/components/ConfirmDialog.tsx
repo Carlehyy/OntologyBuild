@@ -12,7 +12,8 @@ interface Props {
 export default function ConfirmDialog({ open, title, message, onConfirm, onCancel, confirmLabel = '确认删除', tone = 'danger' }: Props) {
   if (!open) return null
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    // 确认框必须高于一切抽屉/面板（Sheet 等为 z-50），用模态 token 档位
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[var(--z-modal)]">
       <div className="bg-white rounded-lg shadow-lg p-6 w-96">
         <h3 className="font-semibold text-lg mb-2">{title}</h3>
         <p className="text-gray-600 text-sm mb-6">{message}</p>

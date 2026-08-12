@@ -144,26 +144,34 @@ def test_editor_role_sees_world_model_by_default(client, viewer_headers):
     assert r.status_code == 200
 
 
-def test_role_with_ontologies_but_no_child_loses_parent_after_normalize(db):
-    """GROUP_MENU_KEYS 归一化：父 key 需至少一个子 key 才能保留。
+def test_world_model_group_requires_child_after_normalize(db):
+    """GROUP_MENU_KEYS 归一化：world_model 父 key 需至少一个子 key 才能保留。
 
-    迁移 0065 负责给存量记录补子 key；这里锁定归一化行为本身。
+    世界模型提升为一级导航分组（models/calls 子 key）；本体管理恢复单项，
+    不再受分组归一化约束；旧 ontologies.* 子 key 已失效，归一化直接滤除。
     """
     from app.auth.permissions import normalize_menu_keys
 
-    assert "ontologies" not in normalize_menu_keys(["ontologies"])
-    assert "ontologies" in normalize_menu_keys(
-        ["ontologies", "ontologies.world_model"])
-    assert "ontologies.world_model" in normalize_menu_keys(
+    assert "world_model" not in normalize_menu_keys(["world_model"])
+    assert "world_model" in normalize_menu_keys(
+        ["world_model", "world_model.models"])
+    # 只有子 key 时自动补父 key
+    assert "world_model" in normalize_menu_keys(["world_model.calls"])
+    assert "world_model.models" in normalize_menu_keys(["world_model.models"])
+    # 本体管理恢复单项：独立保留
+    assert "ontologies" in normalize_menu_keys(["ontologies"])
+    # 旧 key 已不在 ALL_MENU_KEYS，归一化滤除
+    assert "ontologies.library" not in normalize_menu_keys(["ontologies.library"])
+    assert "ontologies.world_model" not in normalize_menu_keys(
         ["ontologies.world_model"])
-    assert "ontologies.library" in normalize_menu_keys(["ontologies.library"])
 
 
-def test_role_record_backfilled_by_migration_shape(db):
-    """存量授权记录含 ontologies 时，授予子 key 后访问恢复。"""
+def test_role_record_with_world_model_keys_grants_access(db):
+    """存量授权记录持有一级 world_model 组 key 时，访问世界模型域恢复。"""
     db.add(RoleMenuPermission(
         role="editor",
-        menu_keys=["ontologies", "ontologies.library", "ontologies.world_model"],
+        menu_keys=["ontologies", "world_model", "world_model.models",
+                   "world_model.calls"],
         updated_by="test",
     ))
     db.commit()
@@ -171,8 +179,9 @@ def test_role_record_backfilled_by_migration_shape(db):
 
     keys = get_role_menu_keys(db, "editor")
     assert "ontologies" in keys
-    assert "ontologies.library" in keys
-    assert "ontologies.world_model" in keys
+    assert "world_model" in keys
+    assert "world_model.models" in keys
+    assert "world_model.calls" in keys
 
 
 # ──────────────────────────── 调试执行与保存 ────────────────────────────
@@ -357,3 +366,44 @@ def test_call_records_list_filter_and_overview(client, auth_headers, db):
 def test_call_records_require_menu(client, custom_headers):
     r = client.get(f"{BASE}/calls", headers=custom_headers)
     assert r.status_code == 403
+
+
+# ──────────────────────────── 调试执行收尾代码回归 ────────────────────────────
+
+
+def test_debug_epilogue_handles_json_literals():
+    """test_input 含 JSON 布尔/null 时，注入代码在内核中必须可执行。
+
+    回归：曾把 JSON 文本直接拼进 Python 表达式（true/false/null 不是合法
+    Python 标识符），此类测试入参在内核里必报 NameError。这里在进程内真实
+    执行生成代码（不起内核），锁定拼接正确性。
+    """
+    import contextlib
+    import io
+
+    script = (
+        "def simulate(context, actions, horizon):\n"
+        "    return {\n"
+        "        'flag': context.get('flag'),\n"
+        "        'missing': context.get('nothing'),\n"
+        "        'tags': context.get('tags'),\n"
+        "        'horizon': horizon,\n"
+        "    }\n"
+    )
+    code = service._build_debug_code(script, {
+        "context": {"flag": True, "nothing": None, "tags": ["a", False]},
+        "actions": [],
+        "horizon": 2,
+    })
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        exec(compile(code, "<world-model-debug>", "exec"), {})
+    stdout = buffer.getvalue()
+
+    assert "__OB_RESULT_BEGIN__" in stdout
+    from app.data_channel.pipelines.python_engine.client import extract_payload
+    payload = extract_payload(stdout)
+    assert payload == {
+        "flag": True, "missing": None, "tags": ["a", False], "horizon": 2,
+    }

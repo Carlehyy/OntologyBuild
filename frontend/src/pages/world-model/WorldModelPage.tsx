@@ -13,7 +13,7 @@ type TabKey = (typeof TABS)[number]['key']
 export default function WorldModelPage() {
   const { tab = 'models' } = useParams<{ tab: string }>()
   if (!TABS.some(item => item.key === tab)) {
-    return <Navigate to="/ontologies/world-model/models" replace />
+    return <Navigate to="/world-model/models" replace />
   }
   const active = tab as TabKey
 
@@ -31,7 +31,7 @@ export default function WorldModelPage() {
             return (
               <Link
                 key={item.key}
-                to={`/ontologies/world-model/${item.key}`}
+                to={`/world-model/${item.key}`}
                 title={item.description}
                 className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 pb-2 pt-1 text-sm transition-colors ${
                   isActive

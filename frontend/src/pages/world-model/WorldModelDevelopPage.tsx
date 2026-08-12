@@ -115,6 +115,7 @@ export default function WorldModelDevelopPage() {
   const [versionsLoading, setVersionsLoading] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [confirmRevert, setConfirmRevert] = useState(false)
+  const [confirmRestoreVersionId, setConfirmRestoreVersionId] = useState<string | null>(null)
 
   const dirty = script !== savedScript
   const contentKey = `${script}\n${testInputText}`
@@ -251,8 +252,15 @@ export default function WorldModelDevelopPage() {
       toast({ tone: 'success', title: `已恢复 v${detail.version_no} 的脚本内容`, description: '恢复后请重新执行并保存。' })
     } catch (error) {
       toast({ tone: 'error', title: '版本恢复失败', description: apiError(error) })
+    } finally {
+      setConfirmRestoreVersionId(null)
     }
   }, [modelId, toast])
+
+  // 取消执行：中断客户端等待（内核随服务端收尾销毁），编辑内容不受影响
+  const cancelExecution = useCallback(() => {
+    abortRef.current?.abort()
+  }, [])
 
   const revertToSaved = () => {
     setScript(savedScript)
@@ -269,7 +277,7 @@ export default function WorldModelDevelopPage() {
         <p className="text-sm text-[var(--color-danger)]">{loadError || '推演模型不存在'}</p>
         <button
           type="button"
-          onClick={() => navigate('/ontologies/world-model/models')}
+          onClick={() => navigate('/world-model/models')}
           className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
         >
           返回推演模型列表
@@ -284,7 +292,7 @@ export default function WorldModelDevelopPage() {
       <header className="mb-3 flex flex-wrap items-center gap-3">
         <button
           type="button"
-          onClick={() => navigate('/ontologies/world-model/models')}
+          onClick={() => navigate('/world-model/models')}
           className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
           aria-label="返回推演模型列表"
         >
@@ -330,15 +338,24 @@ export default function WorldModelDevelopPage() {
               <RotateCcw size={14} /> 恢复到已保存
             </button>
           )}
-          <button
-            type="button"
-            onClick={execute}
-            disabled={executing || saving}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[var(--color-nav-bg)] px-3.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-          >
-            {executing ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-            {executing ? '执行中…' : '执行'}
-          </button>
+          {executing ? (
+            <button
+              type="button"
+              onClick={cancelExecution}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+            >
+              <Loader2 size={14} className="animate-spin" /> 取消执行
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={execute}
+              disabled={saving}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[var(--color-nav-bg)] px-3.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              <Play size={14} /> 执行
+            </button>
+          )}
           <button
             type="button"
             onClick={save}
@@ -467,7 +484,7 @@ export default function WorldModelDevelopPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => void restoreVersion(version.id)}
+                    onClick={() => { setShowVersions(false); setConfirmRestoreVersionId(version.id) }}
                     className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-xs text-slate-600 transition-colors hover:bg-slate-50"
                   >
                     <RotateCcw size={12} /> 恢复
@@ -527,6 +544,15 @@ export default function WorldModelDevelopPage() {
         tone="primary"
         onConfirm={revertToSaved}
         onCancel={() => setConfirmRevert(false)}
+      />
+      <ConfirmDialog
+        open={confirmRestoreVersionId !== null}
+        title="恢复到该历史版本？"
+        message="当前编辑器中的未保存修改将被覆盖丢弃，恢复后需重新执行并保存。"
+        confirmLabel="恢复"
+        tone="primary"
+        onConfirm={() => { if (confirmRestoreVersionId) void restoreVersion(confirmRestoreVersionId) }}
+        onCancel={() => setConfirmRestoreVersionId(null)}
       />
     </div>
   )

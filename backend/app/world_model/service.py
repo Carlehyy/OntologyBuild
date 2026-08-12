@@ -19,6 +19,7 @@ from app.data_channel.pipelines.python_engine.client import (
     PythonEngineError,
     execute_code,
     extract_payload,
+    tail_stdout,
 )
 from app.world_model import schemas
 from app.world_model.models import (
@@ -60,13 +61,15 @@ SCRIPT_TEMPLATE = '''def simulate(context, actions, horizon):
 
 # 调试执行注入的收尾代码：调用入口函数并把返回值序列化到输出标记之间。
 # 输出标记与 result 行提取共用（python_engine.client 的 __OB_RESULT_*__）。
+# 注意：{test_input} 必须以 Python 字符串字面量形式嵌入（repr），
+# 直接嵌入 JSON 文本会把 true/false/null 带进 Python 表达式导致 NameError。
 _DEBUG_EPILOGUE_TEMPLATE = '''
 
 # ── OntologyBuild 世界模型调试执行（自动注入，请勿删除） ──
 import json as _ob_json
 if "simulate" not in globals():
     raise NameError("脚本未定义入口函数 simulate(context, actions, horizon)")
-_ob_test_input = _ob_json.loads(_ob_json.dumps({test_input}))
+_ob_test_input = _ob_json.loads({test_input})
 _ob_payload = simulate(
     context=_ob_test_input.get("context") or {{}},
     actions=_ob_test_input.get("actions") or [],
@@ -218,7 +221,9 @@ def _build_debug_code(script: str, test_input: dict) -> str:
             f"测试入参过大（{_TEST_INPUT_CHARS // 1000}K 字符上限）："
             "请裁剪 context 快照后再执行。",
         )
-    return script + _DEBUG_EPILOGUE_TEMPLATE.format(test_input=test_input_json)
+    # repr() 产出合法 Python 字符串字面量，避免 JSON 的 true/false/null
+    # 进入内核代码后被当成 Python 标识符（NameError）
+    return script + _DEBUG_EPILOGUE_TEMPLATE.format(test_input=repr(test_input_json))
 
 
 def _run_debug(script: str, test_input: dict) -> schemas.ScriptExecutionResult:
@@ -226,7 +231,9 @@ def _run_debug(script: str, test_input: dict) -> schemas.ScriptExecutionResult:
         raise HTTPException(400, "脚本内容为空，无法执行。")
     code = _build_debug_code(script, test_input)
     try:
-        execution = execute_code(code)
+        # full_stdout：输出标记的结果块可能超过尾部截断上限，
+        # 必须在完整 stdout 上解析，解析后再截回尾部回传
+        execution = execute_code(code, full_stdout=True)
     except PythonEngineError as exc:
         # 网关未配置/不可达等基础设施失败：话术与数据通道保持一致
         raise HTTPException(502, str(exc)) from exc
@@ -240,7 +247,7 @@ def _run_debug(script: str, test_input: dict) -> schemas.ScriptExecutionResult:
     return schemas.ScriptExecutionResult(
         ok=error is None,
         payload=payload,
-        stdout=execution.stdout,
+        stdout=tail_stdout(execution.stdout),
         error=error,
         traceback=execution.traceback,
         duration_ms=execution.duration_ms,
