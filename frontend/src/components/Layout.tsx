@@ -6,6 +6,7 @@ import {
   UserCircle, User, Menu, X,
 } from 'lucide-react'
 import InboxPopover from '@/components/inbox/InboxPopover'
+import NavTabs from '@/components/NavTabs'
 import PreferencesModal from '@/components/preferences/PreferencesModal'
 import { visibleNavigation, type PlatformNavItem } from '@/config/navigation'
 
@@ -181,20 +182,21 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         {/* 通用标签栏 */}
         {showTopTabBar && (
           <div className="h-14 shrink-0 flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4">
-            {/* 左侧预留 */}
-            <div className="flex items-center gap-2">
+            {/* 左侧：移动端菜单按钮 + 多标签页 */}
+            <div className="flex min-w-0 flex-1 items-center gap-2">
               <button
                 type="button"
                 onClick={() => { setCollapsed(false); setMobileNavOpen(true) }}
                 aria-label="打开平台导航"
-                className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] md:hidden"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] md:hidden"
               >
                 <Menu size={18} />
               </button>
+              <NavTabs />
             </div>
 
             {/* 右侧：收件箱 + 用户中心 */}
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1">
               {/* 收件箱 */}
               <div className="relative" ref={inboxRef}>
                 <InboxPopover
