@@ -71,9 +71,9 @@ export default function NavTabs() {
                 navigate(tab.path)
               }
             }}
-            className={`group flex shrink-0 cursor-pointer items-center gap-1 rounded-lg py-1.5 pl-3 pr-2 text-xs transition-colors ${selected
-              ? 'bg-[var(--color-nav-light)] text-[var(--color-nav-bg)] font-medium'
-              : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'}`}
+            className={`group flex shrink-0 cursor-pointer items-center gap-1 rounded-lg border border-dashed py-1.5 pl-3 pr-2 text-xs transition-colors ${selected
+              ? 'border-[var(--color-nav-bg)] bg-[var(--color-nav-light)] text-[var(--color-nav-bg)] font-medium'
+              : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'}`}
           >
             <span className="max-w-36 truncate">{tab.title}</span>
             <button
