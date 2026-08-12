@@ -5,6 +5,7 @@ import {
   Network, Settings, LogOut, ChevronLeft, ChevronRight, ChevronDown,
   UserCircle, User, Menu, X,
 } from 'lucide-react'
+import FloatingAssistantWidget from '@/components/assistant-widget/FloatingAssistantWidget'
 import InboxPopover from '@/components/inbox/InboxPopover'
 import PreferencesModal from '@/components/preferences/PreferencesModal'
 import { visibleNavigation, type PlatformNavItem } from '@/config/navigation'
@@ -283,6 +284,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </main>
 
       <PreferencesModal open={preferencesOpen} onClose={() => setPreferencesOpen(false)} />
+      <FloatingAssistantWidget />
     </div>
   )
 }

@@ -13,6 +13,7 @@ export default defineConfig({
   testMatch: [
     '**/agent_header.spec.ts',
     '**/agent_ontology_carousel.spec.ts',
+    '**/assistant_widget.spec.ts',
     '**/asset_lake_tabs.spec.ts',
     '**/community.spec.ts',
     '**/data_mapping_preview.spec.ts',
