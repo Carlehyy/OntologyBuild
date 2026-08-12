@@ -7,6 +7,7 @@ the router to preserve existing extension and test contracts.
 """
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -15,7 +16,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.data_channel.pipelines.contracts import PipelineCreate, PipelineUpdate
-from app.data_channel.steward.models import N8nPipeline
+from app.data_channel.steward.models import STATUS_ARCHIVED, N8nPipeline
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
 
 
@@ -407,6 +408,123 @@ def delete_pipeline(
     pipeline.updated_at = datetime.now(timezone.utc)
     db.commit()
     return {"status": "archived", "id": pipeline_id}
+
+
+def _next_clone_name(
+    db: Session,
+    base_name: str,
+    domain: str | None,
+    *,
+    n8n_name_taken: Callable[[str], bool] | None = None,
+) -> str:
+    """生成「原名_复制」序列中首个可用名称（重名自动 _复制2/_复制3 递增）。
+
+    查重口径与 create/update 一致（Pipeline name+domain，不过滤归档行）；
+    n8n 治理记录另有全局非归档唯一约束，由调用方传入额外查重。
+    """
+    for index in range(1, 100):
+        suffix = "_复制" if index == 1 else f"_复制{index}"
+        candidate = f"{(base_name or '')[:200 - len(suffix)]}{suffix}"
+        clash = db.query(Pipeline).filter(
+            Pipeline.name == candidate,
+            Pipeline.domain == domain,
+        ).first()
+        if clash is None and not (n8n_name_taken and n8n_name_taken(candidate)):
+            return candidate
+    raise HTTPException(400, "可用克隆名称已耗尽，请先整理历史副本。")
+
+
+def clone_pipeline(
+    pipeline_id: str,
+    db: Session,
+    current_user,
+    *,
+    is_n8n_pipeline_fn: Callable[[Pipeline], bool],
+    format_pipeline_fn: Callable[[Pipeline], dict],
+):
+    """克隆流水线结构为未发布、未启用的草稿副本（名称追加「_复制」）。
+
+    python 引擎的载体是 definition 中的脚本，直接深拷贝行内定义；n8n 引擎
+    的载体是远端 workflow，经数据管家在 n8n 复制（webhook 路径重新生成）
+    并新建治理记录与影子行。发布期产物（validation_attestation /
+    target_curated_ids / 运行记录）不复制，克隆体走自己的校验发布流程。
+    """
+    pipeline = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
+    if not pipeline:
+        raise HTTPException(404, "Pipeline not found")
+
+    if is_n8n_pipeline_fn(pipeline):
+        from app.data_channel.steward import service as steward_service
+
+        record = steward_service.record_for_pipeline(db, pipeline)
+        if record is None:
+            raise HTTPException(
+                409,
+                "n8n 流水线缺少数据管家治理记录，无法克隆；"
+                "请先在数据管家中修复该流水线。",
+            )
+
+        def _n8n_name_taken(candidate: str) -> bool:
+            return (
+                db.query(N8nPipeline)
+                .filter(
+                    N8nPipeline.name == candidate,
+                    N8nPipeline.status != STATUS_ARCHIVED,
+                )
+                .first()
+                is not None
+            )
+
+        new_name = _next_clone_name(
+            db, pipeline.name, pipeline.domain,
+            n8n_name_taken=_n8n_name_taken,
+        )
+        try:
+            client = steward_service.get_n8n_client(db)
+            clone_record = steward_service.clone_managed_workflow(
+                db, record, client,
+                new_name=new_name,
+                user_id=getattr(current_user, "id", None),
+            )
+        except steward_service.StewardError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        clone = db.query(Pipeline).filter(
+            Pipeline.id == clone_record.pipeline_id,
+        ).first()
+        # 影子行默认归属「智能编排」域；克隆口径是以原流水线为准复制所属域、
+        # 描述与字段契约，让副本开箱即为可校验发布的草稿。
+        clone.domain = pipeline.domain
+        clone.description = pipeline.description or ""
+        clone.column_definitions = copy.deepcopy(pipeline.column_definitions)
+        clone.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(clone)
+        return format_pipeline_fn(clone)
+
+    if (pipeline.definition or {}).get("engine") != "python":
+        raise HTTPException(
+            400,
+            "仅支持克隆 n8n 流水线或 Python 脚本流水线；该流水线引擎已下线。",
+        )
+
+    clone = Pipeline(
+        name=_next_clone_name(db, pipeline.name, pipeline.domain),
+        domain=pipeline.domain,
+        description=pipeline.description or "",
+        source_dataset_id=pipeline.source_dataset_id,
+        route=pipeline.route,
+        spec=copy.deepcopy(pipeline.spec or {}),
+        definition=copy.deepcopy(pipeline.definition),
+        column_definitions=copy.deepcopy(pipeline.column_definitions),
+        status="draft",
+        branch=pipeline.branch or "main",
+        version=1,
+        created_by=getattr(current_user, "id", None),
+    )
+    db.add(clone)
+    db.commit()
+    db.refresh(clone)
+    return format_pipeline_fn(clone)
 
 
 def reject_unpublish(pipeline_id: str, db: Session):

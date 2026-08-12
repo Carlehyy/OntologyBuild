@@ -282,7 +282,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
     }))
   }
 
-  const handleSavePublishedInfo = async () => {
+  const handleSaveBasicInfo = async () => {
     if (!name.trim()) {
       setActionError('流水线名称不能为空')
       return
@@ -326,7 +326,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               {isPublished ? '查看已发布流水线' : '配置流水线'}「{pipeline.name}」
               {isN8n ? (
                 <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700">
-                  <Sparkles size={10} /> n8n流水线
+                  <Sparkles size={10} /> n8n 流水线
                 </span>
               ) : isPython ? (
                 <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700">
@@ -397,7 +397,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                 {isPublished ? <ShieldCheck size={14} className="mt-0.5 shrink-0" /> : <Info size={14} className="mt-0.5 shrink-0" />}
                 <span>{isPublished
                   ? '名称与描述属于基础信息，可以随时更新；已发布的编排、字段类型与主键契约仍保持封版。'
-                  : '名称与描述会在最后一步随草稿一起保存；发布后仍可单独更新这两项基础信息。'}</span>
+                  : '名称与描述属于基础信息，可在此随时单独保存；编排、字段契约与发布配置仍需在最后一步完成。'}</span>
               </div>
               {actionError && (
                 <div role="alert" className="flex items-start gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-600">
@@ -882,10 +882,10 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                 </button>
               </>
             )}
-            {isPublished && step === 1 && (
+            {step === 1 && (
               <button
                 type="button"
-                onClick={handleSavePublishedInfo}
+                onClick={handleSaveBasicInfo}
                 disabled={saving || !infoDirty || !name.trim()}
                 className="flex h-10 items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-sm font-medium text-white shadow-[0_6px_18px_rgba(15,118,110,0.16)] transition-all duration-200 hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -896,7 +896,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
             {step === 4 && isPublished && (
               <button
                 type="button"
-                onClick={infoDirty ? handleSavePublishedInfo : onClose}
+                onClick={infoDirty ? handleSaveBasicInfo : onClose}
                 disabled={saving || !name.trim()}
                 className="flex h-10 items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-sm font-medium text-white shadow-[0_6px_18px_rgba(15,118,110,0.16)] transition-all duration-200 hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
               >

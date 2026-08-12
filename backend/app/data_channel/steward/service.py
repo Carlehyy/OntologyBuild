@@ -169,6 +169,46 @@ def bootstrap_blank_workflow(db: Session, name: str, description: str = "",
     return rec
 
 
+def clone_managed_workflow(db: Session, rec: N8nPipeline, client: N8nClient,
+                           *, new_name: str, user_id: str | None = None) -> N8nPipeline:
+    """克隆受管 workflow：在 n8n 远端复制一份未激活副本并纳管为草稿。
+
+    webhook path 是生产调度地址，照搬原 path 会让两条 workflow 共享同一
+    入口，必须按 bootstrap 同款规则重新生成；发布期产物（managed_contract /
+    revision / attestation）不复制，由克隆体自己的校验与发布流程沉淀。
+    本函数不 commit，由调用方在同一事务内收尾。
+    """
+    try:
+        source = client.get_workflow(rec.n8n_workflow_id)
+    except Exception as exc:  # noqa: BLE001 — n8n 不可达或原 workflow 已被外部删除
+        raise StewardError(
+            f"无法读取原 n8n 工作流（workflow {rec.n8n_workflow_id}）：{exc}"
+        ) from exc
+    payload = N8nClient.sanitize_workflow(source)
+    payload["name"] = new_name
+    slug = re.sub(r"[^a-z0-9-]+", "-", new_name.lower()).strip("-")[:24]
+    for node in payload.get("nodes") or []:
+        if not isinstance(node, dict) or node.get("type") != _WEBHOOK_TYPE:
+            continue
+        params = node.get("parameters")
+        if isinstance(params, dict) and params.get("path"):
+            token = secrets.token_hex(16)
+            params["path"] = f"ob-{slug}-{token}" if slug else f"ob-{token}"
+    created = client.create_workflow(payload)
+    clone = N8nPipeline(
+        name=new_name,
+        description=rec.description or "",
+        n8n_workflow_id=str(created.get("id")),
+        workflow_snapshot=N8nClient.sanitize_workflow(created),
+        created_by=user_id or rec.created_by,
+    )
+    db.add(clone)
+    db.flush()
+    # 创建即在流水线列表可见（draft 影子行）；发布在编辑向导完成
+    ensure_shadow_pipeline(db, clone)
+    return clone
+
+
 # ── workflow JSON 摘要与约定 ──────────────────────────────────────
 
 TRIGGER_TYPE_PREFIXES = ("n8n-nodes-base.webhook", "n8n-nodes-base.scheduleTrigger",

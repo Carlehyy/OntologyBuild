@@ -191,6 +191,9 @@ const pipelinesApi = {
     apiClientV2.put<Pipeline>(`/pipelines/${id}`, body).then(r => r),
   delete: (id: string) =>
     apiClientV2.delete(`/pipelines/${id}`).then(r => r),
+  /** 克隆：复制流水线结构为未发布、未启用的草稿副本（名称自动追加「_复制」尾缀） */
+  clone: (id: string) =>
+    apiClientV2.post<Pipeline>(`/pipelines/${id}/clone`).then(r => r),
 
   /** Validate & Publish */
   /** 发布（封版）；enable=true 同时启用 */

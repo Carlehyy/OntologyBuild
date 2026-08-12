@@ -40,6 +40,7 @@ export default defineConfig({
     '**/ontology_runtime_state_conflict.spec.ts',
     '**/ontology_safe_recovery.spec.ts',
     '**/overview.spec.ts',
+    '**/pipeline_list_page.spec.ts',
     '**/python_script_page.spec.ts',
     '**/sentinel_firing_delta.spec.ts',
     '**/sentinel_panel_loading.spec.ts',

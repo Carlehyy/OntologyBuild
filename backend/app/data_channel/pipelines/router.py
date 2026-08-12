@@ -313,6 +313,23 @@ def unpublish_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     return management_service.reject_unpublish(pipeline_id, db)
 
 
+@router.post("/{pipeline_id}/clone", response_model=PipelineResponse, status_code=201)
+def clone_pipeline(pipeline_id: str, db: Session = Depends(get_db),
+                   current_user=Depends(get_current_user)):
+    """克隆流水线结构为未发布、未启用的草稿副本（名称追加「_复制」）。
+
+    python 引擎复制脚本定义与字段契约；n8n 引擎在 n8n 远端复制 workflow
+    （webhook 路径重新生成、保持未激活）并新建治理记录与影子行。
+    """
+    return management_service.clone_pipeline(
+        pipeline_id,
+        db,
+        current_user,
+        is_n8n_pipeline_fn=_is_n8n_pipeline,
+        format_pipeline_fn=_format_pipeline,
+    )
+
+
 # ── Versions ──────────────────────────────────────────────────────
 
 @router.get("/{pipeline_id}/versions")
