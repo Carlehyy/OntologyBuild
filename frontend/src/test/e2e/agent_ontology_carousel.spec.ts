@@ -230,6 +230,26 @@ test('箭头按钮与拖拽可以切换聚焦卡片，且支持无限循环', as
   await expect(page.locator('[data-card-index="0"]')).toHaveAttribute('aria-selected', 'true')
 })
 
+test('鼠标滚轮可以切换聚焦卡片，向下滚等同向右、向上滚等同向左', async ({ page }) => {
+  await mockCarousel(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/agent')
+
+  const stage = page.getByTestId('ontology-card-carousel')
+  await expect(stage.getByRole('option')).toHaveCount(3)
+  await stage.hover()
+
+  // 向下滚 = 向右切换到下一张
+  await page.mouse.wheel(0, 120)
+  await expect(page.locator('[data-card-index="1"]')).toHaveAttribute('aria-selected', 'true')
+  await expect(page).toHaveURL(/\/#\/agent$/)
+
+  // 等待滚轮切换冷却结束，向上滚 = 向左切回上一张
+  await page.waitForTimeout(300)
+  await page.mouse.wheel(0, -120)
+  await expect(page.locator('[data-card-index="0"]')).toHaveAttribute('aria-selected', 'true')
+})
+
 test('仅两张本体卡片时线性展示且不循环', async ({ page }) => {
   await mockCarousel(page, {
     items: [

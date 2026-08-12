@@ -56,10 +56,9 @@ export const DEFAULT_CUSTOM_MENU_KEYS = ['overview']
 export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
   { key: 'overview', to: '/overview', icon: LayoutDashboard, label: '平台概览', description: '平台运行与数据总览', hiddenFromNavigation: true },
   { key: 'super_assistant', to: '/super-assistant', icon: BrainCircuit, label: '超级助手', description: '通用智能协作入口', hiddenFromNavigation: true },
+  { key: 'agent', to: '/agent', icon: Bot, label: '本体助手', description: '本体智能体与分析报告' },
   { key: 'explore', to: '/explore', icon: Compass, label: '业务探索', description: '业务建模与需求探索' },
   { key: 'ontologies', to: '/ontologies', icon: Network, label: '本体管理', description: '本体、图谱与对象建模' },
-  { key: 'agent', to: '/agent', icon: Bot, label: '本体助手', description: '本体智能体与分析报告' },
-  { key: 'events', to: '/events', icon: ClipboardList, label: '事件登记', description: '业务事件采集与审计' },
   {
     key: 'data', to: '/data', icon: Database, label: '数据通道', description: '数据接入、加工与治理', subItems: [
       { key: 'data.pipelines', to: '/data/pipelines', icon: GitBranch, label: '数据流水线', description: '连接、转换与编排' },
@@ -67,6 +66,7 @@ export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
       { key: 'data.structured', to: '/data/structured', icon: Table2, label: '数据资产湖', description: '结构化数据资产' },
     ],
   },
+  { key: 'events', to: '/events', icon: ClipboardList, label: '事件登记', description: '业务事件采集与审计' },
   {
     key: 'api_hub', to: '/api-hub', icon: Waypoints, label: '接口代理', description: '接口接入、调用与授权', subItems: [
       { key: 'api_hub.interfaces', to: '/api-hub/interfaces', icon: PlugZap, label: '接口管理', description: '接口定义与代理配置' },
@@ -164,6 +164,15 @@ export function firstAccessiblePath(user: User | null): string {
   if (!first) return '/no-access'
   const firstSubItem = first.subItems?.find(child => hasMenuAccess(user, child.key))
   return firstSubItem?.to ?? first.to
+}
+
+/**
+ * 登录成功或访问根路径时的默认落地页：优先进入本体助手；
+ * 无本体助手权限（如只分配了部分菜单的 custom 用户）时退回第一个可访问页面。
+ */
+export function defaultLandingPath(user: User | null): string {
+  if (user && hasMenuAccess(user, 'agent')) return '/agent'
+  return firstAccessiblePath(user)
 }
 
 export const CONFIGURABLE_NAV_ITEMS = PLATFORM_NAV_ITEMS.filter(item => !item.adminOnly)

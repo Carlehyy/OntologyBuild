@@ -200,6 +200,7 @@ export default function VersionEvolutionCard({ ontologyId }: { ontologyId: strin
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ x: number; y: number } | null>(null)
   const completionTimerRef = useRef<number | null>(null)
+  const wheelIdleTimerRef = useRef<number | null>(null)
   const [canvasSize, setCanvasSize] = useState({ width: 480, height: 188 })
   const [view, setView] = useState<ViewTransform>({ x: 0, y: 0, k: 1 })
   const [visibleStep, setVisibleStep] = useState(0)
@@ -266,6 +267,7 @@ export default function VersionEvolutionCard({ ontologyId }: { ontologyId: strin
 
   useEffect(() => () => {
     if (completionTimerRef.current !== null) window.clearTimeout(completionTimerRef.current)
+    if (wheelIdleTimerRef.current !== null) window.clearTimeout(wheelIdleTimerRef.current)
   }, [])
 
   useEffect(() => {
@@ -312,6 +314,8 @@ export default function VersionEvolutionCard({ ontologyId }: { ontologyId: strin
     if ((event.target as Element).closest('.evolution-minimap, .evolution-zoom-controls')) return
     dragRef.current = { x: event.clientX, y: event.clientY }
     event.currentTarget.setPointerCapture(event.pointerId)
+    // 拖拽期间禁用视口过渡动画，让画面零延迟跟随指针；程序化镜头移动仍保留过渡。
+    event.currentTarget.classList.add('is-direct')
   }
 
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -322,9 +326,22 @@ export default function VersionEvolutionCard({ ontologyId }: { ontologyId: strin
     setView(current => ({ ...current, x: current.x + deltaX, y: current.y + deltaY }))
   }
 
+  const endViewportDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    dragRef.current = null
+    event.currentTarget.classList.remove('is-direct')
+  }
+
   const onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     event.preventDefault()
-    const rect = event.currentTarget.getBoundingClientRect()
+    const canvas = event.currentTarget
+    // 滚轮缩放期间禁用视口过渡，保证缩放零延迟跟手；手势停止后恢复过渡供镜头动画使用。
+    canvas.classList.add('is-direct')
+    if (wheelIdleTimerRef.current !== null) window.clearTimeout(wheelIdleTimerRef.current)
+    wheelIdleTimerRef.current = window.setTimeout(() => {
+      canvas.classList.remove('is-direct')
+      wheelIdleTimerRef.current = null
+    }, 140)
+    const rect = canvas.getBoundingClientRect()
     zoomAt(event.clientX - rect.left, event.clientY - rect.top, event.deltaY < 0 ? 1.12 : 1 / 1.12)
   }
 
@@ -412,8 +429,8 @@ export default function VersionEvolutionCard({ ontologyId }: { ontologyId: strin
         className="evolution-canvas"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
-        onPointerUp={() => { dragRef.current = null }}
-        onPointerCancel={() => { dragRef.current = null }}
+        onPointerUp={endViewportDrag}
+        onPointerCancel={endViewportDrag}
         onWheel={onWheel}
       >
         <svg className={view.k < .5 ? 'is-low-detail' : ''} aria-label="本体版本分支演化图">

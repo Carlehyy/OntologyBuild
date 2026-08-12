@@ -3,7 +3,8 @@
  *
  * Coverflow 交互：
  *   - 卡片环形布局：最热卡居中，右侧按选用次数递减，末尾卡环绕到左侧；
- *   - 鼠标按住左右拖拽浏览，松手吸附；>=3 张时可单向无限循环；
+ *   - 鼠标按住左右拖拽浏览，松手吸附；滚轮向下等价向右切换、向上等价向左；
+ *     >=3 张时可单向无限循环；
  *   - 单击侧边卡片仅聚焦居中，单击聚焦卡片（或「开始使用」）才确认选中；
  *   - 左右箭头、指示点与键盘 ←/→/Enter 提供等价操作；
  *   - 焦点动画由 requestAnimationFrame 逐帧驱动，环绕接缝处卡片从一侧
@@ -25,6 +26,10 @@ const CLICK_SLOP_PX = 6
 const HIDE_BEYOND = 2.6
 /** |pos| 超过该值的卡片透明度降为 0，但保留在视窗内保证环绕时连续淡入。 */
 const FADE_BEYOND = 2
+/** 滚轮累积滚动量达到该阈值才切换一张，避免触控板一次手势连切多张。 */
+const WHEEL_SWITCH_THRESHOLD = 40
+/** 两次滚轮切换的最小间隔（毫秒），吸收触控板惯性滚动。 */
+const WHEEL_SWITCH_COOLDOWN_MS = 200
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
@@ -60,6 +65,7 @@ export function OntologyCardCarousel({
   const focusRef = useRef(0)
   const targetRef = useRef(0)
   const rafRef = useRef<number | null>(null)
+  const stageRef = useRef<HTMLDivElement>(null)
 
   const activeIndex = normalizeCardIndex(focus, count)
 
@@ -112,6 +118,33 @@ export function OntologyCardCarousel({
     if (count === 0) return
     animateTo(looped ? target : clamp(target, 0, count - 1))
   }, [animateTo, count, looped])
+
+  // 滚轮切换：向下滚与向右拖等价（切到下一张），向上滚与向左拖等价（切到上一张）。
+  // 用原生非 passive 监听（与 OntologyNetworkView 的滚轮缩放同一模式），
+  // 并按累积滚动量 + 冷却时间节流，避免触控板一次手势连切多张。
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    let accumulated = 0
+    let lastSwitchAt = 0
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault()
+      if (count < 2) return
+      const now = performance.now()
+      if (now - lastSwitchAt < WHEEL_SWITCH_COOLDOWN_MS) {
+        accumulated = 0
+        return
+      }
+      accumulated += event.deltaY
+      if (Math.abs(accumulated) < WHEEL_SWITCH_THRESHOLD) return
+      const direction = accumulated > 0 ? 1 : -1
+      accumulated = 0
+      lastSwitchAt = now
+      snapTo(Math.round(focusRef.current) + direction)
+    }
+    stage.addEventListener('wheel', handleWheel, { passive: false })
+    return () => stage.removeEventListener('wheel', handleWheel)
+  }, [count, snapTo])
 
   /** 侧边卡片点击聚焦：沿环形最短路径滑过去。 */
   const focusCard = useCallback((index: number) => {
@@ -207,7 +240,7 @@ export function OntologyCardCarousel({
         <div>
           <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">选择一个本体，开始探索</h3>
           <p className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">
-            按住拖拽或点击两侧卡片浏览，点击居中卡片进入本体工作区
+            滚轮滚动、按住拖拽或点击两侧卡片浏览，点击居中卡片进入本体工作区
           </p>
         </div>
         <span className="shrink-0 rounded-full border border-sky-100 bg-white/80 px-2.5 py-1 text-[11px] font-medium text-sky-600 shadow-sm dark:border-slate-700 dark:bg-slate-800/80 dark:text-sky-300">
@@ -216,6 +249,7 @@ export function OntologyCardCarousel({
       </div>
 
       <div
+        ref={stageRef}
         data-testid="ontology-card-carousel"
         role="listbox"
         aria-label="已发布本体卡片轮播"
@@ -245,8 +279,12 @@ export function OntologyCardCarousel({
               'translate(-50%, -50%)',
               `translateX(${pos * FOCUS_STEP_X}px)`,
               `translateY(${Math.min(absPos, 2) * 10}px)`,
-              `perspective(1200px) rotateY(${clamp(-pos * 9, -24, 24)}deg)`,
-              `scale(${1 - Math.min(absPos, 2.5) * 0.09})`,
+              // 居中卡（pos 为 0）不施加 3D 透视与缩放：常驻 GPU 光栅化纹理会让
+              // 文字、数字发虚；侧边卡保留浅幅 rotateY/scale 维持 coverflow 纵深感。
+              ...(pos === 0 ? [] : [
+                `perspective(1200px) rotateY(${clamp(-pos * 6, -20, 20)}deg)`,
+                `scale(${1 - Math.min(absPos, 2.5) * 0.06})`,
+              ]),
             ].join(' '),
             pointerEvents: hidden ? 'none' : 'auto',
             visibility: hidden ? 'hidden' : 'visible',
@@ -264,7 +302,7 @@ export function OntologyCardCarousel({
               style={style}
               className={`absolute flex flex-col overflow-hidden rounded-2xl border bg-white shadow-xl will-change-transform dark:bg-slate-800 ${
                 index === activeIndex
-                  ? 'border-teal-300 shadow-2xl ring-2 ring-teal-400/50 dark:border-teal-500'
+                  ? 'border-teal-200 shadow-2xl ring-1 ring-teal-400/30 dark:border-teal-600'
                   : 'border-slate-200 dark:border-slate-700'
               }`}
             >

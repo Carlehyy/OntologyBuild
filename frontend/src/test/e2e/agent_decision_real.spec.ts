@@ -12,7 +12,7 @@ async function login(page: Page): Promise<string> {
   await page.getByLabel('用户名', { exact: true }).fill(STACK_ADMIN_USERNAME)
   await page.getByLabel('密码', { exact: true }).fill(STACK_ADMIN_PASSWORD)
   await page.locator('button[type="submit"]').click()
-  await page.waitForURL('**/#/overview')
+  await page.waitForURL('**/#/agent')
   const token = await page.evaluate(() => localStorage.getItem('token'))
   expect(token).toBeTruthy()
   return token!
