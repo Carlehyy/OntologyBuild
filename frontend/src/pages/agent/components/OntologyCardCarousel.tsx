@@ -38,6 +38,7 @@ function cardMetrics(item: OntologyListItem) {
     { label: '对象实体', value: item.entity_count ?? 0 },
     { label: '实体关系', value: item.relation_count ?? 0 },
     { label: '执行动作', value: item.action_count ?? 0 },
+    { label: '哨兵引擎', value: item.sentinel_count ?? 0 },
   ]
 }
 
@@ -267,15 +268,6 @@ export function OntologyCardCarousel({
                   : 'border-slate-200 dark:border-slate-700'
               }`}
             >
-              {clicks > 0 && (
-                <span
-                  title={`已被选用 ${clicks} 次`}
-                  className="absolute right-3 top-3 z-10 inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50/95 px-2 py-0.5 text-[10px] font-semibold text-amber-600 shadow-sm"
-                >
-                  <Flame size={11} />×{clicks}
-                </span>
-              )}
-
               <div className="flex items-start gap-3 px-4 pb-3 pt-4">
                 <OntologyAvatar icon={item.icon || undefined} size="lg" />
                 <div className="min-w-0 flex-1">
@@ -289,6 +281,14 @@ export function OntologyCardCarousel({
                     <span className="inline-flex shrink-0 rounded-md border border-violet-100 bg-violet-50 px-2 py-0.5 font-mono text-[11px] font-medium leading-4 text-violet-600">
                       {item.current_release_version || item.version}
                     </span>
+                    {clicks > 0 && (
+                      <span
+                        title={`已被选用 ${clicks} 次`}
+                        className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-600"
+                      >
+                        <Flame size={11} />×{clicks}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -301,9 +301,9 @@ export function OntologyCardCarousel({
                 {item.description || '暂无描述'}
               </p>
 
-              <div className="mt-3 grid grid-cols-3 gap-1.5 px-4">
+              <div className="mt-3 grid grid-cols-4 gap-1.5 px-4">
                 {cardMetrics(item).map(metric => (
-                  <div key={metric.label} className="min-w-0 rounded-xl bg-slate-50 px-1 py-2 text-center dark:bg-slate-700/60">
+                  <div key={metric.label} className="min-w-0 rounded-xl bg-slate-50 px-0.5 py-2 text-center dark:bg-slate-700/60">
                     <p className="whitespace-nowrap text-[10px] font-medium text-slate-400">{metric.label}</p>
                     <p className="mt-0.5 text-base font-semibold tabular-nums text-slate-800 dark:text-slate-100">{metric.value}</p>
                   </div>
