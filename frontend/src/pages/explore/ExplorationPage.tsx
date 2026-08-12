@@ -778,7 +778,7 @@ export default function ExplorationPage() {
           ref={chatScrollRef}
           data-testid="exploration-chat-region"
           onScroll={updateScrollStickiness}
-          className="scrollbar-thin workspace-topology-surface flex-1 overflow-y-auto px-4 py-4"
+          className="scrollbar-none workspace-topology-surface flex-1 overflow-y-auto px-4 py-4"
         >
           {timeline.length === 0 && (
             <div className="h-full flex flex-col items-center justify-center gap-4">

@@ -18,7 +18,7 @@ async function authenticate(page: Page) {
   await page.getByLabel('用户名', { exact: true }).fill(STACK_ADMIN_USERNAME)
   await page.getByLabel('密码', { exact: true }).fill(STACK_ADMIN_PASSWORD)
   await page.locator('button[type="submit"]').click()
-  await page.waitForURL('**/#/overview')
+  await page.waitForURL('**/#/agent')
 }
 
 test('Skill 可从助手配置中停用并重新启用', async ({ page }) => {

@@ -10,7 +10,7 @@ async function login(page: any) {
   await page.getByLabel('用户名', { exact: true }).fill(STACK_ADMIN_USERNAME)
   await page.getByLabel('密码', { exact: true }).fill(STACK_ADMIN_PASSWORD)
   await page.click('button[type="submit"]')
-  await page.waitForURL('**/#/overview')
+  await page.waitForURL('**/#/agent')
 }
 
 test.describe('Settings Page', () => {
