@@ -131,6 +131,7 @@ test('未选择本体时展示卡片轮播并按选用次数排序', async ({ pa
   await expect(page.locator('[data-card-index="1"]')).toContainText('医疗健康本体')
   await expect(page.locator('[data-card-index="2"]')).toContainText('法律知识本体')
   await expect(page.locator('[data-card-index="0"]')).toContainText('×7')
+  await expect(page.locator('[data-card-index="0"]')).toContainText('哨兵引擎')
   await expect(page.locator('[data-card-index="2"]').getByText('×0')).toHaveCount(0)
 
   // 环形均匀布局：最热卡居中，次热在右，最冷卡环绕到左侧。
@@ -218,6 +219,29 @@ test('头部下拉选择保持可用（回归）', async ({ page }) => {
   await page.getByLabel('选择本体').selectOption('ontology-1')
   await expect(page).toHaveURL(/\/#\/agent\?ontology_id=ontology-1$/)
   await expect(page.getByTestId('agent-ontology-panel')).toContainText('当前本体暂无可视化对象')
+})
+
+test('超长名称截断为省略号且不与点击数标识重叠', async ({ page }) => {
+  const longName = 'E2E-供应链风险-07260712-非常非常长的本体名称'
+  await mockCarousel(page, {
+    items: [released('ontology-long', longName, 5, '供应链风险管理')],
+  })
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/agent')
+
+  const card = page.locator('[data-card-index="0"]')
+  const name = card.getByTestId('ontology-card-name')
+  const chip = card.getByTestId('ontology-card-clicks')
+  await expect(name).toBeVisible()
+  await expect(chip).toBeVisible()
+  // 名称文本溢出截断（CSS ellipsis 生效）
+  const overflow = await name.evaluate(el => el.scrollWidth - el.clientWidth)
+  expect(overflow).toBeGreaterThan(0)
+  // 名称渲染盒与点击数标识在垂直方向不相交（标识已移至下方 chip 行）
+  const nameBox = await name.boundingBox()
+  const chipBox = await chip.boundingBox()
+  if (!nameBox || !chipBox) throw new Error('bounding box missing')
+  expect(chipBox.y).toBeGreaterThanOrEqual(nameBox.y + nameBox.height - 1)
 })
 
 test('无已发布本体时展示空态与前往管理入口', async ({ page }) => {
