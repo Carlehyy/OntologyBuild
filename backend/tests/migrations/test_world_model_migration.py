@@ -49,6 +49,13 @@ def test_upgrade_creates_tables_and_backfills_role_menu_keys(
         assert "world_model_projects" in tables
         assert "world_model_script_versions" in tables
         assert "world_model_call_records" in tables
+        assert "world_model_services" in tables
+        call_record_columns = {
+            row[1]
+            for row in connection.execute(text(
+                "PRAGMA table_info(world_model_call_records)"))
+        }
+        assert "service_id" in call_record_columns
 
         rows = connection.execute(text(
             "SELECT role,menu_keys FROM role_menu_permissions ORDER BY role"
@@ -56,11 +63,16 @@ def test_upgrade_creates_tables_and_backfills_role_menu_keys(
     engine.dispose()
 
     by_role = {row["role"]: json.loads(row["menu_keys"]) for row in rows}
-    # 持有 ontologies 的角色被回填两个子 key（否则归一化会剥除父 key）
-    assert "ontologies.library" in by_role["editor"]
-    assert "ontologies.world_model" in by_role["editor"]
+    # 0065 先回填 ontologies 子 key，0066 再把世界模型迁为一级分组：
+    # 终态 = 持有 ontologies 的角色获得 world_model 全家，旧子 key 全部移除
     assert "ontologies" in by_role["editor"]
+    assert "world_model" in by_role["editor"]
+    assert "world_model.models" in by_role["editor"]
+    assert "world_model.calls" in by_role["editor"]
+    assert "ontologies.library" not in by_role["editor"]
+    assert "ontologies.world_model" not in by_role["editor"]
     # 未持有 ontologies 的角色不受影响
+    assert "world_model" not in by_role["viewer"]
     assert "ontologies.library" not in by_role["viewer"]
     assert "ontologies.world_model" not in by_role["viewer"]
 
@@ -91,6 +103,7 @@ def test_downgrade_removes_tables_and_menu_key(tmp_path, monkeypatch):
                 "SELECT name FROM sqlite_master WHERE type='table'"))
         }
         assert "world_model_projects" not in tables
+        assert "world_model_services" not in tables
         row = connection.execute(text(
             "SELECT menu_keys FROM role_menu_permissions WHERE role='editor'"
         )).mappings().one()

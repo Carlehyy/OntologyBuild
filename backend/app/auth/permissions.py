@@ -10,8 +10,9 @@ ALL_MENU_KEYS = (
     "super_assistant",
     "explore",
     "ontologies",
-    "ontologies.library",
-    "ontologies.world_model",
+    "world_model",
+    "world_model.models",
+    "world_model.calls",
     "agent",
     "events",
     "data",
@@ -49,11 +50,11 @@ PARENT_MENU_KEYS = {
     "api_hub.authorization": "api_hub",
     "community.skills": "community",
     "community.plugins": "community",
-    "ontologies.library": "ontologies",
-    "ontologies.world_model": "ontologies",
+    "world_model.models": "world_model",
+    "world_model.calls": "world_model",
 }
 GROUP_MENU_KEYS = {
-    "ontologies": ("ontologies.library", "ontologies.world_model"),
+    "world_model": ("world_model.models", "world_model.calls"),
     "data": ("data.pipelines", "data.sync_tasks", "data.structured"),
     "api_hub": (
         "api_hub.interfaces",

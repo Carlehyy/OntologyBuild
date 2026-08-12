@@ -91,6 +91,16 @@ def normalize_rows(body: Any) -> list[dict]:
     return [{"value": body}]
 
 
+def tail_stdout(text: str) -> str:
+    """截断到 stdout 尾部保留上限（与执行结果回传口径一致）。
+
+    输出协议解析（_extract_rows / extract_payload）必须在截断前的完整
+    stdout 上进行——结果块超过尾部保留上限时，截断会把 BEGIN 标记切掉，
+    导致解析失败。调用方解析完成后用本函数把回传文本截回尾部。
+    """
+    return text[-_STDOUT_TAIL_CHARS:]
+
+
 def execute_script(script: str, *, timeout: int | None = None, cancel_event=None) -> ScriptExecution:
     """在 Jupyter Kernel Gateway 上执行脚本并提取 result 行数据。
 
@@ -100,23 +110,28 @@ def execute_script(script: str, *, timeout: int | None = None, cancel_event=None
     内核随 finally 销毁，远端不会留下空跑的执行。
     """
     execution = execute_code(
-        script + _RESULT_EPILOGUE, timeout=timeout, cancel_event=cancel_event)
+        script + _RESULT_EPILOGUE, timeout=timeout, cancel_event=cancel_event,
+        full_stdout=True)
     if not execution.error:
         try:
-            # stdout 截断保留的是尾部，输出标记由收尾代码打印在最后，
-            # 因此在截断后文本上解析与既有行为等价。
+            # 在截断前的完整 stdout 上提取：结果块超过尾部保留上限时，
+            # BEGIN 标记会被截断切掉（回归修复）
             execution.rows = _extract_rows(execution.stdout)
         except PythonEngineError as exc:
             execution.error = str(exc)
+    execution.stdout = tail_stdout(execution.stdout)
     return execution
 
 
-def execute_code(code: str, *, timeout: int | None = None, cancel_event=None) -> ScriptExecution:
+def execute_code(code: str, *, timeout: int | None = None, cancel_event=None,
+                 full_stdout: bool = False) -> ScriptExecution:
     """在 Jupyter Kernel Gateway 上执行任意代码（含调用方注入的收尾代码）。
 
     与 execute_script 共用内核生命周期，但不做 result 行提取——输出协议由
     调用方自定义（如世界模型调试执行的 simulate 调用收尾），结果从
     ScriptExecution.stdout 中按标记解析（见 extract_payload）。
+    full_stdout=True 时 stdout 保留完整文本（供调用方先解析输出协议），
+    调用方解析后应自行用 tail_stdout 截断再回传。
     失败语义与 execute_script 一致。
     """
     timeout = timeout or settings.python_script_timeout_seconds
@@ -150,7 +165,7 @@ def execute_code(code: str, *, timeout: int | None = None, cancel_event=None) ->
         stdout_text, error_name, error_value, traceback_text = _run_on_kernel(
             base_url, kernel_id, headers, code, timeout,
             cancel_event=cancel_event)
-        execution.stdout = stdout_text[-_STDOUT_TAIL_CHARS:]
+        execution.stdout = stdout_text if full_stdout else tail_stdout(stdout_text)
         execution.traceback = traceback_text
         if error_name:
             execution.error = f"脚本执行失败（{error_name}）：{error_value}"

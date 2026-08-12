@@ -8,6 +8,7 @@ import {
   Compass,
   Cpu,
   Database,
+  FlaskConical,
   GitBranch,
   Globe,
   History,
@@ -40,8 +41,9 @@ export const DEFAULT_NON_ADMIN_MENU_KEYS = [
   'super_assistant',
   'explore',
   'ontologies',
-  'ontologies.library',
-  'ontologies.world_model',
+  'world_model',
+  'world_model.models',
+  'world_model.calls',
   'agent',
   'events',
   'data',
@@ -61,10 +63,11 @@ export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
   { key: 'super_assistant', to: '/super-assistant', icon: BrainCircuit, label: '超级助手', description: '通用智能协作入口', hiddenFromNavigation: true },
   { key: 'agent', to: '/agent', icon: Bot, label: '本体助手', description: '本体智能体与分析报告' },
   { key: 'explore', to: '/explore', icon: Compass, label: '业务探索', description: '业务建模与需求探索' },
+  { key: 'ontologies', to: '/ontologies', icon: Network, label: '本体管理', description: '本体、图谱与对象建模' },
   {
-    key: 'ontologies', to: '/ontologies', icon: Network, label: '本体管理', description: '本体、图谱与对象建模', subItems: [
-      { key: 'ontologies.library', to: '/ontologies', icon: Network, label: '本体总览', description: '本体、图谱与对象建模' },
-      { key: 'ontologies.world_model', to: '/ontologies/world-model', icon: Orbit, label: '世界模型', description: '推演模型开发与调用记录' },
+    key: 'world_model', to: '/world-model', icon: Orbit, label: '世界模型', description: '演化层：推演模型与调用记录', subItems: [
+      { key: 'world_model.models', to: '/world-model/models', icon: FlaskConical, label: '推演模型', description: '推演模型项目开发、调试与版本' },
+      { key: 'world_model.calls', to: '/world-model/calls', icon: History, label: '调用记录', description: '推演服务调用审计与回测依据' },
     ],
   },
   {
@@ -147,8 +150,9 @@ export function menuKeyForPath(pathname: string): string | null {
   if (pathname === '/community' || pathname === '/community/') return 'community'
   if (pathname.startsWith('/community/skills')) return 'community.skills'
   if (pathname.startsWith('/community/plugins')) return 'community.plugins'
-  if (pathname === '/ontologies/world-model' || pathname.startsWith('/ontologies/world-model/')) return 'ontologies.world_model'
-  if (pathname.startsWith('/ontologies')) return 'ontologies.library'
+  if (pathname.startsWith('/world-model/calls')) return 'world_model.calls'
+  if (pathname === '/world-model' || pathname.startsWith('/world-model/')) return 'world_model.models'
+  if (pathname.startsWith('/ontologies')) return 'ontologies'
   if (pathname.startsWith('/agent')) return 'agent'
   if (pathname.startsWith('/overview')) return 'overview'
   if (pathname.startsWith('/super-assistant')) return 'super_assistant'
@@ -169,6 +173,7 @@ function tabSubTitleForPath(pathname: string): string | null {
   if (/^\/ontologies\/[^/]+\/graph$/.test(pathname)) return '图谱'
   if (/^\/ontologies\/[^/]+\/(entities|logic|actions)\//.test(pathname)) return '详情'
   if (/^\/ontologies\/(?!new$)[^/]+$/.test(pathname)) return '详情'
+  if (/^\/world-model\/develop\//.test(pathname)) return '开发'
   if (/^\/agent\/reports(\/|$)/.test(pathname)) return '报告'
   if (pathname === '/data/pipelines/steward') return '数据管家'
   if (/^\/data\/pipelines\/script\//.test(pathname)) return '脚本'

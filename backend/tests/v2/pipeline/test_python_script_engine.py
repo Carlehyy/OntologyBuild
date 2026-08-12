@@ -720,3 +720,43 @@ def test_engine_registry_resolves_python_and_rejects_unknown():
     assert callable(get_engine_runner("python"))
     assert get_engine_runner("no-such-engine") is None
     assert "python" in known_engines()
+
+
+def test_execute_script_extracts_rows_beyond_stdout_tail(monkeypatch):
+    """结果块超过 stdout 尾部保留上限（200K）时仍能提取行数据。
+
+    回归：曾改为在截断后的 stdout 上提取，BEGIN 标记被截掉导致大结果集
+    从「成功」变「未检测到平台输出标记」。修复后提取在完整 stdout 上进行，
+    回传的 stdout 仍截断到尾部上限。
+    """
+    big_rows = [{"id": i, "text": "x" * 60} for i in range(4000)]
+    payload = json.dumps(big_rows, ensure_ascii=False)
+    assert len(payload) > 200_000  # 确保结果块本身超过尾部保留上限
+    full_stdout = (
+        "prep log\n"
+        "__OB_RESULT_BEGIN__\n" + payload + "\n__OB_RESULT_END__\n"
+    )
+
+    class _KernelResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"id": "kernel-big"}
+
+    monkeypatch.setattr(
+        python_client.settings, "python_kernel_gateway_url", "http://jkg.test")
+    monkeypatch.setattr(
+        python_client.httpx, "post", lambda *a, **k: _KernelResponse())
+    monkeypatch.setattr(
+        python_client, "_run_on_kernel",
+        lambda *a, **k: (full_stdout, None, None, ""))
+    monkeypatch.setattr(
+        python_client, "_delete_kernel", lambda *a, **k: None)
+
+    execution = python_client.execute_script("result = []")
+
+    assert execution.error is None
+    assert len(execution.rows) == 4000
+    assert execution.rows[0] == {"id": 0, "text": "x" * 60}
+    assert len(execution.stdout) <= 200_000

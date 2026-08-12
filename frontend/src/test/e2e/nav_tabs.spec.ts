@@ -106,16 +106,15 @@ test('顶栏多标签页：打开、切换、域内路径恢复、关闭与刷�
 
   const tabList = page.getByRole('tablist', { name: '页面标签' })
   const agentTab = tabList.getByRole('tab', { name: '本体助手' })
-  // 本体管理拆分为分组后，/ontologies 对应叶子项「本体总览」（ontologies.library）
-  const ontologiesTab = tabList.getByRole('tab', { name: '本体总览' })
+  const ontologiesTab = tabList.getByRole('tab', { name: '本体管理' })
 
   // 访问本体助手，出现第一个标签且为激活态
   await expect(agentTab).toBeVisible()
   await expect(agentTab).toHaveAttribute('aria-selected', 'true')
   await expect(ontologiesTab).toHaveCount(0)
 
-  // 侧边栏打开本体管理（分组按钮：展开子菜单并导航到首个子项 /ontologies），出现第二个标签
-  await page.getByRole('navigation').getByRole('button', { name: '本体管理' }).click()
+  // 侧边栏打开本体管理，出现第二个标签
+  await page.getByRole('navigation').getByRole('link', { name: '本体管理' }).click()
   await expect(page).toHaveURL(/\/#\/ontologies$/)
   await expect(agentTab).toHaveAttribute('aria-selected', 'false')
   await expect(ontologiesTab).toHaveAttribute('aria-selected', 'true')
@@ -146,7 +145,7 @@ test('顶栏多标签页：打开、切换、域内路径恢复、关闭与刷�
   await expect(ontologiesTab).toHaveAttribute('aria-selected', 'true')
 
   // 关闭最后一个标签，回到默认落地页并重新记录标签
-  await ontologiesTab.getByRole('button', { name: '关闭 本体总览' }).click()
+  await ontologiesTab.getByRole('button', { name: '关闭 本体管理' }).click()
   await expect(page).toHaveURL(/\/#\/agent$/)
   await expect(tabList.getByRole('tab', { name: '本体助手' })).toHaveAttribute('aria-selected', 'true')
 

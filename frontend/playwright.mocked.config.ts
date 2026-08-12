@@ -51,6 +51,7 @@ export default defineConfig({
     '**/sync_tasks_ui.spec.ts',
     '**/theme_toggle.spec.ts',
     '**/trial_action_plan_review.spec.ts',
+    '**/world_model.spec.ts',
   ],
   outputDir: '../.artifacts/playwright/mocked-results',
 })

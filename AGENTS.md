@@ -16,6 +16,7 @@ OntologyBuild 是“本体即服务”平台。前端导航是代码发现入口
 | 超级助手 | `backend/app/super_assistant/` |
 | 业务探索 | `backend/app/exploration/` |
 | 本体、本体助手、治理与哨兵 | `backend/app/ontologies/` |
+| 世界模型（演化层：推演模型/推演服务/调用记录） | `backend/app/world_model/` |
 | 事件登记 | `backend/app/events/` |
 | 数据通道 | `backend/app/data_channel/` |
 | 接口代理 | `backend/app/api_hub/` |
