@@ -100,7 +100,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       <div
         aria-live="polite"
         aria-atomic="false"
-        className="pointer-events-none fixed bottom-5 right-5 z-[var(--z-toast)] flex flex-col items-end gap-3"
+        // 右下角固定位已让给全局悬浮 AI 助手（z-[10000]），toast 栈上移到其上方
+        className="pointer-events-none fixed bottom-[5.5rem] right-5 z-[var(--z-toast)] flex flex-col items-end gap-3"
       >
         {items.map(item => <ToastCard key={item.id} item={item} onDismiss={dismiss} />)}
       </div>

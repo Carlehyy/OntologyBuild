@@ -133,6 +133,48 @@ export function mapToolStepStatus(status: string): ChainStepStatus {
 }
 
 /**
+ * 悬浮球/面板的锚定与层级策略。平台自身占用右下角固定位的页面需要避让：
+ * - 本体图谱编辑器（/ontologies/:id/graph）：全屏覆盖层 z-[9999] + FloatingMenu 悬浮菜单，
+ *   需要同时“抬层级”（压过覆盖层）和“上移”（让开菜单按钮）→ overlay
+ * - 同步任务（/data/pipelines/sync-tasks）：长表滚到底部时底部分页条位于右下角 → lifted
+ * - 事件登记（/events）：移动端右下角新建 FAB（仅小屏）→ liftedMobileOnly
+ * 其余页面保持 z-40：高于普通页面内容，但让抽屉/模态（z-50+）与 toast（z-500）正常覆盖，
+ * 避免悬浮球遮挡它们的右下角控件。新增页面若在右下角放置固定控件导致点击被遮挡，在此登记。
+ */
+export type WidgetAnchor = 'default' | 'overlay' | 'lifted' | 'liftedMobileOnly'
+
+export function widgetAnchor(pathname: string): WidgetAnchor {
+  if (pathname === '/events' || pathname.startsWith('/events/')) return 'liftedMobileOnly'
+  if (/^\/ontologies\/[^/]+\/graph$/.test(pathname)) return 'overlay'
+  if (pathname === '/data/pipelines/sync-tasks' || pathname.startsWith('/data/pipelines/sync-tasks/')) return 'lifted'
+  return 'default'
+}
+
+/** 悬浮球 bottom 偏移（右偏移恒为 right-5）。Tailwind 扫描需要字面量类名。 */
+export const WIDGET_FAB_BOTTOM: Record<WidgetAnchor, string> = {
+  default: 'bottom-5',
+  overlay: 'bottom-20',
+  lifted: 'bottom-20',
+  liftedMobileOnly: 'bottom-20 md:bottom-5',
+}
+
+/** 面板 bottom 偏移 = 悬浮球 bottom + 球高(3rem) + 间距(0.5rem) */
+export const WIDGET_PANEL_BOTTOM: Record<WidgetAnchor, string> = {
+  default: 'bottom-[4.75rem]',
+  overlay: 'bottom-[8.5rem]',
+  lifted: 'bottom-[8.5rem]',
+  liftedMobileOnly: 'bottom-[8.5rem] md:bottom-[4.75rem]',
+}
+
+/** 悬浮球/面板层级（见 widgetAnchor 注释） */
+export const WIDGET_Z: Record<WidgetAnchor, string> = {
+  default: 'z-40',
+  overlay: 'z-[10000]',
+  lifted: 'z-40',
+  liftedMobileOnly: 'z-40',
+}
+
+/**
  * 把一条助手消息的工具步骤映射为 ThoughtChain 视图项。
  * 流式进行中、尚无可见正文且没有正在执行/等待确认的工具时，
  * 末尾追加“正在思考”占位项（消费后端已发出但页面此前未使用的 thinking 事件轮次）。
