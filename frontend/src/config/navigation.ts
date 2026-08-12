@@ -154,6 +154,53 @@ export function canAccessPath(user: User | null, pathname: string): boolean {
   return key === null || hasMenuAccess(user, key)
 }
 
+/** 顶栏标签标题的子页面后缀规则：命中即显示为“菜单名 · 后缀”。 */
+function tabSubTitleForPath(pathname: string): string | null {
+  if (/^\/ontologies\/[^/]+\/mapping-config$/.test(pathname)) return '映射配置'
+  if (/^\/ontologies\/[^/]+\/graph$/.test(pathname)) return '图谱'
+  if (/^\/ontologies\/[^/]+\/(entities|logic|actions)\//.test(pathname)) return '详情'
+  if (/^\/ontologies\/(?!new$)[^/]+$/.test(pathname)) return '详情'
+  if (/^\/agent\/reports(\/|$)/.test(pathname)) return '报告'
+  if (pathname === '/data/pipelines/steward') return '数据管家'
+  if (/^\/data\/pipelines\/script\//.test(pathname)) return '脚本'
+  return null
+}
+
+function labelForMenuKey(key: string): string | null {
+  for (const item of PLATFORM_NAV_ITEMS) {
+    if (item.key === key) return item.label
+    const child = item.subItems?.find(sub => sub.key === key)
+    if (child) return child.label
+  }
+  return null
+}
+
+/** 无菜单映射但值得拥有顶栏标签的页面（key 取路径本身）。 */
+const FALLBACK_TAB_PATHS: Record<string, string> = {
+  '/inbox': '收件箱',
+}
+
+export interface NavTabInfo {
+  key: string
+  title: string
+}
+
+/**
+ * 顶栏多标签页：把路径解析为标签，按叶子菜单项粒度（菜单域内的页内跳转
+ * 复用同一标签）。返回 null 表示该路径不产生标签（如 /no-access）。
+ */
+export function navTabForPath(pathname: string): NavTabInfo | null {
+  const key = menuKeyForPath(pathname)
+  if (!key) {
+    const title = FALLBACK_TAB_PATHS[pathname]
+    return title ? { key: pathname, title } : null
+  }
+  const label = labelForMenuKey(key)
+  if (!label) return null
+  const subTitle = tabSubTitleForPath(pathname)
+  return { key, title: subTitle ? `${label} · ${subTitle}` : label }
+}
+
 export function firstAccessiblePath(user: User | null): string {
   if (!user) return '/no-access'
   const first = PLATFORM_NAV_ITEMS.find(item => {
