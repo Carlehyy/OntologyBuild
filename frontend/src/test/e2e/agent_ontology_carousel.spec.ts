@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 
 const now = '2026-08-10T08:00:00+00:00'
 
-const released = (id: string, name: string, clicks: number, domain = '供应链') => ({
+const released = (id: string, name: string, clicks: number, domain = '供应链', sentinelCount = 0) => ({
   id,
   name,
   domain,
@@ -15,13 +15,13 @@ const released = (id: string, name: string, clicks: number, domain = '供应链'
   entity_count: 2,
   relation_count: 1,
   action_count: 1,
-  sentinel_count: 0,
+  sentinel_count: sentinelCount,
   created_at: now,
   updated_at: now,
 })
 
 const ontologies = [
-  released('ontology-1', '供应链本体', 7),
+  released('ontology-1', '供应链本体', 7, '供应链', 6),
   released('ontology-2', '医疗健康本体', 3, '医疗'),
   released('ontology-3', '法律知识本体', 0, '法律'),
   {
@@ -133,6 +133,14 @@ test('未选择本体时展示卡片轮播并按选用次数排序', async ({ pa
   await expect(page.locator('[data-card-index="0"]')).toContainText('×7')
   await expect(page.locator('[data-card-index="2"]').getByText('×0')).toHaveCount(0)
 
+  // 统计区：对象实体/实体关系/执行动作/哨兵引擎四格一行
+  const focusedCard = page.locator('[data-card-index="0"]')
+  await expect(focusedCard.getByText('对象实体')).toBeVisible()
+  await expect(focusedCard.getByText('实体关系')).toBeVisible()
+  await expect(focusedCard.getByText('执行动作')).toBeVisible()
+  await expect(focusedCard.getByText('哨兵引擎')).toBeVisible()
+  await expect(focusedCard.getByText('哨兵引擎').locator('..')).toContainText('6')
+
   // 环形均匀布局：最热卡居中，次热在右，最冷卡环绕到左侧。
   const centerBox = await page.locator('[data-card-index="0"]').boundingBox()
   const rightBox = await page.locator('[data-card-index="1"]').boundingBox()
@@ -140,6 +148,37 @@ test('未选择本体时展示卡片轮播并按选用次数排序', async ({ pa
   if (!centerBox || !rightBox || !leftBox) throw new Error('card bounding box missing')
   expect(rightBox.x).toBeGreaterThan(centerBox.x)
   expect(leftBox.x).toBeLessThan(centerBox.x)
+})
+
+test('长名称本体截断为省略号，且与点击次数徽章分行不重叠', async ({ page }) => {
+  await mockCarousel(page, {
+    items: [
+      released('ontology-1', 'E2E-供应链风险-0726075610-本体', 7),
+      released('ontology-2', '医疗健康本体', 3, '医疗'),
+      released('ontology-3', '法律知识本体', 1, '法律'),
+    ],
+  })
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/agent')
+
+  const card = page.locator('[data-card-index="0"]')
+  const name = card.locator('div[title="E2E-供应链风险-0726075610-本体"]')
+  await expect(name).toBeVisible()
+  // 名称超长时在行内截断为省略号（完整名经 title 悬浮可见）
+  const truncated = await name.evaluate(el => el.scrollWidth > el.clientWidth)
+  expect(truncated).toBe(true)
+
+  // 点击次数徽章位于版本徽标同行的右侧，与名称分行，矩形不相交
+  const badge = card.getByText('×7')
+  await expect(badge).toBeVisible()
+  const nameBox = await name.boundingBox()
+  const badgeBox = await badge.boundingBox()
+  if (!nameBox || !badgeBox) throw new Error('bounding box missing')
+  const intersects = nameBox.x < badgeBox.x + badgeBox.width
+    && badgeBox.x < nameBox.x + nameBox.width
+    && nameBox.y < badgeBox.y + badgeBox.height
+    && badgeBox.y < nameBox.y + nameBox.height
+  expect(intersects).toBe(false)
 })
 
 test('点击侧边卡片仅聚焦，点击聚焦卡片才选中并计数', async ({ page }) => {
