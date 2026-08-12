@@ -34,6 +34,7 @@ export default defineConfig({
     '**/mapping_suggestions.spec.ts',
     '**/mcp-client-config.spec.ts',
     '**/models.spec.ts',
+    '**/nav_tabs.spec.ts',
     '**/ontology_domain_source.spec.ts',
     '**/ontology_overview_responsive.spec.ts',
     '**/ontology_structure_initial_view.spec.ts',
