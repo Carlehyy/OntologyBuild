@@ -14,7 +14,13 @@
   GET    /projects/{id}/versions        脚本版本列表
   GET    /projects/{id}/versions/{vid}  版本详情（含脚本，供恢复）
 
-  调用记录（只读；写入方属二期「发布为推演服务」）：
+  推演服务（发布即上线，一个项目一个在线服务）：
+  GET    /projects/{id}/service         当前服务信息（未发布为 null）
+  POST   /projects/{id}/publish         发布/覆盖更新（冻结版本 + 本体语义注册）
+  POST   /projects/{id}/service/status  上线 / 下线
+  POST   /services/{id}/invoke          调用（写调用记录）
+
+  调用记录（只读；由 invoke 写入）：
   GET    /calls                         列表（keyword / result / 时间范围 / 分页）
   GET    /calls/overview                概览统计
   GET    /calls/{id}                    详情（含请求/响应快照）
@@ -37,7 +43,7 @@ def _ok(data):
     return {"data": data}
 
 
-def _project_out(project, *, version_count: int = 0) -> dict:
+def _project_out(project, *, version_count: int = 0, service_status: str | None = None) -> dict:
     return {
         "id": project.id,
         "name": project.name,
@@ -45,13 +51,18 @@ def _project_out(project, *, version_count: int = 0) -> dict:
         "engine_type": project.engine_type,
         "status": project.status,
         "version_count": version_count,
+        "service_status": service_status,
         "created_at": project.created_at,
         "updated_at": project.updated_at,
     }
 
 
-def _project_detail_out(project) -> dict:
-    return {**_project_out(project), "script": project.script}
+def _project_detail_out(project, *, version_count: int = 0, service_status: str | None = None) -> dict:
+    return {
+        **_project_out(
+            project, version_count=version_count, service_status=service_status),
+        "script": project.script,
+    }
 
 
 def _call_record_out(row, *, with_payloads: bool = False) -> dict:
@@ -104,7 +115,13 @@ def get_project(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return _ok(_project_detail_out(service.get_project(db, project_id)))
+    project = service.get_project(db, project_id)
+    svc = service.get_project_service(db, project_id)
+    return _ok(_project_detail_out(
+        project,
+        version_count=service.count_versions(db, project_id),
+        service_status=svc.status if svc else None,
+    ))
 
 
 @router.patch("/projects/{project_id}")
@@ -171,6 +188,52 @@ def get_version(
     current_user=Depends(get_current_user),
 ):
     return _ok(service.get_script_version(db, project_id, version_id).model_dump())
+
+
+# ── 推演服务（发布 / 状态 / 调用） ──
+
+
+@router.get("/projects/{project_id}/service")
+def get_project_service(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    svc = service.get_project_service(db, project_id)
+    return _ok(service.service_out(db, svc).model_dump() if svc else None)
+
+
+@router.post("/projects/{project_id}/publish", status_code=201)
+def publish_project_service(
+    project_id: str,
+    body: schemas.ServicePublishRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    svc = service.publish_service(db, project_id, body, current_user)
+    return _ok(service.service_out(db, svc).model_dump())
+
+
+@router.post("/projects/{project_id}/service/status")
+def set_project_service_status(
+    project_id: str,
+    body: schemas.ServiceStatusRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    svc = service.set_service_status(db, project_id, body.status)
+    return _ok(service.service_out(db, svc).model_dump())
+
+
+@router.post("/services/{service_id}/invoke")
+def invoke_world_model_service(
+    service_id: str,
+    body: schemas.InvokeRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    result = service.invoke_service(db, service_id, body, current_user)
+    return _ok(result.model_dump())
 
 
 # ── 调用记录（只读） ──

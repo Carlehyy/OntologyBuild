@@ -32,11 +32,12 @@ const editorTheme = EditorView.theme({
 })
 
 // Python 语法高亮（GitHub light 风格）：默认浅色主题对比太弱，关键字/字符串/
-// 注释/数字/函数/类名用高区分度配色，读代码时一眼可辨结构
+// 注释/数字/函数/类名用高区分度配色，读代码时一眼可辨结构。
+// 注释不用斜体：编辑器字体栈不含中文斜体字形，斜体中文注释会被浏览器机械倾斜发糊
 const pythonHighlight = syntaxHighlighting(HighlightStyle.define([
   { tag: tags.keyword, color: '#cf222e', fontWeight: '600' },
   { tag: [tags.string, tags.docComment], color: '#0a3069' },
-  { tag: tags.comment, color: '#6e7781', fontStyle: 'italic' },
+  { tag: tags.comment, color: '#6e7781' },
   { tag: [tags.number, tags.bool, tags.null], color: '#0550ae', fontWeight: '600' },
   { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: '#8250df' },
   { tag: [tags.className, tags.definition(tags.variableName)], color: '#953800' },

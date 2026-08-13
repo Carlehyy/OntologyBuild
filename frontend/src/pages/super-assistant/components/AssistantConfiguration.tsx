@@ -89,6 +89,7 @@ function SkillCreateDialog({ onClose, onSaved }: { onClose: () => void; onSaved:
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [content, setContent] = useState('')
+  const [alwaysActive, setAlwaysActive] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -104,6 +105,7 @@ function SkillCreateDialog({ onClose, onSaved }: { onClose: () => void; onSaved:
         description: description.trim(),
         content,
         enabled: true,
+        always_active: alwaysActive,
       })
       await onSaved()
       toast({ tone: 'success', title: 'Skill 已创建', description: '已生成标准目录和 SKILL.md' })
@@ -127,6 +129,10 @@ function SkillCreateDialog({ onClose, onSaved }: { onClose: () => void; onSaved:
         <label className="block text-xs text-[var(--color-text-secondary)]">具体内容 <span className="text-red-500">*</span>
           <textarea value={content} onChange={event => setContent(event.target.value)} rows={10} placeholder="# 工作流程&#10;&#10;1. …"
             className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs leading-5 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+        </label>
+        <label className="flex min-h-11 items-center justify-between rounded-lg border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)]">
+          常驻系统提示
+          <input type="checkbox" checked={alwaysActive} onChange={event => setAlwaysActive(event.target.checked)} className="h-4 w-4 accent-teal-700" />
         </label>
         {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
       </div>
@@ -507,6 +513,19 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
     }
   }
 
+  const toggleSkillAlwaysActive = async (skill: SuperSkill) => {
+    if (updatingSkillId) return
+    setUpdatingSkillId(skill.id)
+    try {
+      await superAssistantApi.updateSkill(skill.id, { always_active: !skill.always_active })
+      await refreshSkills()
+    } catch (error) {
+      toast({ tone: 'error', title: 'Skill 设置更新失败', description: errorText(error) })
+    } finally {
+      setUpdatingSkillId(null)
+    }
+  }
+
   const removeSkill = async (skill: SuperSkill) => {
     if (!window.confirm(`确定删除 Skill「${skill.name}」及其整个文件夹？`)) return
     try { await superAssistantApi.deleteSkill(skill.id); await refreshSkills(); toast({ tone: 'success', title: 'Skill 已删除' }) }
@@ -607,19 +626,33 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700"><Folder size={16} /></div>
                       <div className="min-w-0 flex-1">
                         <p className="truncate font-mono text-xs font-semibold text-[var(--color-text-primary)]">{skill.name}</p>
-                        <p className="mt-0.5 truncate text-[10px] text-[var(--color-text-tertiary)]">r{skill.revision} · {skill.manifest.length} files</p>
+                        <p className="mt-0.5 truncate text-[10px] text-[var(--color-text-tertiary)]">
+                          r{skill.revision} · {skill.manifest.length} files · {skill.use_count > 0 ? `使用 ${skill.use_count} 次` : '未使用'}
+                        </p>
                       </div>
                     </div>
-                    {!skill.enabled && <span className="mt-2 inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-500">已停用</span>}
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {!skill.enabled && <span className="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-500">已停用</span>}
+                      {skill.always_active && <span className="inline-flex rounded bg-teal-50 px-1.5 py-0.5 text-[9px] text-teal-700">常驻</span>}
+                    </div>
                     <p className="mt-2 line-clamp-2 text-[11px] leading-5 text-[var(--color-text-secondary)]">{skill.description || '暂无描述'}</p>
                     <div className="mt-2 flex items-center justify-between gap-2">
-                      <SettingSwitch
-                        label="启用"
-                        ariaLabel={`${skill.enabled ? '停用' : '启用'} Skill ${skill.name}`}
-                        checked={skill.enabled}
-                        busy={updatingSkillId !== null}
-                        onToggle={() => void toggleSkill(skill)}
-                      />
+                      <div className="flex min-w-0 items-center gap-3">
+                        <SettingSwitch
+                          label="启用"
+                          ariaLabel={`${skill.enabled ? '停用' : '启用'} Skill ${skill.name}`}
+                          checked={skill.enabled}
+                          busy={updatingSkillId !== null}
+                          onToggle={() => void toggleSkill(skill)}
+                        />
+                        <SettingSwitch
+                          label="常驻"
+                          ariaLabel={`${skill.always_active ? '取消' : '设为'}常驻 Skill ${skill.name}`}
+                          checked={skill.always_active}
+                          busy={updatingSkillId !== null}
+                          onToggle={() => void toggleSkillAlwaysActive(skill)}
+                        />
+                      </div>
                       <div className="flex shrink-0 items-center gap-1">
                         <button type="button" onClick={() => setEditingSkill(skill)} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-teal-50 hover:text-teal-800"><Pencil size={12} /> 文件</button>
                         <button type="button" onClick={() => void removeSkill(skill)} aria-label={`删除 ${skill.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>

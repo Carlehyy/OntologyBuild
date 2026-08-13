@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     super_assistant_max_skill_files: int = 500
     super_assistant_max_skill_file_mb: int = 5
     super_assistant_max_tool_rounds: int = 25
+    # 自主 agent 模式（PLAN→EXECUTE→VERIFY，对标 small-rust-hermes run_agent）的
+    # 迭代上限；独立于普通对话的 max_tool_rounds，仅在 agent_mode=True 时生效
+    super_assistant_agent_max_iterations: int = 50
     super_assistant_tool_result_chars: int = 30000
     super_assistant_approval_timeout_seconds: int = 180
     # 自我进化（反思/记忆，对标 small-rust-hermes）：micro 反思每
@@ -100,6 +103,9 @@ class Settings(BaseSettings):
     # granting server-side code execution to assistant configurators.
     super_assistant_mcp_stdio_enabled: bool = False
     super_assistant_mcp_stdio_allowed_commands: str = ""
+    # Anthropic prompt caching：给 system 与 tools 末位元素加 ephemeral 缓存断点，
+    # 降低重复前缀的计费与时延；DeepSeek 等 anthropic 兼容端点不支持时应关闭。
+    super_assistant_prompt_cache_enabled: bool = True
 
     # Data-steward conversation workspace and its isolated browser runtime.
     # Empty workspace root resolves to <uploads_dir>/steward-sessions.

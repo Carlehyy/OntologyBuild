@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Brain, Check, GitBranch, Loader2, Pin, PinOff, Plus, Sparkles, Trash2, X,
+  Brain, Check, GitBranch, GitMerge, Loader2, Pin, PinOff, Plus, Sparkles, Trash2, X,
 } from 'lucide-react'
 
 import {
   superAssistantApi,
+  type DistillCluster,
   type ReflectionCandidate,
   type ReflectionSettings,
   type SuperMemory,
@@ -14,6 +15,9 @@ import { errorText } from './assistantPanelUtils'
 import {
   ZONE_LABELS,
   candidateActions,
+  distillMergeBody,
+  distillProtectedHint,
+  distillSurvivorLabel,
   filterMemories,
   memoryConflictDescription,
   zoneLabel,
@@ -191,6 +195,10 @@ export function MemoryTab() {
   const [draft, setDraft] = useState({ content: '', zone: 'general', pinned: false })
   const [saving, setSaving] = useState(false)
   const [togglingAuto, setTogglingAuto] = useState(false)
+  const [distillOpen, setDistillOpen] = useState(false)
+  const [distillClusters, setDistillClusters] = useState<DistillCluster[]>([])
+  const [distillLoading, setDistillLoading] = useState(false)
+  const [distillBusy, setDistillBusy] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -211,6 +219,38 @@ export function MemoryTab() {
     setLoading(true)
     refresh()
   }, [refresh])
+
+  const loadDistillReport = useCallback(async () => {
+    try {
+      const report = await superAssistantApi.distillReport()
+      setDistillClusters(report.clusters || [])
+    } catch (error) {
+      toast({ tone: 'error', title: '加载蒸馏报告失败', description: errorText(error) })
+    } finally {
+      setDistillLoading(false)
+    }
+  }, [toast])
+
+  const openDistill = () => {
+    setDistillOpen(true)
+    setDistillLoading(true)
+    void loadDistillReport()
+  }
+
+  const applyDistill = async (cluster: DistillCluster, useLLM: boolean) => {
+    if (distillBusy) return
+    setDistillBusy(`${cluster.cluster_key}:${useLLM}`)
+    try {
+      await superAssistantApi.applyDistill(distillMergeBody(cluster, useLLM))
+      toast({ tone: 'success', title: useLLM ? '已通过 LLM 融合合并' : '记忆已合并' })
+      setDistillLoading(true)
+      await Promise.all([loadDistillReport(), refresh()])
+    } catch (error) {
+      toast({ tone: 'error', title: '蒸馏合并失败', description: errorText(error) })
+    } finally {
+      setDistillBusy(null)
+    }
+  }
 
   const toggleAutoAccept = async () => {
     if (!settings || togglingAuto) return
@@ -312,6 +352,15 @@ export function MemoryTab() {
         </select>
         <button
           type="button"
+          onClick={openDistill}
+          data-testid="distill-open"
+          title="找出语义相近的记忆并合并收敛"
+          className="flex min-h-9 items-center gap-1 rounded-lg border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)]"
+        >
+          <GitMerge size={13} />蒸馏收敛
+        </button>
+        <button
+          type="button"
           onClick={() => setCreating(true)}
           aria-label="新增记忆"
           className="flex min-h-9 items-center gap-1 rounded-lg bg-teal-600 px-3 text-xs font-medium text-white hover:bg-teal-700"
@@ -362,6 +411,97 @@ export function MemoryTab() {
             {settings.palace_index || settings.profile}
           </pre>
         </details>
+      )}
+
+      {distillOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="记忆蒸馏收敛">
+          <div className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-2xl bg-[var(--color-bg-elevated)] p-5 shadow-xl">
+            <div className="flex shrink-0 items-start justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">记忆蒸馏收敛</h3>
+                <p className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">语义相近的记忆可合并为一条，减少冗余上下文</p>
+              </div>
+              <button type="button" onClick={() => setDistillOpen(false)} aria-label="关闭"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">
+                <X size={15} />
+              </button>
+            </div>
+            <div className="mt-3 grid gap-3 overflow-y-auto">
+              {distillLoading && (
+                <div className="p-10 text-center text-xs text-[var(--color-text-tertiary)]"><Loader2 size={18} className="mx-auto animate-spin" /></div>
+              )}
+              {!distillLoading && distillClusters.length === 0 && (
+                <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)]">
+                  <GitMerge size={22} className="mx-auto mb-2" />没有可收敛的相似记忆簇
+                </div>
+              )}
+              {!distillLoading && distillClusters.map(cluster => {
+                const protectedHint = distillProtectedHint(cluster)
+                const busyDirect = distillBusy === `${cluster.cluster_key}:false`
+                const busyLLM = distillBusy === `${cluster.cluster_key}:true`
+                return (
+                  <article key={cluster.cluster_key} data-testid="distill-cluster" className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-4">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-xs font-semibold text-[var(--color-text-primary)]">相似记忆 {cluster.members.length} 条</span>
+                      {protectedHint && (
+                        <span
+                          className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700"
+                          title="簇内含核心或常驻记忆，仅在报告中审阅，不参与自动合并"
+                        >
+                          {protectedHint}
+                        </span>
+                      )}
+                    </div>
+                    <ul className="mt-2 grid gap-2">
+                      {cluster.members.map(member => {
+                        const survivorLabel = distillSurvivorLabel(cluster, member.id)
+                        return (
+                          <li key={member.id} className={`rounded-lg border p-2.5 ${survivorLabel ? 'border-teal-200 bg-teal-50/60' : 'border-[var(--color-border)]'}`}>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <ZoneTag zone={member.zone} />
+                              {member.pinned ? <span className="rounded bg-teal-50 px-1.5 py-0.5 text-[10px] text-teal-700">常驻</span> : null}
+                              {survivorLabel && (
+                                <span className="rounded bg-teal-600 px-1.5 py-0.5 text-[10px] font-medium text-white">{survivorLabel}</span>
+                              )}
+                              <span className="text-[10px] text-[var(--color-text-tertiary)]" title="命中 / 引用次数">
+                                {member.match_count}/{member.reference_count}
+                              </span>
+                            </div>
+                            <p className="mt-1.5 whitespace-pre-wrap text-xs leading-5 text-[var(--color-text-primary)]">{member.content}</p>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        data-testid="distill-merge"
+                        disabled={distillBusy !== null}
+                        onClick={() => void applyDistill(cluster, false)}
+                        title="保留建议记忆，簇内其余记忆标记为已取代"
+                        className="flex min-h-8 items-center gap-1 rounded-lg bg-teal-600 px-3 text-xs font-medium text-white transition-colors hover:bg-teal-700 disabled:opacity-50"
+                      >
+                        {busyDirect ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                        直接合并
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="distill-merge-llm"
+                        disabled={distillBusy !== null}
+                        onClick={() => void applyDistill(cluster, true)}
+                        title="调用 LLM 将簇内记忆融合为一条新内容"
+                        className="flex min-h-8 items-center gap-1 rounded-lg border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] disabled:opacity-50"
+                      >
+                        {busyLLM ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                        LLM 融合合并
+                      </button>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          </div>
+        </div>
       )}
 
       {creating && (

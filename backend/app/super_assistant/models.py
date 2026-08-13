@@ -98,6 +98,12 @@ class SuperAssistantSkill(Base):
     folder_path: Mapped[str] = mapped_column(String(1000), nullable=False)
     manifest: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # 常驻技能：SKILL.md 全文直接内联系统提示，跳过 use_skill 渐进披露
+    always_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # 行内使用统计（同记忆 match/reference 计数思路）：use_skill 成功 +1，
+    # 作为 Skill 目录降权排序的信号源，零使用的老技能沉底
+    use_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, onupdate=_now)

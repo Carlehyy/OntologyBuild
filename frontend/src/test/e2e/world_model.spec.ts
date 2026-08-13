@@ -230,6 +230,90 @@ test('开发页：执行通过才可保存，版本恢复需二次确认', async
   await expect(page.getByText('恢复到该历史版本？')).toHaveCount(0)
 })
 
+test('发布为推演服务：语义注册、服务面板与状态切换', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+
+  let published: Record<string, unknown> | null = null
+  const serviceOut = (status: string) => ({
+    id: 'svc-1',
+    project_id: projectRow.id,
+    version_id: 'v1',
+    version_no: 1,
+    name: '台区负荷短期推演服务',
+    description: '',
+    status,
+    endpoint_path: '/api/v2/world-model/services/svc-1/invoke',
+    applicable_object_types: { ontology_id: 'ontology-1', object_type_ids: ['ot-line'] },
+    preconditions: [],
+    created_at: now,
+    updated_at: now,
+  })
+
+  await page.route('**/api/v1/ontologies**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/v1/ontologies') {
+      return json(route, {
+        items: [{ id: 'ontology-1', name: '供应链本体', current_release_id: 'release-1' }],
+        total: 1, page: 1, page_size: 200,
+      })
+    }
+    if (path === '/api/v1/ontologies/ontology-1/entities') {
+      return json(route, [{ id: 'ot-line', name_cn: '线路' }, { id: 'ot-user', name_cn: '用户' }])
+    }
+    return json(route, [])
+  })
+  await page.route('**/api/v2/world-model/**', route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (path === `/api/v2/world-model/projects/${projectRow.id}` && request.method() === 'GET') {
+      return json(route, {
+        ...projectDetail,
+        version_count: 1,
+        service_status: published ? (published as { status: string }).status : null,
+      })
+    }
+    if (path === `/api/v2/world-model/projects/${projectRow.id}/versions`) {
+      return json(route, [{ id: 'v1', version_no: 1, duration_ms: 40, created_at: now }])
+    }
+    if (path === `/api/v2/world-model/projects/${projectRow.id}/service` && request.method() === 'GET') {
+      return json(route, published)
+    }
+    if (path === `/api/v2/world-model/projects/${projectRow.id}/publish` && request.method() === 'POST') {
+      published = serviceOut('online')
+      return json(route, published, 201)
+    }
+    if (path === `/api/v2/world-model/projects/${projectRow.id}/service/status`) {
+      const body = request.postDataJSON() as { status: string }
+      published = serviceOut(body.status)
+      return json(route, published)
+    }
+    return json(route, [])
+  })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/#/world-model/models/${projectRow.id}/develop`)
+
+  // 打开发布对话框，完成语义注册
+  await page.getByRole('button', { name: '发布', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText('发布为推演服务')).toBeVisible()
+  await dialog.getByLabel('服务名称').fill('台区负荷短期推演服务')
+  await dialog.getByLabel('选择所属本体').selectOption('ontology-1')
+  await dialog.getByRole('checkbox', { name: '线路' }).click()
+  await dialog.getByRole('button', { name: '发布并上线' }).click()
+
+  // 服务面板：端点、状态、切换
+  const panel = page.getByTestId('world-model-service-panel')
+  await expect(panel).toBeVisible()
+  await expect(panel.getByText('在线')).toBeVisible()
+  await expect(panel.getByText('/api/v2/world-model/services/svc-1/invoke')).toBeVisible()
+  await panel.getByRole('button', { name: '下线' }).click()
+  await expect(panel.getByText('已下线')).toBeVisible()
+  // 重新发布入口存在
+  await expect(page.getByRole('button', { name: '重新发布' })).toBeVisible()
+})
+
 test('无 world_model 菜单权限的用户不可见且直达被拒', async ({ page }) => {
   await seedAuth(page, 'custom', ['overview'])
   await mockPlatformShell(page)

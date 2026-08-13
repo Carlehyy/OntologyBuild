@@ -407,3 +407,207 @@ def test_debug_epilogue_handles_json_literals():
     assert payload == {
         "flag": True, "missing": None, "tags": ["a", False], "horizon": 2,
     }
+
+
+# ──────────────────────────── 推演服务：发布 / 状态 / 调用 ────────────────────────────
+
+_PUBLISH_BODY = {
+    "name": "负荷推演服务",
+    "description": "对外提供负荷推演",
+    "applicable_ontology_id": "ontology-1",
+    "applicable_object_type_ids": ["ot-line"],
+    "preconditions": [{"object_type_id": "ot-line", "min_count": 1}],
+}
+
+
+def _save_version(client, auth_headers, project_id, monkeypatch):
+    monkeypatch.setattr(service, "execute_code", _fake_execute_ok)
+    r = client.post(
+        f"{BASE}/projects/{project_id}/save",
+        json={"script": "def simulate(context, actions, horizon):\n"
+                        "    return {'trajectory': [1, 2]}",
+              "test_input": {}},
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["ok"] is True
+    return r.json()["data"]["version_no"]
+
+
+def test_publish_requires_saved_version(client, auth_headers, project):
+    r = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY,
+        headers=auth_headers,
+    )
+    assert r.status_code == 400
+    assert "保存" in str(r.json()["detail"])
+
+
+def test_publish_creates_online_service_and_marks_project(
+    client, auth_headers, project, monkeypatch,
+):
+    version_no = _save_version(client, auth_headers, project["id"], monkeypatch)
+    r = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY,
+        headers=auth_headers,
+    )
+    assert r.status_code == 201, r.text
+    svc = r.json()["data"]
+    assert svc["status"] == "online"
+    assert svc["version_no"] == version_no
+    assert svc["endpoint_path"].endswith(f"/services/{svc['id']}/invoke")
+    assert svc["applicable_object_types"] == {
+        "ontology_id": "ontology-1", "object_type_ids": ["ot-line"],
+    }
+    assert svc["preconditions"] == [{"object_type_id": "ot-line", "min_count": 1}]
+
+    r = client.get(f"{BASE}/projects/{project['id']}", headers=auth_headers)
+    detail = r.json()["data"]
+    assert detail["status"] == "published"
+    assert detail["service_status"] == "online"
+    assert detail["version_count"] == 1
+
+    r = client.get(f"{BASE}/projects/{project['id']}/service", headers=auth_headers)
+    assert r.json()["data"]["id"] == svc["id"]
+
+
+def test_republish_overwrites_same_service(
+    client, auth_headers, project, monkeypatch,
+):
+    _save_version(client, auth_headers, project["id"], monkeypatch)
+    first = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=auth_headers,
+    ).json()["data"]
+    version_no_2 = _save_version(client, auth_headers, project["id"], monkeypatch)
+    r = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json={**_PUBLISH_BODY, "name": "负荷推演服务 v2"},
+        headers=auth_headers,
+    )
+    assert r.status_code == 201
+    second = r.json()["data"]
+    assert second["id"] == first["id"]  # 同一项目覆盖更新，不产生第二个服务
+    assert second["name"] == "负荷推演服务 v2"
+    assert second["version_no"] == version_no_2
+
+
+def test_service_offline_blocks_invoke(
+    client, auth_headers, project, monkeypatch,
+):
+    _save_version(client, auth_headers, project["id"], monkeypatch)
+    svc = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=auth_headers,
+    ).json()["data"]
+
+    r = client.post(
+        f"{BASE}/projects/{project['id']}/service/status",
+        json={"status": "offline"}, headers=auth_headers,
+    )
+    assert r.json()["data"]["status"] == "offline"
+
+    r = client.post(
+        f"{BASE}/services/{svc['id']}/invoke",
+        json={"context": {}, "actions": [], "horizon": 1},
+        headers=auth_headers,
+    )
+    assert r.status_code == 409
+
+
+def test_invoke_writes_call_record(
+    client, auth_headers, project, monkeypatch,
+):
+    _save_version(client, auth_headers, project["id"], monkeypatch)
+    svc = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=auth_headers,
+    ).json()["data"]
+
+    r = client.post(
+        f"{BASE}/services/{svc['id']}/invoke",
+        json={"context": {"current_value": 7}, "actions": [], "horizon": 2},
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["ok"] is True
+    assert data["payload"] == {"trajectory": [1, 2]}
+    assert data["call_id"]
+
+    r = client.get(f"{BASE}/calls", headers=auth_headers)
+    items = r.json()["data"]["items"]
+    assert len(items) == 1
+    assert items[0]["service_name"] == "负荷推演服务"
+    assert items[0]["caller"] == "wm_admin" or items[0]["caller"]
+
+    r = client.get(f"{BASE}/calls/{data['call_id']}", headers=auth_headers)
+    detail = r.json()["data"]
+    assert detail["request_payload"]["context"] == {"current_value": 7}
+    assert detail["response_payload"] == {"result": {"trajectory": [1, 2]}}
+
+
+def test_invoke_records_script_failure(
+    client, auth_headers, project, monkeypatch,
+):
+    _save_version(client, auth_headers, project["id"], monkeypatch)
+    svc = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=auth_headers,
+    ).json()["data"]
+
+    monkeypatch.setattr(service, "execute_code", _fake_execute_fail)
+    r = client.post(
+        f"{BASE}/services/{svc['id']}/invoke",
+        json={"context": {}, "actions": [], "horizon": 1},
+        headers=auth_headers,
+    )
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["ok"] is False
+    assert "ValueError" in data["error"]
+
+    r = client.get(f"{BASE}/calls/overview", headers=auth_headers)
+    assert r.json()["data"]["failed"] == 1
+
+
+def test_invoke_gateway_down_returns_502_and_records(
+    client, auth_headers, project, monkeypatch,
+):
+    from app.data_channel.pipelines.python_engine.client import (
+        PythonEngineError,
+    )
+
+    _save_version(client, auth_headers, project["id"], monkeypatch)
+    svc = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=auth_headers,
+    ).json()["data"]
+
+    def _boom(code, **kwargs):
+        raise PythonEngineError("Python 执行网关未配置")
+
+    monkeypatch.setattr(service, "execute_code", _boom)
+    r = client.post(
+        f"{BASE}/services/{svc['id']}/invoke",
+        json={"context": {}, "actions": [], "horizon": 1},
+        headers=auth_headers,
+    )
+    assert r.status_code == 502
+    r = client.get(f"{BASE}/calls/overview", headers=auth_headers)
+    assert r.json()["data"] == {"total": 1, "failed": 1, "avg_duration_ms": 0}
+
+
+def test_publish_and_invoke_require_menu(client, custom_headers, project):
+    r = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=custom_headers,
+    )
+    assert r.status_code == 403
+    r = client.post(
+        f"{BASE}/services/any/invoke",
+        json={"context": {}}, headers=custom_headers,
+    )
+    assert r.status_code == 403

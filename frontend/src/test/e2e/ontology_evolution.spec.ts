@@ -862,11 +862,10 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(runtimeStart).toHaveValue('1')
   await expect(runtimeSummary).toContainText('6 日聚合')
 
-  // 待处理事项横条把后端 health 建议露出，点击直达对应 Tab。
-  const healthStrip = page.getByLabel('待处理事项')
-  await expect(healthStrip).toBeVisible()
-  await expect(healthStrip).toContainText('1 个动作等待审批')
-  await healthStrip.getByRole('button', { name: /1 个动作等待审批/ }).click()
+  // 待审批信息不再摆上总览（横条与卡片均不展示），审批统一在「治理推演」处理。
+  const overviewMain = page.locator('.overview-dashboard')
+  await expect(overviewMain.getByText(/等待审批|需人工审批/)).toHaveCount(0)
+  await page.locator('[data-tab-value="governance"]').click()
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}\\?tab=governance`))
   await page.getByRole('button', { name: '本体总览', exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}$`))

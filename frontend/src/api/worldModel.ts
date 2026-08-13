@@ -17,6 +17,8 @@ export interface WorldModelProjectSummary {
   engine_type: EngineType
   status: string
   version_count: number
+  /** 服务状态：null=未发布（草稿）；online=在线；offline=已下线 */
+  service_status: 'online' | 'offline' | null
   created_at: string | null
   updated_at: string | null
 }
@@ -84,6 +86,40 @@ export interface CallRecordDetail extends CallRecordItem {
 export interface CallRecordListResponse {
   items: CallRecordItem[]
   total: number
+}
+
+// ---------- 推演服务（发布 / 状态 / 调用） ----------
+
+export interface ServicePrecondition {
+  object_type_id: string
+  min_count: number
+}
+
+export interface WorldModelServiceInfo {
+  id: string
+  project_id: string
+  version_id: string | null
+  version_no: number | null
+  name: string
+  description: string
+  status: 'online' | 'offline' | string
+  endpoint_path: string | null
+  applicable_object_types: {
+    ontology_id: string
+    object_type_ids: string[]
+  } | null
+  preconditions: ServicePrecondition[] | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface ServicePublishBody {
+  version_id?: string | null
+  name: string
+  description: string
+  applicable_ontology_id: string
+  applicable_object_type_ids: string[]
+  preconditions: ServicePrecondition[]
 }
 
 export interface CallRecordOverview {
@@ -162,6 +198,17 @@ export const worldModelApi = {
 
   getCall: (id: string) =>
     apiClientV2.get<CallRecordDetail>(`/world-model/calls/${id}`),
+
+  // ---------- 推演服务 ----------
+
+  getService: (projectId: string) =>
+    apiClientV2.get<WorldModelServiceInfo | null>(`/world-model/projects/${projectId}/service`),
+
+  publishService: (projectId: string, body: ServicePublishBody) =>
+    apiClientV2.post<WorldModelServiceInfo>(`/world-model/projects/${projectId}/publish`, body),
+
+  setServiceStatus: (projectId: string, status: 'online' | 'offline') =>
+    apiClientV2.post<WorldModelServiceInfo>(`/world-model/projects/${projectId}/service/status`, { status }),
 }
 
 export default worldModelApi

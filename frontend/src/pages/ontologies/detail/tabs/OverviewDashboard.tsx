@@ -234,11 +234,9 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
             <strong>{kpiObjectTypes}<small>对象实体</small></strong>
             <p>关系 {ov.model.linkTypes} · 动作 {ov.model.actions} · 函数 {ov.model.functions} · 哨兵 {ov.model.sentinels.total}</p>
-            {ov.model.actions === 0
-              ? <em className="kpi-status is-neutral"><CircleAlert size={15} />暂无动作类型</em>
-              : ov.model.actionsRequiringApproval > 0
-              ? <em className="kpi-status is-warning"><CircleAlert size={15} />{ov.model.actionsRequiringApproval} 个动作类型需人工审批</em>
-              : <em className="kpi-status"><CheckCircle2 size={15} />动作均无需人工审批</em>}
+            {ov.model.actions === 0 && (
+              <em className="kpi-status is-neutral"><CircleAlert size={15} />暂无动作类型</em>
+            )}
           </button>
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('data')}>
             <span className="kpi-label">当前实例投影</span>
@@ -267,9 +265,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
             <strong>{kpiFactsTotal}<small>条</small></strong>
             <p>{factParts.slice(0, 3).map(([kind, value]) => `${FACT_KIND_LABEL[kind] || kind} ${value}`).join(' · ') || '尚无事实记录'}</p>
-            {ov.runtime.pendingApprovals > 0
-              ? <em className="kpi-status is-warning"><CircleAlert size={15} />{ov.runtime.pendingApprovals} 条动作待人工审批</em>
-              : <em className="kpi-status is-purple"><GitBranch size={15} />追加式留痕，可回放与追溯</em>}
+            <em className="kpi-status is-purple"><GitBranch size={15} />追加式留痕，可回放与追溯</em>
           </button>
         </section>
 

@@ -25,10 +25,14 @@ from app.world_model import schemas
 from app.world_model.models import (
     ENGINE_TYPES,
     SCRIPT_VERSION_KEEP,
+    SERVICE_STATUS_OFFLINE,
+    SERVICE_STATUS_ONLINE,
     STATUS_DRAFT,
+    STATUS_PUBLISHED,
     WorldModelCallRecord,
     WorldModelProject,
     WorldModelScriptVersion,
+    WorldModelService,
 )
 
 logger = logging.getLogger(__name__)
@@ -128,6 +132,11 @@ def list_projects(
         .group_by(WorldModelScriptVersion.project_id)
         .all()
     )
+    service_statuses = dict(
+        db.query(WorldModelService.project_id, WorldModelService.status)
+        .filter(WorldModelService.project_id.in_([row.id for row in rows]))
+        .all()
+    ) if rows else {}
     return schemas.ProjectListResponse(
         items=[
             schemas.ProjectSummary(
@@ -137,6 +146,7 @@ def list_projects(
                 engine_type=row.engine_type,
                 status=row.status,
                 version_count=int(version_counts.get(row.id, 0)),
+                service_status=service_statuses.get(row.id),
                 created_at=row.created_at,
                 updated_at=row.updated_at,
             )
@@ -423,4 +433,163 @@ def call_records_overview(db: Session) -> schemas.CallRecordOverview:
         total=int(total),
         failed=int(failed),
         avg_duration_ms=int(avg_duration),
+    )
+
+
+# ──────────────────────────── 推演服务（发布 / 状态 / 调用） ────────────────────────────
+
+
+def count_versions(db: Session, project_id: str) -> int:
+    return (
+        db.query(func.count(WorldModelScriptVersion.id))
+        .filter(WorldModelScriptVersion.project_id == project_id)
+        .scalar()
+        or 0
+    )
+
+
+def get_project_service(
+    db: Session, project_id: str,
+) -> WorldModelService | None:
+    _load_project(db, project_id)
+    return (
+        db.query(WorldModelService)
+        .filter(WorldModelService.project_id == project_id)
+        .first()
+    )
+
+
+def publish_service(
+    db: Session, project_id: str, body: schemas.ServicePublishRequest, current_user,
+) -> WorldModelService:
+    """发布为推演服务：冻结版本 + 本体语义注册，生成调用端点并上线。
+
+    一个项目对应一个在线服务（UI 合并语义）：重新发布 = 覆盖更新同一服务。
+    """
+    project = _load_project(db, project_id)
+    if body.version_id:
+        version = db.get(WorldModelScriptVersion, body.version_id)
+        if version is None or version.project_id != project.id:
+            raise HTTPException(404, "指定的脚本版本不存在。")
+    else:
+        version = (
+            db.query(WorldModelScriptVersion)
+            .filter(WorldModelScriptVersion.project_id == project.id)
+            .order_by(WorldModelScriptVersion.version_no.desc())
+            .first()
+        )
+        if version is None:
+            raise HTTPException(
+                400, "尚未保存任何脚本版本：请先在开发页执行通过并保存，再发布。")
+
+    service = (
+        db.query(WorldModelService)
+        .filter(WorldModelService.project_id == project.id)
+        .first()
+    )
+    if service is None:
+        service = WorldModelService(
+            project_id=project.id,
+            name=body.name.strip(),
+            created_by=getattr(current_user, "id", None),
+        )
+        db.add(service)
+        db.flush()  # 先取 id 以生成端点路径
+    service.name = body.name.strip()
+    service.description = body.description.strip()
+    service.version_id = version.id
+    service.status = SERVICE_STATUS_ONLINE  # 发布即上线
+    service.endpoint_path = f"/api/v2/world-model/services/{service.id}/invoke"
+    # 语义注册：值引用本体概念（本体 id + 对象类型 id），供 Agent 结构化检索
+    service.applicable_object_types = {
+        "ontology_id": body.applicable_ontology_id,
+        "object_type_ids": body.applicable_object_type_ids,
+    }
+    service.preconditions = [item.model_dump() for item in body.preconditions]
+    project.status = STATUS_PUBLISHED
+    db.commit()
+    db.refresh(service)
+    return service
+
+
+def set_service_status(
+    db: Session, project_id: str, status: str,
+) -> WorldModelService:
+    service = get_project_service(db, project_id)
+    if service is None:
+        raise HTTPException(404, "该项目尚未发布推演服务。")
+    service.status = status
+    db.commit()
+    db.refresh(service)
+    return service
+
+
+def invoke_service(
+    db: Session, service_id: str, body: schemas.InvokeRequest, current_user,
+) -> schemas.InvokeResult:
+    """调用推演服务：执行冻结版本的脚本并写入调用记录（审计闭环）。"""
+    service = db.get(WorldModelService, service_id)
+    if service is None:
+        raise HTTPException(404, "推演服务不存在或已被删除。")
+    if service.status != SERVICE_STATUS_ONLINE:
+        raise HTTPException(409, "推演服务未在线，无法调用（请先上线）。")
+    version = (
+        db.get(WorldModelScriptVersion, service.version_id)
+        if service.version_id else None
+    )
+    if version is None:
+        raise HTTPException(409, "推演服务未绑定可用的脚本版本。")
+
+    caller = getattr(current_user, "username", "") or ""
+    record = WorldModelCallRecord(
+        project_id=service.project_id,
+        service_id=service.id,
+        service_name=service.name,
+        caller=caller,
+        ok=False,
+        request_payload=body.model_dump(),
+    )
+    try:
+        result = _run_debug(version.script, body.model_dump())
+    except HTTPException as exc:
+        # 网关不可达等基础设施失败：也留痕（审计），然后原样抛出
+        record.error = str(exc.detail)
+        db.add(record)
+        db.commit()
+        raise
+    record.ok = result.ok
+    record.duration_ms = result.duration_ms
+    record.error = result.error
+    if result.ok:
+        record.response_payload = {"result": result.payload}
+    db.add(record)
+    db.commit()
+    return schemas.InvokeResult(
+        ok=result.ok,
+        payload=result.payload if result.ok else None,
+        error=result.error,
+        duration_ms=result.duration_ms,
+        call_id=record.id,
+    )
+
+
+def service_out(db: Session, service: WorldModelService) -> schemas.ServiceOut:
+    """服务输出（含版本号解析）。"""
+    version_no = None
+    if service.version_id:
+        version = db.get(WorldModelScriptVersion, service.version_id)
+        version_no = version.version_no if version else None
+    return schemas.ServiceOut(
+        id=service.id,
+        project_id=service.project_id,
+        version_id=service.version_id,
+        version_no=version_no,
+        name=service.name,
+        description=service.description or "",
+        status=service.status,
+        endpoint_path=service.endpoint_path,
+        applicable_object_types=service.applicable_object_types,
+        preconditions=service.preconditions,
+        created_at=service.created_at,
+        updated_at=service.updated_at,
     )
