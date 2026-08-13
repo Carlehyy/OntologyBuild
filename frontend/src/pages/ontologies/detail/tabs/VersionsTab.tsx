@@ -51,26 +51,31 @@ function stageOf(node: VersionNode, currentReleaseId?: string): VersionStage {
   return 'draft'
 }
 
-const STAGE_META: Record<VersionStage, { label: string; badge: 'success' | 'warning' | 'danger' | 'default'; dot: string; card: string }> = {
+const STAGE_META: Record<VersionStage, { label: string; badge: 'success' | 'warning' | 'danger' | 'default'; dot: string; card: string; bar: string }> = {
   current: {
     label: '当前发布', badge: 'success', dot: 'bg-teal-500 ring-teal-100',
     card: 'border-teal-200 bg-teal-50/55 hover:border-teal-300',
+    bar: 'border-l-teal-500',
   },
   release: {
     label: '历史发布', badge: 'default', dot: 'bg-slate-400 ring-slate-100',
     card: 'border-slate-200 bg-white hover:border-slate-300',
+    bar: 'border-l-slate-300',
   },
   draft: {
     label: '草稿态', badge: 'warning', dot: 'bg-sky-500 ring-sky-100',
     card: 'border-sky-200 bg-sky-50/45 hover:border-sky-300',
+    bar: 'border-l-sky-400',
   },
   trial: {
     label: '试跑态', badge: 'warning', dot: 'bg-amber-500 ring-amber-100',
     card: 'border-amber-200 bg-amber-50/45 hover:border-amber-300',
+    bar: 'border-l-amber-400',
   },
   archived: {
-    label: '已晋级', badge: 'default', dot: 'bg-violet-400 ring-violet-100',
+    label: '已发布', badge: 'default', dot: 'bg-violet-400 ring-violet-100',
     card: 'border-violet-100 bg-violet-50/30 hover:border-violet-200',
+    bar: 'border-l-violet-400',
   },
 }
 
@@ -81,9 +86,9 @@ const VERSION_ACTION_BUTTON = {
   release: 'border-teal-700 bg-teal-700 text-white shadow-sm hover:border-teal-800 hover:bg-teal-800 focus-visible:ring-2 focus-visible:ring-teal-500',
 } as const
 
-function StageBadge({ stage }: { stage: VersionStage }) {
+function StageBadge({ stage, label }: { stage: VersionStage; label?: string }) {
   const meta = STAGE_META[stage]
-  return <Badge variant={meta.badge}>{meta.label}</Badge>
+  return <Badge variant={meta.badge}>{label || meta.label}</Badge>
 }
 
 const PROPERTY_MAPPING_CODES = new Set([
@@ -191,24 +196,32 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
 
   const nodes = treeQuery.data?.versions || []
   const currentReleaseId = treeQuery.data?.current_release_id
-  const promotedFrom = useMemo(() => new Map(nodes.map(node => [node.id, node.version_number])), [nodes])
+  // 分支晋升结果反查表：已晋升的草稿/试跑节点 → 它发布成的版本号，
+  // 用于把来源关系直译为“已发布为 vX”。
+  const promotedTarget = useMemo(() => {
+    const targets = new Map<string, string>()
+    for (const node of nodes) {
+      if (node.node_kind === 'release' && node.promoted_from_id) {
+        targets.set(node.promoted_from_id, node.version_number)
+      }
+    }
+    return targets
+  }, [nodes])
   const roots = useMemo(() => {
     const known = new Set(nodes.map(node => node.id))
     const children = new Map<string, VersionNode[]>()
     const rootNodes: VersionNode[] = []
     for (const node of nodes) {
-      // 正式版本由某个试跑分支晋级产生时，演进图优先展示真实因果链：
-      // v0 → v0.1（草稿/试跑）→ v1（发布），而不是把 v1 排在来源分支前面。
-      const visualParentId = node.promoted_from_id && known.has(node.promoted_from_id)
-        ? node.promoted_from_id
-        : node.parent_version_id
-      if (!visualParentId || !known.has(visualParentId)) {
+      // 发布版始终位于第一列主干；草稿/试跑分支按 parent 缩进挂在所属版本下，
+      // 由层级直接表达“谁由谁衍生”，不再用文字标注来源。
+      const parentId = node.node_kind === 'release' ? undefined : node.parent_version_id
+      if (!parentId || !known.has(parentId)) {
         rootNodes.push(node)
         continue
       }
-      children.set(visualParentId, [...(children.get(visualParentId) || []), node])
+      children.set(parentId, [...(children.get(parentId) || []), node])
     }
-    // 同一来源下发布节点优先形成主干，其余草稿与试跑分支按创建时间展开。
+    // 主干发布版之间、同一版本下的分支之间，均按创建时间展开。
     const sort = (items: VersionNode[]) => [...items].sort((a, b) => {
       if (a.node_kind !== b.node_kind) return a.node_kind === 'release' ? -1 : 1
       return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
@@ -380,7 +393,10 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
     const trial = stage === 'trial'
     const deletableStage = editing || trial
     const isLeaf = children.length === 0
-    const promotedFromVersion = node.promoted_from_id ? promotedFrom.get(node.promoted_from_id) : null
+    const promotedToVersion = promotedTarget.get(node.id) || null
+    const stageText = stage === 'archived' && promotedToVersion
+      ? `已发布为 ${promotedToVersion}`
+      : meta.label
     const parentNode = node.parent_version_id
       ? nodes.find(item => item.id === node.parent_version_id)
       : undefined
@@ -397,33 +413,35 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
       <div key={node.id} role="treeitem" aria-level={depth + 1} aria-current={stage === 'current' ? 'true' : undefined}>
         <article
           data-testid={`version-node-${node.version_number}`}
-          className={`group relative rounded-xl border px-3.5 py-2.5 transition-all duration-200 ${meta.card}`}
+          className={`group relative rounded-xl border border-l-[3px] px-3.5 py-2.5 transition-all duration-200 ${meta.card} ${meta.bar}`}
         >
           <span className={`absolute -left-[1.72rem] top-5 h-3 w-3 rounded-full ring-4 ${meta.dot}`} aria-hidden="true" />
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
               onClick={() => openVersion(node)}
               className="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
-              aria-label={`打开 ${node.version_number} ${meta.label}`}
+              aria-label={`打开 ${node.version_number} ${stageText}`}
             >
               <div className="flex min-w-0 items-center gap-2">
                 {node.node_kind === 'release'
                   ? <GitCommitHorizontal size={16} className={`shrink-0 ${stage === 'current' ? 'text-teal-700' : 'text-slate-500'}`} />
                   : <GitBranch size={16} className={`shrink-0 ${trial ? 'text-amber-600' : 'text-sky-600'}`} />}
                 <span className="shrink-0 font-mono text-base font-semibold tabular-nums text-slate-800">{node.version_number}</span>
-                <span className="shrink-0"><StageBadge stage={stage} /></span>
-                {node.version_label && <span className="min-w-0 truncate text-xs font-medium text-slate-500">{node.version_label}</span>}
-                {promotedFromVersion && <span className="shrink-0 whitespace-nowrap text-[11px] text-teal-600">由 {promotedFromVersion} 晋级</span>}
+                <span className="shrink-0"><StageBadge stage={stage} label={stageText} /></span>
+                {node.version_label && <span className="min-w-0 truncate text-xs font-medium text-slate-500" title={node.version_label}>{node.version_label}</span>}
                 {recoveryFromVersion && (
-                  <span className="shrink-0 whitespace-nowrap text-[11px] font-medium text-amber-700">
-                    从 {recoveryFromVersion} 恢复 · 按当前发布试跑
+                  <span
+                    className="shrink-0 whitespace-nowrap text-[11px] font-medium text-amber-700"
+                    title={`从历史发布 ${recoveryFromVersion} 创建的修复草稿，验证与试跑均以当前发布为基线`}
+                  >
+                    恢复自 {recoveryFromVersion}
                   </span>
                 )}
               </div>
             </button>
 
-            <div className="flex shrink-0 items-center gap-1.5">
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
               {editing ? (
                 <>
                   <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.editor} onClick={() => openVersion(node)}>
@@ -522,9 +540,9 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
           <div>
             <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-              <GitCommitHorizontal size={16} /> 从草稿到正式运行
+              <GitCommitHorizontal size={16} /> 版本如何从草稿到正式运行
             </h3>
-            <p className="mt-0.5 text-xs text-slate-500">在秩序中演化：每次创建新版本都会生成独立、完整的草稿快照。</p>
+            <p className="mt-0.5 text-xs text-slate-500">每次新建版本都会复制一份完整快照，互不干扰。</p>
           </div>
           <div className="flex items-center gap-2 rounded-full bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-700">
             <ShieldCheck size={14} /> 当前正式运行：{treeQuery.data?.current_release_version}
@@ -534,17 +552,17 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
         <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-stretch px-4 py-3" aria-label="版本状态递进关系">
           <div className="rounded-xl border border-sky-100 bg-sky-50/70 p-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-sky-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-sky-600 text-[11px] text-white">1</span>草稿态</div>
-            <p className="mt-1.5 text-xs leading-5 text-sky-700">完整定义与映射可编辑；新版本始终从此状态开始，不产生运行数据或执行动作。</p>
+            <p className="mt-1.5 text-xs leading-5 text-sky-700">自由编辑结构与映射，不产生任何运行数据。</p>
           </div>
           <div className="flex w-9 items-center justify-center text-slate-300"><ArrowRight size={18} /></div>
           <div className="rounded-xl border border-amber-100 bg-amber-50/70 p-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-[11px] text-white">2</span>试跑态</div>
-            <p className="mt-1.5 text-xs leading-5 text-amber-700">门禁：基线仍为当前发布版、结构与哨兵有效，且至少一个对象实体完成数据映射；通过后冻结并隔离试跑。</p>
+            <p className="mt-1.5 text-xs leading-5 text-amber-700">用真实数据在隔离环境验证，不影响正式运行；全部通过后才允许发布。</p>
           </div>
           <div className="flex w-9 items-center justify-center text-slate-300"><ArrowRight size={18} /></div>
           <div className="rounded-xl border border-teal-100 bg-teal-50/70 p-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-teal-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-teal-600 text-[11px] text-white"><Check size={12} /></span>发布态</div>
-            <p className="mt-1.5 text-xs leading-5 text-teal-700">门禁：精确试跑已通过且未失效、数据版本未变化、影响已确认；发布后结构只读，仅当前版本正式执行。</p>
+            <p className="mt-1.5 text-xs leading-5 text-teal-700">验证通过后发布。全平台只按最新发布运行，发布后内容只读。</p>
           </div>
         </div>
       </Card>
@@ -579,12 +597,19 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
       <section className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-slate-50/60 p-4" aria-label="本体版本树">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold text-slate-700">版本演化树</p>
-            <p className="mt-0.5 text-xs text-slate-400">{nodes.length} 个完整快照节点</p>
+            <p className="text-sm font-semibold text-slate-700">版本树</p>
+            <p className="mt-0.5 text-xs text-slate-400">共 {nodes.length} 个版本 · 发布版在左侧主干，分支缩进挂在所属版本下</p>
           </div>
           <span className="rounded-md bg-teal-50 px-2.5 py-1 font-mono text-xs font-semibold text-teal-700">
             当前 {treeQuery.data?.current_release_version}
           </span>
+        </div>
+        <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500" aria-label="版本状态图例">
+          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-teal-500" />当前发布</span>
+          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-slate-400" />历史发布</span>
+          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-sky-500" />草稿态</span>
+          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-amber-500" />试跑态</span>
+          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-violet-400" />已发布的分支</span>
         </div>
         {roots.rootNodes.length > 0 ? (
           <div role="tree" className="ml-2 space-y-2.5 border-l border-slate-200 pl-6" data-testid="version-tree">
@@ -886,7 +911,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                   </div>
                 </section>
 
-                {!blocked && <p className="text-xs text-slate-500">确认后，仅本次试跑验证过的精确结构哈希和数据版本可晋级；任何变化都会自动拒绝。</p>}
+                {!blocked && <p className="text-xs text-slate-500">确认后，只有本次试跑验证过的那份内容会被发布；之后任何改动都需要重新验证。</p>}
                 {createRepairDraft.isError && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">创建修复分支失败：{errorText(createRepairDraft.error)}</p>}
                 {promote.isError && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">{concisePromotionError(promote.error)}</p>}
               </div>
@@ -900,7 +925,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => deleteTarget && deleteVersion.mutate(deleteTarget)}
         title={`删除叶子分支 ${deleteTarget?.version_number || ''}`}
-        description="该草稿或试跑快照及其隔离试跑数据将被永久删除，版本编号不会复用。发布版本、已晋级版本及包含下级分支的节点始终不可删除。"
+        description="该草稿或试跑快照及其隔离试跑数据将被永久删除，版本编号不会复用。发布版、已发布的分支以及仍含下级分支的节点始终不可删除。"
         confirmText="删除此分支"
         variant="danger"
         loading={deleteVersion.isPending}
