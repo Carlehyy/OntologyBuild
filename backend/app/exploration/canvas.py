@@ -1,9 +1,9 @@
-"""业务画布 — 六类业务模型元素的 schema、操作与完整度评估
+"""业务画布 — 七类业务模型元素的 schema、操作与完整度评估
 
 画布是「需求 → 本体」转化稳定性的第一道防线：探索 agent 通过工具调用
 把对话中已确认的信息沉淀为结构化元素（而非自由文本），转化时以画布为源。
 
-六类模型（kind，单数）与画布键（复数）：
+七类模型（kind，单数）与画布键（复数）：
   object   → objects     业务对象（→ ObjectType + 属性 + 关系→LinkType）
   actor    → actors      业务主体（参与方，为动作提供归属/审批语境）
   behavior → behaviors   业务行为（→ ActionType）
@@ -11,7 +11,10 @@
   rule     → rules       业务规则（constraint|validation → disabled 校验规则；
                          approval → requiresApproval；derivation → 激活函数草稿；
                          alert → 哨兵草稿）
-  scenario → scenarios   业务场景（不进本体，作为草稿的可表达性验收器）
+  scenario → scenarios   业务场景（不进本体，作为草稿的可表达性验收器；
+                         可挂接流程成为情境变体）
+  process  → processes   业务流程（标准骨架：步骤/主体/分支/度量；不进本体，
+                         场景可挂接为情境变体）
 """
 from __future__ import annotations
 
@@ -139,6 +142,20 @@ class Rule(_El):
         return normalized
 
 
+class MetricSpec(BaseModel):
+    """流程/场景的产出度量：formula 是定量计算口径（质量门校验），
+    source_objects 指向度量来源的对象名。"""
+    model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True, extra="ignore",
+                              str_strip_whitespace=True)
+    id: Optional[str] = None
+    name: str = Field(min_length=1)
+    display_name: Optional[str] = None
+    formula: Optional[str] = None        # 计算口径（必填才达标；空/未定量由质量门拦下）
+    source_objects: list[str] = Field(default_factory=list)  # 度量来源对象名
+    target: Optional[str] = None         # 目标值（可空）
+    description: Optional[str] = None
+
+
 class ScenarioBranch(BaseModel):
     model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True, extra="ignore",
                               str_strip_whitespace=True)
@@ -156,16 +173,64 @@ class Scenario(_El):
     behaviors: list[str] = Field(default_factory=list)   # 场景涉及的行为名（覆盖检查用）
     branches: list[ScenarioBranch] = Field(default_factory=list)  # 条件分支的显式目标
     expected_outcome: Optional[str] = None
+    process_ref: Optional[str] = None    # 挂接的流程名/id；非空 = 该场景是流程的情境变体
+    metrics: list[MetricSpec] = Field(default_factory=list)       # 情境变体的产出度量
+
+
+class ProcessStep(BaseModel):
+    """流程步骤：seq 为排序键；actor/behavior 是指向主体/行为模型的显式引用，
+    留空 actor 表示线下步骤，留空 behavior 表示尚未绑定行为。"""
+    model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True, extra="ignore",
+                              str_strip_whitespace=True)
+    id: Optional[str] = None
+    seq: int = Field(ge=1)                # 排序键（渲染与校验按 seq 升序取步骤）
+    name: str = Field(min_length=1)
+    actor: Optional[str] = None           # 执行主体引用（可空 = 线下步骤）
+    behavior: Optional[str] = None        # 绑定的业务行为引用（可空）
+    inputs: list[str] = Field(default_factory=list)
+    outputs: list[str] = Field(default_factory=list)
+    description: Optional[str] = None
+
+
+class ProcessBranch(BaseModel):
+    """流程分支：from_step/to_step 是 1-based 步骤下标（按 seq 升序后的位置），
+    与 ScenarioBranch 同一口径；kind=exception 标记异常路径。"""
+    model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True, extra="ignore",
+                              str_strip_whitespace=True)
+    id: Optional[str] = None
+    from_step: int = Field(ge=1)          # 1-based steps 下标
+    to_step: Optional[int] = Field(default=None, ge=1)  # None 表示流程结束
+    condition: str = Field(min_length=1)
+    kind: str = "normal"                  # normal | exception
+
+    @field_validator("kind")
+    @classmethod
+    def validate_kind(cls, value: str) -> str:
+        normalized = (value or "normal").strip().lower()
+        if normalized not in {"normal", "exception"}:
+            raise ValueError("kind 必须是 normal/exception")
+        return normalized
+
+
+class Process(_El):
+    goal: Optional[str] = None
+    trigger: Optional[str] = None
+    steps: list[ProcessStep] = Field(default_factory=list)
+    branches: list[ProcessBranch] = Field(default_factory=list)
+    objects: list[str] = Field(default_factory=list)     # 流程涉及的对象名（覆盖检查用）
+    metrics: list[MetricSpec] = Field(default_factory=list)
+    expected_outcome: Optional[str] = None
 
 
 KIND_MODELS: dict[str, type[_El]] = {
     "object": BusinessObject, "actor": Actor, "behavior": Behavior,
-    "event": Event, "rule": Rule, "scenario": Scenario,
+    "event": Event, "rule": Rule, "scenario": Scenario, "process": Process,
 }
 KIND_KEYS = {"object": "objects", "actor": "actors", "behavior": "behaviors",
-             "event": "events", "rule": "rules", "scenario": "scenarios"}
+             "event": "events", "rule": "rules", "scenario": "scenarios",
+             "process": "processes"}
 KIND_LABELS = {"object": "对象", "actor": "主体", "behavior": "行为",
-               "event": "事件", "rule": "规则", "scenario": "场景"}
+               "event": "事件", "rule": "规则", "scenario": "场景", "process": "流程"}
 
 
 def norm_name(name: str) -> str:
@@ -189,7 +254,8 @@ _NESTED_MODELS: dict[str, dict[str, type[BaseModel]]] = {
     "object": {"attributes": AttributeSpec, "relations": RelationSpec},
     "actor": {"attributes": AttributeSpec},
     "behavior": {"inputs": AttributeSpec},
-    "scenario": {"branches": ScenarioBranch},
+    "scenario": {"branches": ScenarioBranch, "metrics": MetricSpec},
+    "process": {"steps": ProcessStep, "branches": ProcessBranch, "metrics": MetricSpec},
 }
 
 
@@ -242,6 +308,28 @@ def _child_match_index(items: list[dict], raw: dict, model: type[BaseModel]) -> 
             for index, item in enumerate(items):
                 if item.get("from_step") == from_step \
                         and norm_name(str(item.get("condition") or "")) == condition:
+                    return index
+    elif model is ProcessStep:
+        seq = raw.get("seq")
+        name = norm_name(str(raw.get("name") or ""))
+        if seq is not None and name:
+            for index, item in enumerate(items):
+                if item.get("seq") == seq \
+                        and norm_name(str(item.get("name") or "")) == name:
+                    return index
+    elif model is ProcessBranch:
+        from_step = raw.get("from_step", raw.get("fromStep"))
+        condition = norm_name(str(raw.get("condition") or ""))
+        if from_step is not None and condition:
+            for index, item in enumerate(items):
+                if item.get("from_step") == from_step \
+                        and norm_name(str(item.get("condition") or "")) == condition:
+                    return index
+    elif model is MetricSpec:
+        name = norm_name(str(raw.get("name") or ""))
+        if name:
+            for index, item in enumerate(items):
+                if norm_name(str(item.get("name") or "")) == name:
                     return index
     return None
 
@@ -326,8 +414,8 @@ def _new_element(model: type[_El], kind: str, raw: dict) -> dict:
 def upsert_elements(canvas: Any, kind: str, elements: list[dict]) -> tuple[dict, list[str], list[str]]:
     """按 id（其次归一化 name）upsert；返回 (新画布, 生效元素 id 列表, 错误列表)。
 
-    已有元素使用稀疏字段补丁。attributes / relations / inputs / branches
-    使用子项 id（其次自然键）增量合并；只有显式 [] 才清空整表。
+    已有元素使用稀疏字段补丁。attributes / relations / inputs / branches /
+    steps / metrics 使用子项 id（其次自然键）增量合并；只有显式 [] 才清空整表。
 
     始终返回全新 dict —— SQLAlchemy JSON 列必须整体重新赋值才会写库。
     """
@@ -637,8 +725,37 @@ def completeness(canvas: Any) -> dict:
         tgt = norm_name(r.get("applies_to", "") or "")
         if tgt and tgt not in obj_names | beh_names:
             gaps.append(f"规则「{r.get('name')}」作用的「{r.get('applies_to')}」未在对象/行为模型中定义")
+    for p in c["processes"]:
+        pname = p.get("name")
+        steps = p.get("steps") or []
+        for step in steps:
+            actor = str(step.get("actor") or "").strip()
+            if actor and norm_name(actor) not in entity_names:
+                gaps.append(f"流程「{pname}」步骤「{step.get('name')}」的执行主体「{actor}」尚未在对象/主体模型中定义")
+            behavior = str(step.get("behavior") or "").strip()
+            if behavior and norm_name(behavior) not in beh_names:
+                gaps.append(f"流程「{pname}」步骤「{step.get('name')}」绑定的行为「{behavior}」尚未在行为模型中定义")
+        for branch in p.get("branches") or []:
+            source = branch.get("from_step")
+            destination = branch.get("to_step")
+            if not isinstance(source, int) or source < 1 or source > len(steps):
+                gaps.append(f"流程「{pname}」的分支起点 {source} 不在步骤 1..{len(steps)} 范围内")
+            elif destination is not None and (
+                not isinstance(destination, int) or destination < 1 or destination > len(steps)
+            ):
+                gaps.append(f"流程「{pname}」的分支目标 {destination} 不在步骤范围内")
+        for metric in p.get("metrics") or []:
+            for ref in metric.get("source_objects") or []:
+                if norm_name(ref) not in entity_names:
+                    gaps.append(f"流程「{pname}」度量「{metric.get('name')}」的来源对象「{ref}」尚未在对象/主体模型中定义")
     if counts["objects"] and not counts["scenarios"]:
         gaps.append("还没有场景模型 —— 场景用于验收本体草稿能否表达完整业务流程")
+    if counts["objects"] and not counts["processes"]:
+        # 仅建议项：流程是 P0 新模型，绝不进质量门 blocking（vacuous pass 铁律）
+        gaps.append("还没有流程模型 —— 流程编排步骤/分支/度量，场景可挂接为情境变体")
+    for p in c["processes"]:
+        if not (p.get("metrics") or []):
+            gaps.append(f"流程「{p.get('name')}」还没有产出度量 —— 用什么数字证明流程达成了目标？")
     if counts["objects"] and not counts["actors"]:
         gaps.append("还没有主体模型 —— 谁在使用这些对象、执行这些行为？")
 
@@ -671,6 +788,9 @@ def canvas_summary(canvas: Any, max_items: int = 30) -> str:
                 attrs = [a.get("name", "") for a in (x.get("attributes") or [])]
                 extra = f"[{x.get('kind', '')}]" \
                         + (f"({', '.join(attrs[:12])}{'…' if len(attrs) > 12 else ''})" if attrs else "")
+            elif kind == "process":
+                extra = f"({len(x.get('steps') or [])}步 {len(x.get('branches') or [])}分支 " \
+                        f"{len(x.get('metrics') or [])}指标)"
             parts.append(f"{name}{extra} (id={x.get('id')})")
         suffix = f" …共{len(items)}项" if len(items) > max_items else ""
         lines.append(f"- {KIND_LABELS[kind]}模型({len(items)}): " + "; ".join(parts) + suffix)

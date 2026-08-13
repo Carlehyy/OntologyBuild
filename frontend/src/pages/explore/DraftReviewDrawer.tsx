@@ -293,11 +293,11 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
               {scenarioCoverage.length > 0 && (
                 <div className="rounded-lg border border-rose-200 bg-rose-50/50 px-3.5 py-2.5">
                   <div className="flex items-center gap-1.5 text-xs font-medium text-rose-700 mb-1">
-                    <CircleAlert size={13} /> 场景可表达性检查未通过
+                    <CircleAlert size={13} /> 流程/场景可表达性检查未通过
                   </div>
                   {scenarioCoverage.map((c, i) => (
                     <div key={i} className="text-[11px] leading-relaxed text-rose-800/90">
-                      · 场景「{c.scenario}」缺少
+                      · {'process' in c ? `流程「${c.process}」` : `场景「${c.scenario}」`}缺少
                       {c.missingObjects.length > 0 && ` 对象: ${c.missingObjects.join('、')}`}
                       {c.missingBehaviors.length > 0 && ` 行为: ${c.missingBehaviors.join('、')}`}
                       —— 建议回到对话补齐后重新生成

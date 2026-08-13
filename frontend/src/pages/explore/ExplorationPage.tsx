@@ -1,7 +1,7 @@
 /**
  * 业务探索 — 对话式业务建模/需求建模工作台
  *
- * 双区工作台：探索对话（SSE 流式 + 工具轨迹） | 业务场景（六类模型实时沉淀）
+ * 双区工作台：探索对话（SSE 流式 + 工具轨迹） | 业务场景（七类模型实时沉淀）
  * 顶部动作：生成需求文档 → 需求文档工作区里生成本体模型 → 人审后落地本体。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -788,7 +788,7 @@ export default function ExplorationPage() {
               <div className="text-center">
                 <div className="text-sm font-medium text-[var(--color-text-primary)]">从描述你的业务开始</div>
                 <div className="mt-1 text-xs text-[var(--color-text-tertiary)] max-w-md leading-relaxed">
-                  我会通过提问帮你澄清业务，并把确认的信息实时沉淀为对象、主体、行为、事件、规则、场景六类模型 —— 右侧画布随对话生长。
+                  我会通过提问帮你澄清业务，并把确认的信息实时沉淀为对象、主体、行为、事件、规则、流程、场景七类模型 —— 右侧画布随对话生长。
                 </div>
               </div>
               <div className="flex flex-col gap-2 w-full max-w-md">

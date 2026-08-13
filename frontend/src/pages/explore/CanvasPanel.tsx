@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Box, Users, Play, Zap, Scale, Map as MapIcon, ChevronDown, ChevronRight, CircleAlert,
-  CircleCheck, CircleHelp, Share2, ShieldAlert, ShieldCheck, X, Copy, Loader2, FileText,
+  CircleCheck, CircleHelp, GitBranch, Share2, ShieldAlert, ShieldCheck, X, Copy, Loader2, FileText,
 } from 'lucide-react'
 import {
   explorationApi, type BusinessCanvas, type BxQuestion, type CanvasElement,
@@ -10,8 +10,10 @@ import {
 import MermaidBlock from '@/components/MermaidBlock'
 import { writeTextToClipboard } from '@/utils/clipboard'
 import ElementDetailModal from './ElementDetailModal'
-
-type CanvasKey = 'objects' | 'actors' | 'behaviors' | 'events' | 'rules' | 'scenarios'
+import {
+  DIAGRAM_TABS, canvasProcessNames, diagramTargetOptions, diagramTargetPlaceholder,
+  elementBadges, type CanvasKey,
+} from './canvasPanelLogic'
 
 const SECTIONS: {
   key: CanvasKey
@@ -24,50 +26,14 @@ const SECTIONS: {
   { key: 'behaviors', label: '行为模型', icon: Play, tint: 'text-teal-600 bg-teal-50' },
   { key: 'events', label: '事件模型', icon: Zap, tint: 'text-amber-600 bg-amber-50' },
   { key: 'rules', label: '规则模型', icon: Scale, tint: 'text-rose-600 bg-rose-50' },
+  { key: 'processes', label: '流程模型', icon: GitBranch, tint: 'text-indigo-600 bg-indigo-50' },
   { key: 'scenarios', label: '场景模型', icon: MapIcon, tint: 'text-emerald-600 bg-emerald-50' },
-]
-
-const DIAGRAM_TABS: { kind: DiagramKind; label: string; needsTarget?: 'scenario' | 'object' }[] = [
-  { kind: 'er', label: 'ER 图' },
-  { kind: 'flow', label: '流程图', needsTarget: 'scenario' },
-  { kind: 'sequence', label: '时序图', needsTarget: 'scenario' },
-  { kind: 'state', label: '状态图', needsTarget: 'object' },
 ]
 
 const errorMessage = (error: unknown, fallback: string): string => {
   if (!error || typeof error !== 'object') return fallback
   const value = error as { detail?: string | { message?: string }; message?: string }
   return typeof value.detail === 'string' ? value.detail : value.detail?.message || value.message || fallback
-}
-
-function elementBadges(key: CanvasKey, el: CanvasElement): string[] {
-  const badges: string[] = []
-  if (key === 'objects') {
-    const attrs = (el.attributes as unknown[] | undefined)?.length || 0
-    const rels = (el.relations as unknown[] | undefined)?.length || 0
-    badges.push(`${attrs} 属性`)
-    if (rels) badges.push(`${rels} 关系`)
-    if (el.key_attribute) badges.push(`主键 ${el.key_attribute}`)
-  } else if (key === 'actors') {
-    const attrs = (el.attributes as unknown[] | undefined)?.length || 0
-    const resp = (el.responsibilities as unknown[] | undefined)?.length || 0
-    if (el.kind) badges.push(String(el.kind))
-    if (attrs) badges.push(`${attrs} 属性`)
-    if (resp) badges.push(`${resp} 职责`)
-  } else if (key === 'behaviors') {
-    if (el.actor) badges.push(String(el.actor))
-    if (el.object) badges.push(`→ ${el.object}`)
-    if (el.needs_approval) badges.push('需审批')
-  } else if (key === 'events') {
-    if (el.source) badges.push(`来源 ${el.source}`)
-  } else if (key === 'rules') {
-    if (el.kind) badges.push(String(el.kind))
-    if (el.applies_to) badges.push(`→ ${el.applies_to}`)
-  } else if (key === 'scenarios') {
-    const steps = (el.steps as unknown[] | undefined)?.length || 0
-    if (steps) badges.push(`${steps} 步`)
-  }
-  return badges
 }
 
 /** 质量门清单：与后端草稿闸门同一口径，未过门项即 agent 的追问方向 */
@@ -231,7 +197,7 @@ function LedgerPanel({ questions, onAsk }: {
   )
 }
 
-/** 业务画布面板：六类模型分组卡片 + 澄清账本 + 质量门，随 SSE canvas 事件实时刷新 */
+/** 业务画布面板：七类模型分组卡片 + 澄清账本 + 质量门，随 SSE canvas 事件实时刷新 */
 export default function CanvasPanel({ sessionId, canvas, completeness, readiness, onAsk, onOpenDocuments }: {
   sessionId?: string
   canvas: BusinessCanvas | null
@@ -260,6 +226,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
   }, [sessionId])
 
   const scenarioNames = (canvas?.scenarios || []).map(s => String(s.display_name || s.name))
+  const processNames = canvasProcessNames(canvas)
   const objectNames = (canvas?.objects || [])
     .filter(o => ((o.attributes as { name?: string; display_name?: string; enum?: string[] }[] | undefined) || [])
       .some(a => (a.enum?.length || 0) > 0 && /状态|阶段|status|state|stage/i.test(`${a.name || ''}${a.display_name || ''}`)))
@@ -300,8 +267,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
   }
 
   const targetSpec = DIAGRAM_TABS.find(t => t.kind === dgKind)?.needsTarget
-  const targetOptions = targetSpec === 'scenario' ? scenarioNames
-    : targetSpec === 'object' ? objectNames : []
+  const targetOptions = diagramTargetOptions(targetSpec, { scenarioNames, objectNames, processNames })
   const detail = detailStack[detailStack.length - 1] || null
 
   return (
@@ -316,7 +282,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
             data-testid="business-flow-button"
             className="inline-flex h-8 items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2 text-[11px] font-medium text-emerald-700 transition-colors hover:border-emerald-300 hover:bg-emerald-100 hover:text-emerald-800 active:scale-[0.98] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
           >
-            <Share2 size={13} /> 业务流程
+            <Share2 size={13} /> 图示
           </button>
           <button
             type="button"
@@ -478,7 +444,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
                   className="h-8 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2 text-xs outline-none"
                 >
                   <option value="">
-                    {targetSpec === 'scenario' ? '默认场景（第一个）' : '自动选择对象'}
+                    {diagramTargetPlaceholder(targetSpec)}
                   </option>
                   {targetOptions.map(n => <option key={n} value={n}>{n}</option>)}
                 </select>

@@ -7,7 +7,7 @@ schema 保持宽松（对象数组），由 canvas.py / questions.py 的 pydanti
 
 六个常驻工具：
   get_canvas_elements                  读取权威画布的完整 canonical 元素
-  upsert_elements / remove_elements   六类模型元素的沉淀与修正
+  upsert_elements / remove_elements   七类模型元素的沉淀与修正
   raise_questions / resolve_questions 澄清账本（堵门问题必须定量销账）
   show_diagram                        确定性生成 ER/流程/时序/状态图，直接出现在对话里
 """
@@ -123,14 +123,16 @@ _FIELD_DOC = """元素字段约定（name 用英文 snake_case/PascalCase 标识
 - behavior: {name, display_name, actor(主体名), object(对象名), trigger(触发条件), inputs: [{name, display_name, type_hint, required}], outcome(结果，若引起状态变化写明「从X变为Y」), constraints: [str，定量表述], needs_approval(bool)}
 - event: {name, display_name, description, source(行为名|external|time), payload: [str], consequences: [str]}
 - rule: {name, display_name, kind(constraint|validation|derivation|approval|alert), applies_to(对象/行为名), statement(定量表述：阈值/枚举/边界要有具体数字), error_message?}
-- scenario: {name, display_name, goal, actors: [主体名], steps: [str], objects: [涉及对象名], behaviors: [涉及行为名], branches?: [{from_step(1-based), to_step(1-based|null，null=结束), condition}], expected_outcome}。steps 含如果/若/是否时必须给每个判断至少 2 条 branches，明确每个条件的目标步骤"""
+- process: {name, display_name, goal(业务目标), trigger(触发条件)?, steps: [{seq(排序键 int，渲染/校验按 seq 升序), name, actor(主体名，省略=线下步骤)?, behavior(行为名)?, inputs?: [str], outputs?: [str], description?}], branches?: [{from_step(1-based), to_step(1-based|null，null=结束), condition, kind(normal|exception)}], objects: [涉及对象名], metrics: [{name, formula(定量计算口径，须含数值/枚举), source_objects: [来源对象名], target(目标值)?}], expected_outcome} —— steps/branches/metrics 子项协议同其他结构化子项：非空数组按 id（其次自然键：step=seq+name、branch=from_step+condition、metric=name）增量合并，显式 [] 清空整表，删除单个子项传 {id, _delete:true}
+- scenario: {name, display_name, goal, actors: [主体名], steps: [str], objects: [涉及对象名], behaviors: [涉及行为名], branches?: [{from_step(1-based), to_step(1-based|null，null=结束), condition}], expected_outcome, process_ref(挂接的流程 name/id)?, metrics?: [{name, formula(定量口径), source_objects: [str], target?}]}。steps 含如果/若/是否时必须给每个判断至少 2 条 branches，明确每个条件的目标步骤；process_ref 挂接流程后场景成为情境变体：只需 goal 与变体路径，steps 可省略（省略=走流程主路径）"""
 
 TOOL_DEFS = [
     {
         "name": "get_canvas_elements",
         "description": (
             "读取当前业务画布的权威 canonical 元素（含所有已确认字段与子项 id）。"
-            "修改已有元素前，尤其要修改 attributes/relations/inputs/branches 时先读取；"
+            "修改已有元素前，尤其要修改 attributes/relations/inputs/branches/steps/metrics "
+            "时先读取；"
             "默认返回完整元素。极大元素可用 fields 投影，或用 nested_field + "
             "nested_offset/nested_limit 分页读取结构化子项。返回 canvasVersion，后续写入"
             "应把它作为 expected_canvas_version；若 truncated/hasMore=true 必须继续分页。"
@@ -139,7 +141,8 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "kind": {"type": "string",
-                         "enum": ["object", "actor", "behavior", "event", "rule", "scenario"]},
+                         "enum": ["object", "actor", "behavior", "event", "rule", "scenario",
+                                  "process"]},
                 "ids": {"type": "array", "items": {"type": "string"},
                         "description": "可选，元素 id/name/display_name；省略则按该类分页"},
                 "offset": {"type": "integer", "minimum": 0},
@@ -148,7 +151,7 @@ TOOL_DEFS = [
                            "description": "可选字段投影；省略时返回元素全部字段"},
                 "nested_field": {
                     "type": "string",
-                    "enum": ["attributes", "relations", "inputs", "branches"],
+                    "enum": ["attributes", "relations", "inputs", "branches", "steps", "metrics"],
                     "description": "超大结构化子项字段分页；使用时仅返回 id/name 和该字段",
                 },
                 "nested_offset": {"type": "integer", "minimum": 0},
@@ -161,7 +164,8 @@ TOOL_DEFS = [
         "name": "upsert_elements",
         "description": (
             "把对话中已确认的业务知识沉淀/更新到业务画布。同名或同 id 元素按已提供"
-            "字段合并。attributes/relations/inputs/branches 的非空数组按子项 id（其次"
+            "字段合并。attributes/relations/inputs/branches/steps/metrics 的非空数组按"
+            "子项 id（其次"
             "自然键）增量合并，不会覆盖未提及子项；显式 [] 才清空整表；删除单个子项"
             "传 {id, _delete:true}。修改已有元素前先用 get_canvas_elements 读取 canonical "
             "元素及 canvasVersion。\n" + _FIELD_DOC
@@ -170,7 +174,8 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "kind": {"type": "string",
-                         "enum": ["object", "actor", "behavior", "event", "rule", "scenario"],
+                         "enum": ["object", "actor", "behavior", "event", "rule", "scenario",
+                                  "process"],
                          "description": "模型类别"},
                 "elements": {"type": "array", "items": {"type": "object"},
                              "description": "元素数组，字段见工具描述"},
@@ -189,7 +194,8 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "kind": {"type": "string",
-                         "enum": ["object", "actor", "behavior", "event", "rule", "scenario"]},
+                         "enum": ["object", "actor", "behavior", "event", "rule", "scenario",
+                                  "process"]},
                 "ids": {"type": "array", "items": {"type": "string"},
                         "description": "元素 id 或名称列表"},
                 "expected_canvas_version": {
@@ -266,8 +272,8 @@ TOOL_DEFS = [
         "name": "show_diagram",
         "description": ("从画布确定性生成图表并直接展示在对话里（不经 LLM，图与画布严格一致），"
                         "用于让用户「看图挑错」：er=实体关系图（对象+person/org主体）；"
-                        "flow=业务流程图（target=场景名，缺省第一个场景）；"
-                        "sequence=时序图（场景的主体→对象协作，需场景已关联 behaviors）；"
+                        "flow=业务流程图（target=场景名或流程名，缺省第一个场景/流程）；"
+                        "sequence=时序图（target=场景名或流程名：场景需已关联 behaviors，流程取步骤绑定的行为）；"
                         "state=状态图（target=对象名，需状态/阶段枚举与已确认迁移完整闭合、无孤立状态）。"
                         "出图后请用户确认图中结构是否与实际相符，并按反馈修正画布。同一张图内容未变化时不要重复展示。"),
         "parameters": {
@@ -275,7 +281,7 @@ TOOL_DEFS = [
             "properties": {
                 "kind": {"type": "string", "enum": ["er", "flow", "sequence", "state"]},
                 "target": {"type": "string",
-                           "description": "flow/sequence 传场景名；state 传对象名；er 忽略"},
+                           "description": "flow/sequence 传场景名或流程名；state 传对象名；er 忽略"},
             },
             "required": ["kind"],
         },
