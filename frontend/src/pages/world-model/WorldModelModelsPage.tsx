@@ -207,11 +207,13 @@ function ProjectCard({
               {engineTypeLabel(item.engine_type)}
             </span>
             <span className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] ${
-              item.status === 'published'
+              item.service_status === 'online'
                 ? 'bg-teal-50 text-teal-700'
-                : 'bg-amber-50 text-amber-700'
+                : item.service_status === 'offline'
+                  ? 'bg-slate-100 text-slate-500'
+                  : 'bg-amber-50 text-amber-700'
             }`}>
-              {item.status === 'published' ? '已发布' : '草稿'}
+              {item.service_status === 'online' ? '在线' : item.service_status === 'offline' ? '已下线' : '草稿'}
             </span>
           </div>
         </div>
