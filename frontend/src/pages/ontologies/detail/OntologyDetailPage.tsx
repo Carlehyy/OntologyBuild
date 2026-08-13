@@ -289,7 +289,7 @@ export default function OntologyDetailPage() {
         onClose={closeVersionModal}
         title="本体版本演进"
         size="3xl"
-        panelClassName="h-[min(86dvh,820px)]"
+        panelClassName="h-[min(86dvh,820px)] max-w-5xl"
         contentClassName="flex-1 overflow-hidden"
       >
         <VersionsTab ontologyId={id!} onClose={closeVersionModal} />

@@ -148,7 +148,7 @@ test('历史发布只提供安全恢复草稿，并绑定用户看到的当前�
   await dialog.getByRole('button', { name: '创建恢复草稿' }).click()
 
   await expect(page.getByText(/v1\.1 已创建为恢复草稿；正式环境未改变，请先完成隔离试跑/)).toBeVisible()
-  await expect(page.getByTestId('version-node-v1.1')).toContainText('从 v1 恢复 · 按当前发布试跑')
+  await expect(page.getByTestId('version-node-v1.1')).toContainText('恢复自 v1')
   expect(createPayload).toEqual({
     versionLabel: '恢复 v1 规则',
     description: '验证安全回溯闭环',

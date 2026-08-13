@@ -315,7 +315,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await page.goto(`/#/ontologies/${ontology.id}`)
   await expect(page.getByTestId('current-release-version')).toHaveText('v0')
   await page.getByRole('button', { name: '查看历史版本' }).click()
-  await expect(page.getByText('在秩序中演化')).toBeVisible()
+  await expect(page.getByText('每次新建版本都会复制一份完整快照')).toBeVisible()
   await expect(page.getByTestId('version-tree')).toBeVisible()
   await expect(page.getByTestId('version-node-v0')).toContainText('当前发布')
   const draftRow = page.getByTestId('version-node-v0.1')
@@ -564,11 +564,13 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(readyDialog.getByRole('button', { name: '确认发布' })).toBeEnabled()
   await page.getByRole('button', { name: '确认发布' }).click()
   await expect(page.getByTestId('version-node-v1')).toContainText('当前发布', { timeout: 20_000 })
-  await expect(draftRow).toContainText('已晋级')
+  await expect(draftRow).toContainText('已发布为 v1')
   const evolvedVersionOrder = await page.getByTestId('version-tree')
     .locator('article[data-testid^="version-node-"]')
     .evaluateAll(rows => rows.map(row => row.getAttribute('data-testid')?.replace('version-node-', '')))
-  expect(evolvedVersionOrder.slice(0, 3)).toEqual(['v0', 'v0.1', 'v1'])
+  // 发布版始终位于第一列主干，分支缩进挂在所属版本下：
+  // v0（主干）→ v0.1（v0 的分支）→ v0.1.1（v0.1 的修复分支）→ v1（主干）。
+  expect(evolvedVersionOrder.slice(0, 4)).toEqual(['v0', 'v0.1', 'v0.1.1', 'v1'])
 
   const releasedTree = await api<any>(request, token, 'get', `/api/v2/ontologies/${ontology.id}/version-tree`)
   await waitForMappingApplied(request, token, ontology.id, mappingId)
