@@ -13,11 +13,37 @@ from app.super_assistant import runtime
 from app.super_assistant.models import (
     SuperAssistantConversation,
     SuperAssistantMcpServer,
+    SuperAssistantMemory,
+    SuperAssistantMemoryProfile,
     SuperAssistantMessage,
+    SuperAssistantReflectionCandidate,
+    SuperAssistantReflectionRun,
     SuperAssistantSkill,
     SuperAssistantToolRun,
 )
 from app.super_assistant.skill_store import build_manifest, create_skill_folder, render_skill_markdown, skill_directory
+
+# 流式改造后 runtime 每轮调 provider.chat_stream；测试统一经此伪造响应
+# （content 非空时同步触发 on_delta，模拟真流式增量）。
+_RUNTIME_TABLES = [
+    User.__table__, ModelConfig.__table__,
+    SuperAssistantConversation.__table__, SuperAssistantSkill.__table__,
+    SuperAssistantMcpServer.__table__, SuperAssistantMessage.__table__,
+    SuperAssistantToolRun.__table__, SuperAssistantMemory.__table__,
+    SuperAssistantMemoryProfile.__table__, SuperAssistantReflectionRun.__table__,
+    SuperAssistantReflectionCandidate.__table__,
+]
+
+
+def _fake_chat_stream(responses):
+    def _fake(_call_kwargs, _messages, _tools, on_delta=None):
+        result = next(responses)
+        content = result.get("content")
+        if content and on_delta:
+            on_delta(content)
+        return result
+
+    return _fake
 
 
 def test_runtime_progressively_loads_folder_skill_and_persists_answer(tmp_path, monkeypatch):
@@ -26,12 +52,7 @@ def test_runtime_progressively_loads_folder_skill_and_persists_answer(tmp_path, 
         f"sqlite:///{tmp_path / 'runtime.db'}",
         connect_args={"check_same_thread": False},
     )
-    Base.metadata.create_all(bind=engine, tables=[
-        User.__table__, ModelConfig.__table__,
-        SuperAssistantConversation.__table__, SuperAssistantSkill.__table__,
-        SuperAssistantMcpServer.__table__, SuperAssistantMessage.__table__,
-        SuperAssistantToolRun.__table__,
-    ])
+    Base.metadata.create_all(bind=engine, tables=_RUNTIME_TABLES)
     TestingSession = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     monkeypatch.setattr(runtime, "SessionLocal", TestingSession)
 
@@ -82,7 +103,7 @@ def test_runtime_progressively_loads_folder_skill_and_persists_answer(tmp_path, 
             "usage": {"inputTokens": 20, "outputTokens": 8},
         },
     ])
-    monkeypatch.setattr(runtime.provider, "chat", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr(runtime.provider, "chat_stream", _fake_chat_stream(responses))
 
     events = "".join(runtime.stream_chat(
         conversation_id="conversation-1",
@@ -115,12 +136,7 @@ def test_runtime_excludes_disabled_skill_and_rejects_direct_loading(tmp_path, mo
         f"sqlite:///{tmp_path / 'disabled-skill-runtime.db'}",
         connect_args={"check_same_thread": False},
     )
-    Base.metadata.create_all(bind=engine, tables=[
-        User.__table__, ModelConfig.__table__,
-        SuperAssistantConversation.__table__, SuperAssistantSkill.__table__,
-        SuperAssistantMcpServer.__table__, SuperAssistantMessage.__table__,
-        SuperAssistantToolRun.__table__,
-    ])
+    Base.metadata.create_all(bind=engine, tables=_RUNTIME_TABLES)
     TestingSession = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     monkeypatch.setattr(runtime, "SessionLocal", TestingSession)
 
@@ -158,16 +174,18 @@ def test_runtime_excludes_disabled_skill_and_rejects_direct_loading(tmp_path, mo
         ))
         db.commit()
 
-    def fake_chat(_call_kwargs, messages, _tools):
+    def fake_chat_stream(_call_kwargs, messages, _tools, on_delta=None):
         assert "disabled-skill" not in messages[0]["content"]
         assert "This description must not enter the prompt" not in messages[0]["content"]
+        if on_delta:
+            on_delta("停用的 Skill 未进入运行时。")
         return {
             "content": "停用的 Skill 未进入运行时。",
             "tool_calls": [],
             "usage": {"inputTokens": 12, "outputTokens": 6},
         }
 
-    monkeypatch.setattr(runtime.provider, "chat", fake_chat)
+    monkeypatch.setattr(runtime.provider, "chat_stream", fake_chat_stream)
     events = "".join(runtime.stream_chat(
         conversation_id="conversation-disabled",
         owner_id="user-disabled",
@@ -188,12 +206,7 @@ def test_runtime_executes_builtin_minio_mcp_without_network_or_credentials(tmp_p
         f"sqlite:///{tmp_path / 'minio-runtime.db'}",
         connect_args={"check_same_thread": False},
     )
-    Base.metadata.create_all(bind=engine, tables=[
-        User.__table__, ModelConfig.__table__,
-        SuperAssistantConversation.__table__, SuperAssistantSkill.__table__,
-        SuperAssistantMcpServer.__table__, SuperAssistantMessage.__table__,
-        SuperAssistantToolRun.__table__,
-    ])
+    Base.metadata.create_all(bind=engine, tables=_RUNTIME_TABLES)
     TestingSession = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     monkeypatch.setattr(runtime, "SessionLocal", TestingSession)
     with TestingSession() as db:
@@ -264,7 +277,7 @@ def test_runtime_executes_builtin_minio_mcp_without_network_or_credentials(tmp_p
             "usage": {"inputTokens": 25, "outputTokens": 9},
         },
     ])
-    monkeypatch.setattr(runtime.provider, "chat", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr(runtime.provider, "chat_stream", _fake_chat_stream(responses))
 
     events = "".join(runtime.stream_chat(
         conversation_id="conversation-minio",

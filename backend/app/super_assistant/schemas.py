@@ -169,3 +169,73 @@ class McpTestOut(BaseModel):
     ok: bool
     message: str
     tools: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class MemoryCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=50_000)
+    zone: str = Field(default="general", min_length=1, max_length=50)
+    pinned: bool = False
+    tags: list[str] = Field(default_factory=list, max_length=20)
+
+
+class MemoryUpdate(BaseModel):
+    content: str | None = Field(default=None, min_length=1, max_length=50_000)
+    zone: str | None = Field(default=None, min_length=1, max_length=50)
+    pinned: bool | None = None
+    tags: list[str] | None = Field(default=None, max_length=20)
+
+
+class MemoryOut(ORMModel):
+    id: str
+    content: str
+    zone: str
+    pinned: bool
+    confidence: str
+    source: str
+    tags: list[str]
+    supersedes: list[str]
+    superseded: bool
+    match_count: int
+    reference_count: int
+    last_accessed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReflectionCandidateOut(ORMModel):
+    id: str
+    run_id: str
+    conversation_id: str
+    kind: str
+    status: str
+    confidence: str
+    payload: dict[str, Any]
+    decision: str | None
+    created_at: datetime
+    decided_at: datetime | None
+
+
+class ReflectionDecisionRequest(BaseModel):
+    decision: str = Field(min_length=1, max_length=30)
+    payload: dict[str, Any] | None = None
+
+
+class ReflectionFullRequest(BaseModel):
+    conversation_id: str = Field(min_length=1, max_length=100)
+
+
+class ReflectionFullAccepted(BaseModel):
+    dispatched: bool
+    runId: str | None = None
+
+
+class ReflectionSettingsOut(BaseModel):
+    auto_accept_enabled: bool
+    palace_index: str | None
+    profile: str | None
+    memory_count: int
+    pending_count: int
+
+
+class ReflectionSettingsUpdate(BaseModel):
+    auto_accept_enabled: bool

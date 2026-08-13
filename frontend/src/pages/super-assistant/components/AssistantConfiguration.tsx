@@ -16,9 +16,10 @@ import {
   parseMcpClientConfig,
   type ParsedMcpClientServer,
 } from '@/lib/mcpClientConfig'
+import { ApprovalTab, EvolutionPendingBadge, MemoryTab } from './AssistantEvolution'
+import { errorText } from './assistantPanelUtils'
 
-export const errorText = (error: any, fallback = '操作失败') =>
-  error?.detail || error?.message || fallback
+export { errorText }
 
 
 function DialogShell({ title, description, size = 'default', onClose, children }: {
@@ -463,16 +464,17 @@ function SettingSwitch({ label, ariaLabel, checked, busy, onToggle }: {
 }
 
 
-export default function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, refreshServers }: {
+export default function ConfigurationPanel({ open, onClose, skills, servers, refreshSkills, refreshServers, conversationId }: {
   open: boolean
   onClose: () => void
   skills: SuperSkill[]
   servers: SuperMcpServer[]
   refreshSkills: () => Promise<void>
   refreshServers: () => Promise<void>
+  conversationId: string | null
 }) {
   const { toast } = useToast()
-  const [tab, setTab] = useState<'skills' | 'mcp'>('skills')
+  const [tab, setTab] = useState<'skills' | 'mcp' | 'approval' | 'memory'>('skills')
   const [creatingSkill, setCreatingSkill] = useState(false)
   const [editingSkill, setEditingSkill] = useState<SuperSkill | null>(null)
   const [editingMcp, setEditingMcp] = useState<SuperMcpServer | 'new' | null>(null)
@@ -568,8 +570,11 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
               <X size={16} />
             </button>
           </header>
-          <div className="relative mx-4 mt-3 grid grid-cols-2 gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5">
-            <div className={`absolute bottom-0.5 top-0.5 w-[calc(50%_-_4px)] rounded-md bg-teal-600 shadow-sm transition-all duration-300 ease-out ${tab === 'skills' ? 'left-0.5' : 'left-[calc(50%_+_2px)]'}`} />
+          <div className="relative mx-4 mt-3 grid grid-cols-4 gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5">
+            <div
+              className="absolute bottom-0.5 top-0.5 w-[calc(25%_-_4px)] rounded-md bg-teal-600 shadow-sm transition-all duration-300 ease-out"
+              style={{ left: `calc(${(['skills', 'mcp', 'approval', 'memory'] as const).indexOf(tab) * 25}% + 2px)` }}
+            />
             <button type="button" onClick={() => setTab('skills')}
               className={`relative z-10 min-h-9 rounded-md text-xs font-medium transition-colors duration-200 ${tab === 'skills' ? 'text-white' : 'text-slate-500 hover:text-slate-700'}`}>
               Skill <span className={`ml-1 text-[10px] tabular-nums ${tab === 'skills' ? 'text-teal-100' : 'text-slate-400'}`}>{skills.length}</span>
@@ -578,9 +583,21 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
               className={`relative z-10 min-h-9 rounded-md text-xs font-medium transition-colors duration-200 ${tab === 'mcp' ? 'text-white' : 'text-slate-500 hover:text-slate-700'}`}>
               MCP <span className={`ml-1 text-[10px] tabular-nums ${tab === 'mcp' ? 'text-teal-100' : 'text-slate-400'}`}>{configurableServers.length}</span>
             </button>
+            <button type="button" onClick={() => setTab('approval')}
+              className={`relative z-10 flex min-h-9 items-center justify-center gap-1 rounded-md text-xs font-medium transition-colors duration-200 ${tab === 'approval' ? 'text-white' : 'text-slate-500 hover:text-slate-700'}`}>
+              待审批 <EvolutionPendingBadge />
+            </button>
+            <button type="button" onClick={() => setTab('memory')}
+              className={`relative z-10 min-h-9 rounded-md text-xs font-medium transition-colors duration-200 ${tab === 'memory' ? 'text-white' : 'text-slate-500 hover:text-slate-700'}`}>
+              记忆
+            </button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          {tab === 'skills' ? (
+          {tab === 'approval' ? (
+            <ApprovalTab conversationId={conversationId} />
+          ) : tab === 'memory' ? (
+            <MemoryTab />
+          ) : tab === 'skills' ? (
             <>
               <div className="grid gap-3">
                 {skills.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)]"><Folder size={22} className="mx-auto mb-2" />暂无 Skill</div>}
@@ -665,12 +682,12 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
                   <Upload size={14} /> 导入 ZIP
                 </button>
               </div>
-            ) : (
+            ) : tab === 'mcp' ? (
               <button type="button" onClick={() => setEditingMcp('new')}
                 className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-teal-400 bg-teal-50/70 px-3 text-xs font-medium text-teal-700 transition-all hover:border-teal-500 hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
                 <Plus size={14} /> 添加 MCP
               </button>
-            )}
+            ) : null}
             <input ref={uploadRef} type="file" accept=".zip,application/zip" className="hidden" onChange={event => void importZip(event.target.files?.[0])} />
           </footer>
         </section>

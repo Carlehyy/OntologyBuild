@@ -22,11 +22,17 @@ PIPELINE_STREAM = "PIPELINE_TASKS"
 PIPELINE_EXECUTE_SUBJECT = "pipeline.task.execute"
 PIPELINE_RUN_SUBJECT = "task.pipeline.run"
 DATASET_IMPORT_SUBJECT = "task.dataset.import"
+SUPER_ASSISTANT_REFLECT_MICRO_SUBJECT = "super_assistant.reflect.micro"
+SUPER_ASSISTANT_REFLECT_FULL_SUBJECT = "super_assistant.reflect.full"
+SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT = "super_assistant.reflect.focused"
 # 流的全部订阅主题：扩容只能追加，旧 subject 与旧 durable 保持不变
 PIPELINE_STREAM_SUBJECTS = (
     PIPELINE_EXECUTE_SUBJECT,
     PIPELINE_RUN_SUBJECT,
     DATASET_IMPORT_SUBJECT,
+    SUPER_ASSISTANT_REFLECT_MICRO_SUBJECT,
+    SUPER_ASSISTANT_REFLECT_FULL_SUBJECT,
+    SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT,
 )
 
 # 进程内缓存：每个进程只在首次派发时确保一次 Stream
@@ -144,3 +150,22 @@ def dispatch_pipeline_task(task_id: str, trigger_type: str) -> None:
         {"task_id": task_id, "trigger_type": trigger_type},
         f"{task_id}:{trigger_type}:{time.time_ns()}",
     )
+
+
+_SUPER_ASSISTANT_REFLECT_SUBJECTS = {
+    "micro": SUPER_ASSISTANT_REFLECT_MICRO_SUBJECT,
+    "full": SUPER_ASSISTANT_REFLECT_FULL_SUBJECT,
+    "focused": SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT,
+}
+
+
+def dispatch_super_assistant_reflection(kind: str, payload: dict) -> None:
+    """超级助手反思任务派发入口：kind ∈ micro/full/focused。
+
+    payload 约定：owner_id/conversation_id 必填；micro 与 focused 另需
+    message_id，focused 可选 hint。消费侧的幂等由反思 run 记录兜底。
+    """
+    subject = _SUPER_ASSISTANT_REFLECT_SUBJECTS.get(kind)
+    if subject is None:
+        raise ValueError(f"未知的反思任务类型: {kind!r}")
+    dispatch_task(subject, payload)
