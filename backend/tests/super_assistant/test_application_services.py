@@ -108,6 +108,7 @@ def test_chat_cancel_and_tool_decision_preserve_runtime_semantics(
             "owner_id": user.id,
             "assistant_message_id": current.id,
             "requested_model_id": None,
+            "agent_mode": False,
         }
         assert response.media_type == "text/event-stream"
         assert response.headers["cache-control"] == (
@@ -187,6 +188,53 @@ def test_chat_cancel_and_tool_decision_preserve_runtime_semantics(
             409,
             "该工具调用已处理或已过期",
         )
+
+    engine.dispose()
+
+
+def test_chat_passes_agent_mode_to_stream_chat(tmp_path, monkeypatch):
+    """conversation_service.chat 把 body.agent_mode 透传给 stream_chat_fn。"""
+    engine = create_engine(f"sqlite:///{tmp_path / 'agent-mode.db'}")
+    Base.metadata.create_all(
+        bind=engine,
+        tables=[
+            User.__table__,
+            ModelConfig.__table__,
+            SuperAssistantConversation.__table__,
+            SuperAssistantMessage.__table__,
+        ],
+    )
+    Session = sessionmaker(bind=engine)
+    with Session() as db:
+        user = User(
+            id="agent-owner",
+            username="agent-owner",
+            email="agent-owner@example.com",
+            password_hash="unused",
+            role="editor",
+        )
+        db.add(user)
+        db.add(SuperAssistantConversation(
+            id="conversation-agent",
+            owner_id=user.id,
+            title="新会话",
+        ))
+        db.commit()
+
+        observed = {}
+
+        def fake_stream_chat(**kwargs):
+            observed.update(kwargs)
+            return iter(["event: done\ndata: {}\n\n"])
+
+        monkeypatch.setattr(router, "stream_chat", fake_stream_chat)
+        router.chat(
+            "conversation-agent",
+            ChatRequest(message="自主完成这项任务", agent_mode=True),
+            db,
+            user,
+        )
+        assert observed["agent_mode"] is True
 
     engine.dispose()
 

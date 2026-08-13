@@ -50,6 +50,8 @@ from app.super_assistant.schemas import (
     McpServerUpdate,
     McpTestOut,
     MemoryCreate,
+    MemoryDistillReport,
+    MemoryDistillRequest,
     MemoryOut,
     MemoryUpdate,
     MessageOut,
@@ -589,6 +591,39 @@ def delete_memory(
     if deleted is None:
         raise HTTPException(status_code=404, detail="记忆不存在")
     return Response(status_code=204)
+
+
+@router.get("/memories/distill-report", response_model=MemoryDistillReport)
+def get_memory_distill_report(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return {
+        "clusters": memory_service.find_distill_clusters(
+            db,
+            current_user.id,
+        )
+    }
+
+
+@router.post("/memories/distill", response_model=MemoryOut, status_code=201)
+def distill_memories(
+    body: MemoryDistillRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        return memory_service.apply_distill(
+            db,
+            current_user.id,
+            body.member_ids,
+            merged_content=body.merged_content,
+            use_llm=body.use_llm,
+        )
+    except memory_service.MemoryDistillNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except memory_service.MemoryDistillError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _reflection_value_error(exc: ValueError) -> HTTPException:

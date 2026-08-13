@@ -302,21 +302,8 @@ def _reflect(call_kwargs: dict, prompt: str) -> dict:
 
 
 def _recompile_profile(db: Session, owner_id: str) -> None:
-    """记忆/技能变更后重编译用户画像与记忆宫殿；失败仅记日志。"""
-    try:
-        call_kwargs = _reflection_call_kwargs(db)
-
-        def llm_fn(prompt: str) -> str:
-            result = provider.chat(
-                call_kwargs,
-                [{"role": "user", "content": prompt}],
-                [],
-            )
-            return str(result.get("content") or "")
-
-        memory_service.compile_profile_and_palace(db, owner_id, llm_fn)
-    except Exception:
-        logger.exception("重编译用户画像/记忆宫殿失败（owner=%s）", owner_id)
+    """记忆/技能变更后重编译；实现位于 memory_service（避免依赖环）。"""
+    memory_service.recompile_profile(db, owner_id)
 
 
 # ---------------------------------------------------------------------------

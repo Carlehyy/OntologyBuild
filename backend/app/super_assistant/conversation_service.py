@@ -225,6 +225,7 @@ def chat(
             owner_id=current_user.id,
             assistant_message_id=assistant_message.id,
             requested_model_id=body.model_config_id,
+            agent_mode=body.agent_mode,
         ),
         media_type="text/event-stream",
         headers={

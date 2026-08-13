@@ -154,3 +154,130 @@ test('超级助手：待审批与记忆面板全链路', async ({ page }) => {
   await expect(page.getByText('与现有记忆过于相似')).toBeVisible()
   await expect(page.getByText(/相似度 87%/)).toBeVisible()
 })
+
+test('超级助手：蒸馏收敛、Skill 常驻与自主模式', async ({ page }) => {
+  await seedAuth(page)
+
+  let alwaysActive = false
+  let distilled = false
+  const skillPatches: Array<Record<string, unknown>> = []
+  const distillBodies: Array<Record<string, unknown>> = []
+
+  const skill = {
+    id: 'skill-1', name: 'research-helper', description: '检索助手',
+    manifest: [{ path: 'SKILL.md', size: 128, editable: true }],
+    enabled: true, always_active: false, use_count: 0, last_used_at: null,
+    revision: 1, created_at: now, updated_at: now,
+  }
+  const memA = {
+    id: 'mem-a', content: '用户偏好简洁的中文回答', zone: 'general', pinned: false,
+    confidence: 'medium', source: 'user', tags: [], supersedes: [], superseded: false,
+    match_count: 2, reference_count: 1, last_accessed_at: null,
+    created_at: now, updated_at: now,
+  }
+  const memB = { ...memA, id: 'mem-b', content: '用户喜欢简短中文回复', match_count: 0, reference_count: 0 }
+  const merged = { ...memA, id: 'mem-merged', content: '用户偏好简洁的中文回答（合并）' }
+  const cluster = {
+    cluster_key: 'cluster-1',
+    members: [
+      { id: 'mem-a', content: memA.content, zone: 'general', pinned: false, match_count: 2, reference_count: 1, created_at: now },
+      { id: 'mem-b', content: memB.content, zone: 'general', pinned: false, match_count: 0, reference_count: 0, created_at: now },
+    ],
+    survivor_id: 'mem-a',
+    protected: false,
+  }
+
+  await page.route('**/api/v1/**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/v1/models') return json(route, [{
+      id: 'model-1', name: 'Fake model', config_type: 'llm', provider: 'openai',
+      api_base: 'https://example.com', has_api_key: true, enabled: true, is_default: true,
+      last_test_status: 'success', last_tested_at: now, last_test_message: 'ok',
+      models: ['fake-model'], options: {}, created_by: 'admin',
+      created_at: now, updated_at: now,
+    }])
+    return route.continue()
+  })
+
+  await page.route('**/api/v2/super-assistant/**', async route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    const method = request.method()
+    if (path === '/api/v2/super-assistant/conversations' && method === 'GET') {
+      return json(route, [{
+        id: 'conv-1', title: '测试会话', model_config_id: 'model-1', status: 'active',
+        created_at: now, updated_at: now,
+      }])
+    }
+    if (path === '/api/v2/super-assistant/conversations/conv-1/messages') return json(route, [])
+    if (path === '/api/v2/super-assistant/mcp-servers') return json(route, [])
+    if (path === '/api/v2/super-assistant/skills' && method === 'GET') {
+      return json(route, [{ ...skill, always_active: alwaysActive }])
+    }
+    if (path === '/api/v2/super-assistant/skills/skill-1' && method === 'PATCH') {
+      const body = request.postDataJSON() as Record<string, unknown>
+      skillPatches.push(body)
+      if (typeof body.always_active === 'boolean') alwaysActive = body.always_active
+      return json(route, { ...skill, always_active: alwaysActive })
+    }
+    if (path === '/api/v2/super-assistant/memories' && method === 'GET') {
+      return json(route, distilled ? [merged] : [memA, memB])
+    }
+    if (path === '/api/v2/super-assistant/memories/distill-report' && method === 'GET') {
+      return json(route, { clusters: distilled ? [] : [cluster] })
+    }
+    if (path === '/api/v2/super-assistant/memories/distill' && method === 'POST') {
+      const body = request.postDataJSON() as Record<string, unknown>
+      distillBodies.push(body)
+      distilled = true
+      return route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: merged }),
+      })
+    }
+    if (path === '/api/v2/super-assistant/reflection/settings') {
+      return json(route, {
+        auto_accept_enabled: true,
+        palace_index: null,
+        profile: null,
+        memory_count: 2,
+        pending_count: 0,
+      })
+    }
+    if (path === '/api/v2/super-assistant/reflection/candidates') return json(route, [])
+    return route.fulfill({ status: 404, body: '{}' })
+  })
+
+  await page.goto('/#/super-assistant')
+
+  // 自主模式开关随输入区渲染并切换状态
+  const agentToggle = page.getByTestId('agent-mode-toggle')
+  await expect(agentToggle).toHaveAttribute('aria-checked', 'false')
+  await agentToggle.click()
+  await expect(agentToggle).toHaveAttribute('aria-checked', 'true')
+
+  await page.getByRole('button', { name: '打开助手配置' }).click()
+
+  // Skill 治理：未使用标记 + 「常驻」开关触发 PATCH 并刷新卡片
+  await expect(page.getByText('未使用')).toBeVisible()
+  await page.getByRole('switch', { name: '设为常驻 Skill research-helper' }).click()
+  await expect.poll(() => skillPatches).toEqual([{ always_active: true }])
+  await expect(page.getByRole('switch', { name: '取消常驻 Skill research-helper' })).toHaveAttribute('aria-checked', 'true')
+
+  // 蒸馏收敛：打开报告、查看簇并「直接合并」，列表与报告同步刷新
+  await page.getByRole('button', { name: '记忆', exact: true }).click()
+  await expect(page.getByTestId('memory-item')).toHaveCount(2)
+  await page.getByTestId('distill-open').click()
+  const dialog = page.getByRole('dialog', { name: '记忆蒸馏收敛' })
+  await expect(dialog.getByTestId('distill-cluster')).toHaveCount(1)
+  await expect(dialog.getByText('相似记忆 2 条')).toBeVisible()
+  await expect(dialog.getByText('建议保留')).toHaveCount(1)
+  await expect(dialog.getByText('用户喜欢简短中文回复')).toBeVisible()
+  await dialog.getByTestId('distill-merge').click()
+  await expect.poll(() => distillBodies).toEqual([{ member_ids: ['mem-a', 'mem-b'], use_llm: false }])
+  await expect(page.getByText('记忆已合并')).toBeVisible()
+  await expect(dialog.getByText('没有可收敛的相似记忆簇')).toBeVisible()
+  await expect(page.getByTestId('memory-item')).toHaveCount(1)
+  await expect(page.getByText('用户偏好简洁的中文回答（合并）')).toBeVisible()
+})

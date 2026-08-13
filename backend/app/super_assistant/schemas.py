@@ -43,6 +43,7 @@ class MessageOut(ORMModel):
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=100_000)
     model_config_id: str | None = None
+    agent_mode: bool = False
 
 
 class ApprovalRequest(BaseModel):
@@ -54,10 +55,12 @@ class SkillCreate(BaseModel):
     description: str = Field(min_length=1, max_length=4000)
     content: str = Field(min_length=1, max_length=500_000)
     enabled: bool = True
+    always_active: bool = False
 
 
 class SkillUpdate(BaseModel):
     enabled: bool | None = None
+    always_active: bool | None = None
 
 
 class SkillOut(ORMModel):
@@ -66,6 +69,9 @@ class SkillOut(ORMModel):
     description: str
     manifest: list[dict[str, Any]]
     enabled: bool
+    always_active: bool
+    use_count: int
+    last_used_at: datetime | None
     revision: int
     created_at: datetime
     updated_at: datetime
@@ -200,6 +206,33 @@ class MemoryOut(ORMModel):
     last_accessed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class MemoryDistillMember(BaseModel):
+    id: str
+    content: str
+    zone: str
+    pinned: bool
+    match_count: int
+    reference_count: int
+    created_at: datetime
+
+
+class MemoryDistillCluster(BaseModel):
+    cluster_key: str
+    members: list[MemoryDistillMember]
+    survivor_id: str
+    protected: bool
+
+
+class MemoryDistillReport(BaseModel):
+    clusters: list[MemoryDistillCluster]
+
+
+class MemoryDistillRequest(BaseModel):
+    member_ids: list[str] = Field(max_length=50)
+    merged_content: str | None = Field(default=None, max_length=50_000)
+    use_llm: bool = False
 
 
 class ReflectionCandidateOut(ORMModel):

@@ -82,6 +82,7 @@ def create_skill(
         triggers=[],
         folder_path="",
         enabled=body.enabled,
+        always_active=body.always_active,
     )
     folder = skill_directory(current_user.id, item.id)
     item.folder_path = str(folder)
@@ -180,6 +181,8 @@ def update_skill(
     item = skill_lookup_fn(db, current_user.id, skill_id)
     if body.enabled is not None:
         item.enabled = body.enabled
+    if body.always_active is not None:
+        item.always_active = body.always_active
     db.commit()
     db.refresh(item)
     return item

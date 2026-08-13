@@ -135,6 +135,8 @@ ROUTE_PARAMETERS = {
         "db",
         "current_user",
     ),
+    "get_memory_distill_report": ("db", "current_user"),
+    "distill_memories": ("body", "db", "current_user"),
     "list_reflection_candidates": (
         "status",
         "db",
@@ -230,6 +232,11 @@ DELEGATES = {
     "create_memory": ("memory_service", "create_memory"),
     "update_memory": ("memory_service", "update_memory"),
     "delete_memory": ("memory_service", "delete_memory"),
+    "get_memory_distill_report": (
+        "memory_service",
+        "find_distill_clusters",
+    ),
+    "distill_memories": ("memory_service", "apply_distill"),
     "list_reflection_candidates": (
         "reflection_service",
         "list_candidates",
@@ -264,6 +271,7 @@ BODY_TYPES = {
     "update_mcp_server": schemas.McpServerUpdate,
     "create_memory": schemas.MemoryCreate,
     "update_memory": schemas.MemoryUpdate,
+    "distill_memories": schemas.MemoryDistillRequest,
     "decide_reflection_candidate": schemas.ReflectionDecisionRequest,
     "request_full_reflection": schemas.ReflectionFullRequest,
     "update_reflection_settings": schemas.ReflectionSettingsUpdate,
@@ -536,8 +544,11 @@ def test_super_assistant_openapi_matches_pre_extraction_baseline():
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode()
-    assert len(paths) == 22
-    assert sum(len(item) for item in paths.values()) == 33
+    # 基线随契约演进而更新：0068 技能治理为 Skill 契约新增
+    # always_active/use_count/last_used_at 字段；memory_distill 特性新增
+    # /memories/distill-report 与 /memories/distill 两个端点
+    assert len(paths) == 24
+    assert sum(len(item) for item in paths.values()) == 35
     assert hashlib.sha256(payload).hexdigest() == (
-        "70389266626f98a6c66634d7c50668bfb49ef12f6b8172feda3f5e369fdb079b"
+        "f0242f256442a3cb5f87d1fca8a7cbfc1652b2161362690659ed408481b4f653"
     )

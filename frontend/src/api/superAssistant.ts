@@ -39,6 +39,9 @@ export interface SuperSkill {
   description: string
   manifest: SkillFile[]
   enabled: boolean
+  always_active: boolean
+  use_count: number
+  last_used_at: string | null
   revision: number
   created_at: string
   updated_at: string
@@ -91,7 +94,7 @@ const runtimeApiBase = () => {
 
 const streamChat = async (
   conversationId: string,
-  body: { message: string; model_config_id?: string | null },
+  body: { message: string; model_config_id?: string | null; agent_mode?: boolean },
   onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal,
 ) => {
@@ -189,6 +192,27 @@ export interface MemoryConflictError {
   existing?: { id: string; content: string; similarity: number }
 }
 
+export interface DistillMember {
+  id: string
+  content: string
+  zone: string
+  pinned: boolean
+  match_count: number
+  reference_count: number
+  created_at: string
+}
+
+export interface DistillCluster {
+  cluster_key: string
+  members: DistillMember[]
+  survivor_id: string
+  protected: boolean
+}
+
+export interface DistillReport {
+  clusters: DistillCluster[]
+}
+
 export const superAssistantApi = {
   conversations: () => apiClientV2.get<SuperConversation[]>('/super-assistant/conversations'),
   createConversation: (body: { title?: string; model_config_id?: string | null } = {}) =>
@@ -204,9 +228,9 @@ export const superAssistantApi = {
 
   skills: () => apiClientV2.get<SuperSkill[]>('/super-assistant/skills'),
   createSkill: (body: {
-    name: string; description: string; content: string; enabled: boolean
+    name: string; description: string; content: string; enabled: boolean; always_active?: boolean
   }) => apiClientV2.post<SuperSkill>('/super-assistant/skills', body),
-  updateSkill: (id: string, body: Partial<Pick<SuperSkill, 'enabled'>>) =>
+  updateSkill: (id: string, body: Partial<Pick<SuperSkill, 'enabled' | 'always_active'>>) =>
     apiClientV2.patch<SuperSkill>(`/super-assistant/skills/${id}`, body),
   deleteSkill: (id: string) => apiClientV2.delete(`/super-assistant/skills/${id}`),
   importSkill: (archive: File) => {
@@ -250,6 +274,9 @@ export const superAssistantApi = {
   updateMemory: (id: string, body: Partial<Pick<SuperMemory, 'content' | 'zone' | 'pinned' | 'tags'>>) =>
     apiClientV2.patch<SuperMemory>(`/super-assistant/memories/${id}`, body),
   deleteMemory: (id: string) => apiClientV2.delete(`/super-assistant/memories/${id}`),
+  distillReport: () => apiClientV2.get<DistillReport>('/super-assistant/memories/distill-report'),
+  applyDistill: (body: { member_ids: string[]; merged_content?: string; use_llm?: boolean }) =>
+    apiClientV2.post<SuperMemory>('/super-assistant/memories/distill', body),
 
   reflectionCandidates: (status: 'pending' | 'accepted' | 'rejected' | 'all' = 'pending') =>
     apiClientV2.get<ReflectionCandidate[]>(`/super-assistant/reflection/candidates?status=${status}`),

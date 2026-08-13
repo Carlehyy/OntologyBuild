@@ -40,6 +40,7 @@ export default function SuperAssistantPage() {
   const [input, setInput] = useState('')
   const [running, setRunning] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [agentMode, setAgentMode] = useState(false)
   const [pending, setPending] = useState<PendingConfirmation | null>(null)
   const [decisionBusy, setDecisionBusy] = useState(false)
   const [sessionsOpen, setSessionsOpen] = useState(false)
@@ -209,7 +210,7 @@ export default function SuperAssistantPage() {
       { id: tempAssistantId, conversation_id: conversationId, role: 'assistant', content: '', status: 'streaming', steps: [], token_usage: {}, created_at: now },
     ])
     try {
-      await superAssistantApi.streamChat(conversationId, { message, model_config_id: selectedModelId || null }, ({ event, data }) => {
+      await superAssistantApi.streamChat(conversationId, { message, model_config_id: selectedModelId || null, agent_mode: agentMode }, ({ event, data }) => {
         if (event === 'text_delta') {
           setMessages(current => current.map(item => item.id === tempAssistantId ? { ...item, content: item.content + String(data.delta || '') } : item))
         } else if (event === 'tool_start') {
@@ -297,6 +298,21 @@ export default function SuperAssistantPage() {
           }}
           className="max-h-40 min-h-11 flex-1 resize-none bg-transparent px-3 py-3 text-sm leading-5 text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:opacity-60"
         />
+        <div className="flex h-11 shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={agentMode}
+            aria-label="自主模式"
+            data-testid="agent-mode-toggle"
+            title="助手将自主拆解并执行多步任务（最多 50 轮）"
+            onClick={() => setAgentMode(value => !value)}
+            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${agentMode ? 'bg-teal-600' : 'bg-slate-300'}`}
+          >
+            <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${agentMode ? 'left-[22px]' : 'left-0.5'}`} />
+          </button>
+          <span className="whitespace-nowrap text-xs text-[var(--color-text-secondary)]">自主模式</span>
+        </div>
         <div className="relative flex shrink-0 items-center gap-2">
           {running ? (
             <button type="button" onClick={() => void stop()} disabled={stopping} aria-label="停止生成" title="停止生成"

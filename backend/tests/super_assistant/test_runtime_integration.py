@@ -359,3 +359,178 @@ def test_cancel_tool_placeholders_pairs_orphan_calls():
         "role": "tool", "tool_call_id": "c2",
         "name": "web_fetch", "content": "Tool call cancelled",
     }
+
+
+# ---------------------------------------------------------------------------
+# 自主 agent 模式（PLAN→EXECUTE→VERIFY + 目标标记 + todo 清单工具）
+# ---------------------------------------------------------------------------
+
+
+def _agent_stream_args(ids):
+    return {**_stream_args(ids), "agent_mode": True}
+
+
+def _reopen(tmp_path, name):
+    return sessionmaker(bind=create_engine(
+        f"sqlite:///{tmp_path / name}.db", connect_args={"check_same_thread": False},
+    ))
+
+
+def test_agent_mode_catalog_and_prompt_include_todo_tools(tmp_path, monkeypatch):
+    """agent 模式：目录含 todo 工具，system prompt 追加自主模式段，完成标记被剥离。"""
+    _, ids = _seed(tmp_path, monkeypatch, "agent-catalog")
+    captured: dict = {}
+
+    def _fake(_call_kwargs, messages, tools, on_delta=None):
+        captured["tools"] = [tool["name"] for tool in tools]
+        captured["system"] = messages[0]["content"]
+        return _text("[GOAL_COMPLETE] 目标已达成。")
+
+    monkeypatch.setattr(runtime.provider, "chat_stream", _fake)
+    events = "".join(runtime.stream_chat(**_agent_stream_args(ids)))
+
+    assert "todo_write" in captured["tools"]
+    assert "todo_read" in captured["tools"]
+    assert "自主执行模式" in captured["system"]
+    assert "PLAN" in captured["system"]
+    assert "[GOAL_COMPLETE]" in captured["system"]
+    assert "[GOAL_COMPLETE]" not in events
+
+    with _reopen(tmp_path, "agent-catalog")() as db:
+        saved = db.get(SuperAssistantMessage, ids["assistant_message_id"])
+        assert saved.status == "complete"
+        assert saved.content == "目标已达成。"
+
+
+def test_agent_mode_todo_write_then_read_shares_state(tmp_path, monkeypatch):
+    """todo 清单是本轮 stream_chat 的内存态：todo_write 后 todo_read 同轮次内可读。"""
+    _, ids = _seed(tmp_path, monkeypatch, "agent-todo")
+    responses = iter([
+        {
+            "content": None,
+            "tool_calls": [{
+                "id": "c1", "name": "todo_write",
+                "arguments": {"items": ["收集订单数据", "汇总并给出结论"]},
+            }],
+            "usage": {},
+        },
+        {
+            "content": None,
+            "tool_calls": [{"id": "c2", "name": "todo_read", "arguments": {}}],
+            "usage": {},
+        },
+        _text("[GOAL_COMPLETE] 已完成全部步骤。"),
+    ])
+    monkeypatch.setattr(runtime.provider, "chat_stream", _fake_chat_stream(responses))
+    events = "".join(runtime.stream_chat(**_agent_stream_args(ids)))
+    assert "1. 收集订单数据" in events
+    assert "2. 汇总并给出结论" in events
+
+    with _reopen(tmp_path, "agent-todo")() as db:
+        runs = {run.tool_name: run for run in db.query(SuperAssistantToolRun).all()}
+        assert runs["todo_write"].status == "success"
+        assert runs["todo_read"].status == "success"
+        assert "1. 收集订单数据" in runs["todo_read"].result
+        saved = db.get(SuperAssistantMessage, ids["assistant_message_id"])
+        assert saved.content == "已完成全部步骤。"
+
+
+def test_agent_mode_uses_agent_iteration_limit(tmp_path, monkeypatch):
+    """agent 模式迭代上限取 super_assistant_agent_max_iterations，不被 max_tool_rounds 截断。"""
+    _, ids = _seed(tmp_path, monkeypatch, "agent-rounds")
+    monkeypatch.setattr(settings, "super_assistant_max_tool_rounds", 8)
+    monkeypatch.setattr(settings, "super_assistant_agent_max_iterations", 50)
+    responses = iter([
+        *(
+            {
+                "content": None,
+                "tool_calls": [{
+                    "id": f"c{index}", "name": "think",
+                    "arguments": {"thought": f"第 {index} 步"},
+                }],
+                "usage": {},
+            }
+            for index in range(12)
+        ),
+        _text("[GOAL_COMPLETE] 十二步全部完成。"),
+    ])
+    monkeypatch.setattr(runtime.provider, "chat_stream", _fake_chat_stream(responses))
+    events = "".join(runtime.stream_chat(**_agent_stream_args(ids)))
+    assert "event: message_end" in events
+
+    with _reopen(tmp_path, "agent-rounds")() as db:
+        runs = db.query(SuperAssistantToolRun).all()
+        assert len(runs) == 12
+        assert {run.status for run in runs} == {"success"}
+        saved = db.get(SuperAssistantMessage, ids["assistant_message_id"])
+        assert saved.status == "complete"
+        assert saved.content == "十二步全部完成。"
+
+
+def test_agent_mode_goal_failed_breaks_loop_and_records_step(tmp_path, monkeypatch):
+    """[GOAL_FAILED] 跳出迭代：content 剥离标记，steps 追加 agent failed 记录。"""
+    _, ids = _seed(tmp_path, monkeypatch, "agent-failed")
+    responses = iter([
+        {
+            "content": None,
+            "tool_calls": [{"id": "c1", "name": "think", "arguments": {"thought": "尝试"}}],
+            "usage": {},
+        },
+        _text("[GOAL_FAILED] 无法完成：缺少订单数据。"),
+    ])
+    monkeypatch.setattr(runtime.provider, "chat_stream", _fake_chat_stream(responses))
+    events = "".join(runtime.stream_chat(**_agent_stream_args(ids)))
+    # text_delta 是实时增量（协议不变），message_end 落库内容必须已剥离标记
+    assert "[GOAL_FAILED]" not in events.split("event: message_end")[-1]
+
+    with _reopen(tmp_path, "agent-failed")() as db:
+        saved = db.get(SuperAssistantMessage, ids["assistant_message_id"])
+        assert saved.status == "complete"
+        assert saved.content == "无法完成：缺少订单数据。"
+        assert {"toolName": "agent", "status": "failed"} in saved.steps
+
+
+def test_non_agent_mode_has_no_todo_tools(tmp_path, monkeypatch):
+    """非 agent 模式：目录无 todo 工具，system prompt 不含自主模式段。"""
+    _, ids = _seed(tmp_path, monkeypatch, "no-agent")
+    captured: dict = {}
+
+    def _fake(_call_kwargs, messages, tools, on_delta=None):
+        captured["tools"] = [tool["name"] for tool in tools]
+        captured["system"] = messages[0]["content"]
+        return _text("普通答复。")
+
+    monkeypatch.setattr(runtime.provider, "chat_stream", _fake)
+    "".join(runtime.stream_chat(**_stream_args(ids)))
+    assert "todo_write" not in captured["tools"]
+    assert "todo_read" not in captured["tools"]
+    assert "自主执行模式" not in captured["system"]
+
+
+def test_non_agent_mode_keeps_configured_round_limit(tmp_path, monkeypatch):
+    """非 agent 模式仍以 super_assistant_max_tool_rounds 为上限（走无工具收尾）。"""
+    _, ids = _seed(tmp_path, monkeypatch, "no-agent-limit")
+    monkeypatch.setattr(settings, "super_assistant_max_tool_rounds", 1)
+    monkeypatch.setattr(settings, "super_assistant_agent_max_iterations", 50)
+    seen_tool_counts: list[int] = []
+    responses = iter([
+        {
+            "content": None,
+            "tool_calls": [{"id": "c1", "name": "think", "arguments": {"thought": "x"}}],
+            "usage": {},
+        },
+        _text("总结答复。"),
+    ])
+
+    def _fake(_call_kwargs, _messages, tools, on_delta=None):
+        seen_tool_counts.append(len(tools))
+        return next(responses)
+
+    monkeypatch.setattr(runtime.provider, "chat_stream", _fake)
+    "".join(runtime.stream_chat(**_stream_args(ids)))
+    # 第二轮是 for/else 的无工具总结调用：证明 max_tool_rounds=1 已生效
+    assert seen_tool_counts[-1] == 0
+
+    with _reopen(tmp_path, "no-agent-limit")() as db:
+        saved = db.get(SuperAssistantMessage, ids["assistant_message_id"])
+        assert saved.content == "总结答复。"
