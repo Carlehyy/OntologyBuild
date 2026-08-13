@@ -28,7 +28,7 @@ import {
   type TestInput,
   type WorldModelProjectDetail,
 } from '@/api/worldModel'
-import { engineTypeLabel } from './WorldModelListTab'
+import { engineTypeLabel } from './WorldModelModelsPage'
 import { useToast } from '@/components/ui/Toast'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import {

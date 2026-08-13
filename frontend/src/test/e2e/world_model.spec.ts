@@ -153,14 +153,18 @@ test('旧 /ontologies/world-model 路径重定向到一级路由', async ({ page
   await expect(page).toHaveURL(/#\/world-model\/calls$/)
 })
 
-test('推演模型列表渲染与筛选，页内 Tab 可切换', async ({ page }) => {
+test('推演模型与调用记录为独立页面（无页内 Tab 与共享标题）', async ({ page }) => {
   await seedAuth(page)
   await mockPlatformShell(page)
   await mockWorldModel(page)
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/#/world-model/models')
 
-  await expect(page.getByRole('heading', { name: '世界模型' })).toBeVisible()
+  // 共享标题与页内 Tab 已移除
+  await expect(page.getByRole('heading', { name: '世界模型' })).toHaveCount(0)
+  await expect(page.getByText('演化层能力', { exact: false })).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: '世界模型子功能' })).toHaveCount(0)
+  // 列表页内容正常
   await expect(page.getByText('台区负荷短期推演')).toBeVisible()
 
   // 列表筛选（本地过滤）
@@ -169,13 +173,15 @@ test('推演模型列表渲染与筛选，页内 Tab 可切换', async ({ page }
   await page.getByLabel('按模型名称或描述筛选').fill('')
   await expect(page.getByText('台区负荷短期推演')).toBeVisible()
 
-  // Tab 切换到调用记录（页内 Tab 栏，区别于侧边栏子项）
+  // 经侧边栏子项进入独立的调用记录页
   // 回归：未设置时间筛选时，请求不得携带空的 start=/end=（后端 datetime 校验会 422）
   const callsRequests: string[] = []
   page.on('request', req => {
     if (req.url().includes('/world-model/calls?')) callsRequests.push(req.url())
   })
-  await page.getByRole('navigation', { name: '世界模型子功能' }).getByRole('link', { name: '调用记录' }).click()
+  const sidebar = page.locator('aside')
+  // 当前已在世界模型域内，分组处于激活展开态，子项直接可见（点击分组按钮反而会收起）
+  await sidebar.getByRole('link', { name: '调用记录' }).click()
   await expect(page).toHaveURL(/#\/world-model\/calls$/)
   await expect(page.getByText('agent-session-1')).toBeVisible()
   expect(callsRequests.length).toBeGreaterThan(0)

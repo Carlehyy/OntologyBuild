@@ -66,7 +66,7 @@ function OverviewCard({ icon, label, value, tone }: {
   )
 }
 
-export default function WorldModelCallsTab() {
+export default function WorldModelCallsPage() {
   const [items, setItems] = useState<CallRecordItem[]>([])
   const [overview, setOverview] = useState<CallRecordOverview | null>(null)
   const [total, setTotal] = useState(0)

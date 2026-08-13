@@ -32,7 +32,8 @@ import SuperAssistantPage from '@/pages/super-assistant/SuperAssistantPage'
 import SkillCommunityPage from '@/pages/community/SkillCommunityPage'
 import PluginCommunityPage from '@/pages/community/PluginCommunityPage'
 import OntologyGraphPage from '@/pages/ontologies/graph/OntologyGraphPage'
-import WorldModelPage from '@/pages/world-model/WorldModelPage'
+import WorldModelModelsPage from '@/pages/world-model/WorldModelModelsPage'
+import WorldModelCallsPage from '@/pages/world-model/WorldModelCallsPage'
 import WorldModelDevelopPage from '@/pages/world-model/WorldModelDevelopPage'
 import ApiHubPage from '@/pages/api-hub/ApiHubPage'
 import PublicManualDatasetPage from '@/pages/data-management/structured/PublicManualDatasetPage'
@@ -153,10 +154,11 @@ export default function App() {
           {/* ── 业务探索（对话式业务建模 → 需求文档 → 本体草稿） ── */}
           <Route path="/explore" element={<ProtectedRoute><ExplorationPage /></ProtectedRoute>} />
 
-          {/* 世界模型（演化层）— 一级导航域；旧 /ontologies/world-model/* 路径保留重定向 */}
+          {/* 世界模型（演化层）— 一级导航域；推演模型与调用记录为独立页面；旧 /ontologies/world-model/* 路径保留重定向 */}
           <Route path="/world-model" element={<Navigate to="/world-model/models" replace />} />
+          <Route path="/world-model/models" element={<ProtectedRoute><WorldModelModelsPage /></ProtectedRoute>} />
           <Route path="/world-model/models/:modelId/develop" element={<ProtectedRoute><WorldModelDevelopPage /></ProtectedRoute>} />
-          <Route path="/world-model/:tab" element={<ProtectedRoute><WorldModelPage /></ProtectedRoute>} />
+          <Route path="/world-model/calls" element={<ProtectedRoute><WorldModelCallsPage /></ProtectedRoute>} />
           <Route path="/ontologies/world-model" element={<LegacyWorldModelRedirect />} />
           <Route path="/ontologies/world-model/*" element={<LegacyWorldModelRedirect />} />
           <Route path="/ontologies" element={<ProtectedRoute><OntologyListPage /></ProtectedRoute>} />
