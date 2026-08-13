@@ -2,12 +2,13 @@
  * 业务画布元素详情弹窗
  *
  * 详情页的首要任务是帮助用户理解“这个模型如何运转”，而不是复述字段。
- * 六类模型各自使用不同的逻辑表达：
+ * 七类模型各自使用不同的逻辑表达：
  *   · 对象：识别 → 描述 → 连接
  *   · 主体：身份 → 职责 → 参与
  *   · 行为：触发 → 执行 → 结果
  *   · 事件：来源 → 事实 → 影响
  *   · 规则：作用对象 → 判定 → 执行结果
+ *   · 流程：目标 → 步骤/分支 → 产出度量
  *   · 场景：目标 → 主流程/分支 → 业务结果
  *
  * 结构缺口只做简短提示；具体澄清问题仍统一留在画布的“澄清账本”中处理。
@@ -21,7 +22,7 @@ import {
 } from 'lucide-react'
 import type { BusinessCanvas, CanvasElement } from '@/api/exploration'
 
-type CanvasKey = 'objects' | 'actors' | 'behaviors' | 'events' | 'rules' | 'scenarios'
+type CanvasKey = 'objects' | 'actors' | 'behaviors' | 'events' | 'rules' | 'processes' | 'scenarios'
 
 interface KindStyle {
   label: string
@@ -53,6 +54,10 @@ const KIND_STYLE: Record<CanvasKey, KindStyle> = {
     label: '规则模型', Icon: Scale, accent: 'bg-rose-600', soft: 'bg-rose-50',
     text: 'text-rose-700', border: 'border-rose-200',
   },
+  processes: {
+    label: '流程模型', Icon: GitBranch, accent: 'bg-indigo-600', soft: 'bg-indigo-50',
+    text: 'text-indigo-700', border: 'border-indigo-200',
+  },
   scenarios: {
     label: '场景模型', Icon: MapIcon, accent: 'bg-emerald-600', soft: 'bg-emerald-50',
     text: 'text-emerald-700', border: 'border-emerald-200',
@@ -80,8 +85,12 @@ const KIND_GUIDE: Record<CanvasKey, { purpose: string; reading: string }> = {
     purpose: '定义业务约束、判断、审批、派生或告警的执行口径。',
     reading: '先看规则作用于谁，再看判定表达，最后看命中或不满足时系统做什么。',
   },
+  processes: {
+    purpose: '定义业务的标准骨架：有序步骤、条件分支、异常路径与产出度量。',
+    reading: '先看目标与触发，再沿步骤顺序看每步由谁执行、绑定什么行为，最后看分支类型与度量口径。',
+  },
   scenarios: {
-    purpose: '用端到端流程验证主体、对象、行为和规则能否共同表达真实业务。',
+    purpose: '挂接流程的情境变体：在特定上下文里走哪条路径、怎么决策。',
     reading: '从业务目标出发，顺着主流程和条件分支走到预期结果。',
   },
 }
@@ -129,6 +138,33 @@ interface ScenarioBranch {
   from_step?: number
   to_step?: number | null
   condition?: string
+}
+
+interface ProcessStep {
+  id?: string | null
+  seq?: number
+  name?: string
+  actor?: string | null
+  behavior?: string | null
+  inputs?: string[]
+  outputs?: string[]
+  description?: string | null
+}
+
+interface ProcessBranch {
+  from_step?: number
+  to_step?: number | null
+  condition?: string
+  kind?: string
+}
+
+interface MetricRow {
+  name?: string
+  display_name?: string
+  formula?: string | null
+  source_objects?: string[]
+  target?: string | null
+  description?: string | null
 }
 
 interface Hit {
@@ -471,6 +507,146 @@ function ScenarioTimeline({ steps, branches }: { steps: string[]; branches: Scen
   )
 }
 
+/** 流程结构化步骤：ProcessStep 是对象（seq/name/actor/behavior/inputs/outputs），
+ *  与场景的字符串步骤不同，不能复用 ScenarioTimeline。 */
+function ProcessSteps({ steps, ctx }: { steps: ProcessStep[]; ctx: Ctx }) {
+  const ordered = [...steps].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
+  return (
+    <ol>
+      {ordered.map((step, index) => {
+        const stepNumber = index + 1
+        const inputs = asArr<string>(step.inputs)
+        const outputs = asArr<string>(step.outputs)
+        return (
+          <li key={step.id || `${step.name || 'step'}-${index}`} className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
+            <div className="flex flex-col items-center">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-indigo-200 bg-indigo-50 font-mono text-[11px] font-semibold text-indigo-700">
+                {step.seq ?? stepNumber}
+              </span>
+              {index < ordered.length - 1 && <span className="my-1 min-h-6 w-px flex-1 bg-indigo-200" />}
+            </div>
+            <div className="pb-4">
+              <p className="pt-0.5 text-sm font-medium leading-relaxed text-[var(--color-text-primary)]">
+                {step.name || `第 ${stepNumber} 步`}
+              </p>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+                <span>执行</span>
+                {step.actor
+                  ? <EntityRef name={step.actor} preferred="actors" ctx={ctx} />
+                  : <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">线下步骤</span>}
+                <span aria-hidden="true">·</span>
+                <span>行为</span>
+                {step.behavior
+                  ? <EntityRef name={step.behavior} preferred="behaviors" ctx={ctx} />
+                  : <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">未绑定</span>}
+              </div>
+              {(inputs.length > 0 || outputs.length > 0) && (
+                <div className="mt-1.5 space-y-1 text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">
+                  {inputs.length > 0 && <div>输入：{inputs.join('、')}</div>}
+                  {outputs.length > 0 && <div>输出：{outputs.join('、')}</div>}
+                </div>
+              )}
+              {step.description && (
+                <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">
+                  {step.description}
+                </p>
+              )}
+            </div>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+/** 流程分支表：from/to 步骤下标 + 条件 + 类型（正常/异常路径） */
+function ProcessBranchTable({ branches }: { branches: ProcessBranch[] }) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-[var(--color-border)]">
+      <div className="hidden grid-cols-[minmax(150px,1.4fr)_90px_90px_70px] gap-3 bg-[#f7f9fb] dark:bg-[#121820] px-3 py-2 text-[10px] font-medium text-[var(--color-text-tertiary)] sm:grid">
+        <span>条件</span>
+        <span>从步骤</span>
+        <span>到步骤</span>
+        <span>类型</span>
+      </div>
+      <div className="divide-y divide-[var(--color-border)] bg-white">
+        {branches.map((branch, index) => {
+          const isException = str(branch.kind) === 'exception'
+          return (
+            <div
+              key={`${branch.condition || 'branch'}-${index}`}
+              className="grid gap-2 px-3 py-2.5 sm:grid-cols-[minmax(150px,1.4fr)_90px_90px_70px] sm:items-center sm:gap-3"
+            >
+              <span className="text-xs font-medium text-[var(--color-text-primary)]">
+                {branch.condition || '条件未命名'}
+              </span>
+              <span className="font-mono text-[11px] text-[var(--color-text-secondary)]">
+                第 {branch.from_step ?? '—'} 步
+              </span>
+              <span className="font-mono text-[11px] text-[var(--color-text-secondary)]">
+                {branch.to_step == null ? '流程结束' : `第 ${branch.to_step} 步`}
+              </span>
+              <span>
+                <span className={`inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium ${isException
+                  ? 'bg-rose-50 text-rose-700' : 'bg-teal-50 text-teal-700'}`}>
+                  {isException ? '异常路径' : '正常路径'}
+                </span>
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/** 产出度量表：指标 + 定量口径 + 来源对象（可下钻）+ 目标值；流程与场景共用 */
+function MetricTable({ metrics, ctx }: { metrics: MetricRow[]; ctx: Ctx }) {
+  if (!metrics.length) return <Empty text="当前还没有定义产出度量。" />
+  return (
+    <div className="overflow-hidden rounded-xl border border-[var(--color-border)]">
+      <div className="hidden grid-cols-[minmax(120px,1fr)_minmax(150px,1.4fr)_minmax(120px,1fr)_80px] gap-3 bg-[#f7f9fb] dark:bg-[#121820] px-3 py-2 text-[10px] font-medium text-[var(--color-text-tertiary)] sm:grid">
+        <span>指标</span>
+        <span>计算口径</span>
+        <span>来源对象</span>
+        <span>目标值</span>
+      </div>
+      <div className="divide-y divide-[var(--color-border)] bg-white">
+        {metrics.map((metric, index) => {
+          const sources = asArr<string>(metric.source_objects)
+          const alias = metric.display_name && metric.name && metric.display_name !== metric.name
+          return (
+            <div
+              key={`${metric.name || 'metric'}-${index}`}
+              className="grid gap-2 px-3 py-3 sm:grid-cols-[minmax(120px,1fr)_minmax(150px,1.4fr)_minmax(120px,1fr)_80px] sm:items-start sm:gap-3"
+            >
+              <div className="min-w-0">
+                <span className="text-sm font-medium text-[var(--color-text-primary)]">
+                  {metric.display_name || metric.name}
+                </span>
+                {alias && (
+                  <code className="mt-0.5 block truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">
+                    {metric.name}
+                  </code>
+                )}
+              </div>
+              <div className="min-w-0 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+                {metric.formula || '口径未定义'}
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {sources.length
+                  ? sources.map(name => <EntityRef key={name} name={name} preferred="objects" ctx={ctx} />)
+                  : <span className="text-[11px] text-[var(--color-text-tertiary)]">—</span>}
+              </div>
+              <div className="text-[11px] text-[var(--color-text-secondary)]">{metric.target || '—'}</div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function ruleOutcome(kind: string, errorMessage: string): string {
   if (errorMessage) return errorMessage
   if (kind === 'approval') return '满足条件时进入审批流程'
@@ -751,6 +927,70 @@ function ElementBody({ sectionKey, el, ctx }: { sectionKey: CanvasKey; el: Canva
     )
   }
 
+  if (sectionKey === 'processes') {
+    const steps = asArr<ProcessStep>(el.steps)
+    const branches = asArr<ProcessBranch>(el.branches)
+    const metrics = asArr<MetricRow>(el.metrics)
+    const goal = str(el.goal)
+    const trigger = str(el.trigger)
+    const expectedOutcome = str(el.expected_outcome)
+    const exceptionCount = branches.filter(branch => str(branch.kind) === 'exception').length
+    return (
+      <>
+        <LogicChain
+          title="业务流程如何标准运转"
+          description="流程模型是标准骨架：目标与触发界定边界，步骤与分支定义路径，度量定义产出口径；场景作为情境变体挂接在它上面。"
+          items={[
+            {
+              eyebrow: '业务目标',
+              Icon: Target,
+              value: goal || '目标尚未定义',
+              meta: trigger ? `触发：${trigger}` : '触发条件未定义',
+              warning: !goal,
+            },
+            {
+              eyebrow: '步骤与分支',
+              Icon: GitBranch,
+              value: steps.length ? `${steps.length} 个步骤` : '步骤尚未定义',
+              meta: branches.length
+                ? `${branches.length} 条分支${exceptionCount ? `（含 ${exceptionCount} 条异常路径）` : ''}`
+                : '当前为线性主路径',
+              emphasized: true,
+              warning: steps.length === 0,
+            },
+            {
+              eyebrow: '预期结果',
+              Icon: Flag,
+              value: expectedOutcome || '预期结果尚未定义',
+              meta: metrics.length ? `${metrics.length} 项产出度量` : '产出度量尚未定义',
+              warning: !expectedOutcome,
+            },
+          ]}
+        />
+        <Section icon={Route} title="流程步骤" count={steps.length}>
+          {steps.length
+            ? <ProcessSteps steps={steps} ctx={ctx} />
+            : <Empty text="当前还没有形成流程步骤。" />}
+        </Section>
+        {branches.length > 0 && (
+          <Section icon={GitBranch} title="条件分支" count={branches.length}>
+            <ProcessBranchTable branches={branches} />
+          </Section>
+        )}
+        <Section icon={ListChecks} title="产出度量" count={metrics.length}>
+          <MetricTable metrics={metrics} ctx={ctx} />
+        </Section>
+        {expectedOutcome && (
+          <Section icon={Flag} title="预期结果">
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-3.5 py-3 text-sm font-medium leading-relaxed text-indigo-800">
+              {expectedOutcome}
+            </div>
+          </Section>
+        )}
+      </>
+    )
+  }
+
   const actors = asArr<string>(el.actors)
   const objects = asArr<string>(el.objects)
   const behaviors = asArr<string>(el.behaviors)
@@ -758,6 +998,8 @@ function ElementBody({ sectionKey, el, ctx }: { sectionKey: CanvasKey; el: Canva
   const branches = asArr<ScenarioBranch>(el.branches)
   const goal = str(el.goal)
   const expectedOutcome = str(el.expected_outcome)
+  const processRef = str(el.process_ref)
+  const metrics = asArr<MetricRow>(el.metrics)
   return (
     <>
       <LogicChain
@@ -788,6 +1030,11 @@ function ElementBody({ sectionKey, el, ctx }: { sectionKey: CanvasKey; el: Canva
           },
         ]}
       />
+      {processRef && (
+        <Section icon={GitBranch} title="所属流程">
+          <EntityRef name={processRef} preferred="processes" ctx={ctx} />
+        </Section>
+      )}
       <Section icon={Users} title="场景参与要素">
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -813,8 +1060,15 @@ function ElementBody({ sectionKey, el, ctx }: { sectionKey: CanvasKey; el: Canva
       <Section icon={Route} title="主流程与分支" count={steps.length}>
         {steps.length
           ? <ScenarioTimeline steps={steps} branches={branches} />
-          : <Empty text="当前还没有形成可顺序验收的场景步骤。" />}
+          : <Empty text={processRef
+              ? '该场景挂接所属流程的主路径，未定义变体步骤。'
+              : '当前还没有形成可顺序验收的场景步骤。'} />}
       </Section>
+      {metrics.length > 0 && (
+        <Section icon={ListChecks} title="产出度量" count={metrics.length}>
+          <MetricTable metrics={metrics} ctx={ctx} />
+        </Section>
+      )}
       {expectedOutcome && (
         <Section icon={Flag} title="闭环结果">
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-sm font-medium leading-relaxed text-emerald-800">
@@ -850,6 +1104,10 @@ function structureGaps(sectionKey: CanvasKey, el: CanvasElement): string[] {
   } else if (sectionKey === 'rules') {
     if (!str(el.applies_to)) gaps.push('缺少作用对象')
     if (!str(el.statement)) gaps.push('缺少可执行判定')
+  } else if (sectionKey === 'processes') {
+    if (!str(el.goal)) gaps.push('缺少业务目标')
+    if (!asArr<ProcessStep>(el.steps).length) gaps.push('缺少流程步骤')
+    if (!str(el.expected_outcome)) gaps.push('缺少预期结果')
   } else {
     if (!str(el.goal)) gaps.push('缺少业务目标')
     if (!asArr<string>(el.steps).length) gaps.push('缺少流程步骤')
@@ -892,7 +1150,16 @@ function relatedRefs(sectionKey: CanvasKey, el: CanvasElement, canvas: BusinessC
     push(el.source, 'behaviors')
   } else if (sectionKey === 'rules') {
     push(el.applies_to)
+  } else if (sectionKey === 'processes') {
+    asArr<string>(el.objects).forEach(name => push(name, 'objects'))
+    asArr<ProcessStep>(el.steps).forEach(step => {
+      push(step.actor, 'actors')
+      push(step.behavior, 'behaviors')
+    })
+    asArr<MetricRow>(el.metrics)
+      .forEach(metric => asArr<string>(metric.source_objects).forEach(name => push(name, 'objects')))
   } else {
+    push(el.process_ref, 'processes')
     asArr<string>(el.actors).forEach(name => push(name, 'actors'))
     asArr<string>(el.objects).forEach(name => push(name, 'objects'))
     asArr<string>(el.behaviors).forEach(name => push(name, 'behaviors'))
@@ -919,6 +1186,10 @@ function HeaderMeta({ sectionKey, el }: { sectionKey: CanvasKey; el: CanvasEleme
   } else if (sectionKey === 'rules') {
     items.push(`${RULE_KIND[str(el.kind)]?.label || '约束'}规则`)
     if (str(el.applies_to)) items.push(`作用于 ${str(el.applies_to)}`)
+  } else if (sectionKey === 'processes') {
+    items.push(`${asArr(el.steps).length} 步`, `${asArr(el.branches).length} 分支`)
+    const metrics = asArr(el.metrics).length
+    if (metrics) items.push(`${metrics} 指标`)
   } else {
     items.push(`${asArr(el.steps).length} 步`, `${asArr(el.branches).length} 分支`)
   }
@@ -1015,7 +1286,7 @@ export default function ElementDetailModal({ sectionKey, el, canvas, onClose, on
 
   const index = useMemo(() => {
     const result = new Map<string, Hit[]>()
-    const keys: CanvasKey[] = ['objects', 'actors', 'behaviors', 'events', 'rules', 'scenarios']
+    const keys: CanvasKey[] = ['objects', 'actors', 'behaviors', 'events', 'rules', 'processes', 'scenarios']
     if (!canvas) return result
     for (const key of keys) {
       const list = canvas[key]

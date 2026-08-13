@@ -1,6 +1,6 @@
 """需求文档生成 — 骨架确定性渲染，LLM 只写叙述
 
-稳定性原则：六类模型的清单章节由画布**确定性**渲染成 markdown 表格
+稳定性原则：七类模型的清单章节由画布**确定性**渲染成 markdown 表格
 （文档永远忠实于画布）；LLM 仅补「背景与目标 / 业务概述」两节叙述，
 调用失败时降级为占位文本，文档生成永不因 LLM 失败而失败。
 """
@@ -31,9 +31,15 @@ def canvas_fingerprint(canvas: dict) -> str:
 
     文档自己的来源元数据不参与哈希，避免快照封装改变业务内容指纹。问题账本等
     其余画布字段会参与，因此任何影响需求结论的改动都能使旧文档变 stale。
+
+    规范化时剔除值为空列表的 ``processes`` 键（仅剔这一个键）：旧快照（无此键）
+    与新画布（空 processes）指纹一致，存量文档不因流程模型上线而全局 stale；
+    画布一旦写入流程内容，指纹自然变化（正确）。
     """
     canonical = C._ensure_canvas(canvas)
     canonical.pop(_SOURCE_META_KEY, None)
+    if canonical.get("processes") == []:
+        canonical.pop("processes", None)
     payload = json.dumps(
         canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -167,12 +173,71 @@ def _render_rules(items: list[dict]) -> str:
                     r.get("error_message", "")] for r in items])
 
 
+def _render_metrics(items: list[dict]) -> str:
+    """流程/场景共用的产出度量表（formula 是定量口径，source_objects 是数据来源）。"""
+    return _table(["指标", "口径", "数据来源", "目标值"],
+                  [[_label(m), m.get("formula", ""),
+                    "、".join(str(v) for v in (m.get("source_objects") or [])),
+                    m.get("target", "")] for m in items])
+
+
+def _render_processes(items: list[dict]) -> str:
+    parts = []
+    for i, p in enumerate(items, 1):
+        parts.append(f"### 流程 {i}：{_label(p)}\n")
+        if p.get("goal"):
+            parts.append(f"**目标**：{p['goal']}\n")
+        if p.get("trigger"):
+            parts.append(f"**触发**：{p['trigger']}\n")
+        # 步骤按 seq 升序渲染，与流程图/质量门同一口径
+        steps = sorted((st for st in (p.get("steps") or []) if isinstance(st, dict)),
+                       key=lambda st: int(st.get("seq") or 0))
+        if steps:
+            parts.append("**流程步骤**\n")
+            parts.append(_table(
+                ["序号", "步骤", "负责主体", "对应行为", "输入", "产出"],
+                [[step.get("seq", j), step.get("name", ""),
+                  step.get("actor", ""), step.get("behavior", ""),
+                  "、".join(str(v) for v in (step.get("inputs") or [])),
+                  "、".join(str(v) for v in (step.get("outputs") or []))]
+                 for j, step in enumerate(steps, 1)],
+            ))
+        branches = p.get("branches") or []
+        if branches:
+            parts.append("**条件分支**\n")
+            parts.append(_table(
+                ["起始步骤", "目标步骤", "条件", "类型", "起始内容", "目标内容"],
+                [[branch.get("from_step"), branch.get("to_step") or "结束",
+                  branch.get("condition", ""),
+                  {"normal": "正常", "exception": "异常"}.get(
+                      branch.get("kind") or "normal", branch.get("kind") or ""),
+                  (steps[branch["from_step"] - 1].get("name", "")
+                   if isinstance(branch.get("from_step"), int)
+                   and 1 <= branch["from_step"] <= len(steps) else ""),
+                  (steps[branch["to_step"] - 1].get("name", "")
+                   if isinstance(branch.get("to_step"), int)
+                   and 1 <= branch["to_step"] <= len(steps) else "流程结束")]
+                 for branch in branches],
+            ))
+        metrics = p.get("metrics") or []
+        if metrics:
+            parts.append("**产出度量**\n")
+            parts.append(_render_metrics(metrics))
+        if p.get("expected_outcome"):
+            parts.append(f"**预期结果**：{p['expected_outcome']}\n")
+        if p.get("objects"):
+            parts.append("**关联对象**：" + "、".join(p["objects"]) + "\n")
+    return "\n".join(parts) if parts else "（空）\n"
+
+
 def _render_scenarios(items: list[dict]) -> str:
     parts = []
     for i, s in enumerate(items, 1):
         parts.append(f"### 场景 {i}：{_label(s)}\n")
         if s.get("goal"):
             parts.append(f"**目标**：{s['goal']}\n")
+        if s.get("process_ref"):
+            parts.append(f"**所属流程**：{s['process_ref']}\n")
         if s.get("actors"):
             parts.append("**参与主体**：" + "、".join(s["actors"]) + "\n")
         steps = s.get("steps") or []
@@ -195,6 +260,10 @@ def _render_scenarios(items: list[dict]) -> str:
             ))
         if s.get("expected_outcome"):
             parts.append(f"**预期结果**：{s['expected_outcome']}\n")
+        metrics = s.get("metrics") or []
+        if metrics:
+            parts.append("**产出度量**\n")
+            parts.append(_render_metrics(metrics))
         refs = []
         if s.get("objects"):
             refs.append("对象：" + "、".join(s["objects"]))
@@ -313,15 +382,19 @@ def generate_document(db: Session, session: ExplorationSession,
 
 {_render_rules(canvas["rules"])}
 
-## 8. 场景模型
+## 8. 流程模型
+
+{_render_processes(canvas["processes"])}
+
+## 9. 场景模型
 
 {_render_scenarios(canvas["scenarios"])}
 
-## 9. 澄清账本
+## 10. 澄清账本
 
 {_render_ledger(canvas)}
 
-## 10. 质量门检查
+## 11. 质量门检查
 
 {_render_readiness(rd)}
 """

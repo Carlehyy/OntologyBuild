@@ -1,14 +1,18 @@
 """质量门（readiness gates）— 画布 → 本体草稿的准入检查
 
-九道门与图谱编辑器/转化管线的真实需求一一对应：编辑器里一个"好"的本体
+十道门与图谱编辑器/转化管线的真实需求一一对应：编辑器里一个"好"的本体
 对象需要主键、带类型的属性、可解析且带基数的关系、绑定了对象的动作、
-可形式化（定量）的规则条件、来源可追溯的哨兵。凡是转化时只能靠回退兜底
+可形式化（定量）的规则条件、来源可追溯的哨兵；流程编排门再把流程模型的
+步骤落位、分支可达与度量定量显性拦下。凡是转化时只能靠回退兜底
 （自动补 id 主键、基数默认 one-to-many、规则待形式化却连数字都没有）的，
 都在这里显性拦下，逼着对话把口径问清，而不是把含糊留给编辑器。
 
 每道门产出 blocking / advisory 两级问题项：
   - blocking：不解决就不该生成草稿（可 force 越权，留痕）
   - advisory：不拦路，但列出来供追问与人审
+
+画布零流程时 processes 门无条件通过（vacuous pass）—— 流程是 P0 新模型，
+所有 blocking 只针对已存在流程的畸形，存量会话与旧画布不受新门影响。
 
 evaluate() 纯函数、确定性，同一画布永远得到同一份报告 —— 与转化管线同哲学。
 """
@@ -31,15 +35,16 @@ from app.exploration.questions import (
 
 # 门定义顺序即阶段推进顺序（第一道未过的门 = 当前建议聚焦的阶段）
 _GATE_STAGES = [
-    ("scope", "业务边界", "阶段0 · 定边界：先有至少一个场景和一个主体"),
+    ("scope", "业务边界", "阶段0 · 定边界：先有至少一个流程或场景和一个主体"),
     ("objects", "对象齐备", "阶段1 · 对象与主键：属性、类型、业务主键"),
     ("relations", "关系闭合", "阶段2 · 关系与基数：目标可解析、基数已确认"),
     ("behaviors", "行为落位", "阶段3 · 行为：谁(主体)对什么(对象)做"),
     ("lifecycles", "状态闭环", "阶段3 · 生命周期：枚举与迁移使用同一口径且没有孤立状态"),
     ("rules", "规则定量", "阶段4 · 规则定量：阈值/枚举/边界给到数字"),
     ("events", "事件可追溯", "阶段4 · 事件：来源指向行为/external/time"),
-    ("questions", "疑问清零", "阶段5 · 清账：回答账本里剩余的堵门问题"),
-    ("coverage", "场景验收", "阶段6 · 验收：场景引用的对象/行为都已定义"),
+    ("processes", "流程编排", "阶段5 · 流程编排：步骤落位、分支可达、度量定量"),
+    ("questions", "疑问清零", "阶段6 · 清账：回答账本里剩余的堵门问题"),
+    ("coverage", "场景验收", "阶段7 · 验收：场景引用的对象/行为都已定义"),
 ]
 _STAGE_READY = "已就绪 · 全部质量门通过，可生成需求文档与本体草稿"
 
@@ -57,6 +62,7 @@ def evaluate(canvas: Any) -> dict:
     events = c["events"]
     rules = c["rules"]
     scenarios = c["scenarios"]
+    processes = c["processes"]
 
     obj_names = {norm_name(o.get("name", "")) for o in objects} \
         | {norm_name(o.get("display_name", "")) for o in objects if o.get("display_name")}
@@ -79,7 +85,7 @@ def evaluate(canvas: Any) -> dict:
         gates.append({"id": gid, "label": label, "passed": not blocking,
                       "blockingItems": blocking, "advisoryItems": advisory})
 
-    # -- scope：边界 —— 场景圈定验收范围，主体圈定参与方
+    # -- scope：边界 —— 流程/场景圈定业务边界，主体圈定参与方
     blk, adv = [], []
     for collection, label in (
         (objects, "对象"), (actors, "主体"), (behaviors, "行为"),
@@ -95,8 +101,8 @@ def evaluate(canvas: Any) -> dict:
                 blk.append(
                     f"{label}模型存在重复稳定 name：{'、'.join(labels[:4])}；"
                     "请先合并或重命名，避免引用歧义")
-    if not scenarios:
-        blk.append("还没有任何场景 —— 场景是草稿可表达性的验收器，先让用户讲一个端到端流程")
+    if not scenarios and not processes:
+        blk.append("还没有任何流程或场景 —— 先让用户讲一个端到端流程或一个典型情境")
     if not actors:
         blk.append("还没有任何主体 —— 谁在参与这些业务？")
     if not objects:
@@ -219,6 +225,40 @@ def evaluate(canvas: Any) -> dict:
             adv.append(f"事件「{name}」未说明后果 —— 发生之后业务上要做什么？")
     gate("events", blk, adv)
 
+    # -- processes：流程编排 —— 画布零流程时本门无条件通过（vacuous pass），
+    # 所有 blocking 只针对已存在流程的畸形；分支/可达性复用 diagram 共享校验。
+    blk, adv = [], []
+    for p in processes:
+        pname = _label(p)
+        steps = [step for step in (p.get("steps") or []) if isinstance(step, dict)]
+        if steps and len(steps) < 2:
+            blk.append(f"流程「{pname}」的步骤少于 2 步 —— 端到端流程至少要有起点与终点")
+        try:
+            analysis = D.process_model_analysis(c, p.get("id") or p.get("name"))
+        except D.DiagramError as error:
+            blk.append(f"流程「{pname}」无法定位：{error}")
+            continue
+        blk.extend(f"流程「{pname}」：{issue}" for issue in analysis["issues"])
+        for metric in p.get("metrics") or []:
+            mname = metric.get("name") or "?"
+            formula = str(metric.get("formula") or "").strip()
+            if not formula:
+                blk.append(f"流程「{pname}」的度量「{mname}」缺少计算口径（formula）")
+            elif not is_quantified(formula):
+                hits = "、".join(vague_terms_in(formula)[:3]) or "无数量信号"
+                blk.append(f"流程「{pname}」的度量「{mname}」口径未定量（{hits}）—— 要有具体数字或枚举")
+            for ref in metric.get("source_objects") or []:
+                if norm_name(ref) not in entity_names:
+                    blk.append(f"流程「{pname}」的度量「{mname}」的来源对象「{ref}」未在对象/主体模型中定义")
+        branches = p.get("branches") or []
+        if not any(branch.get("kind") == "exception" for branch in branches):
+            adv.append(f"流程「{pname}」没有异常分支（exception）—— 出错/驳回时流程往哪走？")
+        if not (p.get("metrics") or []):
+            adv.append(f"流程「{pname}」还没有产出度量（metrics）—— 用什么数字证明流程达成了目标？")
+        if steps and not any(str(step.get("behavior") or "").strip() for step in steps):
+            adv.append(f"流程「{pname}」的全部步骤都未绑定行为 —— 步骤与行为模型脱节")
+    gate("processes", blk, adv)
+
     # -- questions：账本清零 —— dismissed 只是暂缓，已销账答案还须与 target 画布一致
     opens_b = open_questions(canvas, KIND_BLOCKING)
     opens_a = open_questions(canvas, KIND_ADVISORY)
@@ -234,7 +274,8 @@ def evaluate(canvas: Any) -> dict:
     adv = [f"AI 建议待确认：{q.get('question')}" for q in opens_a]
     gate("questions", blk, adv)
 
-    # -- coverage：场景是端到端验收器，不接受只有名字的空壳场景
+    # -- coverage：场景是端到端验收器，不接受只有名字的空壳场景；
+    # 挂接流程的场景从简，覆盖口径含流程引用（对象/行为被任一场景或流程引用即覆盖）。
     blk, adv = [], []
     covered_obj: set[str] = set()
     covered_beh: set[str] = set()
@@ -250,6 +291,24 @@ def evaluate(canvas: Any) -> dict:
         for value in (behavior.get("name"), behavior.get("display_name"), behavior.get("id"))
         if value
     }
+    process_identity = {
+        norm_name(str(value)): norm_name(str(process.get("name") or ""))
+        for process in processes
+        for value in (process.get("name"), process.get("display_name"), process.get("id"))
+        if value
+    }
+    for p in processes:
+        for x in p.get("objects") or []:
+            if norm_name(x) in entity_names:
+                canonical = object_identity.get(norm_name(x))
+                if canonical:
+                    covered_obj.add(canonical)
+        for step in p.get("steps") or []:
+            behavior = str(step.get("behavior") or "").strip()
+            if behavior and norm_name(behavior) in beh_names:
+                canonical = behavior_identity.get(norm_name(behavior))
+                if canonical:
+                    covered_beh.add(canonical)
     for s in scenarios:
         sname = _label(s)
         for x in s.get("objects") or []:
@@ -262,6 +321,28 @@ def evaluate(canvas: Any) -> dict:
                 canonical = behavior_identity.get(norm_name(x))
                 if canonical:
                     covered_beh.add(canonical)
+        process_ref = str(s.get("process_ref") or "").strip()
+        if process_ref:
+            if norm_name(process_ref) not in process_identity:
+                blk.append(f"场景「{sname}」挂接的流程「{process_ref}」不存在")
+                continue
+            # 挂接场景从简：只强制 goal 非空；steps 为空 = 走流程主路径，
+            # 跳过场景级 flow 校验；objects/behaviors 若填必须可解析；
+            # steps 非空则落入下方与未挂接场景一致的现有校验。
+            if not str(s.get("goal") or "").strip():
+                blk.append(f"场景「{sname}」缺少业务目标（goal）")
+            if not (s.get("steps") or []):
+                unresolved_objects = [str(x) for x in (s.get("objects") or [])
+                                      if norm_name(str(x)) not in entity_names]
+                unresolved_behaviors = [str(x) for x in (s.get("behaviors") or [])
+                                        if norm_name(str(x)) not in beh_names]
+                if unresolved_objects:
+                    blk.append(f"场景「{sname}」引用未定义对象/实体主体："
+                               + "、".join(unresolved_objects[:8]))
+                if unresolved_behaviors:
+                    blk.append(f"场景「{sname}」引用未定义行为："
+                               + "、".join(unresolved_behaviors[:8]))
+                continue
         try:
             analysis = D.scenario_model_analysis(c, s.get("name") or s.get("display_name"))
         except D.DiagramError as error:
@@ -275,13 +356,13 @@ def evaluate(canvas: Any) -> dict:
             except D.DiagramError as error:
                 if "流程图质量校验未通过" in str(error):
                     blk.append(f"场景「{sname}」的流程结构不完整：{error}")
-    if scenarios:
+    if scenarios or processes:
         un_obj = [_label(o) for o in objects if norm_name(o.get("name", "")) not in covered_obj]
         un_beh = [_label(b) for b in behaviors if norm_name(b.get("name", "")) not in covered_beh]
         if un_obj:
-            adv.append(f"对象 {', '.join(un_obj[:6])} 未被任何场景覆盖")
+            adv.append(f"对象 {', '.join(un_obj[:6])} 未被任何场景或流程覆盖")
         if un_beh:
-            adv.append(f"行为 {', '.join(un_beh[:6])} 未被任何场景覆盖")
+            adv.append(f"行为 {', '.join(un_beh[:6])} 未被任何场景或流程覆盖")
     gate("coverage", blk, adv)
 
     blocking_count = sum(len(g["blockingItems"]) for g in gates)

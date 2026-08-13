@@ -13,15 +13,16 @@ const emptyCanvas = {
   behaviors: [],
   events: [],
   rules: [],
+  processes: [],
   scenarios: [],
   questions: [],
 }
 
 const ready = {
   ready: true,
-  stage: '阶段9 · 可落地',
-  gatesPassed: 9,
-  gatesTotal: 9,
+  stage: '已就绪 · 全部质量门通过，可生成需求文档与本体草稿',
+  gatesPassed: 10,
+  gatesTotal: 10,
   blockingCount: 0,
   advisoryCount: 0,
   openQuestions: { blocking: 0, advisory: 0 },
@@ -31,7 +32,7 @@ const ready = {
 const blockedReadiness = {
   ...ready,
   ready: false,
-  stage: '阶段5 · 补规则',
+  stage: '阶段4 · 规则定量：阈值/枚举/边界给到数字',
   gatesPassed: 7,
   blockingCount: 2,
   gates: [{
@@ -132,7 +133,7 @@ async function mockExplore(
         updatedAt: '',
         canvas: emptyCanvas,
         completeness: {
-          counts: { objects: 1, actors: 0, behaviors: 0, events: 0, rules: 0, scenarios: 0 },
+          counts: { objects: 1, actors: 0, behaviors: 0, events: 0, rules: 0, processes: 0, scenarios: 0 },
           gaps: [],
         },
         readiness: ready,
@@ -261,7 +262,7 @@ test.describe('业务探索文档转化风险', () => {
     })
 
     await page.getByRole('button', { name: '生成本体模型', exact: true }).click()
-    await expect(page.getByText('质量门未通过（7/9 门）', { exact: false })).toBeVisible()
+    await expect(page.getByText('质量门未通过（7/10 门）', { exact: false })).toBeVisible()
     await expect(page.getByText('[规则口径] 审批阈值缺少金额与币种', { exact: false })).toBeVisible()
     await page.getByRole('button', { name: '已知悉风险，越权生成（留痕）' }).click()
     await expect(page.getByText('质量门越权生成')).toBeVisible()
