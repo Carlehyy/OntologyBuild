@@ -127,5 +127,7 @@
   outline: none !important;
 }
 .cm-editor .cm-content {
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  /* 西文等宽在前；中文依次回退 macOS 苹方 / Windows 雅黑 / Linux Noto Sans SC，
+     避免落到浏览器默认的 monospace 中文（Windows 上常是宋体）而难读 */
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', monospace !important;
 }
