@@ -152,7 +152,7 @@ def menu_guard(menu_key: str, *, read_menu_keys: tuple[str, ...] = ()):
 overview_guard = menu_guard("overview")
 ontology_guard = menu_guard(
     "ontologies",
-    read_menu_keys=("agent", "explore", "events"),
+    read_menu_keys=("agent", "explore", "events", "world_model"),
 )
 models_guard = menu_guard(
     "models",

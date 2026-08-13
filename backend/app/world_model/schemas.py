@@ -105,3 +105,56 @@ class CallRecordOverview(BaseModel):
     total: int = 0
     failed: int = 0
     avg_duration_ms: int = 0
+
+
+# ---------- 推演服务（发布 / 状态 / 调用） ----------
+
+
+class PreconditionItem(BaseModel):
+    """前置条件（最小结构化表达）：某类对象的事实数量下限。"""
+    object_type_id: str = Field(min_length=1, max_length=100)
+    min_count: int = Field(default=1, ge=1)
+
+
+class ServicePublishRequest(BaseModel):
+    """发布为推演服务：选定冻结版本 + 本体语义注册。"""
+    version_id: str | None = None  # 缺省发布最新冻结版本
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=500)
+    applicable_ontology_id: str = Field(min_length=1)
+    applicable_object_type_ids: list[str] = Field(min_length=1)
+    preconditions: list[PreconditionItem] = Field(default_factory=list)
+
+
+class ServiceStatusRequest(BaseModel):
+    status: Literal["online", "offline"]
+
+
+class ServiceOut(BaseModel):
+    id: str
+    project_id: str
+    version_id: str | None
+    version_no: int | None = None
+    name: str
+    description: str
+    status: str
+    endpoint_path: str | None
+    applicable_object_types: dict[str, Any] | None
+    preconditions: list[dict[str, Any]] | None
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+class InvokeRequest(BaseModel):
+    """调用推演服务：与 simulate(context, actions, horizon) 契约对齐。"""
+    context: dict[str, Any] = Field(default_factory=dict)
+    actions: list[Any] = Field(default_factory=list)
+    horizon: int = Field(default=1, ge=0)
+
+
+class InvokeResult(BaseModel):
+    ok: bool
+    payload: Any = None
+    error: str | None = None
+    duration_ms: int = 0
+    call_id: str | None = None
