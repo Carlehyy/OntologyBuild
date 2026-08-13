@@ -146,6 +146,49 @@ const streamChat = async (
   if (buffer.trim()) dispatch(buffer)
 }
 
+export interface SuperMemory {
+  id: string
+  content: string
+  zone: string
+  pinned: boolean
+  confidence: string
+  source: string
+  tags: string[]
+  supersedes: string[]
+  superseded: boolean
+  match_count: number
+  reference_count: number
+  last_accessed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ReflectionCandidate {
+  id: string
+  run_id: string
+  conversation_id: string
+  kind: 'memory' | 'skill' | 'conflict' | string
+  status: 'pending' | 'accepted' | 'rejected' | string
+  confidence: string
+  payload: Record<string, any>
+  decision: string | null
+  created_at: string
+  decided_at: string | null
+}
+
+export interface ReflectionSettings {
+  auto_accept_enabled: boolean
+  palace_index: string | null
+  profile: string | null
+  memory_count: number
+  pending_count: number
+}
+
+export interface MemoryConflictError {
+  detail: string
+  existing?: { id: string; content: string; similarity: number }
+}
+
 export const superAssistantApi = {
   conversations: () => apiClientV2.get<SuperConversation[]>('/super-assistant/conversations'),
   createConversation: (body: { title?: string; model_config_id?: string | null } = {}) =>
@@ -194,4 +237,27 @@ export const superAssistantApi = {
   testMcpServer: (id: string) => apiClientV2.post<{ ok: boolean; message: string; tools: McpTool[] }>(
     `/super-assistant/mcp-servers/${id}/test`,
   ),
+
+  memories: (params: { zone?: string; include_superseded?: boolean } = {}) => {
+    const search = new URLSearchParams()
+    if (params.zone) search.set('zone', params.zone)
+    if (params.include_superseded) search.set('include_superseded', 'true')
+    const suffix = search.size ? `?${search.toString()}` : ''
+    return apiClientV2.get<SuperMemory[]>(`/super-assistant/memories${suffix}`)
+  },
+  createMemory: (body: { content: string; zone?: string; pinned?: boolean; tags?: string[] }) =>
+    apiClientV2.post<SuperMemory>('/super-assistant/memories', body),
+  updateMemory: (id: string, body: Partial<Pick<SuperMemory, 'content' | 'zone' | 'pinned' | 'tags'>>) =>
+    apiClientV2.patch<SuperMemory>(`/super-assistant/memories/${id}`, body),
+  deleteMemory: (id: string) => apiClientV2.delete(`/super-assistant/memories/${id}`),
+
+  reflectionCandidates: (status: 'pending' | 'accepted' | 'rejected' | 'all' = 'pending') =>
+    apiClientV2.get<ReflectionCandidate[]>(`/super-assistant/reflection/candidates?status=${status}`),
+  decideReflectionCandidate: (id: string, decision: string, payload?: Record<string, any>) =>
+    apiClientV2.post<ReflectionCandidate>(`/super-assistant/reflection/candidates/${id}/decision`, { decision, payload }),
+  runFullReflection: (conversationId: string) =>
+    apiClientV2.post<{ dispatched: boolean; runId?: string | null }>('/super-assistant/reflection/full', { conversation_id: conversationId }),
+  reflectionSettings: () => apiClientV2.get<ReflectionSettings>('/super-assistant/reflection/settings'),
+  updateReflectionSettings: (body: { auto_accept_enabled: boolean }) =>
+    apiClientV2.put<ReflectionSettings>('/super-assistant/reflection/settings', body),
 }

@@ -4,7 +4,7 @@ const readiness = {
   ready: false,
   stage: '阶段0 · 定边界',
   gatesPassed: 0,
-  gatesTotal: 9,
+  gatesTotal: 10,
   blockingCount: 3,
   advisoryCount: 0,
   openQuestions: { blocking: 0, advisory: 0 },
@@ -12,7 +12,7 @@ const readiness = {
 }
 
 const emptyCanvas = {
-  objects: [], actors: [], behaviors: [], events: [], rules: [], scenarios: [], questions: [],
+  objects: [], actors: [], behaviors: [], events: [], rules: [], processes: [], scenarios: [], questions: [],
 }
 
 const session = (id: string, marker: string) => ({
@@ -24,7 +24,7 @@ const session = (id: string, marker: string) => ({
   updatedAt: '2026-07-24T00:00:00Z',
   canvas: emptyCanvas,
   completeness: {
-    counts: { objects: 0, actors: 0, behaviors: 0, events: 0, rules: 0, scenarios: 0 },
+    counts: { objects: 0, actors: 0, behaviors: 0, events: 0, rules: 0, processes: 0, scenarios: 0 },
     gaps: [],
   },
   readiness,

@@ -12,7 +12,7 @@
   3. lint + 自动修复：主键必在属性中、链接端点必须可解析、名称唯一化、
      枚举白名单外回退默认值；全部修复记入 report.warnings。
      叠加与目标本体的同名冲突标记（保守合并：冲突项应用时跳过）、
-     场景可表达性检查（场景引用的对象/行为是否都在草稿+目标本体中）。
+     流程/场景可表达性检查（引用的对象/行为是否都在草稿+目标本体中）。
 
 草稿永不直写本体 —— apply_draft 只落用户勾选且无冲突的元素，且转出的
 函数/哨兵带三重闸门（enabled=false / muted / status=draft），落地即休眠待人工形式化。
@@ -869,11 +869,22 @@ def _scenario_coverage(canvas: dict, draft: dict,
     known_actions = {norm_name(a["name"]) for a in draft["actions"]} \
         | {norm_name(a["displayName"]) for a in draft["actions"]} | ex.get("actions", set())
     out = []
+    # 场景条目保持 {scenario, ...} 形状、顺序与语义不变（既有测试锁定该契约）。
     for s in canvas.get("scenarios") or []:
         missing_o = [x for x in (s.get("objects") or []) if norm_name(x) not in known_objects]
         missing_b = [x for x in (s.get("behaviors") or []) if norm_name(x) not in known_actions]
         if missing_o or missing_b:
             out.append({"scenario": s.get("display_name") or s.get("name"),
+                        "missingObjects": missing_o, "missingBehaviors": missing_b})
+    # 流程条目 additive 追加在尾部，判别键为 process：objects 引用 +
+    # steps[].behavior 引用做同一口径校验（已知集合 = 草稿 + 目标本体存量同名）。
+    for p in canvas.get("processes") or []:
+        missing_o = [x for x in (p.get("objects") or []) if norm_name(x) not in known_objects]
+        step_behaviors = [str(step.get("behavior") or "").strip()
+                          for step in (p.get("steps") or []) if isinstance(step, dict)]
+        missing_b = [x for x in step_behaviors if x and norm_name(x) not in known_actions]
+        if missing_o or missing_b:
+            out.append({"process": p.get("display_name") or p.get("name"),
                         "missingObjects": missing_o, "missingBehaviors": missing_b})
     return out
 

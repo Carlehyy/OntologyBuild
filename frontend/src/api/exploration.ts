@@ -8,7 +8,7 @@ import { apiClientV2 } from './client'
 
 // ---------- 类型 ----------
 
-export type CanvasKind = 'object' | 'actor' | 'behavior' | 'event' | 'rule' | 'scenario'
+export type CanvasKind = 'object' | 'actor' | 'behavior' | 'event' | 'rule' | 'scenario' | 'process'
 
 export interface CanvasElement {
   id: string
@@ -36,6 +36,7 @@ export interface BusinessCanvas {
   behaviors: CanvasElement[]
   events: CanvasElement[]
   rules: CanvasElement[]
+  processes: CanvasElement[]
   scenarios: CanvasElement[]
   questions?: BxQuestion[]
 }
@@ -236,10 +237,15 @@ export interface DraftSentinel {
   conflict?: boolean
 }
 
+/** 可表达性检查条目（判别式联合）：场景条目形状与语义不变；流程条目以 process 键判别 */
+export type DraftCoverageEntry =
+  | { scenario: string; missingObjects: string[]; missingBehaviors: string[] }
+  | { process: string; missingObjects: string[]; missingBehaviors: string[] }
+
 export interface DraftReport {
   warnings: string[]
   conflicts: string[]
-  scenarioCoverage: { scenario: string; missingObjects: string[]; missingBehaviors: string[] }[]
+  scenarioCoverage: DraftCoverageEntry[]
   llmRefined: boolean
   /** 生成时刻的质量门快照；gateOverride=true 表示未就绪被显式越权 */
   readiness?: Pick<Readiness, 'ready' | 'stage' | 'gatesPassed' | 'gatesTotal' | 'blockingCount' | 'advisoryCount'>

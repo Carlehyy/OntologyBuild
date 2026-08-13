@@ -12,7 +12,7 @@
 "金额较大时需要审批"这类无法形式化的话。
 
 账本存储在会话画布 JSON 的 questions 键下（随 canvas 事件推送、随文档/草稿
-快照冻结），与六类模型元素同生命周期，天然可追溯。
+快照冻结），与七类模型元素同生命周期，天然可追溯。
 """
 from __future__ import annotations
 
@@ -92,6 +92,19 @@ _FIELD_ALIASES = {
     "结果": "outcome",
     "来源": "source",
     "规则表述": "statement",
+    # 流程/场景新字段：target 路径可用中文别名定位（如「支付场景.所属流程」）
+    "流程": "process_ref",
+    "所属流程": "process_ref",
+    "挂接流程": "process_ref",
+    "步骤": "steps",
+    "流程步骤": "steps",
+    "分支": "branches",
+    "条件分支": "branches",
+    "度量": "metrics",
+    "产出度量": "metrics",
+    "指标": "metrics",
+    "口径": "formula",
+    "计算口径": "formula",
 }
 
 
@@ -271,6 +284,10 @@ def _flatten_text(value: Any) -> list[str]:
         ]
     if isinstance(value, list):
         return [text for item in value for text in _flatten_text(item)]
+    # ProcessStep.seq、ScenarioBranch.from_step/to_step 等纯数值字段不是证据文本，
+    # 防止「2 人审批」类答案被 seq=2 假一致放行（bool 不是此类数值，保持原样）。
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return []
     return [str(value)]
 
 
@@ -312,7 +329,7 @@ def _resolve_child(value: Any, token: str) -> tuple[bool, Any]:
 def _find_target_root(canvas: Any, token: str) -> tuple[Optional[dict], Optional[str]]:
     candidates: list[tuple[dict, str]] = []
     c = canvas if isinstance(canvas, dict) else {}
-    for key in ("objects", "actors", "behaviors", "events", "rules", "scenarios"):
+    for key in ("objects", "actors", "behaviors", "events", "rules", "scenarios", "processes"):
         for item in c.get(key) or []:
             if _matches_named_item(item, token):
                 candidates.append((item, key))
@@ -368,7 +385,7 @@ def _target_resolution(canvas: Any, target: str, question: str) -> tuple[Optiona
 
 
 def _linked_evidence(canvas: Any, root: dict) -> list[str]:
-    """只扩展到与 target 直接相连的规则/行为/场景，避免无关数字造成假一致。"""
+    """只扩展到与 target 直接相连的规则/行为/场景/流程，避免无关数字造成假一致。"""
     evidence = _flatten_text(root)
     aliases = {
         norm_name(str(root.get(key) or ""))
@@ -400,6 +417,17 @@ def _linked_evidence(canvas: Any, root: dict) -> list[str]:
         }
         if refs & (aliases | behavior_aliases):
             evidence.extend(_flatten_text(scenario))
+    # 流程元素：顶层 objects 引用与步骤的 actor/behavior 显式绑定都算直接相连
+    for process in c.get("processes") or []:
+        refs = {norm_name(str(value)) for value in (process.get("objects") or [])}
+        refs |= {
+            norm_name(str(step.get(key) or ""))
+            for step in (process.get("steps") or [])
+            if isinstance(step, dict)
+            for key in ("actor", "behavior")
+        } - {""}
+        if refs & (aliases | behavior_aliases):
+            evidence.extend(_flatten_text(process))
     return evidence
 
 

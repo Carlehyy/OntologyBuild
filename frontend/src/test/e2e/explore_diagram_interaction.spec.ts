@@ -14,13 +14,13 @@ const canvas = {
     ],
     relations: [],
   }],
-  actors: [], behaviors: [], events: [], rules: [], scenarios: [], questions: [],
+  actors: [], behaviors: [], events: [], rules: [], processes: [], scenarios: [], questions: [],
 }
 
 const sessionDetail = (id: string, title: string) => ({
   id, title, canvasVersion: 1, status: 'active', createdAt: '', updatedAt: '',
   canvas,
-  completeness: { counts: { objects: 1, actors: 0, behaviors: 0, events: 0, rules: 0, scenarios: 0 }, gaps: [] },
+  completeness: { counts: { objects: 1, actors: 0, behaviors: 0, events: 0, rules: 0, processes: 0, scenarios: 0 }, gaps: [] },
   readiness,
   messages: id === 's1' ? [
     {
@@ -39,7 +39,7 @@ const sessionDetail = (id: string, title: string) => ({
 })
 
 const readiness = {
-  ready: false, stage: '阶段0 · 定边界', gatesPassed: 2, gatesTotal: 9,
+  ready: false, stage: '阶段0 · 定边界', gatesPassed: 2, gatesTotal: 10,
   blockingCount: 2, advisoryCount: 0, openQuestions: { blocking: 0, advisory: 0 },
   gates: [],
 }
@@ -220,7 +220,7 @@ test.describe('业务探索图表与图片交互', () => {
     await expect.poll(() => page.evaluate(() => sessionStorage.getItem('last-copied-text')))
       .toBe('请展示工单状态流程')
 
-    await page.getByRole('button', { name: '业务流程' }).click()
+    await page.getByRole('button', { name: '图示', exact: true }).click()
     await page.getByRole('button', { name: '状态图', exact: true }).click()
     await page.getByRole('button', { name: '复制源码', exact: true }).click()
     await expect.poll(() => page.evaluate(() => sessionStorage.getItem('last-copied-text')))
@@ -237,7 +237,7 @@ test.describe('业务探索图表与图片交互', () => {
   })
 
   test('业务画布弹窗和 Markdown 图片使用同一套自适应交互', async ({ page }) => {
-    await page.getByRole('button', { name: '业务流程' }).click()
+    await page.getByRole('button', { name: '图示', exact: true }).click()
     await page.getByRole('button', { name: '状态图', exact: true }).click()
     await expect(page.getByTestId('canvas-diagram-title')).toHaveText('工单状态图')
     await page.waitForTimeout(300)
@@ -404,7 +404,7 @@ test.describe('业务探索图表与图片交互', () => {
 
     await expect(fileButton).toContainText('会话文件')
     await expect(historyButton).toContainText('历史会话')
-    await expect(flowButton).toContainText('业务流程')
+    await expect(flowButton).toContainText('图示')
     await expect(documentButton).toContainText('需求文档')
 
     const colors = await Promise.all([fileButton, historyButton, flowButton, documentButton]

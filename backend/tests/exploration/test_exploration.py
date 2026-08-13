@@ -276,8 +276,8 @@ def test_document_generation_without_llm(client, auth_headers, session, db):
     # 确定性章节忠实于画布；LLM 缺席时叙述节降级为占位而非失败
     assert "## 4. 对象模型" in md and "订单" in md and "order_no" in md
     assert "标记支付" in md and "大额审批" in md and "支付流程" in md
-    # §9/§10：澄清账本 + 质量门报告（与草稿闸门同一口径）
-    assert "## 9. 澄清账本" in md and "## 10. 质量门检查" in md
+    # §10/§11：澄清账本 + 质量门报告（与草稿闸门同一口径；§8 起插入流程模型章节后顺延）
+    assert "## 10. 澄清账本" in md and "## 11. 质量门检查" in md
     assert "⛔ 未就绪" in md          # demo 画布故意含瑕疵（悬空关系/缺主键）
 
     r = client.post(f"{BASE}/sessions/{session['id']}/documents",

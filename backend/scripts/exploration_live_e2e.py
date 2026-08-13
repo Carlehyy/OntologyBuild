@@ -13,7 +13,7 @@
 
 覆盖范围：
 
-* 真实 ``run_exploration_turn`` 生成六类业务画布并通过质量门；
+* 真实 ``run_exploration_turn`` 生成业务画布并通过十道质量门（零流程时流程编排门 vacuous pass）；
 * 多轮对已有对象做稀疏增量更新，已确认属性/关系与子项 ID 不丢失；
 * 超长用户附件后段事实可检索，Agent 草稿正文不冒充用户证据；
 * 真实 LLM 叙述 + 确定性骨架生成需求文档；
@@ -304,7 +304,7 @@ def _semantic_blocking_canvas(canvas_module: Any) -> dict[str, Any]:
 
 
 _BASE_IMPORT_PROMPT = """这是一次访谈完成后的批量导入，下面每个字段都已由业务负责人逐项确认，
-不存在待澄清口径。请在本回合调用 upsert_elements，把六类模型完整写入画布。可以在同一响应
+不存在待澄清口径。请在本回合调用 upsert_elements，把下列六类模型完整写入画布（本次不导入流程模型）。可以在同一响应
 并行调用六次工具，但并行写入时必须省略 expected_canvas_version；如果使用乐观锁，就一次只写
 一类并以上一次工具返回的新版本继续。不要用自然语言复述代替工具，不要 raise_questions、
 不要出图，也不要增添未给出的概念。
@@ -352,6 +352,7 @@ def _execute(
     from app.auth.models import User
     from app.database import Base, SessionLocal, engine
     from app.exploration import canvas as C
+    from app.exploration import converter as CV
     from app.exploration import readiness as R
     from app.exploration import router as exploration_router
     from app.exploration import schemas as S
@@ -503,7 +504,7 @@ def _execute(
             )
             return events, content
 
-        # 1) Real model -> all six canonical canvas kinds.
+        # 1) Real model -> the six import canvas kinds (process persistence is step 7).
         run_turn("six_kind_import", _BASE_IMPORT_PROMPT)
         expected_names = {
             "objects": {"order", "customer"},
@@ -539,13 +540,13 @@ def _execute(
                 + _BASE_IMPORT_PROMPT,
             )
             missing = missing_expected()
-        _require(not missing, f"六类画布仍缺少指定元素: {missing}")
+        _require(not missing, f"导入画布仍缺少指定元素: {missing}")
 
         canvas = C._ensure_canvas(session.canvas)
         readiness = R.evaluate(canvas)
         _require(
             readiness["ready"],
-            "真实模型生成的六类画布未通过质量门: "
+            "真实模型生成的导入画布未通过质量门: "
             + "；".join(
                 item
                 for gate in readiness["gates"]
@@ -553,7 +554,7 @@ def _execute(
             )[:1_500],
         )
         counts = {key: len(canvas[key]) for key in expected_names}
-        _require(all(value > 0 for value in counts.values()), "六类画布存在空类别")
+        _require(all(value > 0 for value in counts.values()), "导入画布存在空类别")
         order = next(item for item in canvas["objects"] if C.norm_name(item["name"]) == "order")
         old_attributes = {
             C.norm_name(item.get("name", "")): str(item.get("id") or "")
@@ -654,8 +655,9 @@ def _execute(
             "## 5. 行为模型",
             "## 6. 事件模型",
             "## 7. 规则模型",
-            "## 8. 场景模型",
-            "## 10. 质量门检查",
+            "## 8. 流程模型",
+            "## 9. 场景模型",
+            "## 11. 质量门检查",
         ):
             _require(heading in document.content_md, f"需求文档缺少章节: {heading}")
         for expected in ("Order", "Sales", "confirm_pay", "order_paid", "big_amount", "pay_flow"):
@@ -684,7 +686,7 @@ def _execute(
             "这是已确认的增量变更：先调用 get_canvas_elements 读取 Order 的完整 canonical "
             "attributes/relations 和最新 canvasVersion；随后只给 Order 稀疏补丁，新增属性 "
             "currency（显示名=币种，type_hint=枚举，enum=[CNY,USD]，required=true）。"
-            "不要重发、删除或清空任何既有属性和关系，也不要修改其它六类元素。",
+            "不要重发、删除或清空任何既有属性和关系，也不要修改其它模型元素。",
         )
         incremental_tools = [
             str(event.get("tool") or "")
@@ -901,6 +903,81 @@ def _execute(
             "defaultCode": semantic_detail["code"],
             "blockingCodes": semantic_codes,
             "forcedAudit": True,
+        }
+
+        # 7) P0 process model: persistence + 10-gate readiness + draft coverage.
+        process_canvas = _semantic_blocking_canvas(C)
+        process_canvas, _, process_errors = C.upsert_elements(process_canvas, "process", [{
+            "name": "order_handling",
+            "displayName": "订单处理主流程",
+            "goal": "完成订单从确认到关闭的处理",
+            "trigger": "客户提交订单",
+            "steps": [
+                {"seq": 1, "name": "运营确认订单", "actor": "Operator",
+                 "behavior": "confirm_order"},
+                {"seq": 2, "name": "客户取消收尾", "actor": "Operator",
+                 "behavior": "cancel_order"},
+            ],
+            "branches": [
+                {"fromStep": 1, "toStep": 2, "condition": "客户取消或确认失败",
+                 "kind": "exception"},
+                {"fromStep": 1, "toStep": None, "condition": "确认成功"},
+            ],
+            "objects": ["Order"],
+            "metrics": [{
+                "name": "confirm_lead_time", "displayName": "确认时效",
+                "formula": "订单确认时长 ≤ 2 小时", "sourceObjects": ["Order"],
+                "target": "≤ 1 小时",
+            }],
+            "expectedOutcome": "订单状态明确闭环",
+        }])
+        _require(not process_errors, f"流程模型落库失败: {process_errors}")
+        process_readiness = R.evaluate(process_canvas)
+        _require(
+            process_readiness["ready"],
+            "含流程画布未通过质量门: "
+            + "；".join(
+                item
+                for gate in process_readiness["gates"]
+                for item in gate["blockingItems"]
+            )[:1_500],
+        )
+        _require(process_readiness["gatesTotal"] == 10, "质量门总数不是 10")
+        process_gate = next(
+            gate for gate in process_readiness["gates"] if gate["id"] == "processes"
+        )
+        _require(process_gate["passed"], f"流程门未通过: {process_gate['blockingItems']}")
+        _, process_draft_report = CV.build_draft(process_canvas)
+        _require(
+            not any(
+                "process" in entry for entry in process_draft_report["scenarioCoverage"]
+            ),
+            "流程引用完整时 coverage 不应出现 process 条目",
+        )
+        # 引用缺失时 coverage 追加判别式 process 条目（形状锁定）。
+        broken_canvas, _, broken_errors = C.upsert_elements(process_canvas, "process", [{
+            "name": "order_handling",
+            "objects": ["Order", "GhostObject"],
+            "steps": [{"seq": 2, "name": "客户取消收尾", "behavior": "ghost_behavior"}],
+        }])
+        _require(not broken_errors, f"流程增量补丁失败: {broken_errors}")
+        _, broken_report = CV.build_draft(broken_canvas)
+        process_entry = next(
+            (entry for entry in broken_report["scenarioCoverage"] if "process" in entry),
+            None,
+        )
+        _require(process_entry is not None, "流程引用缺失时 coverage 没有 process 条目")
+        _require(
+            set(process_entry) == {"process", "missingObjects", "missingBehaviors"}
+            and process_entry["missingObjects"] == ["GhostObject"]
+            and process_entry["missingBehaviors"] == ["ghost_behavior"],
+            f"process 覆盖条目形状不符: {process_entry}",
+        )
+        report["checks"]["processModelPersistence"] = {
+            "passed": True,
+            "gatesTotal": int(process_readiness["gatesTotal"]),
+            "processGatePassed": True,
+            "coverageDiscriminator": True,
         }
 
         db.expire_all()

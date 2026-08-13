@@ -12,6 +12,8 @@ from app.model_configs.models import ModelConfig
 from app.super_assistant.models import (
     SuperAssistantConversation,
     SuperAssistantMessage,
+    SuperAssistantReflectionCandidate,
+    SuperAssistantReflectionRun,
     SuperAssistantToolRun,
 )
 from app.super_assistant.schemas import (
@@ -121,6 +123,12 @@ def delete_conversation(
         current_user.id,
         conversation_id,
     )
+    db.query(SuperAssistantReflectionCandidate).filter(
+        SuperAssistantReflectionCandidate.conversation_id == item.id,
+    ).delete(synchronize_session=False)
+    db.query(SuperAssistantReflectionRun).filter(
+        SuperAssistantReflectionRun.conversation_id == item.id,
+    ).delete(synchronize_session=False)
     db.query(SuperAssistantToolRun).filter(
         SuperAssistantToolRun.conversation_id == item.id,
     ).delete(synchronize_session=False)

@@ -28,6 +28,9 @@ class SuperAssistantConversation(Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False, default="新会话")
     model_config_id: Mapped[str | None] = mapped_column(String, ForeignKey("model_configs.id", ondelete="SET NULL"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    # 上下文压缩：summary 覆盖最旧的 summary_message_count 条 complete 消息
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, onupdate=_now)
 
@@ -97,6 +100,117 @@ class SuperAssistantSkill(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, onupdate=_now)
+
+
+class SuperAssistantMemory(Base):
+    """跨会话记忆：对标 hermes 的 memory 模型（zone + pinned + supersedes）。
+
+    效果统计不用独立事件表，直接在行内计数：
+    match_count（被检索命中次数）与 reference_count（被实际引用/访问次数）
+    共同映射出 [0.5, 1.0] 的效果因子；配合 30 天半衰期时间衰减降权。
+    """
+
+    __tablename__ = "super_assistant_memories"
+    __table_args__ = (
+        Index("ix_sa_memories_owner_zone", "owner_id", "zone"),
+        Index("ix_sa_memories_owner_updated", "owner_id", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    owner_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # 内置约定 zone：core=身份偏好 / work=当前焦点 / episode=会话摘要 /
+    # general 默认；project:<name> 预留给项目级记忆
+    zone: Mapped[str] = mapped_column(String(50), nullable=False, default="general")
+    pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    confidence: Mapped[str] = mapped_column(String(10), nullable=False, default="medium")
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="reflection")
+    tags: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # 本条记忆取代的旧记忆 id 列表；被取代行置 superseded=True（留档审计）
+    supersedes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    superseded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    match_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reference_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, onupdate=_now)
+
+
+class SuperAssistantReflectionRun(Base):
+    """一次反思执行记录：micro（每轮后）/ full（手动）/ focused（propose_skill）。
+
+    NATS 消费侧的幂等锚点：同一 (kind, message_id) 已有成功记录时跳过。
+    """
+
+    __tablename__ = "super_assistant_reflection_runs"
+    __table_args__ = (
+        Index("ix_sa_reflect_runs_conversation_created", "conversation_id", "created_at"),
+        Index("ix_sa_reflect_runs_owner_created", "owner_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    owner_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    conversation_id: Mapped[str] = mapped_column(
+        String, ForeignKey("super_assistant_conversations.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    message_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("super_assistant_messages.id", ondelete="SET NULL"), nullable=True, index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    candidate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class SuperAssistantReflectionCandidate(Base):
+    """反思产出的待审批候选：memory / skill / conflict。
+
+    payload 结构按 kind 约定：
+    - memory: {content, zone, tags, pinned, confidence, supersedes: [memory_id]}
+    - skill: {name, display_name, description, triggers, skill_md, files: [{path, content}]}
+    - conflict: {memory_id, conflict_kind, explain, options: [...], candidate_id?}
+    """
+
+    __tablename__ = "super_assistant_reflection_candidates"
+    __table_args__ = (
+        Index("ix_sa_reflect_candidates_owner_status", "owner_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    run_id: Mapped[str] = mapped_column(
+        String, ForeignKey("super_assistant_reflection_runs.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    owner_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    conversation_id: Mapped[str] = mapped_column(
+        String, ForeignKey("super_assistant_conversations.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    confidence: Mapped[str] = mapped_column(String(10), nullable=False, default="medium")
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # 审批动作：accept/reject；冲突候选细化：new_supersedes/keep_old/skip
+    decision: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class SuperAssistantMemoryProfile(Base):
+    """每用户记忆设置与编译产物：palace 索引、LLM 画像、auto-accept 开关。
+
+    注入优先级（对标 hermes）：palace_index > profile > 经典模式
+    （pinned 全文 + 索引 + 每轮相关记忆）。
+    """
+
+    __tablename__ = "super_assistant_memory_profiles"
+
+    owner_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    palace_index: Mapped[str | None] = mapped_column(Text, nullable=True)
+    profile: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auto_accept_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    compiled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, onupdate=_now)
 
 

@@ -41,7 +41,8 @@ import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
 } from '@/components/ui/sheet'
 
-// 与数据通道 Python 脚本编辑页一致的编辑器观感（GitHub light 高亮）
+// 与数据通道 Python 脚本编辑页一致的编辑器观感（GitHub light 高亮）：
+// 注释不用斜体，避免斜体中文字形被浏览器机械倾斜发糊
 const editorTheme = EditorView.theme({
   '.cm-content': {
     lineHeight: '1.6',
@@ -51,7 +52,7 @@ const editorTheme = EditorView.theme({
 const pythonHighlight = syntaxHighlighting(HighlightStyle.define([
   { tag: tags.keyword, color: '#cf222e', fontWeight: '600' },
   { tag: [tags.string, tags.docComment], color: '#0a3069' },
-  { tag: tags.comment, color: '#6e7781', fontStyle: 'italic' },
+  { tag: tags.comment, color: '#6e7781' },
   { tag: [tags.number, tags.bool, tags.null], color: '#0550ae' },
   { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: '#8250df' },
   { tag: [tags.className, tags.definition(tags.variableName)], color: '#953800' },

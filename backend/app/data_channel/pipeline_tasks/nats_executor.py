@@ -10,7 +10,9 @@
 
 - ``pipeline.task.execute``：数据任务池的调度/手动单任务触发；
 - ``task.pipeline.run``：UI 手动运行整条流水线（不带 write_opts）；
-- ``task.dataset.import``：数据集导入的解析（inspect）/提交（commit）。
+- ``task.dataset.import``：数据集导入的解析（inspect）/提交（commit）；
+- ``super_assistant.reflect.micro/full/focused``：超级助手三种自我进化
+  反思任务（micro 每轮后 / full 手动 / focused 定向技能）。
 
 每个 subject 使用独立 durable pull consumer，共享进程级并发信号量。
 启动方式::
@@ -45,6 +47,9 @@ _HEARTBEAT_INTERVAL_SECONDS = 5
 _CONSUMER_DURABLE = "pipeline-executor"
 _PIPELINE_RUN_DURABLE = "pipeline-run-executor"
 _DATASET_IMPORT_DURABLE = "dataset-import-executor"
+_SUPER_ASSISTANT_REFLECT_MICRO_DURABLE = "super-assistant-reflect-micro"
+_SUPER_ASSISTANT_REFLECT_FULL_DURABLE = "super-assistant-reflect-full"
+_SUPER_ASSISTANT_REFLECT_FOCUSED_DURABLE = "super-assistant-reflect-focused"
 
 # 消息处理器：解析后的 payload → 协程；业务异常必须在 handler 内消化，
 # 逃到 ``_process_message`` 的异常一律 nak 重投
@@ -117,12 +122,31 @@ def _handler_registry():
         DATASET_IMPORT_SUBJECT,
         PIPELINE_EXECUTE_SUBJECT,
         PIPELINE_RUN_SUBJECT,
+        SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT,
+        SUPER_ASSISTANT_REFLECT_FULL_SUBJECT,
+        SUPER_ASSISTANT_REFLECT_MICRO_SUBJECT,
     )
+    from app.super_assistant import reflection_tasks
 
     return (
         (PIPELINE_EXECUTE_SUBJECT, _CONSUMER_DURABLE, _execute_pipeline_task_message),
         (PIPELINE_RUN_SUBJECT, _PIPELINE_RUN_DURABLE, _run_pipeline_run_message),
         (DATASET_IMPORT_SUBJECT, _DATASET_IMPORT_DURABLE, _run_dataset_import_message),
+        (
+            SUPER_ASSISTANT_REFLECT_MICRO_SUBJECT,
+            _SUPER_ASSISTANT_REFLECT_MICRO_DURABLE,
+            reflection_tasks.run_micro_reflection_message,
+        ),
+        (
+            SUPER_ASSISTANT_REFLECT_FULL_SUBJECT,
+            _SUPER_ASSISTANT_REFLECT_FULL_DURABLE,
+            reflection_tasks.run_full_reflection_message,
+        ),
+        (
+            SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT,
+            _SUPER_ASSISTANT_REFLECT_FOCUSED_DURABLE,
+            reflection_tasks.run_focused_reflection_message,
+        ),
     )
 
 
