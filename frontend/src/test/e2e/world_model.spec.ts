@@ -170,9 +170,17 @@ test('推演模型列表渲染与筛选，页内 Tab 可切换', async ({ page }
   await expect(page.getByText('台区负荷短期推演')).toBeVisible()
 
   // Tab 切换到调用记录（页内 Tab 栏，区别于侧边栏子项）
+  // 回归：未设置时间筛选时，请求不得携带空的 start=/end=（后端 datetime 校验会 422）
+  const callsRequests: string[] = []
+  page.on('request', req => {
+    if (req.url().includes('/world-model/calls?')) callsRequests.push(req.url())
+  })
   await page.getByRole('navigation', { name: '世界模型子功能' }).getByRole('link', { name: '调用记录' }).click()
   await expect(page).toHaveURL(/#\/world-model\/calls$/)
   await expect(page.getByText('agent-session-1')).toBeVisible()
+  expect(callsRequests.length).toBeGreaterThan(0)
+  expect(callsRequests[0]).not.toContain('start=')
+  expect(callsRequests[0]).not.toContain('end=')
 })
 
 test('开发页：执行通过才可保存，版本恢复需二次确认', async ({ page }) => {
