@@ -15,6 +15,8 @@ from app.super_assistant.models import (
     SuperAssistantConversation,
     SuperAssistantMcpServer,
     SuperAssistantMessage,
+    SuperAssistantReflectionCandidate,
+    SuperAssistantReflectionRun,
     SuperAssistantSkill,
     SuperAssistantToolRun,
 )
@@ -32,6 +34,7 @@ def test_user_can_manage_conversations_folder_skills_and_mcp(tmp_path, monkeypat
         SuperAssistantConversation.__table__, SuperAssistantSkill.__table__,
         SuperAssistantMcpServer.__table__, SuperAssistantMessage.__table__,
         SuperAssistantToolRun.__table__,
+        SuperAssistantReflectionRun.__table__, SuperAssistantReflectionCandidate.__table__,
     ])
     TestingSession = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     with TestingSession() as db:

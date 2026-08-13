@@ -487,6 +487,7 @@ export default function SuperAssistantPage() {
         servers={servers}
         refreshSkills={refreshSkills}
         refreshServers={refreshServers}
+        conversationId={selectedId}
       />
     </div>
   )

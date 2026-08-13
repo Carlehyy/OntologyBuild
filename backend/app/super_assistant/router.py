@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import uuid
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import (
     APIRouter,
@@ -16,7 +17,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -27,6 +28,8 @@ from app.super_assistant import (
     conversation_service as _conversation_service,
 )
 from app.super_assistant import mcp_server_service
+from app.super_assistant import memory_service
+from app.super_assistant import reflection_service
 from app.super_assistant import skill_service as _skill_service
 from app.super_assistant.models import (
     SuperAssistantConversation,
@@ -46,7 +49,16 @@ from app.super_assistant.schemas import (
     McpServerOut,
     McpServerUpdate,
     McpTestOut,
+    MemoryCreate,
+    MemoryOut,
+    MemoryUpdate,
     MessageOut,
+    ReflectionCandidateOut,
+    ReflectionDecisionRequest,
+    ReflectionFullAccepted,
+    ReflectionFullRequest,
+    ReflectionSettingsOut,
+    ReflectionSettingsUpdate,
     SkillCreate,
     SkillFileContent,
     SkillOut,
@@ -96,6 +108,22 @@ def _mcp_http_error(
     else:
         status_code = 400
     return HTTPException(status_code=status_code, detail=str(exc))
+
+
+def _memory_conflict_response(
+    exc: memory_service.MemoryConflictError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": str(exc),
+            "existing": {
+                "id": exc.existing_id,
+                "content": exc.existing_content,
+                "similarity": exc.similarity,
+            },
+        },
+    )
 
 
 @router.get("/conversations", response_model=list[ConversationOut])
@@ -485,3 +513,180 @@ def install_platform_minio_mcp(
         )
     except mcp_server_service.McpServerServiceError as exc:
         raise _mcp_http_error(exc) from exc
+
+
+@router.get("/memories", response_model=list[MemoryOut])
+def list_memories(
+    zone: str | None = None,
+    include_superseded: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return memory_service.list_memories(
+        db,
+        current_user.id,
+        zone=zone,
+        include_superseded=include_superseded,
+    )
+
+
+@router.post("/memories", response_model=MemoryOut, status_code=201)
+def create_memory(
+    body: MemoryCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        return memory_service.create_memory(
+            db,
+            current_user.id,
+            body.content,
+            zone=body.zone,
+            pinned=body.pinned,
+            tags=body.tags,
+            confidence="high",
+            source="user",
+        )
+    except memory_service.MemoryConflictError as exc:
+        return _memory_conflict_response(exc)
+
+
+@router.patch("/memories/{memory_id}", response_model=MemoryOut)
+def update_memory(
+    memory_id: str,
+    body: MemoryUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        memory = memory_service.update_memory(
+            db,
+            current_user.id,
+            memory_id,
+            content=body.content,
+            zone=body.zone,
+            pinned=body.pinned,
+            tags=body.tags,
+        )
+    except memory_service.MemoryConflictError as exc:
+        return _memory_conflict_response(exc)
+    if memory is None:
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    return memory
+
+
+@router.delete("/memories/{memory_id}", status_code=204)
+def delete_memory(
+    memory_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    deleted = memory_service.delete_memory(
+        db,
+        current_user.id,
+        memory_id,
+    )
+    if deleted is None:
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    return Response(status_code=204)
+
+
+def _reflection_value_error(exc: ValueError) -> HTTPException:
+    """reflection_service 的 ValueError 消息契约 → HTTP 状态码。"""
+    message = str(exc)
+    if message in {"候选不存在", "会话不存在"}:
+        status_code = 404
+    elif message in {"候选已处理", "同名 Skill 已存在"}:
+        status_code = 409
+    else:
+        status_code = 400
+    return HTTPException(status_code=status_code, detail=message)
+
+
+@router.get(
+    "/reflection/candidates",
+    response_model=list[ReflectionCandidateOut],
+)
+def list_reflection_candidates(
+    status: Literal["pending", "accepted", "rejected", "all"] = "pending",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return reflection_service.list_candidates(
+        db,
+        current_user.id,
+        status=status,
+    )
+
+
+@router.post(
+    "/reflection/candidates/{candidate_id}/decision",
+    response_model=ReflectionCandidateOut,
+)
+def decide_reflection_candidate(
+    candidate_id: str,
+    body: ReflectionDecisionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        return reflection_service.decide_candidate(
+            db,
+            current_user.id,
+            candidate_id,
+            body.decision,
+            edited_payload=body.payload,
+        )
+    except memory_service.MemoryConflictError as exc:
+        return _memory_conflict_response(exc)
+    except ValueError as exc:
+        raise _reflection_value_error(exc) from exc
+
+
+@router.post(
+    "/reflection/full",
+    response_model=ReflectionFullAccepted,
+    status_code=202,
+)
+def request_full_reflection(
+    body: ReflectionFullRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        return reflection_service.request_full_reflection(
+            db,
+            current_user.id,
+            body.conversation_id,
+        )
+    except ValueError as exc:
+        raise _reflection_value_error(exc) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get(
+    "/reflection/settings",
+    response_model=ReflectionSettingsOut,
+)
+def get_reflection_settings(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return reflection_service.get_reflection_settings(db, current_user.id)
+
+
+@router.put(
+    "/reflection/settings",
+    response_model=ReflectionSettingsOut,
+)
+def update_reflection_settings(
+    body: ReflectionSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return reflection_service.update_reflection_settings(
+        db,
+        current_user.id,
+        body.auto_accept_enabled,
+    )

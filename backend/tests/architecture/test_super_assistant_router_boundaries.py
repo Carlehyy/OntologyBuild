@@ -14,6 +14,8 @@ from app.settings.object_storage import service as object_storage_service
 from app.super_assistant import (
     conversation_service,
     mcp_server_service,
+    memory_service,
+    reflection_service,
     router as assistant_router,
     runtime,
     schemas,
@@ -115,6 +117,46 @@ ROUTE_PARAMETERS = {
         "current_user",
     ),
     "install_platform_minio_mcp": ("db", "current_user"),
+    "list_memories": (
+        "zone",
+        "include_superseded",
+        "db",
+        "current_user",
+    ),
+    "create_memory": ("body", "db", "current_user"),
+    "update_memory": (
+        "memory_id",
+        "body",
+        "db",
+        "current_user",
+    ),
+    "delete_memory": (
+        "memory_id",
+        "db",
+        "current_user",
+    ),
+    "list_reflection_candidates": (
+        "status",
+        "db",
+        "current_user",
+    ),
+    "decide_reflection_candidate": (
+        "candidate_id",
+        "body",
+        "db",
+        "current_user",
+    ),
+    "request_full_reflection": (
+        "body",
+        "db",
+        "current_user",
+    ),
+    "get_reflection_settings": ("db", "current_user"),
+    "update_reflection_settings": (
+        "body",
+        "db",
+        "current_user",
+    ),
 }
 
 DELEGATES = {
@@ -184,6 +226,30 @@ DELEGATES = {
         "mcp_server_service",
         "install_platform_minio_mcp",
     ),
+    "list_memories": ("memory_service", "list_memories"),
+    "create_memory": ("memory_service", "create_memory"),
+    "update_memory": ("memory_service", "update_memory"),
+    "delete_memory": ("memory_service", "delete_memory"),
+    "list_reflection_candidates": (
+        "reflection_service",
+        "list_candidates",
+    ),
+    "decide_reflection_candidate": (
+        "reflection_service",
+        "decide_candidate",
+    ),
+    "request_full_reflection": (
+        "reflection_service",
+        "request_full_reflection",
+    ),
+    "get_reflection_settings": (
+        "reflection_service",
+        "get_reflection_settings",
+    ),
+    "update_reflection_settings": (
+        "reflection_service",
+        "update_reflection_settings",
+    ),
 }
 
 BODY_TYPES = {
@@ -196,6 +262,11 @@ BODY_TYPES = {
     "put_skill_file": schemas.SkillFileContent,
     "create_mcp_server": schemas.McpServerCreate,
     "update_mcp_server": schemas.McpServerUpdate,
+    "create_memory": schemas.MemoryCreate,
+    "update_memory": schemas.MemoryUpdate,
+    "decide_reflection_candidate": schemas.ReflectionDecisionRequest,
+    "request_full_reflection": schemas.ReflectionFullRequest,
+    "update_reflection_settings": schemas.ReflectionSettingsUpdate,
 }
 
 
@@ -224,6 +295,9 @@ def test_super_assistant_router_preserves_contract_and_helper_aliases():
         "McpServerOut",
         "McpServerUpdate",
         "McpTestOut",
+        "MemoryCreate",
+        "MemoryOut",
+        "MemoryUpdate",
         "MessageOut",
         "SkillCreate",
         "SkillFileContent",
@@ -422,6 +496,8 @@ def test_super_assistant_services_do_not_import_http_router():
     for module in (
         conversation_service,
         mcp_server_service,
+        memory_service,
+        reflection_service,
         skill_service,
     ):
         imports = _imports(Path(module.__file__))
@@ -431,7 +507,7 @@ def test_super_assistant_services_do_not_import_http_router():
 
 def test_super_assistant_router_and_services_stay_bounded():
     limits = {
-        "router.py": 520,
+        "router.py": 750,
         "conversation_service.py": 320,
         "skill_service.py": 380,
         "mcp_server_service.py": 340,
@@ -460,8 +536,8 @@ def test_super_assistant_openapi_matches_pre_extraction_baseline():
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode()
-    assert len(paths) == 16
-    assert sum(len(item) for item in paths.values()) == 24
+    assert len(paths) == 22
+    assert sum(len(item) for item in paths.values()) == 33
     assert hashlib.sha256(payload).hexdigest() == (
-        "37c2cb8af239eb7540018394e13fc06ff50430958f29bca4a86908ef78b38617"
+        "70389266626f98a6c66634d7c50668bfb49ef12f6b8172feda3f5e369fdb079b"
     )

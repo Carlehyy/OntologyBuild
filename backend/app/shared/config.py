@@ -68,9 +68,33 @@ class Settings(BaseSettings):
     super_assistant_max_skill_archive_mb: int = 20
     super_assistant_max_skill_files: int = 500
     super_assistant_max_skill_file_mb: int = 5
-    super_assistant_max_tool_rounds: int = 8
+    super_assistant_max_tool_rounds: int = 25
     super_assistant_tool_result_chars: int = 30000
     super_assistant_approval_timeout_seconds: int = 180
+    # 自我进化（反思/记忆，对标 small-rust-hermes）：micro 反思每
+    # super_assistant_reflect_interval 轮触发一次，显式教学关键词绕过冷却；
+    # 低于 auto_accept_min_confidence 或无冲突校验不通过的记忆候选进入人工审批。
+    super_assistant_reflect_enabled: bool = True
+    super_assistant_reflect_interval: int = 3
+    super_assistant_auto_accept_min_confidence: str = "medium"
+    # 记忆注入：索引/每轮相关条数上限；30 天半衰期衰减
+    super_assistant_memory_index_cap: int = 50
+    super_assistant_relevant_memory_cap: int = 3
+    # 上下文压缩：估算超过 model_limit*(1-headroom) 时，把最旧消息（保留最近
+    # super_assistant_compaction_keep_recent 条）交给 LLM 摘要
+    super_assistant_context_headroom: float = 0.18
+    super_assistant_compaction_keep_recent: int = 8
+    # 工具权限规则：逗号分隔的工具名 glob（fnmatch 语义），deny 优先；空为不限制
+    super_assistant_tool_allow: str = ""
+    super_assistant_tool_deny: str = ""
+    # 子代理：隔离子上下文的工具轮次上限（深度固定 1）
+    super_assistant_subagent_max_rounds: int = 8
+    # web 工具：fetch 默认开启（SSRF 校验复用 MCP 规则）；search 需显式配置后端
+    super_assistant_web_fetch_enabled: bool = True
+    super_assistant_web_fetch_max_chars: int = 20000
+    super_assistant_web_search_backend: str = ""  # 空=关闭；tavily / brave
+    super_assistant_web_search_tavily_api_key: str = ""
+    super_assistant_web_search_brave_api_key: str = ""
     # stdio launches a process inside the backend container. Keep it opt-in and
     # require an explicit executable allowlist because this is equivalent to
     # granting server-side code execution to assistant configurators.
