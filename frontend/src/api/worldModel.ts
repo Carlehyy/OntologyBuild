@@ -148,7 +148,14 @@ export const worldModelApi = {
     end?: string
     page?: number
     size?: number
-  }) => apiClientV2.get<CallRecordListResponse>('/world-model/calls', { params }),
+  }) => {
+    // 空值参数（如 start/end 未设置时的空串）不得发出：
+    // 后端 datetime 参数收到空串会 422
+    const query = Object.fromEntries(
+      Object.entries(params).filter(([, value]) => value !== '' && value !== undefined),
+    )
+    return apiClientV2.get<CallRecordListResponse>('/world-model/calls', { params: query })
+  },
 
   callsOverview: () =>
     apiClientV2.get<CallRecordOverview>('/world-model/calls/overview'),
