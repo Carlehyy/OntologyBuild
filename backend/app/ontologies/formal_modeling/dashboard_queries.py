@@ -193,9 +193,7 @@ def ontology_overview(ontology_id: str, db: Session):
     if err_firings:
         health.append({"level": "warn", "message": f"近 7 天有 {err_firings} 次哨兵评估出错", "target": "governance",
                        "hint": "查看运行历史的哨兵触发记录，多为条件表达式写错"})
-    if pending_n > 0:
-        health.append({"level": "action", "message": f"{pending_n} 个动作等待审批", "target": "governance",
-                       "hint": "到「治理与推演 → 治理驾驶舱」批准或拒绝"})
+    # 待审批动作刻意不进 health：总览不展示审批待办，审批统一在「治理推演」处理。
 
     return _ok({
         "release": {
