@@ -54,11 +54,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
-    # xdist 并行 + 测试环境低 bcrypt 轮次 + pytest-split 按时长四分片后，全量
-    # 回归在 4 vCPU runner 上目前约 7-10 分钟（套件随功能持续增长）；上限留到
-    # 15 分钟，既覆盖增长余量，又能及时掐断真正卡死的任务。
-    timeout-minutes: 15
+        shard: [1, 2, 3, 4, 5, 6]
+    # xdist 并行 + 测试环境低 bcrypt 轮次 + pytest-split 按时长六分片后，单片
+    # 回归在 4 vCPU runner 上约 5-7 分钟（套件随功能持续增长，分片配平数据见
+    # backend/.test_durations）；上限留到 20 分钟，既覆盖 runner 波动余量，
+    # 又能及时掐断真正卡死的任务。
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16-alpine
@@ -91,7 +92,7 @@ jobs:
       - name: Backend regression suite
         run: >-
           uv run pytest -q --disable-warnings -n auto --dist loadfile
-          --ignore tests/v2/perf --splits=4 --group=${{ matrix.shard }}
+          --ignore tests/v2/perf --splits=6 --group=${{ matrix.shard }}
           --splitting-algorithm=least_duration
         working-directory: backend
 
