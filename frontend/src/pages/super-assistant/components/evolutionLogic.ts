@@ -1,4 +1,4 @@
-import type { SuperMemory } from '@/api/superAssistant'
+import type { DistillCluster, SuperMemory } from '@/api/superAssistant'
 
 export const ZONE_LABELS: Record<string, string> = {
   core: '身份偏好',
@@ -52,3 +52,22 @@ export const memoryConflictDescription = (error: any): string | null => {
   const percent = Number.isFinite(similarity) ? `相似度 ${(similarity * 100).toFixed(0)}%` : '相似'
   return `${percent}：${String(existing.content).slice(0, 80)}`
 }
+
+/** 蒸馏簇 protected 提示：核心/常驻记忆只参与审阅、不参与自动合并；非保护簇返回 null */
+export const distillProtectedHint = (cluster: Pick<DistillCluster, 'protected'>): string | null =>
+  cluster.protected ? '核心/常驻，仅审不合' : null
+
+/** 蒸馏簇成员的被保留徽标；非 survivor 返回 null */
+export const distillSurvivorLabel = (
+  cluster: Pick<DistillCluster, 'survivor_id'>,
+  memberId: string,
+): string | null => (cluster.survivor_id === memberId ? '建议保留' : null)
+
+/** 蒸馏合并请求体：簇内全部成员 + 是否走 LLM 融合 */
+export const distillMergeBody = (
+  cluster: Pick<DistillCluster, 'members'>,
+  useLLM: boolean,
+): { member_ids: string[]; use_llm: boolean } => ({
+  member_ids: cluster.members.map(member => member.id),
+  use_llm: useLLM,
+})

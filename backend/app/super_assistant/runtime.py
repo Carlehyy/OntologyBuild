@@ -27,6 +27,7 @@ from app.super_assistant.models import (
     SuperAssistantToolRun,
 )
 from app.super_assistant.permissions import ToolPermissionChecker
+from app.super_assistant.skill_store import read_text_file, skill_directory
 from app.super_assistant.skill_tools import builtin_skill_tool_schemas, execute_skill_tool
 
 logger = logging.getLogger(__name__)
@@ -34,17 +35,35 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CONTEXT_TOKENS = 64_000
 
+# 自主 agent 模式的目标完成/失败标记：模型在最终答复开头输出，
+# 运行时据此跳出迭代并在落库内容中剥离（不展示给用户）
+_GOAL_COMPLETE_MARKER = "[GOAL_COMPLETE]"
+_GOAL_FAILED_MARKER = "[GOAL_FAILED]"
+
+# 自主 agent 模式的 system prompt 追加段：PLAN→EXECUTE→VERIFY 工作纪律
+_AGENT_MODE_SECTION = """自主执行模式：
+1. 你是自主执行代理：围绕用户目标自主规划、逐步执行并自查，不要等待用户逐步下达指令。
+2. PLAN：先用 todo_write 把目标拆成可核验的步骤清单（每项一句话）。
+3. EXECUTE：按清单逐步执行；完成步骤后用 todo_write 覆盖式更新清单，需要时用 todo_read 查看当前进度。
+4. VERIFY：全部步骤完成后，自查结果是否真正满足用户目标；不满足则继续补齐或修正。
+5. 确认目标已完成时，在最终答复开头输出 [GOAL_COMPLETE]；确认无法完成时输出 [GOAL_FAILED] 并说明原因。这两个标记不会展示给用户。
+"""
+
 # 只读内置工具：同一轮内可并行执行（无副作用、无需确认）
 _READ_ONLY_BUILTIN_TOOLS = frozenset({
     "use_skill",
     "read_skill_file",
     "memory_search",
+    "memory_distill",
     "palace_zones",
     "palace_read_zone",
     "palace_recall",
     "web_fetch",
     "web_search",
     "think",
+    # todo 清单是本轮 stream_chat 的内存态，读写均无外部副作用
+    "todo_write",
+    "todo_read",
 })
 
 
@@ -52,7 +71,32 @@ def sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
 
-def _system_prompt(skills: list[SuperAssistantSkill], memory_section: str = "") -> str:
+def _always_active_section(skills: list[SuperAssistantSkill]) -> str:
+    """常驻技能段：always_active 的 Skill 直接内联 SKILL.md 全文。
+
+    对标 hermes 的常驻技能：跳过 use_skill 渐进披露，视为系统规则的一部分。
+    单个 Skill 读取失败只记日志跳过，不阻断对话。
+    """
+    blocks: list[str] = []
+    for skill in skills:
+        if not skill.always_active:
+            continue
+        try:
+            skill_md = read_text_file(skill_directory(skill.owner_id, skill.id), "SKILL.md")
+        except Exception:
+            logger.warning("常驻 Skill %s 的 SKILL.md 读取失败，跳过注入", skill.name, exc_info=True)
+            continue
+        blocks.append(f"### {skill.name}\n{skill_md}")
+    if not blocks:
+        return ""
+    return "常驻技能（内容已完整加载，直接遵守，无需再调用 use_skill）：\n" + "\n\n".join(blocks)
+
+
+def _system_prompt(
+    skills: list[SuperAssistantSkill],
+    memory_section: str = "",
+    agent_mode: bool = False,
+) -> str:
     catalog = "\n".join(
         f"- {skill.name}: {skill.description}"
         for skill in skills
@@ -72,12 +116,17 @@ def _system_prompt(skills: list[SuperAssistantSkill], memory_section: str = "") 
 可用 Skill 目录：
 {catalog}
 """
+    always_active_section = _always_active_section(skills)
+    if agent_mode:
+        prompt = f"{prompt}\n{_AGENT_MODE_SECTION}\n"
+    if always_active_section:
+        prompt = f"{prompt}\n{always_active_section}\n"
     if memory_section:
         prompt = f"{prompt}\n{memory_section}\n"
     return prompt
 
 
-def _builtin_tools() -> list[dict[str, Any]]:
+def _builtin_tools(agent_mode: bool = False) -> list[dict[str, Any]]:
     tools: list[dict[str, Any]] = [
         *builtin_skill_tool_schemas(),
         {
@@ -114,6 +163,11 @@ def _builtin_tools() -> list[dict[str, Any]]:
                 "required": ["memory_id"],
                 "additionalProperties": False,
             },
+        },
+        {
+            "name": "memory_distill",
+            "description": "扫描长期记忆中的近重复簇，返回蒸馏报告（只读，不执行合并；合并需在记忆面板由用户确认）。",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         },
         {
             "name": "palace_zones",
@@ -171,6 +225,32 @@ def _builtin_tools() -> list[dict[str, Any]]:
             },
         },
     ]
+    if agent_mode:
+        # 自主 agent 模式的任务清单工具：状态是本轮 stream_chat 的内存态，
+        # 经 builtin_context 的 todo_state 传入 _execute_builtin_tool，不落库
+        tools.extend([
+            {
+                "name": "todo_write",
+                "description": "覆盖式写入当前任务的步骤清单（每项一句话、可核验），返回编号清单。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "items": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "完整步骤清单（覆盖旧清单）",
+                        },
+                    },
+                    "required": ["items"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "todo_read",
+                "description": "读取当前任务的步骤清单。",
+                "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+            },
+        ])
     if settings.super_assistant_web_fetch_enabled:
         tools.append({
             "name": "web_fetch",
@@ -196,8 +276,11 @@ def _builtin_tools() -> list[dict[str, Any]]:
     return tools
 
 
-def _tool_catalog(servers: list[SuperAssistantMcpServer]) -> tuple[list[dict[str, Any]], dict[str, tuple[SuperAssistantMcpServer, str]]]:
-    tools = _builtin_tools()
+def _tool_catalog(
+    servers: list[SuperAssistantMcpServer],
+    agent_mode: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, tuple[SuperAssistantMcpServer, str]]]:
+    tools = _builtin_tools(agent_mode)
     registry: dict[str, tuple[SuperAssistantMcpServer, str]] = {}
     for server in servers:
         for item in server.tool_manifest or []:
@@ -227,6 +310,31 @@ def _execute_builtin(db, owner_id: str, name: str, arguments: dict[str, Any]) ->
     return execute_skill_tool(db, owner_id, name, arguments)
 
 
+def _record_skill_use(db, owner_id: str, arguments: dict[str, Any], result: str) -> None:
+    """use_skill 成功后累计行内使用统计（目录降权排序的信号源）。
+
+    成功判定：execute_skill_tool 返回的结果 JSON 不含 "error" 键。
+    计数随当前会话提交——与 memory_search 的 mark_referenced 同事务模式一致；
+    只读并行路径在独立会话执行（见 _execute_read_only_tool），各自提交互不阻塞。
+    """
+    try:
+        payload = json.loads(result)
+    except ValueError:
+        return
+    if not isinstance(payload, dict) or "error" in payload:
+        return
+    skill = db.query(SuperAssistantSkill).filter(
+        SuperAssistantSkill.owner_id == owner_id,
+        SuperAssistantSkill.name == str(arguments.get("name") or ""),
+        SuperAssistantSkill.enabled.is_(True),
+    ).first()
+    if skill is None:
+        return
+    skill.use_count += 1
+    skill.last_used_at = datetime.now(timezone.utc)
+    db.commit()
+
+
 def _memory_hit_payload(hits: list) -> dict[str, Any]:
     return {
         "memories": [
@@ -242,6 +350,18 @@ def _memory_hit_payload(hits: list) -> dict[str, Any]:
     }
 
 
+def _render_todo_items(items: list[str]) -> str:
+    """把内存态步骤清单渲染成编号文本；空清单提示先 PLAN。"""
+    if not items:
+        return "（清单为空：先用 todo_write 把目标拆成可核验的步骤）"
+    return "\n".join(f"{index}. {item}" for index, item in enumerate(items, 1))
+
+
+def _strip_goal_markers(content: str) -> str:
+    """剥离自主模式的目标完成/失败标记，并清理其残留的首尾空白。"""
+    return content.replace(_GOAL_COMPLETE_MARKER, "").replace(_GOAL_FAILED_MARKER, "").strip()
+
+
 def _execute_builtin_tool(
     db,
     *,
@@ -251,6 +371,7 @@ def _execute_builtin_tool(
     call_kwargs: dict[str, Any],
     name: str,
     arguments: dict[str, Any],
+    todo_state: dict[str, list[str]] | None = None,
 ) -> str:
     """全部内置工具的统一分派（含记忆/宫殿/web/子代理）。
 
@@ -259,7 +380,12 @@ def _execute_builtin_tool(
     产出候选，agent 不得直接写 Skill 文件。
     """
     if name in {"use_skill", "read_skill_file"}:
-        return _execute_builtin(db, owner_id, name, arguments)
+        result = _execute_builtin(db, owner_id, name, arguments)
+        # 使用统计挂在统一分派点：串行/并行两条执行路径都经过这里，
+        # 且在结果截断之前判定，成功语义最可靠
+        if name == "use_skill":
+            _record_skill_use(db, owner_id, arguments, result)
+        return result
     if name == "memory_search" or name == "palace_recall":
         query = str(arguments.get("query") or "").strip()
         if not query:
@@ -315,6 +441,26 @@ def _execute_builtin_tool(
         if deleted:
             return json.dumps({"deleted": True, "memoryId": memory_id}, ensure_ascii=False)
         return json.dumps({"deleted": False, "error": "记忆不存在"}, ensure_ascii=False)
+    if name == "memory_distill":
+        # 只读报告：preview 取成员首行前 60 字；合并不在此执行
+        clusters = memory_service.find_distill_clusters(db, owner_id)
+        return json.dumps(
+            {
+                "cluster_count": len(clusters),
+                "clusters": [
+                    {
+                        "member_count": len(cluster["members"]),
+                        "protected": cluster["protected"],
+                        "preview": [
+                            memory_service._first_line(member["content"], 60)
+                            for member in cluster["members"]
+                        ],
+                    }
+                    for cluster in clusters
+                ],
+            },
+            ensure_ascii=False,
+        )
     if name == "palace_zones":
         counts: dict[str, int] = {}
         for memory in memory_service.list_memories(db, owner_id):
@@ -361,6 +507,20 @@ def _execute_builtin_tool(
         return json.dumps({"results": results}, ensure_ascii=False)
     if name == "think":
         return "已记录：" + str(arguments.get("thought") or "")
+    if name == "todo_write":
+        if todo_state is None:
+            return json.dumps({"error": "todo 工具仅在自主 agent 模式可用"}, ensure_ascii=False)
+        items = [
+            str(item).strip()
+            for item in (arguments.get("items") or [])
+            if str(item).strip()
+        ][:50]
+        todo_state["items"] = items
+        return _render_todo_items(items)
+    if name == "todo_read":
+        if todo_state is None:
+            return json.dumps({"error": "todo 工具仅在自主 agent 模式可用"}, ensure_ascii=False)
+        return _render_todo_items(todo_state.get("items") or [])
     if name == "subagent":
         # 惰性导入：subagent.py 复用本模块的 _execute_builtin，不能反向顶层依赖
         from app.super_assistant.subagent import run_subagent
@@ -515,7 +675,7 @@ def _trigger_micro_reflection(
 
 
 def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: str,
-                requested_model_id: str | None) -> Iterator[str]:
+                requested_model_id: str | None, agent_mode: bool = False) -> Iterator[str]:
     db = SessionLocal()
     assistant_message: SuperAssistantMessage | None = None
     client_disconnected = False
@@ -549,12 +709,24 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
         skills = db.query(SuperAssistantSkill).filter(
             SuperAssistantSkill.owner_id == owner_id,
             SuperAssistantSkill.enabled.is_(True),
-        ).order_by(SuperAssistantSkill.name.asc()).all()
+            # 目录全量列出制下排序是唯一降权杠杆：使用率高的排前，
+            # 零使用的老技能按 name 沉底（对标 hermes 使用统计降权）
+        ).order_by(
+            SuperAssistantSkill.use_count.desc(),
+            SuperAssistantSkill.name.asc(),
+        ).all()
         servers = db.query(SuperAssistantMcpServer).filter(
             SuperAssistantMcpServer.owner_id == owner_id,
             SuperAssistantMcpServer.enabled.is_(True),
         ).order_by(SuperAssistantMcpServer.name.asc()).all()
-        tools, mcp_registry = _tool_catalog(servers)
+        tools, mcp_registry = _tool_catalog(servers, agent_mode)
+        # 自主 agent 模式的 todo 清单状态：仅存活于本次 stream_chat，不落库
+        todo_state: dict[str, list[str]] | None = {"items": []} if agent_mode else None
+        max_rounds = (
+            settings.super_assistant_agent_max_iterations
+            if agent_mode
+            else settings.super_assistant_max_tool_rounds
+        )
 
         # 本次请求的用户消息：作为记忆检索 query 与 micro 反思的意图输入
         latest_user = db.query(SuperAssistantMessage).filter(
@@ -574,7 +746,7 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
             db, owner_id, query_text=user_query,
         )
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _system_prompt(skills, memory_section)}
+            {"role": "system", "content": _system_prompt(skills, memory_section, agent_mode)}
         ]
         messages.extend({"role": item.role, "content": item.content} for item in stored_messages if item.role in {"user", "assistant"})
         permission_checker = ToolPermissionChecker.from_settings()
@@ -583,7 +755,7 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
         last_input_tokens = 0
         all_text: list[str] = []
 
-        for round_index in range(settings.super_assistant_max_tool_rounds):
+        for round_index in range(max_rounds):
             if _run_cancelled(db, assistant_message):
                 yield sse("cancelled", {"message": "已停止生成"})
                 return
@@ -606,6 +778,12 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
             round_text = round_text or str(result.get("content") or "")
             if round_text:
                 all_text.append(round_text)
+            if agent_mode and _GOAL_FAILED_MARKER in round_text:
+                # 目标失败：记录一条 agent 步骤后跳出迭代（不再执行本轮 tool_calls）
+                steps.append({"toolName": "agent", "status": "failed"})
+                break
+            if agent_mode and _GOAL_COMPLETE_MARKER in round_text:
+                break
             calls = result.get("tool_calls") or []
             if not calls:
                 break
@@ -673,6 +851,7 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
                 "conversation_id": conversation_id,
                 "assistant_message_id": assistant_message.id,
                 "call_kwargs": call_kwargs,
+                "todo_state": todo_state,
             }
 
             if parallel_items:
@@ -807,6 +986,8 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
                 all_text.append("已达到工具调用轮次上限。")
 
         final_content = "".join(all_text) or "模型没有返回可显示的内容。"
+        if agent_mode:
+            final_content = _strip_goal_markers(final_content) or "模型没有返回可显示的内容。"
         assistant_message.content = final_content
         assistant_message.steps = steps
         usage_snapshot = {

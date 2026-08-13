@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import type { SuperMemory } from '../../api/superAssistant.ts'
+import type { DistillMember, SuperMemory } from '../../api/superAssistant.ts'
 import {
   candidateActions,
+  distillMergeBody,
+  distillProtectedHint,
+  distillSurvivorLabel,
   filterMemories,
   memoryConflictDescription,
   zoneLabel,
@@ -85,5 +88,41 @@ describe('memoryConflictDescription', () => {
   it('returns null for non-conflict errors', () => {
     assert.equal(memoryConflictDescription({ detail: '其他错误' }), null)
     assert.equal(memoryConflictDescription(new Error('network')), null)
+  })
+})
+
+const distillMember = (overrides: Partial<DistillMember>): DistillMember => ({
+  id: overrides.id || 'mem-1',
+  content: overrides.content || '',
+  zone: overrides.zone || 'general',
+  pinned: overrides.pinned ?? false,
+  match_count: 0,
+  reference_count: 0,
+  created_at: '2026-08-12T00:00:00+00:00',
+})
+
+describe('distillProtectedHint', () => {
+  it('flags protected clusters and stays quiet otherwise', () => {
+    assert.equal(distillProtectedHint({ protected: true }), '核心/常驻，仅审不合')
+    assert.equal(distillProtectedHint({ protected: false }), null)
+  })
+})
+
+describe('distillSurvivorLabel', () => {
+  it('labels only the survivor member', () => {
+    const cluster = { survivor_id: 'mem-2' }
+    assert.equal(distillSurvivorLabel(cluster, 'mem-2'), '建议保留')
+    assert.equal(distillSurvivorLabel(cluster, 'mem-1'), null)
+  })
+})
+
+describe('distillMergeBody', () => {
+  const cluster = {
+    members: [distillMember({ id: 'mem-1' }), distillMember({ id: 'mem-2' })],
+  }
+
+  it('collects member ids in cluster order and forwards the use_llm flag', () => {
+    assert.deepEqual(distillMergeBody(cluster, false), { member_ids: ['mem-1', 'mem-2'], use_llm: false })
+    assert.deepEqual(distillMergeBody(cluster, true), { member_ids: ['mem-1', 'mem-2'], use_llm: true })
   })
 })

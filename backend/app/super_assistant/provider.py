@@ -5,13 +5,80 @@ reusing only the platform's model configuration records.
 """
 from __future__ import annotations
 
+import importlib
 import json
+import time
 from collections.abc import Callable
 from typing import Any
+
+from app.shared.config import settings
 
 
 class ProviderError(RuntimeError):
     pass
+
+
+# ---------------------------------------------------------------------------
+# 瞬态错误重试：openai/anthropic 两个 SDK 均为函数内延迟 import，
+# 这里的异常类也只能在命中错误时惰性解析。
+# ---------------------------------------------------------------------------
+
+_RETRY_MAX_ATTEMPTS = 3
+_RETRY_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
+_RETRY_AFTER_CAP_SECONDS = 10.0
+
+
+def _sleep(seconds: float) -> None:
+    """独立出来的 sleep seam，测试中替换以避免真实等待。"""
+    time.sleep(seconds)
+
+
+def _transient_error_types() -> tuple[type[BaseException], ...]:
+    """惰性收集两个 SDK 的瞬态异常类（限流/连接失败/服务端 5xx/超时）。"""
+    types: list[type[BaseException]] = []
+    for module_name in ("openai", "anthropic"):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        for name in ("RateLimitError", "APIConnectionError", "InternalServerError", "APITimeoutError"):
+            error_type = getattr(module, name, None)
+            if isinstance(error_type, type) and issubclass(error_type, BaseException):
+                types.append(error_type)
+    return tuple(types)
+
+
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    """读取瞬态错误响应的 Retry-After 头（秒，上限 10s）；缺失或不可解析返回 None。"""
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if headers is None:
+        return None
+    raw = headers.get("retry-after") or headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return min(max(seconds, 0.0), _RETRY_AFTER_CAP_SECONDS)
+
+
+def _with_retry(call: Callable[[], Any]) -> Any:
+    """对瞬态 SDK 错误最多尝试 3 次，指数退避 1s/2s/4s，Retry-After 头优先。
+
+    非瞬态错误（含 ProviderError）立即原样抛出，不改变既有错误语义。
+    """
+    for attempt in range(_RETRY_MAX_ATTEMPTS):
+        try:
+            return call()
+        except Exception as exc:
+            if attempt + 1 >= _RETRY_MAX_ATTEMPTS or not isinstance(exc, _transient_error_types()):
+                raise
+            delay = _retry_after_seconds(exc)
+            if delay is None:
+                delay = _RETRY_BACKOFF_SECONDS[min(attempt, len(_RETRY_BACKOFF_SECONDS) - 1)]
+            _sleep(delay)
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def chat(call_kwargs: dict[str, Any], messages: list[dict[str, Any]],
@@ -85,7 +152,7 @@ def _chat_openai(kw: dict[str, Any], messages: list[dict[str, Any]],
                 "parameters": tool["parameters"],
             },
         } for tool in tools]
-    response = client.chat.completions.create(**create_kwargs)
+    response = _with_retry(lambda: client.chat.completions.create(**create_kwargs))
     if not response.choices:
         raise ProviderError("模型未返回任何候选结果")
     message = response.choices[0].message
@@ -119,48 +186,9 @@ def _chat_anthropic(kw: dict[str, Any], messages: list[dict[str, Any]],
         client_kwargs["base_url"] = kw["api_base"]
     client = anthropic.Anthropic(**client_kwargs)
 
-    system = "\n\n".join(message.get("content") or "" for message in messages if message["role"] == "system")
-    provider_messages: list[dict[str, Any]] = []
-    for message in messages:
-        if message["role"] == "system":
-            continue
-        if message["role"] == "assistant":
-            blocks: list[dict[str, Any]] = []
-            if message.get("content"):
-                blocks.append({"type": "text", "text": message["content"]})
-            blocks.extend({
-                "type": "tool_use",
-                "id": call["id"],
-                "name": call["name"],
-                "input": call.get("arguments") or {},
-            } for call in message.get("tool_calls") or [])
-            provider_messages.append({"role": "assistant", "content": blocks or [{"type": "text", "text": ""}]})
-        elif message["role"] == "tool":
-            provider_messages.append({
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": message["tool_call_id"],
-                    "content": message.get("content") or "",
-                }],
-            })
-        else:
-            provider_messages.append({"role": "user", "content": message.get("content") or ""})
-
-    create_kwargs: dict[str, Any] = {
-        "model": kw["model"],
-        "max_tokens": int(kw.get("max_output_tokens") or 4096),
-        "temperature": 0.2,
-        "system": system,
-        "messages": provider_messages,
-    }
-    if tools:
-        create_kwargs["tools"] = [{
-            "name": tool["name"],
-            "description": tool["description"],
-            "input_schema": tool["parameters"],
-        } for tool in tools]
-    response = client.messages.create(**create_kwargs)
+    response = _with_retry(
+        lambda: client.messages.create(**_anthropic_create_kwargs(kw, messages, tools))
+    )
     text_parts: list[str] = []
     tool_calls: list[dict[str, Any]] = []
     for block in response.content:
@@ -359,9 +387,10 @@ def _chat_stream_openai(kw: dict[str, Any], messages: list[dict[str, Any]],
     client = _openai_client(kw)
     # 不发送 stream_options：部分 OpenAI 兼容网关不识别该字段；usage 在
     # 对端主动给出时顺手采集，否则与非流式一样返回空 dict。
-    stream = client.chat.completions.create(
+    # 只有建连（create 本身）走重试；迭代中途断线不重试，避免重复产出 delta。
+    stream = _with_retry(lambda: client.chat.completions.create(
         **_openai_create_kwargs(kw, messages, tools), stream=True,
-    )
+    ))
     think_filter = _ThinkPrefixFilter(on_delta or (lambda _delta: None))
     content_parts: list[str] = []
     pending_calls: dict[int, dict[str, Any]] = {}
@@ -402,14 +431,35 @@ def _chat_stream_openai(kw: dict[str, Any], messages: list[dict[str, Any]],
             arguments = ({"_truncated": True, "_raw": raw} if finish_reason == "length"
                          else {"_raw": raw})
         tool_calls.append({"id": slot["id"], "name": slot["name"], "arguments": arguments})
+    usage_payload: dict[str, Any] = ({
+        "inputTokens": getattr(usage, "prompt_tokens", None),
+        "outputTokens": getattr(usage, "completion_tokens", None),
+    } if usage else {})
+    cached_tokens = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", None)
+    if cached_tokens is not None:
+        usage_payload["cacheReadTokens"] = cached_tokens
     return {
         "content": "".join(content_parts) or None,
         "tool_calls": tool_calls,
-        "usage": {
-            "inputTokens": getattr(usage, "prompt_tokens", None),
-            "outputTokens": getattr(usage, "completion_tokens", None),
-        } if usage else {},
+        "usage": usage_payload,
     }
+
+
+def _apply_anthropic_cache_breakpoints(create_kwargs: dict[str, Any]) -> None:
+    """注入 prompt caching 断点：system 改 text-block 结构、tools 末位加 ephemeral。
+
+    system 为空时不生成空 text block（部分端点会拒绝），tools 为空自然跳过。
+    """
+    system = create_kwargs.get("system")
+    if system:
+        create_kwargs["system"] = [{
+            "type": "text",
+            "text": system,
+            "cache_control": {"type": "ephemeral"},
+        }]
+    tools = create_kwargs.get("tools")
+    if tools:
+        tools[-1]["cache_control"] = {"type": "ephemeral"}
 
 
 def _anthropic_create_kwargs(kw: dict[str, Any], messages: list[dict[str, Any]],
@@ -455,6 +505,8 @@ def _anthropic_create_kwargs(kw: dict[str, Any], messages: list[dict[str, Any]],
             "description": tool["description"],
             "input_schema": tool["parameters"],
         } for tool in tools]
+    if settings.super_assistant_prompt_cache_enabled:
+        _apply_anthropic_cache_breakpoints(create_kwargs)
     return create_kwargs
 
 
@@ -474,7 +526,11 @@ def _chat_stream_anthropic(kw: dict[str, Any], messages: list[dict[str, Any]],
     think_filter = _ThinkPrefixFilter(on_delta or (lambda _delta: None))
     text_blocks: dict[int, list[str]] = {}
     tool_blocks: dict[int, dict[str, Any]] = {}
-    with client.messages.stream(**_anthropic_create_kwargs(kw, messages, tools)) as stream:
+    # __enter__ 才发起 HTTP 请求，即建连阶段，只有它走重试；
+    # 迭代中途断线不重试，避免重复产出 delta。
+    manager = client.messages.stream(**_anthropic_create_kwargs(kw, messages, tools))
+    stream = _with_retry(manager.__enter__)
+    try:
         for event in stream:
             event_type = getattr(event, "type", "")
             index = getattr(event, "index", None)
@@ -492,6 +548,8 @@ def _chat_stream_anthropic(kw: dict[str, Any], messages: list[dict[str, Any]],
                 elif delta.type == "input_json_delta" and index in tool_blocks:
                     tool_blocks[index]["json"].append(delta.partial_json)
         final_message = stream.get_final_message()
+    finally:
+        manager.__exit__(None, None, None)
     think_filter.finish()
     stop_reason = getattr(final_message, "stop_reason", None)
     tool_calls: list[dict[str, Any]] = []
@@ -505,11 +563,19 @@ def _chat_stream_anthropic(kw: dict[str, Any], messages: list[dict[str, Any]],
                          else {"_raw": raw})
         tool_calls.append({"id": slot["id"], "name": slot["name"], "arguments": arguments})
     usage = getattr(final_message, "usage", None)
+    usage_payload: dict[str, Any] = ({
+        "inputTokens": getattr(usage, "input_tokens", None),
+        "outputTokens": getattr(usage, "output_tokens", None),
+    } if usage else {})
+    if usage:
+        cache_creation = getattr(usage, "cache_creation_input_tokens", None)
+        if cache_creation is not None:
+            usage_payload["cacheCreationTokens"] = cache_creation
+        cache_read = getattr(usage, "cache_read_input_tokens", None)
+        if cache_read is not None:
+            usage_payload["cacheReadTokens"] = cache_read
     return {
         "content": "\n".join("".join(parts) for _index, parts in sorted(text_blocks.items())) or None,
         "tool_calls": tool_calls,
-        "usage": {
-            "inputTokens": getattr(usage, "input_tokens", None),
-            "outputTokens": getattr(usage, "output_tokens", None),
-        } if usage else {},
+        "usage": usage_payload,
     }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from collections import Counter
@@ -9,11 +10,15 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app.model_configs.selector import llm_call_kwargs, select_llm_model_config
 from app.shared.config import settings
+from app.super_assistant import provider
 from app.super_assistant.models import (
     SuperAssistantMemory,
     SuperAssistantMemoryProfile,
 )
+
+logger = logging.getLogger(__name__)
 
 # 30 天半衰期：得分按 0.5 ** (age_days / 30) 衰减，下限保护长期事实
 _HALF_LIFE_DAYS = 30.0
@@ -347,11 +352,11 @@ def _index_snippet(content: str) -> str:
     return " ".join(content.split())[:_INDEX_SNIPPET_LENGTH]
 
 
-def _first_line(content: str) -> str:
-    """首行摘要：取内容第一行前 80 字符。"""
+def _first_line(content: str, limit: int = _INDEX_SNIPPET_LENGTH) -> str:
+    """首行摘要：取内容第一行，截取前 limit 字符（默认 80）。"""
     stripped = content.strip()
     first = stripped.splitlines()[0] if stripped else ""
-    return first[:_INDEX_SNIPPET_LENGTH]
+    return first[:limit]
 
 
 def build_memory_prompt_section(
@@ -476,3 +481,235 @@ def compile_profile_and_palace(
     db.commit()
     db.refresh(profile_row)
     return profile_row
+
+
+# ---------------------------------------------------------------------------
+# 记忆蒸馏收敛（对标 hermes distill）：近重复簇发现 + 应用合并
+# ---------------------------------------------------------------------------
+
+
+class MemoryDistillError(Exception):
+    """蒸馏合并被拒绝：member_ids 无效或不足以构成簇（路由层映射 400）。"""
+
+
+class MemoryDistillNotFoundError(MemoryDistillError):
+    """member_ids 混入不属于当前用户的记忆（路由层映射 404）。"""
+
+
+def _distill_effectiveness(memory: SuperAssistantMemory) -> float:
+    """蒸馏幸存者效果分：reference/match 比率映射到 [0.5, 1.0]。
+
+    与 effectiveness_factor 不同，max(match, 1) 使从未被检索过的记忆得
+    0.5 而非乐观的 1.0：簇内并列时改由 created_at 决出幸存者，避免新
+    写入的记忆掩盖已被引用验证过的旧记忆。
+    """
+    ratio = memory.reference_count / max(memory.match_count, 1)
+    return 0.5 + 0.5 * min(ratio, 1.0)
+
+
+def _select_survivor(members: list[SuperAssistantMemory]) -> SuperAssistantMemory:
+    """簇内容幸存者：效果分最高者；并列取最新 created_at。"""
+    return max(
+        members,
+        key=lambda member: (_distill_effectiveness(member), member.created_at),
+    )
+
+
+def find_distill_clusters(
+    db: Session,
+    owner_id: str,
+    threshold: float = 0.55,
+) -> list[dict]:
+    """发现近重复记忆簇（只读，不改动任何记忆行）。
+
+    owner 全部 active 记忆两两算 TF-IDF 余弦（复用本模块分词/向量逻辑，
+    IDF 在全体记忆文档上计算），>= threshold 的边做 union-find，只保留
+    成员 >= 2 的簇。每簇返回 cluster_key（成员 id 排序后逗号连接）、
+    members（按 created_at 升序）、survivor_id 与 protected（任一成员
+    zone=="core" 或 pinned）；按簇大小降序（并列按 cluster_key）。
+    """
+    memories = _active_memories(db, owner_id)
+    if len(memories) < 2:
+        return []
+    documents = [_tokenize(memory.content) for memory in memories]
+    idf = _idf(documents)
+
+    parent = list(range(len(memories)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for left in range(len(memories)):
+        for right in range(left + 1, len(memories)):
+            if (
+                _cosine_similarity(documents[left], documents[right], idf)
+                >= threshold
+            ):
+                right_root = find(right)
+                if right_root != find(left):
+                    parent[right_root] = find(left)
+
+    groups: dict[int, list[SuperAssistantMemory]] = {}
+    for index, memory in enumerate(memories):
+        groups.setdefault(find(index), []).append(memory)
+
+    clusters: list[dict] = []
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda member: (member.created_at, member.id))
+        clusters.append({
+            "cluster_key": ",".join(
+                sorted(member.id for member in members)
+            ),
+            "members": [
+                {
+                    "id": member.id,
+                    "content": member.content,
+                    "zone": member.zone,
+                    "pinned": member.pinned,
+                    "match_count": member.match_count,
+                    "reference_count": member.reference_count,
+                    "created_at": member.created_at,
+                }
+                for member in members
+            ],
+            "survivor_id": _select_survivor(members).id,
+            "protected": any(
+                member.zone == "core" or member.pinned for member in members
+            ),
+        })
+    clusters.sort(
+        key=lambda cluster: (-len(cluster["members"]), cluster["cluster_key"])
+    )
+    return clusters
+
+
+def _distill_merge_prompt(members: list[SuperAssistantMemory]) -> str:
+    lines = "\n".join(f"- {member.content.strip()}" for member in members)
+    return (
+        "以下多条记忆描述同一主题，请融合成一条更密的陈述：保留全部事实、"
+        "去除重复、不超过 200 字。只输出融合后的正文。\n\n" + lines
+    )
+
+
+def _llm_call_kwargs(db: Session) -> dict:
+    """记忆侧 LLM 调用与对话运行时共用同一模型选择逻辑。"""
+    model_config = select_llm_model_config(
+        db=db,
+        purpose_tags=("super_assistant",),
+        allow_vlm=False,
+    )
+    call_kwargs = llm_call_kwargs(model_config)
+    if not call_kwargs:
+        raise provider.ProviderError(
+            "没有可用的文本模型，请先到“模型配置”启用一个 LLM"
+        )
+    return call_kwargs
+
+
+def recompile_profile(db: Session, owner_id: str) -> None:
+    """记忆/技能变更后重编译用户画像与记忆宫殿；失败仅记日志。"""
+    try:
+        call_kwargs = _llm_call_kwargs(db)
+
+        def llm_fn(prompt: str) -> str:
+            result = provider.chat(
+                call_kwargs,
+                [{"role": "user", "content": prompt}],
+                [],
+            )
+            return str(result.get("content") or "")
+
+        compile_profile_and_palace(db, owner_id, llm_fn)
+    except Exception:
+        logger.exception("重编译用户画像/记忆宫殿失败（owner=%s）", owner_id)
+
+
+def _llm_distill_merge(
+    db: Session,
+    members: list[SuperAssistantMemory],
+) -> str:
+    """LLM 融合簇成员为一条更密的陈述；任何失败（含无可用模型、调用
+    异常、空输出）返回空串，由调用方回退幸存者内容。"""
+    try:
+        call_kwargs = _llm_call_kwargs(db)
+        result = provider.chat(
+            call_kwargs,
+            [{"role": "user", "content": _distill_merge_prompt(members)}],
+            [],
+        )
+        return str(result.get("content") or "").strip()
+    except Exception:
+        logger.warning("蒸馏合并的 LLM 融合失败，回退幸存者内容", exc_info=True)
+        return ""
+
+
+def apply_distill(
+    db: Session,
+    owner_id: str,
+    member_ids: list[str],
+    merged_content: str | None = None,
+    use_llm: bool = False,
+) -> SuperAssistantMemory:
+    """应用一簇记忆的蒸馏合并：写入一条合并记忆并 supersede 全部成员。
+
+    簇结构由 find_distill_clusters 的报告保证，这里只校验归属与状态：
+    去重后不足 2 条、id 不存在或已 superseded → MemoryDistillError；
+    混入他人记忆 → MemoryDistillNotFoundError（先于其他校验）。
+    merged_content 为空时：use_llm=True 走 LLM 融合（失败回退幸存者
+    内容），否则直接用幸存者内容。合并后重编译画像/宫殿（失败仅记日志）。
+    """
+    ids: list[str] = []
+    for item in member_ids:
+        stripped = str(item).strip()
+        if stripped and stripped not in ids:
+            ids.append(stripped)
+    if len(ids) < 2:
+        raise MemoryDistillError("蒸馏合并至少需要 2 条不同的记忆")
+    rows = (
+        db.query(SuperAssistantMemory)
+        .filter(SuperAssistantMemory.id.in_(ids))
+        .all()
+    )
+    if any(row.owner_id != owner_id for row in rows):
+        raise MemoryDistillNotFoundError("包含不属于当前用户的记忆")
+    by_id = {row.id: row for row in rows}
+    members: list[SuperAssistantMemory] = []
+    for memory_id in ids:
+        row = by_id.get(memory_id)
+        if row is None:
+            raise MemoryDistillError("记忆不存在")
+        if row.superseded:
+            raise MemoryDistillError("记忆已被取代，请重新生成蒸馏报告")
+        members.append(row)
+
+    survivor = _select_survivor(members)
+    content = (merged_content or "").strip()
+    if not content and use_llm:
+        content = _llm_distill_merge(db, members)
+    if not content:
+        content = survivor.content
+    tags: list[str] = []
+    for member in members:
+        for tag in member.tags or []:
+            if tag not in tags:
+                tags.append(tag)
+    memory = create_memory(
+        db,
+        owner_id,
+        content,
+        zone=survivor.zone,
+        pinned=any(member.pinned for member in members),
+        confidence=survivor.confidence,
+        source="reflection",
+        tags=tags,
+        supersedes=ids,
+        conflict_check=False,
+    )
+    # 内部已捕获全部异常并记日志
+    recompile_profile(db, owner_id)
+    return memory

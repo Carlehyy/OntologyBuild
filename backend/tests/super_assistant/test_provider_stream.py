@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
+from app.shared.config import settings
 from app.super_assistant import provider
 
 
@@ -279,3 +281,259 @@ def test_anthropic_stream_falls_back_to_non_streaming(monkeypatch):
     assert result["content"] == "回退答复"
     assert result["usage"] == {"inputTokens": 3, "outputTokens": 2}
     assert deltas == ["回退答复"]
+
+
+# ---------------------------------------------------------------------------
+# 瞬态重试 / prompt caching 断点 / cache usage 采集
+# ---------------------------------------------------------------------------
+
+
+def _status_error(error_cls, status, retry_after=None):
+    """构造真实 SDK 异常实例：重试判定走 isinstance，必须用真实异常类。"""
+    headers = {"retry-after": retry_after} if retry_after is not None else {}
+    request = httpx.Request("POST", "https://api.test/v1/messages")
+    response = httpx.Response(status, headers=headers, request=request)
+    return error_cls("transient", response=response, body=None)
+
+
+def _connection_error(error_cls):
+    request = httpx.Request("POST", "https://api.test/v1/messages")
+    return error_cls(message="connection reset", request=request)
+
+
+class _ScriptedCompletions:
+    """按脚本依次响应 create：Exception 抛出、callable 调用、其余原样返回。"""
+
+    def __init__(self, steps):
+        self._steps = list(steps)
+        self.calls = 0
+        self.stream_calls = 0
+
+    def create(self, **kwargs):
+        if kwargs.get("stream"):
+            self.stream_calls += 1
+        else:
+            self.calls += 1
+        step = self._steps.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return step() if callable(step) else step
+
+
+def _patch_anthropic_scripted(monkeypatch, *, create_steps=(), stream_steps=()):
+    """脚本化 anthropic 客户端：记录每次调用的 kwargs，按脚本抛错/返回。"""
+    import anthropic
+
+    recorded = {"create": [], "stream": []}
+
+    def _make(endpoint, steps):
+        queue = list(steps)
+
+        def _call(**kwargs):
+            recorded[endpoint].append(kwargs)
+            step = queue.pop(0)
+            if isinstance(step, Exception):
+                raise step
+            return step() if callable(step) else step
+
+        return _call
+
+    monkeypatch.setattr(
+        anthropic, "Anthropic",
+        lambda **_kwargs: SimpleNamespace(messages=SimpleNamespace(
+            create=_make("create", create_steps),
+            stream=_make("stream", stream_steps),
+        )),
+    )
+    return recorded
+
+
+@pytest.fixture
+def sleeps(monkeypatch):
+    """替换 provider._sleep，记录退避时长且不做真实等待。"""
+    recorded: list[float] = []
+    monkeypatch.setattr(provider, "_sleep", recorded.append)
+    return recorded
+
+
+def test_chat_retries_transient_errors_then_succeeds(monkeypatch, sleeps):
+    import openai
+
+    completions = _ScriptedCompletions([
+        _status_error(openai.RateLimitError, 429),
+        _connection_error(openai.APIConnectionError),
+        _completion("重试后成功"),
+    ])
+    _patch_openai(monkeypatch, completions)
+    result = provider.chat(_CALL_KWARGS, _MESSAGES, [])
+    assert result["content"] == "重试后成功"
+    assert completions.calls == 3
+    assert sleeps == [1.0, 2.0]
+
+
+def test_chat_does_not_retry_non_transient_error(monkeypatch, sleeps):
+    completions = _ScriptedCompletions([ValueError("bad request")])
+    _patch_openai(monkeypatch, completions)
+    with pytest.raises(provider.ProviderError, match="模型调用失败"):
+        provider.chat(_CALL_KWARGS, _MESSAGES, [])
+    assert completions.calls == 1
+    assert sleeps == []
+
+
+def test_chat_prefers_retry_after_header_with_cap(monkeypatch, sleeps):
+    import openai
+
+    completions = _ScriptedCompletions([
+        _status_error(openai.RateLimitError, 429, retry_after="7"),
+        _status_error(openai.InternalServerError, 500, retry_after="30"),
+        _completion("ok"),
+    ])
+    _patch_openai(monkeypatch, completions)
+    result = provider.chat(_CALL_KWARGS, _MESSAGES, [])
+    assert result["content"] == "ok"
+    assert sleeps == [7.0, 10.0]  # Retry-After 优先于指数退避，且封顶 10s
+
+
+def test_chat_gives_up_after_max_attempts(monkeypatch, sleeps):
+    import openai
+
+    completions = _ScriptedCompletions([
+        _status_error(openai.RateLimitError, 429),
+        _connection_error(openai.APIConnectionError),
+        _status_error(openai.InternalServerError, 500),
+    ])
+    _patch_openai(monkeypatch, completions)
+    with pytest.raises(provider.ProviderError, match="模型调用失败"):
+        provider.chat(_CALL_KWARGS, _MESSAGES, [])
+    assert completions.calls == 3
+    assert sleeps == [1.0, 2.0]
+
+
+def test_anthropic_chat_retries_transient_error(monkeypatch, sleeps):
+    import anthropic
+
+    response = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="anthropic 重试成功")],
+        usage=None,
+    )
+    recorded = _patch_anthropic_scripted(
+        monkeypatch,
+        create_steps=[_status_error(anthropic.RateLimitError, 429), response],
+    )
+    result = provider.chat(_anthropic_kwargs(), _MESSAGES, [])
+    assert result["content"] == "anthropic 重试成功"
+    assert len(recorded["create"]) == 2
+    assert sleeps == [1.0]
+
+
+def test_openai_stream_retries_connect_phase_transient_error(monkeypatch, sleeps):
+    import openai
+
+    completions = _ScriptedCompletions([
+        _status_error(openai.RateLimitError, 429),
+        lambda: iter([_chunk(content="流式成功")]),
+    ])
+    _patch_openai(monkeypatch, completions)
+    result = provider.chat_stream(_CALL_KWARGS, _MESSAGES, [], None)
+    assert result["content"] == "流式成功"
+    assert completions.stream_calls == 2
+    assert completions.calls == 0  # 建连重试成功，未触发非流式回退
+    assert sleeps == [1.0]
+
+
+def test_openai_stream_midstream_error_is_not_retried(monkeypatch, sleeps):
+    import openai
+
+    def _broken_stream():
+        yield _chunk(content="半截")
+        raise _connection_error(openai.APIConnectionError)
+
+    completions = _ScriptedCompletions([_broken_stream, _completion("回退内容")])
+    _patch_openai(monkeypatch, completions)
+    deltas: list[str] = []
+    result = provider.chat_stream(_CALL_KWARGS, _MESSAGES, [], deltas.append)
+    assert result["content"] == "回退内容"
+    assert completions.stream_calls == 1  # 迭代中途断线不重试
+    assert completions.calls == 1  # 维持既有非流式回退
+    assert sleeps == []
+    assert deltas == ["回退内容"]  # 半截内容滞留 think 前缀缓冲，未提前透出
+
+
+_SYSTEM_MESSAGES = [
+    {"role": "system", "content": "你是超级助手"},
+    {"role": "user", "content": "你好"},
+]
+_TOOLS = [
+    {"name": "web_search", "description": "搜索", "parameters": {"type": "object"}},
+    {"name": "web_fetch", "description": "抓取", "parameters": {"type": "object"}},
+]
+
+
+def test_anthropic_chat_injects_cache_breakpoints(monkeypatch):
+    response = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="答复")], usage=None,
+    )
+    recorded = _patch_anthropic_scripted(monkeypatch, create_steps=[response])
+    provider.chat(_anthropic_kwargs(), _SYSTEM_MESSAGES, _TOOLS)
+    sent = recorded["create"][0]
+    assert sent["system"] == [{
+        "type": "text", "text": "你是超级助手",
+        "cache_control": {"type": "ephemeral"},
+    }]
+    assert "cache_control" not in sent["tools"][0]
+    assert sent["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_anthropic_chat_omits_cache_breakpoints_when_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "super_assistant_prompt_cache_enabled", False)
+    response = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="答复")], usage=None,
+    )
+    recorded = _patch_anthropic_scripted(monkeypatch, create_steps=[response])
+    provider.chat(_anthropic_kwargs(), _SYSTEM_MESSAGES, _TOOLS)
+    sent = recorded["create"][0]
+    assert sent["system"] == "你是超级助手"
+    assert all("cache_control" not in tool for tool in sent["tools"])
+
+
+def test_anthropic_stream_injects_cache_breakpoints(monkeypatch):
+    final = SimpleNamespace(stop_reason="end_turn", usage=None)
+    recorded = _patch_anthropic_scripted(
+        monkeypatch,
+        stream_steps=[_FakeAnthropicStream([], final)],
+    )
+    provider.chat_stream(_anthropic_kwargs(), _SYSTEM_MESSAGES, _TOOLS, None)
+    sent = recorded["stream"][0]
+    assert sent["system"] == [{
+        "type": "text", "text": "你是超级助手",
+        "cache_control": {"type": "ephemeral"},
+    }]
+    assert sent["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_anthropic_stream_collects_cache_usage(monkeypatch):
+    final = SimpleNamespace(
+        stop_reason="end_turn",
+        usage=SimpleNamespace(
+            input_tokens=9, output_tokens=5,
+            cache_creation_input_tokens=120, cache_read_input_tokens=340,
+        ),
+    )
+    _patch_anthropic(monkeypatch, events=[], final=final)
+    result = provider.chat_stream(_anthropic_kwargs(), _MESSAGES, [], None)
+    assert result["usage"] == {
+        "inputTokens": 9, "outputTokens": 5,
+        "cacheCreationTokens": 120, "cacheReadTokens": 340,
+    }
+
+
+def test_openai_stream_collects_cached_tokens(monkeypatch):
+    _patch_openai(monkeypatch, _FakeCompletions(stream_chunks=[
+        _chunk(content="你好"),
+        SimpleNamespace(choices=[], usage=SimpleNamespace(
+            prompt_tokens=11, completion_tokens=7,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=6),
+        )),
+    ]))
+    result = provider.chat_stream(_CALL_KWARGS, _MESSAGES, [], None)
+    assert result["usage"] == {"inputTokens": 11, "outputTokens": 7, "cacheReadTokens": 6}
