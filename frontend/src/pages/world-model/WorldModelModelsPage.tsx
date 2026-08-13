@@ -253,7 +253,7 @@ function ProjectCard({
   )
 }
 
-export default function WorldModelListTab() {
+export default function WorldModelModelsPage() {
   const [nameFilter, setNameFilter] = useState('')
   const [engineFilter, setEngineFilter] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
