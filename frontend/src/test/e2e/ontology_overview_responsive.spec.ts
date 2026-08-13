@@ -90,7 +90,6 @@ async function mockOverview(page: Page, options?: { singleVersion?: boolean; wit
         health: withHealth
           ? [
             { level: 'warn', message: '1 条映射未绑定对象实体（将由数据自建类型）', target: 'data-mapping', hint: '建议在映射维护里显式绑定，防止产生平行类型' },
-            { level: 'action', message: '2 个动作等待审批', target: 'governance', hint: '到「治理与推演 → 治理驾驶舱」批准或拒绝' },
           ]
           : [],
       })
@@ -142,8 +141,11 @@ test('矮屏（1280x720）下 KPI 栏不被压碎，内容改为滚动呈现', a
   const health = page.getByLabel('待处理事项')
   await expect(health).toBeVisible()
   await expect(health).toContainText('1 条映射未绑定对象实体')
-  await health.getByRole('button', { name: /2 个动作等待审批/ }).click()
-  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontologyId}\\?tab=governance`))
+  // 审批相关信息刻意不在总览展示，即使 overview 接口仍返回
+  // pendingApprovals / actionsRequiringApproval 字段。
+  await expect(page.getByText(/等待审批|需人工审批/)).toHaveCount(0)
+  await health.getByRole('button', { name: /1 条映射未绑定对象实体/ }).click()
+  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontologyId}\\?tab=data-mapping`))
 })
 
 test('大屏（1920x1080）下完整呈现：趋势图可见，页面收敛为三个面板', async ({ page }) => {

@@ -239,8 +239,6 @@ def test_overview_is_scoped_to_current_release_snapshot(
     assert body["health"] == [
         {"level": "info", "message": "已有数据但还没有哨兵", "target": "design",
          "hint": "在图谱编辑器建哨兵，让平台替你盯住状态变化"},
-        {"level": "action", "message": "1 个动作等待审批", "target": "governance",
-         "hint": "到「治理与推演 → 治理驾驶舱」批准或拒绝"},
     ]
 
     pending = client.get(
