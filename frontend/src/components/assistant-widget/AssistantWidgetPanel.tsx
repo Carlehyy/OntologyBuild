@@ -325,7 +325,7 @@ export default function AssistantWidgetPanel() {
 
           <PendingConfirmationCard />
 
-          <footer className="shrink-0 border-t border-[var(--color-border)] p-2.5">
+          <footer className="shrink-0 border-t border-[var(--color-border)] p-2">
             <Sender
               value={draft}
               onChange={value => setDraft(value)}
@@ -334,11 +334,12 @@ export default function AssistantWidgetPanel() {
               loading={streaming}
               disabled={composerBlocked || loadingList}
               placeholder="输入消息，Enter 发送 / Shift+Enter 换行"
-              autoSize={{ minRows: 1, maxRows: 4 }}
+              autoSize={{ minRows: 1, maxRows: 3 }}
               styles={{
-                // 默认 paddingSM(12px) 让迷你窗输入框偏臃肿，收紧到 6/8px
-                root: { paddingBlock: 6, paddingInlineStart: 8, paddingInlineEnd: 8 },
-                input: { fontSize: 13, lineHeight: '20px' },
+                // 纵向 padding 在 content 层（库默认 paddingSM=12px），root 本身无默认
+                // padding；迷你窗收紧：4/8px 内边距、12px 字号、最多 3 行
+                content: { paddingBlock: 4, paddingInlineStart: 8, paddingInlineEnd: 8 },
+                input: { fontSize: 12, lineHeight: '18px' },
               }}
             />
           </footer>
