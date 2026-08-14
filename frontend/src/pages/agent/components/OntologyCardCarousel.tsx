@@ -260,7 +260,9 @@ export function OntologyCardCarousel({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
-        className="scrollbar-none relative min-h-0 flex-1 cursor-grab touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-teal-300 active:cursor-grabbing"
+        // isolate：卡片/箭头的 z-index（最高 110）只在舞台内部竞争。若不隔离，
+        // 它们会进入根层叠上下文并压过全局悬浮 AI 助手面板（z-40）。
+        className="isolate scrollbar-none relative min-h-0 flex-1 cursor-grab touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-teal-300 active:cursor-grabbing"
       >
         {ranked.map((item, index) => {
           const pos = circularCardPosition(index, focus, count)

@@ -289,3 +289,62 @@ test('无菜单权限时面板展示不可用提示且输入被禁用', async ({
   await expect(panel.getByText('当前账号暂无 AI 助手使用权限，请联系管理员开通。')).toBeVisible()
   await expect(panel.getByPlaceholder('输入消息，Enter 发送 / Shift+Enter 换行')).toBeDisabled()
 })
+
+test('本体助手未选本体时悬浮窗盖过拓扑卡片轮播（层级回归）', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+  await mockSuperAssistant(page)
+  // 未选择本体时，本体助手右侧面板展示卡片轮播（居中卡 inline z-index 最高 100）。
+  // 轮播舞台未做层叠隔离时，卡片会压过全局悬浮窗（z-40）；隔离后悬浮窗保持最上层。
+  await page.route(/\/api\/v1\/ontologies(\?|$)/, route => json(route, {
+    items: [
+      {
+        id: 'ontology-1', name: '供应链本体', domain: '供应链', description: '供应链本体描述',
+        status: 'draft', version: 'v1', current_release_id: 'release-ontology-1',
+        current_release_version: 'v1', assistant_card_clicks: 7,
+        entity_count: 2, relation_count: 1, action_count: 1, sentinel_count: 1,
+        created_at: now, updated_at: now,
+      },
+      {
+        id: 'ontology-2', name: '医疗健康本体', domain: '医疗', description: '医疗健康本体描述',
+        status: 'draft', version: 'v1', current_release_id: 'release-ontology-2',
+        current_release_version: 'v1', assistant_card_clicks: 3,
+        entity_count: 2, relation_count: 1, action_count: 1, sentinel_count: 0,
+        created_at: now, updated_at: now,
+      },
+    ],
+    total: 2,
+    page: 1,
+    page_size: 1000,
+  }))
+  await page.setViewportSize({ width: 1280, height: 900 })
+
+  await page.goto('/#/agent')
+  await expect(page.getByTestId('ontology-card-carousel')).toBeVisible()
+
+  await page.getByTestId('assistant-widget-fab').click()
+  const panel = page.getByTestId('assistant-widget-panel')
+  await expect(panel).toBeVisible()
+
+  // 取面板与居中卡片的交叠区域中心，断言该点最上层元素属于悬浮窗而非卡片
+  const panelBox = await panel.boundingBox()
+  const cardBox = await page.locator('[data-card-index="0"]').boundingBox()
+  if (!panelBox || !cardBox) throw new Error('bounding box missing')
+  const overlapX = Math.min(panelBox.x + panelBox.width, cardBox.x + cardBox.width) - Math.max(panelBox.x, cardBox.x)
+  const overlapY = Math.min(panelBox.y + panelBox.height, cardBox.y + cardBox.height) - Math.max(panelBox.y, cardBox.y)
+  expect(overlapX).toBeGreaterThan(0)
+  expect(overlapY).toBeGreaterThan(0)
+  const x = Math.max(panelBox.x, cardBox.x) + overlapX / 2
+  const y = Math.max(panelBox.y, cardBox.y) + overlapY / 2
+
+  const topmost = await page.evaluate(({ x, y }) => {
+    const stack = document.elementsFromPoint(x, y)
+    for (const el of stack) {
+      const node = el as HTMLElement
+      if (node.closest?.('[data-card-index]')) return 'card'
+      if (node.closest?.('[data-testid="assistant-widget-panel"]')) return 'panel'
+    }
+    return 'other'
+  }, { x, y })
+  expect(topmost).toBe('panel')
+})
