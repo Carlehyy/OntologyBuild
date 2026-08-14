@@ -104,6 +104,12 @@ def _canvas_node_ids(snapshot: dict | None) -> set[str]:
     L2-only nodes use namespaced ids to avoid collisions across object
     properties and actions.  Functions and sentinels are analysis overlays, not
     persistent canvas nodes.
+
+    The data-mapping workspace shares the same per-version layout store under
+    namespaced node ids: ``object:<id>`` / ``relation:<id>`` for ontology
+    elements and ``dataset:<id>`` for datasets referenced by the version's
+    mappings.  Unmapped datasets are rejected (and pruned) because the mapping
+    canvas only materializes nodes for mapped elements.
     """
     snap = complete_snapshot(snapshot)
     valid_ids: set[str] = set()
@@ -112,6 +118,7 @@ def _canvas_node_ids(snapshot: dict | None) -> set[str]:
         if not object_type_id:
             continue
         valid_ids.update({object_type_id, f"l1:{object_type_id}", f"l2:{object_type_id}"})
+        valid_ids.add(f"object:{object_type_id}")
         for prop in object_type.get("properties") or []:
             if not isinstance(prop, dict):
                 continue
@@ -119,11 +126,32 @@ def _canvas_node_ids(snapshot: dict | None) -> set[str]:
             if property_id:
                 node_id = f"property:{object_type_id}:{property_id}"
                 valid_ids.update({node_id, f"l2:{node_id}"})
+    for link_type in snap["linkTypes"]:
+        link_type_id = str(link_type.get("id") or "")
+        if link_type_id:
+            valid_ids.add(f"relation:{link_type_id}")
     for action in snap["actions"]:
         action_id = str(action.get("id") or "")
         if action_id:
             node_id = f"action:{action_id}"
             valid_ids.update({node_id, f"l2:{node_id}"})
+    for mapping in snap["mappings"]:
+        if not isinstance(mapping, dict):
+            continue
+        dataset_id = str(
+            mapping.get("curated_dataset_id") or mapping.get("curatedDatasetId") or "")
+        if dataset_id:
+            valid_ids.add(f"dataset:{dataset_id}")
+    for link_mapping in snap["linkMappings"]:
+        if not isinstance(link_mapping, dict):
+            continue
+        for key in (
+            "src_dataset_id", "tgt_dataset_id", "edge_dataset_id",
+            "srcDatasetId", "tgtDatasetId", "edgeDatasetId",
+        ):
+            dataset_id = str(link_mapping.get(key) or "")
+            if dataset_id:
+                valid_ids.add(f"dataset:{dataset_id}")
     return valid_ids
 
 

@@ -80,6 +80,7 @@ interface MappingWorkspaceResponse {
   versionId?: string
   versionNumber?: string
   isCurrentRelease?: boolean
+  canvasLayout?: Record<string, { x: number; y: number }>
 }
 
 export interface MappingDataset {
@@ -362,6 +363,7 @@ export function useMappingData(
     workspaceRevision: workspaceQuery.data?.revision || null,
     workspaceEditable: workspaceQuery.data?.editable ?? null,
     workspaceMode: workspaceQuery.data?.workspaceMode || null,
+    canvasLayout: workspaceQuery.data?.canvasLayout || {},
     isLoading: requiredQueries.some(query => query.isLoading),
     isError: requiredQueries.some(query => query.isError),
     isLoadingSchemas: schemasQuery.isLoading,
