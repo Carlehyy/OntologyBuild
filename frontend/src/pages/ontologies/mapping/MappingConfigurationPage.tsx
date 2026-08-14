@@ -14,6 +14,7 @@ import {
   Link2, Loader2, Plus, Save, Search, Sparkles, Table2, Trash2, X,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
+import { saveCanvasLayout } from '@/palantir-graph/api/formalApi'
 import {
   fetchMappingSuggestions,
   type MappingSuggestionResponse,
@@ -209,6 +210,26 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
   const objectById = useMemo(() => new Map(data.objectTypes.map(item => [item.id, item])), [data.objectTypes])
   const datasetById = useMemo(() => new Map(data.datasets.map(item => [item.id, item])), [data.datasets])
 
+  // 与后端 _canvas_node_ids 的合法性保持一致：只有已被版本映射引用的元素
+  // 位置才可持久化；草稿里尚未保存连线的新节点不写入（刷新后本就不再出现）。
+  const persistableNodeIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const mapping of data.mappings) {
+      const objectId = mappingTargetId(mapping)
+      if (objectId) ids.add(`object:${objectId}`)
+      if (mapping.curated_dataset_id) ids.add(`dataset:${mapping.curated_dataset_id}`)
+    }
+    for (const relation of data.linkTypes) {
+      const mapping = linkMappingForType(relation, data.linkMappings)
+      if (!mapping) continue
+      ids.add(`relation:${relation.id}`)
+      for (const datasetId of [mapping.src_dataset_id, mapping.tgt_dataset_id, mapping.edge_dataset_id]) {
+        if (datasetId) ids.add(`dataset:${datasetId}`)
+      }
+    }
+    return ids
+  }, [data.linkMappings, data.linkTypes, data.mappings])
+
   const targetProperty = useCallback((targetNode: MappingNode, handleId: string | null | undefined): MappingProperty | undefined => {
     if (!handleId || targetNode.data.kind === 'dataset') return undefined
     if (targetNode.data.kind === 'object') return targetNode.data.object?.properties.find(property => property.name === handleId)
@@ -347,14 +368,18 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       }
     }
 
+    // 已保存的画布位置优先于车道式自动布局；位置是独立展示元数据，
+    // 任何本体状态（草稿/试跑/发布/归档）都可拖拽调整并持久化。
+    const savedLayout = data.canvasLayout
     let datasetY = 55
     const datasetPositions = new Map<string, { x: number; y: number }>()
     ;[...usedDatasets].forEach(datasetId => {
       const dataset = datasetById.get(datasetId)
       if (dataset) {
-        const node: MappingNode = { id: `dataset:${dataset.id}`, type: 'dataset', position: { x: 60, y: datasetY }, data: { kind: 'dataset', dataset, onPreview: toggleDatasetPreview } }
+        const node: MappingNode = { id: `dataset:${dataset.id}`, type: 'dataset', position: savedLayout[`dataset:${dataset.id}`] || { x: 60, y: datasetY }, data: { kind: 'dataset', dataset, onPreview: toggleDatasetPreview } }
         datasetPositions.set(dataset.id, node.position)
-        nextNodes.push(node); datasetY += estimatedNodeHeight(node) + 36
+        nextNodes.push(node)
+        datasetY = Math.max(datasetY, node.position.y + estimatedNodeHeight(node) + 36)
       }
     })
     let targetY = 55
@@ -363,9 +388,11 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       if (object) {
         const mappedDatasetId = data.mappings.find(mapping => mappingTargetId(mapping) === object.id)?.curated_dataset_id
         const desiredY = mappedDatasetId ? datasetPositions.get(mappedDatasetId)?.y : undefined
-        targetY = Math.max(targetY, desiredY ?? targetY)
-        const node: MappingNode = { id: `object:${object.id}`, type: 'object', position: { x: targetLaneX(), y: targetY }, data: { kind: 'object', object } }
-        nextNodes.push(node); targetY += estimatedNodeHeight(node) + 36
+        const savedPosition = savedLayout[`object:${object.id}`]
+        if (!savedPosition) targetY = Math.max(targetY, desiredY ?? targetY)
+        const node: MappingNode = { id: `object:${object.id}`, type: 'object', position: savedPosition || { x: targetLaneX(), y: targetY }, data: { kind: 'object', object } }
+        nextNodes.push(node)
+        targetY = Math.max(targetY, node.position.y + estimatedNodeHeight(node) + 36)
       }
     })
     let relationY = 55
@@ -382,9 +409,11 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
       const desiredY = anchorPositions.length
         ? anchorPositions.reduce((sum, position) => sum + position.y, 0) / anchorPositions.length
         : relationY
-      relationY = Math.max(relationY, desiredY)
-      const node: MappingNode = { id: `relation:${relation.id}`, type: 'relation', position: { x: relationLaneX(), y: relationY }, data: { kind: 'relation', relation, sourceProperty: sourceObject?.properties.find(property => property.name === sourceObject.primaryKey) || sourceObject?.properties[0], targetProperty: targetObject?.properties.find(property => property.name === targetObject.primaryKey) || targetObject?.properties[0] } }
-      nextNodes.push(node); relationY += estimatedNodeHeight(node) + 36
+      const savedPosition = savedLayout[`relation:${relation.id}`]
+      if (!savedPosition) relationY = Math.max(relationY, desiredY)
+      const node: MappingNode = { id: `relation:${relation.id}`, type: 'relation', position: savedPosition || { x: relationLaneX(), y: relationY }, data: { kind: 'relation', relation, sourceProperty: sourceObject?.properties.find(property => property.name === sourceObject.primaryKey) || sourceObject?.properties[0], targetProperty: targetObject?.properties.find(property => property.name === targetObject.primaryKey) || targetObject?.properties[0] } }
+      nextNodes.push(node)
+      relationY = Math.max(relationY, node.position.y + estimatedNodeHeight(node) + 36)
     })
     const consistentlyEnabled = (policies: Map<string, boolean[]>) => new Set(
       [...policies.entries()]
@@ -690,35 +719,49 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
     } finally { setSaving(false) }
   }
 
-  const autoLayout = () => {
-    setNodes(current => {
-      const positions = new Map<string, { x: number; y: number }>()
-      let datasetY = 55
-      for (const node of current.filter(item => item.data.kind === 'dataset')) {
-        positions.set(node.id, { x: 60, y: datasetY })
-        datasetY += estimatedNodeHeight(node) + 36
-      }
-      let objectY = 55
-      for (const node of current.filter(item => item.data.kind === 'object')) {
-        const sourceEdge = edges.find(edge => edge.target === node.id)
-        const desiredY = sourceEdge ? positions.get(sourceEdge.source)?.y : undefined
-        objectY = Math.max(objectY, desiredY ?? objectY)
-        positions.set(node.id, { x: targetLaneX(), y: objectY })
-        objectY += estimatedNodeHeight(node) + 36
-      }
-      let relationY = 55
-      for (const node of current.filter(item => item.data.kind === 'relation')) {
-        const anchors = edges
-          .filter(edge => edge.target === node.id)
-          .map(edge => positions.get(edge.source)?.y)
-          .filter((y): y is number => y !== undefined)
-        const desiredY = anchors.length ? anchors.reduce((sum, y) => sum + y, 0) / anchors.length : relationY
-        relationY = Math.max(relationY, desiredY)
-        positions.set(node.id, { x: relationLaneX(), y: relationY })
-        relationY += estimatedNodeHeight(node) + 36
-      }
-      return current.map(node => ({ ...node, position: positions.get(node.id) || node.position }))
+  // 节点位置是与映射配置相互独立的展示元数据：任何本体状态下都可拖拽调整，
+  // 拖拽结束即写入版本 canvas_layout，不触碰映射快照，也不点亮“保存配置”。
+  const persistLayout = useCallback((layoutNodes: MappingNode[]) => {
+    const positions: Record<string, { x: number; y: number }> = {}
+    for (const node of layoutNodes) {
+      if (!persistableNodeIds.has(node.id)) continue
+      positions[node.id] = { x: node.position.x, y: node.position.y }
+    }
+    if (!Object.keys(positions).length) return
+    saveCanvasLayout(ontologyId, positions, versionId).catch(() => {
+      setNotice({ tone: 'warn', text: '节点位置保存失败，可再次拖动重试。' })
     })
+  }, [ontologyId, persistableNodeIds, versionId])
+
+  const autoLayout = () => {
+    const positions = new Map<string, { x: number; y: number }>()
+    let datasetY = 55
+    for (const node of nodes.filter(item => item.data.kind === 'dataset')) {
+      positions.set(node.id, { x: 60, y: datasetY })
+      datasetY += estimatedNodeHeight(node) + 36
+    }
+    let objectY = 55
+    for (const node of nodes.filter(item => item.data.kind === 'object')) {
+      const sourceEdge = edges.find(edge => edge.target === node.id)
+      const desiredY = sourceEdge ? positions.get(sourceEdge.source)?.y : undefined
+      objectY = Math.max(objectY, desiredY ?? objectY)
+      positions.set(node.id, { x: targetLaneX(), y: objectY })
+      objectY += estimatedNodeHeight(node) + 36
+    }
+    let relationY = 55
+    for (const node of nodes.filter(item => item.data.kind === 'relation')) {
+      const anchors = edges
+        .filter(edge => edge.target === node.id)
+        .map(edge => positions.get(edge.source)?.y)
+        .filter((y): y is number => y !== undefined)
+      const desiredY = anchors.length ? anchors.reduce((sum, y) => sum + y, 0) / anchors.length : relationY
+      relationY = Math.max(relationY, desiredY)
+      positions.set(node.id, { x: relationLaneX(), y: relationY })
+      relationY += estimatedNodeHeight(node) + 36
+    }
+    const nextNodes = nodes.map(node => ({ ...node, position: positions.get(node.id) || node.position }))
+    setNodes(nextNodes)
+    persistLayout(nextNodes)
   }
   const clearConnectionFocus = () => { setFocusedNodeId(null); setFocusedEdgeId(null); setHoveredEdgeId(null) }
   const clearCanvas = () => { if (editable && nodes.length && window.confirm('清空画布会把现有映射标记为待删除，只有点击“保存配置”后才会同步数据库。')) { setNodes([]); setEdges([]); setDirty(true); setSelectedDatasetId(null); clearConnectionFocus() } }
@@ -915,6 +958,7 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
             onEdgeMouseEnter={(_, edge) => setHoveredEdgeId(edge.id)}
             onEdgeMouseLeave={() => setHoveredEdgeId(null)}
             onPaneClick={clearConnectionFocus}
+            onNodeDragStop={() => persistLayout(nodes)}
             nodesConnectable={editable} nodesDraggable
             fitView fitViewOptions={{ padding: .18 }} minZoom={.3} maxZoom={1.5}
             deleteKeyCode={editable ? ['Backspace', 'Delete'] : null} connectionLineStyle={{ stroke: '#109486', strokeWidth: 2 }}

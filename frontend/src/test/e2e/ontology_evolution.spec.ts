@@ -391,6 +391,24 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page.getByTestId('mapping-focus-guide')).toContainText('连线追踪')
   await expect(page.locator('.dmc-canvas-stats')).toContainText('字段映射 4')
 
+  // 节点位置是独立展示元数据：拖拽即写入版本布局，不点亮“保存配置”。
+  const mappingLayoutSaved = page.waitForResponse(response =>
+    response.request().method() === 'PUT'
+      && response.url().includes('/api/v2/ontologies/')
+      && response.url().endsWith('/layout'))
+  const mappingObjectDragBox = await mappingObjectNode.boundingBox()
+  expect(mappingObjectDragBox).toBeTruthy()
+  await page.mouse.move(
+    mappingObjectDragBox!.x + mappingObjectDragBox!.width / 2, mappingObjectDragBox!.y + 14)
+  await page.mouse.down()
+  await page.mouse.move(
+    mappingObjectDragBox!.x + mappingObjectDragBox!.width / 2 + 100,
+    mappingObjectDragBox!.y + 14 + 60,
+    { steps: 8 })
+  await page.mouse.up()
+  expect((await mappingLayoutSaved).ok()).toBeTruthy()
+  await expect(page.locator('.dmc-canvas-stats')).toContainText('已与数据库同步')
+
   // 两侧清单都必须在当前工作台高度内独立滚动，不能由内容撑高后被页面裁掉。
   await verifyVerticalListScroll(page.getByTestId('mapping-assets-list'))
   await verifyVerticalListScroll(page.getByTestId('mapping-ontology-list'))

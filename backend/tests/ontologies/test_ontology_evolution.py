@@ -2994,6 +2994,8 @@ def test_passed_trial_is_frozen_and_can_only_continue_in_a_new_branch(
 
     # 画布坐标属于独立展示元数据：试跑快照冻结后仍可调整，且不会推进
     # revision、改变 snapshot_hash 或污染被试跑验证的正式模型快照。
+    # 数据映射工作台的节点位置共享同一布局存储，使用 object:/dataset: 等
+    # 命名空间 id，仅接受被版本映射引用的元素。
     frozen_row = db.query(OntologyVersion).filter_by(id=draft["id"]).one()
     frozen_revision = frozen_row.revision
     frozen_hash = frozen_row.snapshot_hash
@@ -3007,10 +3009,42 @@ def test_passed_trial_is_frozen_and_can_only_continue_in_a_new_branch(
                 "property:ot-order:p-name": {"x": 920, "y": 430},
                 "l1:ot-order": {"x": 180, "y": 140},
                 "l2:property:ot-order:p-name": {"x": 480, "y": 320},
+                "object:ot-order": {"x": 460, "y": 240},
+                "dataset:dataset-orders": {"x": 60, "y": 120},
             },
         },
     )
     assert saved_layout.status_code == 200, saved_layout.text
+    assert saved_layout.json()["data"]["positions"]["object:ot-order"] == {
+        "x": 460.0, "y": 240.0,
+    }
+    assert saved_layout.json()["data"]["positions"]["dataset:dataset-orders"] == {
+        "x": 60.0, "y": 120.0,
+    }
+    unknown_layout_node = client.put(
+        f"/api/v2/ontologies/{oid}/layout",
+        headers=auth_headers,
+        json={
+            "versionId": draft["id"],
+            "positions": {
+                "dataset:dataset-unknown": {"x": 60, "y": 120},
+            },
+        },
+    )
+    assert unknown_layout_node.status_code == 422, unknown_layout_node.text
+    assert unknown_layout_node.json()["detail"]["code"] == "invalid_canvas_layout"
+    unknown_relation_node = client.put(
+        f"/api/v2/ontologies/{oid}/layout",
+        headers=auth_headers,
+        json={
+            "versionId": draft["id"],
+            "positions": {
+                "relation:lt-unknown": {"x": 60, "y": 120},
+            },
+        },
+    )
+    assert unknown_relation_node.status_code == 422, unknown_relation_node.text
+    assert unknown_relation_node.json()["detail"]["code"] == "invalid_canvas_layout"
     assert saved_layout.json()["data"]["positions"]["property:ot-order:p-name"] == {
         "x": 920.0, "y": 430.0,
     }
@@ -3211,16 +3245,26 @@ def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(
         sentinel_id=dynamic.id).count() == 0
 
     # 当前发布和历史发布同样允许保存布局；运行时 full 视图读取布局覆盖，
-    # 发布快照的哈希和内容保持原样。
+    # 发布快照的哈希和内容保持原样。映射画布的 object:/dataset: 位置同样可写。
     release_row = db.query(OntologyVersion).filter_by(id=release["id"]).one()
     release_hash = release_row.snapshot_hash
     moved_release = client.put(
         f"/api/v2/ontologies/{oid}/layout",
         headers=auth_headers,
-        json={"positions": {"ot-order": {"x": 720, "y": 420}}},
+        json={"positions": {
+            "ot-order": {"x": 720, "y": 420},
+            "object:ot-order": {"x": 500, "y": 260},
+            "dataset:dataset-orders": {"x": 80, "y": 160},
+        }},
     )
     assert moved_release.status_code == 200, moved_release.text
     assert moved_release.json()["data"]["versionId"] == release["id"]
+    assert moved_release.json()["data"]["positions"]["object:ot-order"] == {
+        "x": 500.0, "y": 260.0,
+    }
+    assert moved_release.json()["data"]["positions"]["dataset:dataset-orders"] == {
+        "x": 80.0, "y": 160.0,
+    }
     runtime = client.get(
         f"/api/v2/formal/ontologies/{oid}/full", headers=auth_headers,
     ).json()["data"]
