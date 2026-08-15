@@ -1,5 +1,6 @@
 import type { ElementType } from 'react'
 import {
+  Activity,
   Bot,
   Blocks,
   BookOpenCheck,
@@ -97,6 +98,7 @@ export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
       { key: 'settings.users', to: '/settings/users', icon: Network, label: '用户管理', adminOnly: true },
       { key: 'settings.agents', to: '/settings/agents', icon: Bot, label: '智能体配置', adminOnly: true },
       { key: 'settings.domains', to: '/settings/domains', icon: Globe, label: '领域设置', adminOnly: true },
+      { key: 'settings.monitoring', to: '/settings/monitoring', icon: Activity, label: '运行监控', description: '接口性能与平台运行健康度', adminOnly: true },
     ],
   },
 ]
