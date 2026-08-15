@@ -56,4 +56,3 @@ class ApiPerfSlowRequest(Base):
     user_agent: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     # JSON object: {layer: {count, total_ms}} for db/llm/http spans.
     breakdown: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
-

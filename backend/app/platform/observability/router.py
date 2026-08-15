@@ -58,4 +58,3 @@ def slow_requests(
             db, start=start, end=end, route=route, page=page, size=size
         )
     }
-

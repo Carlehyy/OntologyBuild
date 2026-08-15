@@ -257,4 +257,3 @@ class _PerfCollector:
 
 
 collector = _PerfCollector()
-

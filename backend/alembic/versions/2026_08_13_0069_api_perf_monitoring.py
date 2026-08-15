@@ -92,4 +92,3 @@ def downgrade() -> None:
         table_name="api_perf_minute_rollups",
     )
     op.drop_table("api_perf_minute_rollups")
-

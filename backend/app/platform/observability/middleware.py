@@ -206,4 +206,3 @@ class PerfMonitoringMiddleware:
                 logger.exception(
                     "慢请求落库失败 request_id=%s", record.get("request_id")
                 )
-
