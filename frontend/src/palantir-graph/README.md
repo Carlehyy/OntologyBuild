@@ -14,7 +14,7 @@ palantir-graph/
 ├── api/                      Formal API 客户端
 ├── engine/                   浏览器侧 Action/Function 辅助执行
 ├── types/                    图谱领域类型
-├── utils/                    标识符、布局、图标和 schema lint
+├── utils/                    标识符、布局、图标、schema lint 和边锚点选路（routeEdgeHandles）
 └── workspaceCapabilities.ts  Toolbar/FloatingMenu 的工作区能力契约
 ```
 

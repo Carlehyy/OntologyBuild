@@ -31,6 +31,7 @@ async def application_lifespan(
     data_scheduler = None
     data_scheduler_attempted = False
     file_cleanup_task = None
+    perf_monitor_started = False
     runtime_resources_started = False
     try:
         seed_database()
@@ -146,6 +147,17 @@ async def application_lifespan(
         )
 
         file_cleanup_task = asyncio.create_task(file_asset_cleanup_loop())
+
+        # API 性能监控：聚合刷新与保留清理的后台维护循环。
+        # 失败仅告警不阻断启动——监控是旁路能力，不能影响平台可用性。
+        try:
+            from app.platform.observability import collector as perf_collector
+
+            perf_collector.collector.start()
+            perf_monitor_started = True
+        except Exception as exc:
+            _main_logger.warning("API 性能监控后台任务启动失败: %s", exc)
+
         runtime_resources_started = True
         async with (
             api_hub_public.run(),
@@ -161,6 +173,13 @@ async def application_lifespan(
                 pass
             except Exception:  # noqa: BLE001
                 _main_logger.exception("File cleanup task shutdown failed")
+        if perf_monitor_started:
+            try:
+                from app.platform.observability import collector as perf_collector
+
+                await perf_collector.collector.stop()
+            except Exception:  # noqa: BLE001
+                _main_logger.exception("API 性能监控后台任务关闭失败")
         if runtime_resources_started:
             try:
                 from app.data_channel.steward.browser_runtime import (

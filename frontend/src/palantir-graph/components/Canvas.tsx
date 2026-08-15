@@ -22,6 +22,7 @@ import {
 
 import { useOntologyStore } from '../store/ontologyStore';
 import { saveCanvasLayout } from '../api/formalApi';
+import { routeEdgeHandles } from '../utils/routeEdgeHandles';
 import ObjectTypeNode from './nodes/ObjectTypeNode';
 import MultiConnectionEdge from './edges/MultiConnectionEdge';
 import ConnectLinkDialog from './ConnectLinkDialog';
@@ -171,7 +172,12 @@ export default function Canvas({ onBrowseInstances, schemaReadOnly = false, layo
       : nodes,
     [nodes, schemaReadOnly]
   );
-  const renderEdges = schemaReadOnly ? selectedStoreEdges : edges;
+  // 渲染期按节点实时相对位置重选边锚点：拖拽时连线端点自动换到更合适的侧面。
+  // 纯派生不写 store，自环保持「右出左进」配合 MultiConnectionEdge 的自环画法。
+  const renderEdges = useMemo(
+    () => routeEdgeHandles(schemaReadOnly ? selectedStoreEdges : edges, renderNodes),
+    [schemaReadOnly, selectedStoreEdges, edges, renderNodes]
+  );
 
   // Store 中的坐标只代表客户端视图，不再等同于模型结构变更。
   useEffect(() => {

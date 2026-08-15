@@ -351,6 +351,9 @@
 .dmc-handle { z-index: 4 !important; width: 10px !important; height: 10px !important; border: 2px solid #fff !important; box-shadow: 0 0 0 1px rgba(66,82,91,.1); }
 .dmc-handle--source { right: 0 !important; background: #18a294 !important; }
 .dmc-handle--target { left: 0 !important; background: #6876c9 !important; }
+/* 拖拽跨侧时字段行锚点换到节点另一侧（handle id 即映射语义，不变） */
+.dmc-handle--source.dmc-handle--flip { left: 0 !important; right: auto !important; }
+.dmc-handle--target.dmc-handle--flip { right: 0 !important; left: auto !important; }
 .dmc-page--readonly .dmc-handle { opacity: .42; cursor: default !important; }
 .dmc-page--readonly .react-flow__edge-path { stroke-dasharray: 0; }
 .dmc-node-field--endpoint { color: #9b6a20; background: #fffaf1; }

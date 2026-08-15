@@ -142,6 +142,12 @@ class McpMiddleware:
 
 app.add_middleware(McpMiddleware)
 
+# 运行健康度观测：为所有 HTTP 路由记录耗时聚合与慢请求证据。
+# 纯 ASGI 中间件，不缓冲 SSE；健康检查/MCP/监控自身按路径豁免。
+from app.platform.observability.middleware import PerfMonitoringMiddleware
+
+app.add_middleware(PerfMonitoringMiddleware)
+
 from app.deps import require_admin, require_menu_permission
 
 
