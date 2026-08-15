@@ -72,6 +72,10 @@ def seed_database() -> None:
         from app.inbox.models import (  # noqa: F401
             InboxItem, InboxDelivery, InboxEventReceipt, InboxOutboxEvent,
         )
+        # 平台概览 · 运行健康度（API 性能监控）
+        from app.platform.observability.models import (  # noqa: F401
+            ApiPerfMinuteRollup, ApiPerfSlowRequest,
+        )
         # Every real runtime schema is owned by Alembic. ``create_all`` would
         # disguise a missed migration and omit data backfills/constraints, so
         # it is reserved for isolated unit tests only.

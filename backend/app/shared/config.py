@@ -212,6 +212,15 @@ class Settings(BaseSettings):
     # provision users through authenticated administrative flows.
     allow_public_registration: bool = True
 
+    # API 性能监控（平台运行健康度）。默认开启；出现问题时可用
+    # API_PERF_ENABLED=false 整体关闭。慢阈值按部署环境可调。
+    api_perf_enabled: bool = True
+    api_perf_slow_threshold_ms: int = Field(default=1000, ge=100, le=600000)
+    api_perf_flush_interval_seconds: int = Field(default=30, ge=5, le=3600)
+    api_perf_slow_retention_days: int = Field(default=7, ge=1, le=90)
+    api_perf_agg_retention_days: int = Field(default=30, ge=1, le=365)
+    api_perf_buffer_max_rows: int = Field(default=10000, ge=100, le=1000000)
+
     model_config = SettingsConfigDict(
         # Later dotenv files override earlier ones.  Real process environment
         # variables still have the highest pydantic-settings priority.

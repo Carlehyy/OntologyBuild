@@ -69,6 +69,9 @@ def chat(call_kwargs: dict, messages: list[dict], tools: list[dict]) -> dict[str
                     model_config_id, model_name, provider, status, latency_ms,
                     _safe_error_message(error_msg),
                 )
+            from app.shared import perf_spans
+
+            perf_spans.record_span("llm", latency_ms)
         except Exception:
             pass  # 统计记录失败不影响主流程
 

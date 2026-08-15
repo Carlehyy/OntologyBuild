@@ -211,6 +211,28 @@ Actions 日志。普通 push 不具有创建新加密 authority 的权限，后�
 `true/false`、`yes/no` 或 `1/0`。部署入口不接受宿主 shell 中的同名变量覆盖
 `.env`；如需改变策略，必须先修改持久配置并重新执行完整校验。
 
+## 运行监控（API 性能监控）
+
+平台后端自带接口性能观测（系统设置 → 运行监控，仅 admin 可见）：纯 ASGI
+请求计时中间件把每个 HTTP 请求按「分钟 × 方法 × 路由模板 × 状态类别」
+聚合进 PostgreSQL（api_perf_minute_rollups），超过慢阈值的请求同时以单条
+证据行落库（api_perf_slow_requests，含 request_id、用户名、来源 IP、
+User-Agent 与 db/llm/http 分层耗时分解）。聚合由进程内内存缓冲每
+API_PERF_FLUSH_INTERVAL_SECONDS 批量写入；进程崩溃最多丢失最后几秒聚合，
+慢请求证据不丢。/health*、/api/health、/api-hub/mcp*、SSE 流式、
+WebSocket、OPTIONS 与监控查询接口自身不参与统计。
+
+- API_PERF_ENABLED（默认 true）：整体开关；出现问题时置 false 可完全
+  关闭采集（请求路径零额外开销）；
+- API_PERF_SLOW_THRESHOLD_MS（默认 1000）：慢接口判定阈值；
+- API_PERF_FLUSH_INTERVAL_SECONDS（默认 30）：分钟聚合批量落库周期；
+- API_PERF_SLOW_RETENTION_DAYS（默认 7）：慢请求明细保留天数；
+- API_PERF_AGG_RETENTION_DAYS（默认 30）：分钟聚合保留天数（后台维护
+  循环按日清理过期行）。
+
+响应头 X-Request-ID 与日志记录中的 request_id 一一对应，可用于在应用日志
+中按 id 还原单次请求的执行细节。
+
 ## 安全要求
 
 - 不在 PR、Issue、日志或迭代文档中粘贴真实值；
