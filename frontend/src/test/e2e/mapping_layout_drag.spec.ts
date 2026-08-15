@@ -160,3 +160,34 @@ test('映射画布初始化优先恢复已保存的节点位置', async ({ page 
   // 恢复后对象节点应明显低于数据集节点（考虑 fitView 缩放仍远超阈值）。
   expect(objectBox!.y).toBeGreaterThan(datasetBox!.y + 300)
 })
+
+test('拖拽节点跨侧后字段行锚点自动换侧，连线始终走短边', async ({ page }) => {
+  await mockMappingWorkspace(page)
+  await page.goto(
+    '/#/ontologies/ontology-layout/mapping-config?versionId=draft-1',
+    { waitUntil: 'domcontentloaded' },
+  )
+
+  const datasetNode = page.locator('.react-flow__node[data-id="dataset:dataset-orders"]')
+  const orderNode = page.locator('.react-flow__node[data-id="object:ot-order"]')
+  await expect(page.locator('.react-flow__node')).toHaveCount(3)
+  await expect(page.locator('.react-flow__edge')).toHaveCount(2)
+
+  // 初始车道布局（数据集在左、对象在右）：所有锚点保持默认朝向，无换侧
+  await expect(page.locator('.dmc-handle--flip')).toHaveCount(0)
+
+  // 把数据集节点拖到对象节点右侧：拖拽距离覆盖跨中心线（含 fitView 缩放余量）
+  const before = await datasetNode.boundingBox()
+  expect(before).toBeTruthy()
+  await page.mouse.move(before!.x + before!.width / 2, before!.y + 14)
+  await page.mouse.down()
+  await page.mouse.move(before!.x + before!.width / 2 + 900, before!.y + 14, { steps: 12 })
+  await page.mouse.up()
+
+  // 数据集锚点翻到左侧（2 个字段行），两个对象节点锚点翻到右侧（各 1 个字段行）
+  await expect(datasetNode.locator('.dmc-handle--flip')).toHaveCount(2)
+  await expect(orderNode.locator('.dmc-handle--flip')).toHaveCount(1)
+  await expect(page.locator('.react-flow__node[data-id="object:ot-supplier"] .dmc-handle--flip')).toHaveCount(1)
+  // 换侧只是视觉派生，连线数量与映射关系不变
+  await expect(page.locator('.react-flow__edge')).toHaveCount(2)
+})
