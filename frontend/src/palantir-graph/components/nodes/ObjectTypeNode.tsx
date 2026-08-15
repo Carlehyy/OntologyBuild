@@ -10,6 +10,23 @@ interface ObjectTypeNodeProps {
   selected?: boolean;
 }
 
+/**
+ * 四侧锚点：边在渲染期按两节点相对位置选侧（见 utils/routeEdgeHandles），
+ * 拖拽节点时连线端点自动换到更合适的侧面。
+ * 仅「左进 / 右出」保留可见圆点，维持拖线创建关系的既有交互；
+ * 其余锚点隐形且不可作为连线起点，只供边端点吸附。
+ */
+const HANDLE_SIDES = [
+  ['top', Position.Top],
+  ['right', Position.Right],
+  ['bottom', Position.Bottom],
+  ['left', Position.Left],
+] as const;
+
+const VISIBLE_TARGET_HANDLE = '!w-3 !h-3 !bg-surface-400 !border-2 !border-surface-700';
+const VISIBLE_SOURCE_HANDLE = '!w-3 !h-3 !bg-indigo-500 !border-2 !border-surface-700';
+const INVISIBLE_HANDLE = '!h-2 !w-2 !border-0 !bg-transparent !opacity-0 !pointer-events-none';
+
 const ObjectTypeNode = memo(({ data, selected }: ObjectTypeNodeProps) => {
   const setSelectedNode = useOntologyStore((state) => state.setSelectedNode);
   const openPanel = useOntologyStore((state) => state.openPanel);
@@ -118,16 +135,22 @@ const ObjectTypeNode = memo(({ data, selected }: ObjectTypeNodeProps) => {
       )}
 
       {/* Handles */}
-      <Handle
-        type="target"
-        position={Position.Left}
-        className="!w-3 !h-3 !bg-surface-400 !border-2 !border-surface-700"
-      />
-      <Handle
-        type="source"
-        position={Position.Right}
-        className="!w-3 !h-3 !bg-indigo-500 !border-2 !border-surface-700"
-      />
+      {HANDLE_SIDES.map(([side, position]) => (
+        <span key={side}>
+          <Handle
+            id={`target-${side}`}
+            type="target"
+            position={position}
+            className={side === 'left' ? VISIBLE_TARGET_HANDLE : INVISIBLE_HANDLE}
+          />
+          <Handle
+            id={`source-${side}`}
+            type="source"
+            position={position}
+            className={side === 'right' ? VISIBLE_SOURCE_HANDLE : INVISIBLE_HANDLE}
+          />
+        </span>
+      ))}
     </div>
   );
 });

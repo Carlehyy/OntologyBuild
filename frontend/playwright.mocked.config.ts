@@ -27,6 +27,7 @@ export default defineConfig({
     '**/governance_async_refresh.spec.ts',
     '**/governance_reject_modal.spec.ts',
     '**/governance_story_narrative.spec.ts',
+    '**/graph_edge_anchor_routing.spec.ts',
     '**/instance_browser_readonly.spec.ts',
     '**/instance_data_interactions.spec.ts',
     '**/instance_data_overview.spec.ts',

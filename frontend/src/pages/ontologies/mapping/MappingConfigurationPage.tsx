@@ -29,6 +29,7 @@ import {
   buildSuggestionAdditions,
   type SuggestionAcceptance,
 } from './suggestion-apply'
+import { computeHandleSides, type HandleSide } from './handle-sides'
 import MappingSuggestionPanel from './MappingSuggestionPanel'
 import './mapping-configuration.css'
 
@@ -36,6 +37,8 @@ type DatasetNodeData = {
   kind: 'dataset'
   dataset: MappingDataset
   onPreview: (datasetId: string) => void
+  /** 字段行锚点朝向（纯视觉）：拖拽跨侧时由 renderedNodes 注入 */
+  __handleSide?: HandleSide
 }
 type TargetNodeData = {
   kind: 'object' | 'relation'
@@ -43,6 +46,8 @@ type TargetNodeData = {
   relation?: MappingLinkType
   sourceProperty?: MappingProperty
   targetProperty?: MappingProperty
+  /** 字段行锚点朝向（纯视觉）：拖拽跨侧时由 renderedNodes 注入 */
+  __handleSide?: HandleSide
 }
 type MappingNode = Node<DatasetNodeData | TargetNodeData>
 
@@ -76,6 +81,8 @@ function relationLaneX() {
 
 function DatasetCanvasNode({ data }: NodeProps<Node<DatasetNodeData>>) {
   const dataset = data.dataset
+  // 拖拽跨侧时整节点锚点换侧；key 强制重挂载让 React Flow 重新量取锚点坐标
+  const handleSide = data.__handleSide ?? 'right'
   return (
     <div className="dmc-node dmc-node--dataset">
       <div className="dmc-node__stripe" />
@@ -84,7 +91,7 @@ function DatasetCanvasNode({ data }: NodeProps<Node<DatasetNodeData>>) {
         {dataset.columns.map(column => <div key={column.name} className="dmc-node-field">
           {dataset.primaryKeyColumns.includes(column.name) ? <KeyRound size={11} className="is-key" /> : <span className="dmc-field-spacer" />}
           <span title={datasetColumnLabel(column)}>{datasetColumnLabel(column)}</span><em>{typeLabel(column.type)}</em>
-          <Handle type="source" position={Position.Right} id={column.name} className="dmc-handle dmc-handle--source" />
+          <Handle key={handleSide} type="source" position={handleSide === 'left' ? Position.Left : Position.Right} id={column.name} className={`dmc-handle dmc-handle--source${handleSide === 'left' ? ' dmc-handle--flip' : ''}`} />
         </div>)}
         {dataset.columns.length === 0 && <div className="dmc-node-empty">暂未识别到字段</div>}
       </div>
@@ -94,6 +101,9 @@ function DatasetCanvasNode({ data }: NodeProps<Node<DatasetNodeData>>) {
 
 function ObjectCanvasNode({ data }: NodeProps<Node<TargetNodeData>>) {
   const object = data.object!
+  const handleSide = data.__handleSide ?? 'left'
+  const handlePosition = handleSide === 'right' ? Position.Right : Position.Left
+  const handleClassName = `dmc-handle dmc-handle--target${handleSide === 'right' ? ' dmc-handle--flip' : ''}`
   const properties = object.properties.filter(property => property.source !== 'computed' && !property.computed)
   return (
     <div className="dmc-node dmc-node--object">
@@ -101,7 +111,7 @@ function ObjectCanvasNode({ data }: NodeProps<Node<TargetNodeData>>) {
       <header><span><Boxes size={15} /></span><div><b>{object.displayName || object.name}</b><small>对象实体 · {properties.length} 个属性</small></div></header>
       <div className="dmc-node__fields">
         {properties.map(property => <div key={property.id || property.name} className="dmc-node-field">
-          <Handle type="target" position={Position.Left} id={property.name} className="dmc-handle dmc-handle--target" />
+          <Handle key={handleSide} type="target" position={handlePosition} id={property.name} className={handleClassName} />
           {object.primaryKey === property.name || object.primaryKey === property.id ? <KeyRound size={11} className="is-key" /> : <span className="dmc-field-spacer" />}
           <span title={property.displayName || property.name}>{property.displayName || property.name}</span>{property.required && <i>*</i>}<em>{typeLabel(property.type)}</em>
         </div>)}
@@ -112,6 +122,9 @@ function ObjectCanvasNode({ data }: NodeProps<Node<TargetNodeData>>) {
 
 function RelationCanvasNode({ data }: NodeProps<Node<TargetNodeData>>) {
   const relation = data.relation!
+  const handleSide = data.__handleSide ?? 'left'
+  const handlePosition = handleSide === 'right' ? Position.Right : Position.Left
+  const handleClassName = `dmc-handle dmc-handle--target${handleSide === 'right' ? ' dmc-handle--flip' : ''}`
   const properties = (relation.properties || []).filter(property => property.source !== 'computed' && !property.computed)
   return (
     <div className="dmc-node dmc-node--relation">
@@ -119,9 +132,9 @@ function RelationCanvasNode({ data }: NodeProps<Node<TargetNodeData>>) {
       <header><span><GitBranch size={15} /></span><div><b>{relation.displayName || relation.name}</b><small>实体关系 · {relation.cardinality}</small></div></header>
       <div className="dmc-relation-endpoints"><span>源对象</span><ArrowRight size={11} /><span>目标对象</span></div>
       <div className="dmc-node__fields">
-        <div className="dmc-node-field dmc-node-field--endpoint"><Handle type="target" position={Position.Left} id={REL_SOURCE} className="dmc-handle dmc-handle--target" /><Link2 size={11} /><span>源对象外键</span><em>{typeLabel(data.sourceProperty?.type)}</em></div>
-        <div className="dmc-node-field dmc-node-field--endpoint"><Handle type="target" position={Position.Left} id={REL_TARGET} className="dmc-handle dmc-handle--target" /><Link2 size={11} /><span>目标对象外键</span><em>{typeLabel(data.targetProperty?.type)}</em></div>
-        {properties.map(property => <div key={property.id || property.name} className="dmc-node-field"><Handle type="target" position={Position.Left} id={property.name} className="dmc-handle dmc-handle--target" /><span className="dmc-field-spacer" /><span>{property.displayName || property.name}</span><em>{typeLabel(property.type)}</em></div>)}
+        <div className="dmc-node-field dmc-node-field--endpoint"><Handle key={handleSide} type="target" position={handlePosition} id={REL_SOURCE} className={handleClassName} /><Link2 size={11} /><span>源对象外键</span><em>{typeLabel(data.sourceProperty?.type)}</em></div>
+        <div className="dmc-node-field dmc-node-field--endpoint"><Handle key={handleSide} type="target" position={handlePosition} id={REL_TARGET} className={handleClassName} /><Link2 size={11} /><span>目标对象外键</span><em>{typeLabel(data.targetProperty?.type)}</em></div>
+        {properties.map(property => <div key={property.id || property.name} className="dmc-node-field"><Handle key={handleSide} type="target" position={handlePosition} id={property.name} className={handleClassName} /><span className="dmc-field-spacer" /><span>{property.displayName || property.name}</span><em>{typeLabel(property.type)}</em></div>)}
       </div>
     </div>
   )
@@ -508,6 +521,8 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
 
   const activeEdgeId = hoveredEdgeId || focusedEdgeId
   const hasConnectionFocus = Boolean(activeEdgeId || focusedNodeId)
+  // 字段行锚点朝向随节点相对位置换侧（纯视觉，不改边数据，见 handle-sides.ts）
+  const handleSides = useMemo(() => computeHandleSides(nodes, edges), [nodes, edges])
   const renderedEdges = useMemo(() => edges.map(edge => {
     const detail = edgeDetails.get(edge.id)
     const exactActive = edge.id === activeEdgeId
@@ -550,8 +565,9 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
     return {
       ...node,
       className: `${node.className || ''}${hasConnectionFocus && !active ? ' dmc-node-shell--dimmed' : ''}`.trim(),
+      data: { ...node.data, __handleSide: handleSides.get(node.id) },
     }
-  }), [activeEdgeId, edges, focusedNodeId, hasConnectionFocus, nodes])
+  }), [activeEdgeId, edges, focusedNodeId, handleSides, hasConnectionFocus, nodes])
 
   const focusedEdgeDetail = activeEdgeId ? edgeDetails.get(activeEdgeId) : undefined
   const focusedNode = focusedNodeId ? nodes.find(node => node.id === focusedNodeId) : undefined
