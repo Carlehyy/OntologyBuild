@@ -5,8 +5,9 @@ import { useAgentSettings } from './hooks/useAgentSettings'
 import { useDomainSettings } from './hooks/useDomainSettings'
 import AgentSettingsTab from './tabs/AgentSettingsTab'
 import DomainSettingsTab from './tabs/DomainSettingsTab'
+import MonitoringTab from './tabs/MonitoringTab'
 
-type ActiveTab = 'users' | 'agents' | 'domains'
+type ActiveTab = 'users' | 'agents' | 'domains' | 'monitoring'
 
 const TAB_FROM_PATH: Record<string, ActiveTab> = {
   '/settings': 'users',
@@ -14,12 +15,14 @@ const TAB_FROM_PATH: Record<string, ActiveTab> = {
   '/settings/users': 'users',
   '/settings/agents': 'agents',
   '/settings/domains': 'domains',
+  '/settings/monitoring': 'monitoring',
 }
 
 const TAB_PARAM_MAP: Record<string, ActiveTab> = {
   'users': 'users',
   'agents': 'agents',
   'domains': 'domains',
+  'monitoring': 'monitoring',
 }
 
 export default function SettingsPage() {
@@ -38,6 +41,7 @@ export default function SettingsPage() {
       {activeTab === 'agents' && <AgentSettingsTab settings={agentSettings} t={t} />}
       {activeTab === 'users' && <UserManagementPanel />}
       {activeTab === 'domains' && <DomainSettingsTab settings={domainSettings} />}
+      {activeTab === 'monitoring' && <MonitoringTab />}
     </div>
   )
 }

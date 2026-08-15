@@ -24,14 +24,16 @@ def _skill_columns(db_path: Path) -> set[str]:
     return {row[1] for row in rows}
 
 
-def test_revision_graph_head_is_skill_governance(tmp_path, monkeypatch):
+def test_revision_graph_head_is_single_head(tmp_path, monkeypatch):
     backend = Path(__file__).resolve().parents[2]
     monkeypatch.delenv("DATABASE_URL", raising=False)
     cfg = _alembic_config(backend, tmp_path / "heads.db")
 
     heads = ScriptDirectory.from_config(cfg).get_heads()
 
-    assert heads == ["0068_super_assistant_skill_governance"]
+    # 单头门禁：新迁移必须线性追加（当前 head 见 alembic heads 输出）。
+    assert len(heads) == 1
+    assert heads == ["0069_api_perf_monitoring"]
 
 
 def _create_0067_shape_skills_table(db_path: Path) -> None:
