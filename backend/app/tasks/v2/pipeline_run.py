@@ -413,7 +413,8 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
         db.flush()
 
     ver, changeset = lake_store.upsert_run(
-        db, curated_ds, data, mode, pk_cols, soft_delete_column=soft_col)
+        db, curated_ds, data, mode, pk_cols, soft_delete_column=soft_col,
+        rows_before=lake_rows_before)
     # 版本保留窗口（元数据 + 变更集；回放链完整性规则见 _prune_versions）：
     # 与 blob 路径的 _create_version_locked 尾部一致，机会式清理
     svc._prune_versions_best_effort(curated_ds.id)

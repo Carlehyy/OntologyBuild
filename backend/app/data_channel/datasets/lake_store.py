@@ -74,6 +74,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from datetime import datetime
 
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
@@ -353,11 +354,13 @@ def _rebuild_lake_table(db, conn, dataset, schema: dict, columns: list[str],
 
 
 def _reconcile_structure(db, conn, dataset, schema: dict, mode: str,
-                         pk_cols: list[str], rows: list[dict]) -> dict[str, str]:
-    """ upsert 前的结构对齐，返回生效的列映射。
+                         pk_cols: list[str], rows: list[dict],
+                         ) -> tuple[dict[str, str], bool]:
+    """ upsert 前的结构对齐，返回 (生效的列映射, 是否整表重建)。
 
     - 表不存在：按契约列（或来数列）建表；
-    - overwrite：列集合或主键与契约漂移时整表重建；
+    - overwrite：列集合或主键与契约漂移时整表重建（rebuilt=True，调用方
+      据此把合并基座行数归零——旧表数据随 DROP 放弃）；
     - 增量模式：主键漂移拒绝（口径对齐 validate_upsert_base 的重建指引）；
       无契约时新列走并集演化，有契约时契约外列兜底抛错（gate 已先行拦截）。
     """
@@ -365,7 +368,7 @@ def _reconcile_structure(db, conn, dataset, schema: dict, mode: str,
     if not sa.inspect(conn).has_table(table_name):
         return ensure_lake_table(
             db, dataset,
-            columns=schema.get("columns") or lake_columns_from_rows(rows))
+            columns=schema.get("columns") or lake_columns_from_rows(rows)), False
     _, mapping, _ = _contract(dataset)
     if mapping is None:
         raise LakeStoreError(
@@ -381,9 +384,9 @@ def _reconcile_structure(db, conn, dataset, schema: dict, mode: str,
         if pk_drift or column_drift:
             return _rebuild_lake_table(
                 db, conn, dataset, schema,
-                target_columns or lake_columns_from_rows(rows), pk_cols)
+                target_columns or lake_columns_from_rows(rows), pk_cols), True
         _assert_structure(conn, table_name, mapping, pk_cols)
-        return mapping
+        return mapping, False
     if pk_drift:
         raise LakeGateError(
             f"数据集「{getattr(dataset, 'name', '')}」湖中存量数据的物理主键"
@@ -401,7 +404,7 @@ def _reconcile_structure(db, conn, dataset, schema: dict, mode: str,
                 "请重新试跑并发布流水线契约。")
         mapping = evolve_lake_table_columns(db, dataset, extra)
     _assert_structure(conn, table_name, mapping, pk_cols)
-    return mapping
+    return mapping, False
 
 
 # ── 行规范化与行身份 ────────────────────────────────────────
@@ -625,6 +628,7 @@ def _normalize_single_row(logical: dict, mapping: dict[str, str],
 def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
                      pk_cols: list[str],
                      soft_delete_column: str = "",
+                     rows_before: int | None = None,
                      ) -> tuple[DatasetVersion, DatasetChangeset]:
     conn = _connection(db)
     schema = dict(dataset.schema_json or {})
@@ -662,7 +666,8 @@ def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
         return _publish_run(db, dataset, rowcount=0, entries=[],
                             added=0, updated=0, deleted=0)
 
-    mapping = _reconcile_structure(db, conn, dataset, schema, mode, pk_cols, rows)
+    mapping, rebuilt = _reconcile_structure(
+        db, conn, dataset, schema, mode, pk_cols, rows)
 
     # 软删除标记列进物理表：来数携带的标记列已随 reconcile 演化；湖中存量
     # truthy 行需要标记列存在才能重评估（无打标需求时不引入标记列，对齐
@@ -699,6 +704,14 @@ def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
         normalized = _dedup_first_by_signature(normalized)
 
     stage = _stage_rows(conn, table, normalized)
+    # 合并基座行数：overwrite 整表重建后为 0（旧表已 DROP）；调用方在写锁内
+    # 已计数的直接复用；否则此处一次性计数。结尾 rowcount 由各分支的精确
+    # 物理增删推导，不再另做一次全表 count(*)。
+    if rebuilt:
+        rows_before = 0
+    elif rows_before is None and (pk_physical or mode != "overwrite"):
+        rows_before = conn.execute(
+            sa.select(sa.func.count()).select_from(table)).scalar_one()
     try:
         added_keys: list = []
         updated_keys: list = []
@@ -758,13 +771,6 @@ def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
                     .select_from(s.join(t, join_cond))
                     .where(diff_cond)).all()]
 
-            deleted_physical: list[dict] = []
-            if mode == "overwrite":
-                deleted_physical = [dict(record) for record in conn.execute(
-                    sa.select(t)
-                    .select_from(t.outerjoin(s, join_cond))
-                    .where(s.c[pk_physical[0]].is_(None))).mappings().all()]
-
             # updated 的旧行内容（变更集 old_row），只按键物化变化行
             for batch in _chunked(updated_keys):
                 for record in conn.execute(
@@ -772,11 +778,18 @@ def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
                 ).mappings():
                     record = dict(record)
                     old_rows_by_key[tuple(record[p] for p in pk_physical)] = record
-            deleted_keys = [tuple(record[p] for p in pk_physical)
-                            for record in deleted_physical]
-            old_rows_by_key.update(
-                (tuple(record[p] for p in pk_physical), record)
-                for record in deleted_physical)
+            # overwrite 的湖中删除行：分批 fetch（deleted 行本身即变更集
+            # old_row 所需，峰值 ∝ 删除行数，不再一次性 .all() 出中间列表）
+            if mode == "overwrite":
+                for record in conn.execute(
+                        sa.select(t)
+                        .select_from(t.outerjoin(s, join_cond))
+                        .where(s.c[pk_physical[0]].is_(None))
+                ).mappings().yield_per(_BATCH_SIZE):
+                    record = dict(record)
+                    key = tuple(record[p] for p in pk_physical)
+                    deleted_keys.append(key)
+                    old_rows_by_key[key] = record
 
             new_rows_by_key = {tuple(row[p] for p in pk_physical): row
                                for row in normalized}
@@ -824,63 +837,93 @@ def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
             insert_rows = [new_rows_by_key[key] for key in added_keys + updated_keys]
         else:
             # 无主键：无行级身份。overwrite 全量替换；append/upsert 直接追加
-            # （对齐 merge.py 无主键时的退化语义）；append_dedup 再跳过湖中全同行
+            # （对齐 merge.py 无主键时的退化语义）；append_dedup 再跳过湖中全同行。
+            # 与湖的比较全部下沉 DB 集合运算（湖表全 TEXT 列无 NULL，逐列等值
+            # ⟺ 整行签名等值），变更集只物化实际变化行，不把整湖读进 Python。
+            all_physical = [p for p in mapping.values()]
+            t = table.alias("t")
+            s = stage.alias("s")
+            row_match = sa.and_(*[t.c[p] == s.c[p] for p in all_physical])
             if mode == "overwrite":
-                existing = [dict(record) for record in
-                            conn.execute(sa.select(table)).mappings()]
+                # 变更集 = 集合级求差（EXCEPT 自带去重，与整行签名集合 diff
+                # 的重复折叠口径一致，对齐 compute_lake_impact 无主键口径）；
+                # 物理重写全程 DB 端（来数重复行经 stage 原样保留）
+                stage_cols = [s.c[p] for p in all_physical]
+                lake_cols = [t.c[p] for p in all_physical]
+                added_physical = [dict(zip(all_physical, record))
+                                  for record in conn.execute(
+                                      sa.select(*stage_cols).except_(
+                                          sa.select(*lake_cols)))]
+                deleted_physical = [dict(zip(all_physical, record))
+                                    for record in conn.execute(
+                                        sa.select(*lake_cols).except_(
+                                            sa.select(*stage_cols)))]
                 conn.execute(table.delete())
-                insert_rows = normalized
-                # 变更集按整行签名求差，只记真实进出（对齐 compute_lake_impact）
-                new_rows_by_sig = {_physical_signature(r): r for r in normalized}
-                old_rows_by_key = {_physical_signature(r): r for r in existing}
-                added_keys = [sig for sig in new_rows_by_sig
-                              if sig not in old_rows_by_key]
-                deleted_keys = [sig for sig in old_rows_by_key
-                                if sig not in new_rows_by_sig]
+                conn.execute(table.insert().from_select(
+                    all_physical,
+                    sa.select(*[stage.c[p] for p in all_physical])))
+                new_rows_by_sig = {_physical_signature(r): r
+                                   for r in added_physical}
+                old_rows_by_key = {_physical_signature(r): r
+                                   for r in deleted_physical}
+                added_keys = list(new_rows_by_sig)
+                deleted_keys = list(old_rows_by_key)
             else:
-                # 无主键 + 软删除：湖中存量先按词表重评估（有变化时全行重写，
-                # 变更集按签名差记录），再追加来数
-                if mode == "upsert" and soft_delete_column:
-                    existing = [dict(record) for record in
-                                conn.execute(sa.select(table)).mappings()]
-                    pk_physical_set: set = set()
-                    rewritten: list[dict] = []
-                    changed_pairs: list[tuple[dict, dict]] = []
-                    for old_phys in existing:
+                # 无主键 + 软删除：湖中存量按词表定向重评估（打标/摘标两条
+                # UPDATE，只触及状态迁移的行，不再整表物化+重写），再追加来数
+                if (mode == "upsert" and soft_delete_column
+                        and soft_delete_column in mapping
+                        and all(c in mapping for c in _SOFT_MARKER_COLS)):
+                    flag_p = mapping[soft_delete_column]
+                    marker_p = mapping[_SOFT_MARKER_COLS[0]]
+                    ts_p = mapping[_SOFT_MARKER_COLS[1]]
+                    flag_expr = sa.func.lower(sa.func.trim(table.c[flag_p]))
+                    # 已正确打标的 truthy 行不在命中集（保持原标记与首次打标
+                    # 时间戳，不每次运行刷新 ts 制造变更噪音）
+                    to_mark = sa.and_(flag_expr.in_(sorted(_SOFT_DELETE_TRUTHY)),
+                                      table.c[marker_p] != "True")
+                    to_unmark = sa.and_(~flag_expr.in_(sorted(_SOFT_DELETE_TRUTHY)),
+                                        table.c[marker_p] != "")
+                    # 变更集旧值：只物化状态迁移行（逐实例，重复行逐份记录）
+                    changed_old = [dict(record) for record in conn.execute(
+                        sa.select(table).where(
+                            sa.or_(to_mark, to_unmark))).mappings()]
+                    run_ts = datetime.utcnow().isoformat()
+                    conn.execute(table.update().where(to_mark).values(
+                        {marker_p: "True", ts_p: run_ts}))
+                    conn.execute(table.update().where(to_unmark).values(
+                        {marker_p: "", ts_p: ""}))
+                    for old_phys in changed_old:
                         logical = _logical_row(old_phys, mapping)
                         flag_value = logical.get(soft_delete_column)
                         is_deleted = (str(flag_value).strip().lower()
                                       in _SOFT_DELETE_TRUTHY) if flag_value is not None else False
-                        already_marked = logical.get(_SOFT_MARKER_COLS[0]) == "True"
-                        if is_deleted and already_marked:
-                            rewritten.append(old_phys)  # 打标状态已正确：保持原样
-                            continue
-                        _apply_soft_delete([logical], soft_delete_column)
-                        new_phys = _normalize_single_row(
-                            logical, mapping, pk_physical_set)
-                        rewritten.append(new_phys)
-                        if new_phys != old_phys:
-                            changed_pairs.append((old_phys, new_phys))
-                    if changed_pairs:
-                        conn.execute(table.delete())
-                        for batch in _chunked(rewritten):
-                            conn.execute(table.insert(), batch)
-                        for old_phys, new_phys in changed_pairs:
-                            old_sig = _physical_signature(old_phys)
-                            new_sig = _physical_signature(new_phys)
-                            deleted_keys.append(old_sig)
-                            old_rows_by_key[old_sig] = old_phys
-                            added_keys.append(new_sig)
-                            new_rows_by_sig[new_sig] = new_phys
-                candidates = normalized
-                if mode == "append_dedup" and candidates:
-                    existing_sigs = {
-                        _physical_signature(dict(record))
-                        for record in conn.execute(sa.select(table)).mappings()}
-                    candidates = [row for row in candidates
-                                  if _physical_signature(row) not in existing_sigs]
-                insert_rows = candidates
-                for row in candidates:
+                        if is_deleted:
+                            new_logical = {**logical,
+                                           _SOFT_MARKER_COLS[0]: "True",
+                                           _SOFT_MARKER_COLS[1]: run_ts}
+                        else:
+                            new_logical = {**logical,
+                                           _SOFT_MARKER_COLS[0]: "",
+                                           _SOFT_MARKER_COLS[1]: ""}
+                        new_phys = _normalize_single_row(logical, mapping, set())
+                        old_sig = _physical_signature(old_phys)
+                        new_sig = _physical_signature(new_phys)
+                        deleted_keys.append(old_sig)
+                        old_rows_by_key[old_sig] = old_phys
+                        added_keys.append(new_sig)
+                        new_rows_by_sig[new_sig] = new_phys
+                if mode == "append_dedup":
+                    # 与湖中全同的行经反连接在 DB 端过滤（来数已批内首现去重，
+                    # 过滤结果逐行即逐签名）
+                    insert_rows = [dict(zip(all_physical, record))
+                                   for record in conn.execute(
+                                       sa.select(*[s.c[p] for p in all_physical])
+                                       .select_from(s.outerjoin(t, row_match))
+                                       .where(t.c[all_physical[0]].is_(None)))]
+                else:
+                    insert_rows = list(normalized)
+                for row in insert_rows:
                     sig = _physical_signature(row)
                     added_keys.append(sig)
                     new_rows_by_sig[sig] = row
@@ -911,8 +954,15 @@ def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
     finally:
         stage.drop(bind=conn)
 
-    rowcount = conn.execute(
-        sa.select(sa.func.count()).select_from(table)).scalar_one()
+    # rowcount 由各分支的精确物理增删推导，不再全表 count(*)：
+    # 有主键 = 基座 − 删除键 + 新增键（主键级精确）；无主键 overwrite =
+    # 来数行数（全量替换）；无主键追加系 = 基座 + 实际追加行数
+    if pk_physical:
+        rowcount = rows_before - len(deleted_keys) + len(added_keys)
+    elif mode == "overwrite":
+        rowcount = len(normalized)
+    else:
+        rowcount = rows_before + len(insert_rows)
     return _publish_run(db, dataset, rowcount=rowcount, entries=entries,
                         added=len(added_keys), updated=len(updated_keys),
                         deleted=len(deleted_keys))
@@ -920,6 +970,7 @@ def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
 
 def upsert_run(db, dataset, rows: list[dict], write_mode: str,
                pk_cols: list[str], *, soft_delete_column: str = "",
+               rows_before: int | None = None,
                ) -> tuple[DatasetVersion, DatasetChangeset]:
     """按入库方式把来数合并进物理湖表，发布新版本并记录行级变更集。
 
@@ -928,6 +979,8 @@ def upsert_run(db, dataset, rows: list[dict], write_mode: str,
     版本号撞唯一约束时整体回滚重试（与 _create_version_locked 同策略）。
     soft_delete_column 仅对 upsert 生效：truthy 行打 __deleted__ 标记而非
     物理删除（词表与 write_modes._apply_soft_delete 一致）。
+    rows_before：调用方在同一写锁/事务内已计数的基座行数（仅追加系与有主键
+    分支使用；overwrite 重建或 None 时按需要在合并前一次性计数）。
     """
     if not uses_lake_table(dataset):
         raise LakeStoreError(
@@ -938,7 +991,7 @@ def upsert_run(db, dataset, rows: list[dict], write_mode: str,
     for attempt in range(3):
         try:
             return _upsert_run_once(db, dataset, rows, mode, normalized_pk,
-                                    soft_delete_column)
+                                    soft_delete_column, rows_before)
         except IntegrityError:
             db.rollback()
             if attempt == 2:

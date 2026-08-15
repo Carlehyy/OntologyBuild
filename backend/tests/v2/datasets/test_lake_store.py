@@ -549,6 +549,100 @@ def test_no_pk_overwrite_and_append_dedup(db):
         rows_by_pks(db, ds, ["1"])
 
 
+def test_no_pk_overwrite_multiset_and_set_level_changeset(db):
+    """无主键 overwrite：物理表保留来数重复行（多重集），变更集按整行签名
+    集合级求差（重复折叠），rowcount 按物理行数记账。"""
+    ds = _make_dataset(db, pk=None, columns=("a", "b"))
+    upsert_run(db, ds, [
+        {"a": "1", "b": "x"},
+        {"a": "1", "b": "x"},  # 湖中重复行
+        {"a": "2", "b": "y"},
+        {"a": "3", "b": "z"},
+    ], "overwrite", [])
+
+    v2, cs2 = upsert_run(db, ds, [
+        {"a": "1", "b": "x"},  # 与湖中重复行同签名 → 集合级 unchanged
+        {"a": "3", "b": "z"},
+        {"a": "3", "b": "z"},  # 来数重复：物理保留两份，变更集只记一个 added
+        {"a": "4", "b": "w"},
+    ], "overwrite", [])
+    rows = [r for batch in stream_rows(db, ds) for r in batch]
+    assert sorted(json.dumps(r, sort_keys=True) for r in rows) == sorted(
+        json.dumps(r, sort_keys=True) for r in [
+            {"a": "1", "b": "x"}, {"a": "3", "b": "z"},
+            {"a": "3", "b": "z"}, {"a": "4", "b": "w"}])
+    assert v2.rowcount == 4
+    # 集合级求差：added={4,w}、deleted={2,y}，各 1 条（重复折叠、无 updated）
+    assert (cs2.added_count, cs2.updated_count, cs2.deleted_count) == (1, 0, 1)
+    entries = _changeset_rows(db, cs2.id)
+    added = [r for r in entries if r.change_type == "added"]
+    deleted = [r for r in entries if r.change_type == "deleted"]
+    assert [r.new_row for r in added] == [{"a": "4", "b": "w"}]
+    assert [r.old_row for r in deleted] == [{"a": "2", "b": "y"}]
+
+
+def test_no_pk_upsert_soft_delete_reeval_multiset(db):
+    """无主键 upsert+软删除：湖中存量逐实例重评估（重复行逐份记变更集）；
+    已正确打标的行保持原时间戳且不重复记变更。"""
+    ds = _make_dataset(db, pk=None, columns=("v", "flag"))
+    upsert_run(db, ds, [
+        {"v": "1", "flag": "0"},
+        {"v": "2", "flag": "是"},
+        {"v": "2", "flag": "是"},  # 重复实例：两份都要打标
+    ], "overwrite", [])
+    v2, cs2 = upsert_run(db, ds, [{"v": "3", "flag": "no"}], "upsert", [],
+                         soft_delete_column="flag")
+    rows = [r for batch in stream_rows(db, ds) for r in batch]
+    assert len(rows) == 4  # 3 存量 + 1 追加
+    marked = [r for r in rows if r.get("__deleted__") == "True"]
+    assert len(marked) == 2  # 两份重复实例都打上标
+    # 变更集逐实例：2 组 打标前行 deleted + 打标后行 added，外加 1 条追加 added
+    assert (cs2.added_count, cs2.updated_count, cs2.deleted_count) == (3, 0, 2)
+    marked_ts = sorted(r["__deleted_at__"] for r in marked)
+
+    # 再次运行：已打标行保持原时间戳，不产生打标变更（仅追加 1 行）
+    v3, cs3 = upsert_run(db, ds, [{"v": "4", "flag": "0"}], "upsert", [],
+                         soft_delete_column="flag")
+    rows_after = [r for batch in stream_rows(db, ds) for r in batch]
+    assert sorted(r["__deleted_at__"] for r in rows_after
+                  if r.get("__deleted__") == "True") == marked_ts
+    assert (cs3.added_count, cs3.updated_count, cs3.deleted_count) == (1, 0, 0)
+    assert v3.rowcount == 5
+
+
+def test_no_pk_upsert_soft_delete_clears_stale_marker_text(db):
+    """无主键软删除重评估：falsy 行携带非空非 'True' 标记文本时回填空串，
+    按 deleted(old)+added(new) 对记变更集。"""
+    ds = _make_dataset(db, pk=None,
+                       columns=("v", "flag", "__deleted__", "__deleted_at__"))
+    upsert_run(db, ds, [
+        {"v": "1", "flag": "0", "__deleted__": "False",
+         "__deleted_at__": "2020-01-01"},
+    ], "overwrite", [])
+    v2, cs2 = upsert_run(db, ds, [{"v": "2", "flag": "0"}], "upsert", [],
+                         soft_delete_column="flag")
+    rows = [r for batch in stream_rows(db, ds) for r in batch]
+    by_v = {r["v"]: r for r in rows}
+    assert by_v["1"]["__deleted__"] == ""
+    assert by_v["1"]["__deleted_at__"] == ""
+    # 追加 1 added + 清除重写 1 组 deleted+added
+    assert (cs2.added_count, cs2.updated_count, cs2.deleted_count) == (2, 0, 1)
+    entries = _changeset_rows(db, cs2.id)
+    cleared = [r for r in entries if r.change_type == "deleted"]
+    assert cleared[0].old_row["__deleted__"] == "False"
+
+
+def test_no_pk_append_dedup_multiset_skip(db):
+    """湖中已有两份全同行时，来数全同行仍整体跳过（集合语义），不产生变更。"""
+    ds = _make_dataset(db, pk=None, columns=("a", "b"))
+    upsert_run(db, ds, [
+        {"a": "1", "b": "x"}, {"a": "1", "b": "x"}], "overwrite", [])
+    v2, cs2 = upsert_run(db, ds, [{"a": "1", "b": "x"}], "append_dedup", [])
+    assert (cs2.added_count, cs2.updated_count, cs2.deleted_count) == (0, 0, 0)
+    assert count_rows(db, ds) == 2
+    assert v2.rowcount == 2
+
+
 # ── 遗留 blob 基座的懒引导 ──────────────────────────────────
 def test_upsert_without_bootstrap_on_legacy_history_is_rejected(db):
     """有 blob 历史而无物理表：直接入湖拒绝（防存量被当空湖丢失）。"""

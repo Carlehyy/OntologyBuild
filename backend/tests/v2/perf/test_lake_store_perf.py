@@ -183,3 +183,97 @@ def test_benchmark_lake_store(lake_db):
             note=f"回放到 v{target}：全表流式 + 撤销 1 个 overwrite 变更集")
 
     _write_report()
+
+
+def _nopk_row(i: int, *, tag: str = "v") -> dict:
+    return {"k": f"k{i:07d}",
+            **{f"c{j}": f"{tag}{i % 5000}-{j}" for j in range(COLS - 2)},
+            # 1% truthy：供软删除重评估场景产生小比例存量变更
+            "flag": "1" if i % 100 == 0 else "0"}
+
+
+@pytest.fixture(scope="module")
+def lake_db_nopk(tmp_path_factory):
+    """无主键数据集基座（独立库）：10 万行 × 8 列，直插预置。"""
+    from app.database import Base
+    from app.model_registry import import_all_models
+
+    import_all_models()
+    db_path = tmp_path_factory.mktemp("lake_perf_nopk") / "bench.db"
+    engine = sa.create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+
+    ds = Dataset(
+        id=str(uuid.uuid4()), name="基准数据集-无主键", kind="curated",
+        schema_json={"columns": ["k"] + [f"c{j}" for j in range(COLS - 2)]
+                     + ["flag"]})
+    session.add(ds)
+    session.commit()
+
+    lake_store.upsert_run(session, ds, [_nopk_row(i) for i in range(5000)],
+                          "overwrite", [])
+    _, mapping, _ = lake_store._contract(ds)
+    table = lake_store.lake_table_definition(
+        lake_store.lake_table_name(ds.id), mapping, [])
+    conn = session.connection()
+    batch = []
+    for i in range(5000, BASE_ROWS):
+        batch.append(lake_store.normalize_lake_rows([_nopk_row(i)], mapping, [])[0])
+        if len(batch) >= 5000:
+            conn.execute(table.insert(), batch)
+            batch.clear()
+    if batch:
+        conn.execute(table.insert(), batch)
+    session.commit()
+    yield session, ds
+    session.close()
+    engine.dispose()
+
+
+def test_benchmark_lake_store_no_pk(lake_db_nopk):
+    """无主键分支基准：核心验收 = Python 峰值与墙钟不再随湖总量增长（只随
+    当批来数 + 实际变化行增长）。"""
+    session, ds = lake_db_nopk
+
+    # 湖内容读回一次（测量外），供构造"源未变"批次
+    readback = [row for batch in lake_store.stream_rows(session, ds)
+                for row in batch]
+    assert len(readback) == BASE_ROWS
+
+    # ── overwrite 同内容重跑（定时任务源未变，生产最常见形态）────────
+    (v_same, cs_same), wall, peak = _measure(
+        lambda: lake_store.upsert_run(session, ds, list(readback),
+                                      "overwrite", []))
+    assert v_same.rowcount == BASE_ROWS
+    assert (cs_same.added_count, cs_same.updated_count,
+            cs_same.deleted_count) == (0, 0, 0)
+    _record(f"nopk_overwrite_same_content_{BASE_ROWS}", wall, peak,
+            note="同内容重跑：变更集应为空；峰值理想值 ≈ 0（不读湖进 Python）")
+
+    # ── append_dedup 全重复批次（零追加）──────────────────────────
+    dup_batch = readback[:INC_ROWS]
+    (v_dup, cs_dup), wall, peak = _measure(
+        lambda: lake_store.upsert_run(session, ds, list(dup_batch),
+                                      "append_dedup", []))
+    assert cs_dup.added_count == 0
+    assert v_dup.rowcount == BASE_ROWS
+    _record(f"nopk_append_dedup_all_identical_{INC_ROWS}_on_{BASE_ROWS}",
+            wall, peak,
+            note="全重复批次：反连接过滤应在 DB 端完成，峰值理想值 ≈ 批大小")
+
+    # ── upsert + 软删除：1 万新行追加 + 湖中 1% truthy 存量打标 ─────
+    novel = [{"k": f"n{i:07d}",
+              **{f"c{j}": f"n{i % 5000}-{j}" for j in range(COLS - 2)},
+              "flag": "0"} for i in range(INC_ROWS)]
+    (v_soft, cs_soft), wall, peak = _measure(
+        lambda: lake_store.upsert_run(session, ds, novel, "upsert", [],
+                                      soft_delete_column="flag"))
+    truthy = BASE_ROWS // 100
+    assert cs_soft.deleted_count == truthy           # 打标前行
+    assert cs_soft.added_count == INC_ROWS + truthy  # 追加 + 打标后行
+    assert v_soft.rowcount == BASE_ROWS + INC_ROWS
+    _record(f"nopk_upsert_soft_reeval_{truthy}_flips_on_{BASE_ROWS}", wall, peak,
+            note="存量小比例打标：应定向 UPDATE 命中行而非整表物化+重写")
+
+    _write_report()
