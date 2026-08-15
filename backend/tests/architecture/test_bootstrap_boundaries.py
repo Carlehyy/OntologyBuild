@@ -240,9 +240,12 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
         cleanup_loop,
     )
     real_create_task = asyncio.create_task
+    task_calls = 0
 
     def create_task(coro):
-        events.append("file_cleanup.create")
+        nonlocal task_calls
+        task_calls += 1
+        events.append(f"task.create.{task_calls}")
         return real_create_task(coro)
 
     monkeypatch.setattr(lifecycle.asyncio, "create_task", create_task)
@@ -269,7 +272,8 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
         "sentinel_scan.start",
         "data_scheduler.start",
         "api_hub_mcp.reset",
-        "file_cleanup.create",
+        "task.create.1",
+        "task.create.2",
         "api_hub_public_mcp.enter",
         "api_hub_system_mcp.enter",
         "application.ready",
