@@ -23,6 +23,7 @@ import {
   type GraphPath, type HighlightSet, type PublishedWorkspace, type StructureEdge,
   type StructureNode, type StructureSentinel,
 } from './structureGraphModel'
+import { saveStatusLabel, type StructureSaveState } from './saveStatus'
 
 type Level = 1 | 2
 type Direction = 'outgoing' | 'both'
@@ -444,9 +445,12 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
   const [functionId, setFunctionId] = useState('')
   const [sentinelId, setSentinelId] = useState('')
   const [openDependency, setOpenDependency] = useState<'function' | 'sentinel' | null>(null)
-  const [saveState, setSaveState] = useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle')
+  const [saveState, setSaveState] = useState<StructureSaveState>('idle')
+  const [saveCountdown, setSaveCountdown] = useState(3)
+  const [saveCountdownNonce, setSaveCountdownNonce] = useState(0)
   const [saveError, setSaveError] = useState('')
   const [organizeConfirmOpen, setOrganizeConfirmOpen] = useState(false)
+  const [toolbarMoreRight, setToolbarMoreRight] = useState(false)
   const groupDrag = useRef<{
     objectId: string
     parentStart: { x: number; y: number }
@@ -454,8 +458,10 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
   } | null>(null)
   const pendingPositions = useRef<Record<string, { x: number; y: number }>>({})
   const saveTimer = useRef<number | null>(null)
+  const savedResetTimer = useRef<number | null>(null)
   const saveInFlight = useRef(false)
   const lastFittedGraph = useRef(builtGraph)
+  const toolbarScrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     setAllNodes(builtGraph.nodes)
@@ -491,6 +497,9 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     try {
       await saveCanvasLayout(ontologyId, batch, workspace.versionId)
       setSaveState('saved')
+      // 成功提示短暂停留后回到空闲文案，避免「布局已保存」永久驻留造成状态残留。
+      if (savedResetTimer.current !== null) window.clearTimeout(savedResetTimer.current)
+      savedResetTimer.current = window.setTimeout(() => setSaveState('idle'), 2000)
     } catch (error) {
       pendingPositions.current = { ...batch, ...pendingPositions.current }
       setSaveState('error')
@@ -509,9 +518,22 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     })
     setSaveState('pending')
     setSaveError('')
+    // 每次拖拽都重新开始 3 秒倒计时；nonce 用于让倒计时 effect 重新起表。
+    setSaveCountdown(3)
+    setSaveCountdownNonce(value => value + 1)
+    if (savedResetTimer.current !== null) window.clearTimeout(savedResetTimer.current)
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
     saveTimer.current = window.setTimeout(() => void flushLayout(), 3000)
   }, [flushLayout, level])
+
+  // pending 期间每秒递减展示剩余秒数（3→2→1），随后由 flushLayout 切换为「正在保存布局」。
+  useEffect(() => {
+    if (saveState !== 'pending') return
+    const timer = window.setInterval(() => {
+      setSaveCountdown(previous => Math.max(1, previous - 1))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [saveState, saveCountdownNonce])
 
   const scheduleLayoutSave = useCallback((node: StructureNode) => {
     schedulePositionSave({ [node.id]: node.position })
@@ -525,9 +547,28 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange)
       if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
+      if (savedResetTimer.current !== null) window.clearTimeout(savedResetTimer.current)
       void flushLayout()
     }
   }, [flushLayout])
+
+  // 窄屏下工具栏可横向滚动但滚动条被隐藏，用右缘渐变提示「后面还有控件」。
+  const updateToolbarScrollHint = useCallback(() => {
+    const element = toolbarScrollRef.current
+    if (!element) return
+    setToolbarMoreRight(element.scrollWidth - element.clientWidth - element.scrollLeft > 4)
+  }, [])
+
+  useEffect(() => {
+    updateToolbarScrollHint()
+    window.addEventListener('resize', updateToolbarScrollHint)
+    return () => window.removeEventListener('resize', updateToolbarScrollHint)
+  }, [updateToolbarScrollHint])
+
+  // 选择项文案等渲染级变化也可能改变滚动宽度，每次渲染后重新测量（状态相同时 React 会短路）。
+  useEffect(() => {
+    updateToolbarScrollHint()
+  })
 
   const onNodesChange = useCallback((changes: NodeChange<StructureNode>[]) => {
     setAllNodes(nodes => applyNodeChanges(changes, nodes))
@@ -744,12 +785,19 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     window.setTimeout(() => void fitView({ padding: level === 1 ? 0.26 : 0.14, minZoom: level === 1 ? 0.24 : 0.34, maxZoom: level === 1 ? 1.05 : 0.86, duration: 420 }), 40)
   }, [fitView, level, schedulePositionSave, workspace])
 
-  const saveLabel = saveState === 'pending' ? '3 秒后自动保存' : saveState === 'saving' ? '正在保存布局' : saveState === 'saved' ? '布局已保存' : saveState === 'error' ? '保存失败' : '拖动后自动保存布局'
+  const saveLabel = saveStatusLabel(saveState, saveCountdown)
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-50/70" data-testid="ontology-structure-graph">
-      <div className="z-40 flex shrink-0 items-center gap-2 overflow-x-auto border-b border-slate-200 bg-white px-3 py-2.5" style={{ scrollbarWidth: 'none' }}>
-        <AnimatedSegmentedControl<Level>
+      <div className="z-40 flex shrink-0 items-stretch border-b border-slate-200 bg-white">
+        <div className="relative flex min-w-0 flex-1">
+          <div
+            ref={toolbarScrollRef}
+            onScroll={updateToolbarScrollHint}
+            className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-3 py-2.5"
+            style={{ scrollbarWidth: 'none' }}
+          >
+          <AnimatedSegmentedControl<Level>
           value={level}
           label="图谱视角"
           items={[{ value: 1, label: 'L1' }, { value: 2, label: 'L2' }]}
@@ -761,7 +809,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           items={[{ value: 'browse', label: '浏览', icon: Focus }, { value: 'path', label: '路径', icon: Route }]}
           onChange={changeMode}
         />
-        <div className="relative w-[260px] shrink-0">
+        <div className="relative w-[240px] min-w-[170px] shrink">
           <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input value={searchText} onChange={event => { setSearchText(event.target.value); setSearchOpen(true); setSearchFocus(null) }} onFocus={() => setSearchOpen(true)} onKeyDown={event => { if (event.key === 'Enter' && searchResults[0]) chooseSearchResult(searchResults[0]); if (event.key === 'Escape') setSearchOpen(false) }} placeholder={level === 1 ? '搜索对象实体或实体关系' : '搜索对象、关系、属性或动作'} aria-label="搜索本体结构" className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-8 text-xs text-slate-700 outline-none transition focus:border-teal-400 focus:bg-white focus:ring-2 focus:ring-teal-100" />
           {searchText && <button type="button" aria-label="清空搜索" onClick={() => { setSearchText(''); setSearchFocus(null); setSearchOpen(false) }} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-200"><X size={12} /></button>}
@@ -788,14 +836,16 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           onOpenChange={open => setOpenDependency(open ? 'sentinel' : null)}
           onChange={id => chooseDependency('sentinel', id)}
         />
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          <span data-testid="published-structure-readonly" title="当前页面只允许调整并保存画布布局，不允许修改本体模型结构" className="mr-1 inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-[11px] font-medium text-slate-600">
-            <ShieldCheck size={13} className="text-teal-700" />发布快照 · 结构只读
-          </span>
+          </div>
+          {toolbarMoreRight && (
+            <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 z-20 w-8 bg-gradient-to-l from-white via-white/85 to-transparent" />
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1 border-l border-slate-200 bg-white px-2">
           <button type="button" onClick={() => setOrganizeConfirmOpen(true)} aria-label="智能整理图谱" title="按实体关系力导向展开，并将属性与动作分层排列" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:translate-y-px"><Sparkles size={13} />智能整理</button>
-          <button type="button" onClick={() => void zoomOut({ duration: 160 })} aria-label="缩小" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomOut size={14} /></button>
-          <button type="button" onClick={() => void zoomIn({ duration: 160 })} aria-label="放大" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomIn size={14} /></button>
-          <button type="button" onClick={() => void fitView({ padding: 0.2, minZoom: level === 2 ? 0.32 : 0.24, maxZoom: 0.92, duration: 260 })} aria-label="适应画布" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><Maximize2 size={14} /></button>
+          <button type="button" onClick={() => void zoomOut({ duration: 160 })} aria-label="缩小" title="缩小" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomOut size={14} /></button>
+          <button type="button" onClick={() => void zoomIn({ duration: 160 })} aria-label="放大" title="放大" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomIn size={14} /></button>
+          <button type="button" onClick={() => void fitView({ padding: 0.2, minZoom: level === 2 ? 0.32 : 0.24, maxZoom: 0.92, duration: 260 })} aria-label="适应画布" title="适应画布" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><Maximize2 size={14} /></button>
         </div>
       </div>
 
@@ -830,7 +880,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           <MiniMap pannable zoomable position="bottom-left" style={{ width: 150, height: 96 }} className="!m-3 !rounded-xl !border !border-slate-200 !bg-white/90 !shadow-sm" nodeColor={node => node.data?.kind === 'object' ? '#0f766e' : node.data?.kind === 'property' ? '#8b5cf6' : '#f59e0b'} maskColor="rgba(241,245,249,0.72)" />
         </ReactFlow>
 
-        <div className="pointer-events-none absolute left-3 top-3 z-20 flex items-center gap-2 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-[10px] text-slate-500 shadow-sm backdrop-blur">
+        <div className="pointer-events-none absolute left-3 top-3 z-20 flex items-center gap-2 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-[11px] text-slate-500 shadow-sm backdrop-blur">
           <Layers3 size={13} className="text-teal-600" /><span>L{level} · {workspace.objectTypes.length} 对象 · {workspace.linkTypes.length} 关系{level === 2 ? ` · ${workspace.objectTypes.reduce((sum, item) => sum + item.properties.length, 0)} 属性 · ${workspace.actions.length} 动作` : ''}</span>
           <span className="h-3 w-px bg-slate-200" />
           {saveState === 'error' ? (
@@ -843,10 +893,32 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
               <AlertCircle size={11} />保存失败 · 点击重试
             </button>
           ) : (
-            <span className={`inline-flex items-center gap-1 ${saveState === 'saved' ? 'text-emerald-600' : ''}`}><Clock3 size={11} />{saveLabel}</span>
+            <span
+              role="status"
+              aria-live="polite"
+              data-testid="structure-save-status"
+              className={`inline-flex items-center gap-1 ${
+                saveState === 'pending' ? 'text-amber-600'
+                  : saveState === 'saved' ? 'text-emerald-600'
+                    : 'text-slate-500'
+              }`}
+            >
+              {saveState === 'saving'
+                ? <Loader2 size={11} className="animate-spin" />
+                : saveState === 'saved' ? <Check size={11} /> : <Clock3 size={11} />}
+              {saveLabel}
+            </span>
           )}
           <span className="h-3 w-px bg-slate-200" />
           <span>发布版 <span className="font-mono font-semibold text-teal-700" data-testid="published-structure-version">{workspace.version}</span></span>
+          <span className="h-3 w-px bg-slate-200" />
+          <span
+            data-testid="published-structure-readonly"
+            title="当前页面只允许调整并保存画布布局，不允许修改本体模型结构"
+            className="pointer-events-auto inline-flex shrink-0 items-center gap-1 font-medium text-slate-600"
+          >
+            <ShieldCheck size={13} className="text-teal-700" />发布快照 · 结构只读
+          </span>
         </div>
 
         {(hasDependency || paths.length > 0) && (
