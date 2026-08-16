@@ -117,6 +117,19 @@ async function mockWorldModel(page: Page) {
         created_at: now,
       })
     }
+    if (path === '/api/v2/world-model/templates/time-series') {
+      return json(route, {
+        key: 'time-series',
+        name: '时序推演示例（ARIMA / SARIMA）',
+        description: 'ITSM 式统计时序建模',
+        script: 'import statsmodels\ndef simulate(context, actions, horizon):\n    return {"trajectory": [1, 2, 3]}\n',
+        test_input: {
+          context: { series: Array.from({ length: 36 }, (_, i) => 100 + i), period: 12 },
+          actions: [],
+          horizon: 6,
+        },
+      })
+    }
     return json(route, [])
   })
 }
@@ -228,6 +241,90 @@ test('开发页：执行通过才可保存，版本恢复需二次确认', async
   await expect(page.getByText('恢复到该历史版本？')).toBeVisible()
   await page.getByRole('button', { name: '取消' }).click()
   await expect(page.getByText('恢复到该历史版本？')).toHaveCount(0)
+})
+
+test('保存首个版本后发布按钮立即可用（无需刷新页面）', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+  // 场景回归：项目 version_count=0 时发布按钮禁用；
+  // 保存成功必须立即解锁，不能要求用户刷新页面。
+  await page.route('**/api/v2/world-model/**', route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (path === `/api/v2/world-model/projects/${projectRow.id}` && request.method() === 'GET') {
+      return json(route, { ...projectDetail, version_count: 0 })
+    }
+    if (path.endsWith('/execute') && request.method() === 'POST') {
+      return json(route, { ok: true, payload: { trajectory: [1] }, stdout: '', error: null, traceback: '', duration_ms: 10, kernel_id: 'k' })
+    }
+    if (path.endsWith('/save') && request.method() === 'POST') {
+      return json(route, { ok: true, version_no: 1, execution: null })
+    }
+    if (path.endsWith('/service') && request.method() === 'GET') {
+      return json(route, null)
+    }
+    return json(route, [])
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/#/world-model/models/${projectRow.id}/develop`)
+
+  const publishButton = page.getByRole('button', { name: '发布', exact: true })
+  await expect(publishButton).toBeDisabled()
+
+  // 修改脚本后执行通过并保存
+  await page.locator('.cm-content').first().click()
+  await page.keyboard.press('End')
+  await page.keyboard.type('# v1')
+  await page.getByRole('button', { name: '执行', exact: true }).click()
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(page.getByText('已保存为版本 v1')).toBeVisible()
+
+  // 缺陷修复点：保存成功后版本数刷新，发布按钮无需刷新即可点击
+  await expect(publishButton).toBeEnabled()
+})
+
+test('时序示例：一键插入官方 ARIMA 模板并替换测试入参', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+  await mockWorldModel(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/#/world-model/models/${projectRow.id}/develop`)
+
+  const insertButton = page.getByRole('button', { name: '时序示例', exact: true })
+  await expect(insertButton).toBeVisible()
+
+  // 编辑器干净（无未保存修改）时直接插入，不弹确认
+  await insertButton.click()
+  const editor = page.locator('.cm-content').first()
+  await expect(editor).toContainText('statsmodels')
+  const inputArea = page.getByLabel('测试入参 JSON')
+  await expect(inputArea).toHaveValue(/"period": 12/)
+
+  // 插入后需重新执行通过才能保存（与保存纪律一致）
+  const saveButton = page.getByRole('button', { name: '保存', exact: true })
+  await expect(saveButton).toBeDisabled()
+  await page.getByRole('button', { name: '执行', exact: true }).click()
+  await expect(saveButton).toBeEnabled()
+
+  // 编辑器与已保存脚本不同（dirty）时先弹二次确认；取消不改动内容
+  await editor.click()
+  await page.keyboard.press('End')
+  await page.keyboard.type('# dirty')
+  await insertButton.click()
+  await expect(page.getByText('插入时序推演示例？')).toBeVisible()
+  await page.getByRole('button', { name: '取消' }).click()
+  await expect(page.getByText('插入时序推演示例？')).toHaveCount(0)
+  await expect(editor).toContainText('# dirty')
+
+  // 再次插入并确认后，示例模板覆盖当前内容
+  await insertButton.click()
+  await expect(page.getByText('插入时序推演示例？')).toBeVisible()
+  await page.getByRole('button', { name: '插入示例' }).click()
+  await expect(page.getByText('插入时序推演示例？')).toHaveCount(0)
+  await expect(editor).toContainText('statsmodels')
+  await expect(editor).not.toContainText('# dirty')
+  // 内容替换后执行凭证失效，需重新执行
+  await expect(saveButton).toBeDisabled()
 })
 
 test('发布为推演服务：语义注册、服务面板与状态切换', async ({ page }) => {

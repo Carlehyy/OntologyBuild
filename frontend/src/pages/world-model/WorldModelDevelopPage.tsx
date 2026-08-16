@@ -21,6 +21,7 @@ import {
   RotateCcw,
   Save,
   Terminal,
+  TrendingUp,
   XCircle,
 } from 'lucide-react'
 import {
@@ -127,6 +128,8 @@ export default function WorldModelDevelopPage() {
   const [publishOpen, setPublishOpen] = useState(false)
   const [publishVersions, setPublishVersions] = useState<ScriptVersionItem[]>([])
   const [endpointCopied, setEndpointCopied] = useState(false)
+  const [insertingTs, setInsertingTs] = useState(false)
+  const [confirmInsertTs, setConfirmInsertTs] = useState(false)
 
   const dirty = script !== savedScript
   const contentKey = `${script}\n${testInputText}`
@@ -235,6 +238,11 @@ export default function WorldModelDevelopPage() {
       setValidatedKey(null)
       if (modelId) localStorage.removeItem(draftKey(modelId))
       setDraftRestoredAt(null)
+      // 缺陷修复：保存成功后立即刷新版本数，发布按钮无需刷新页面即可解锁
+      setProject(current => current ? {
+        ...current,
+        version_count: Math.max(current.version_count ?? 0, saveResult.version_no ?? 0),
+      } : current)
       toast({ tone: 'success', title: `已保存为版本 v${saveResult.version_no}` })
     } catch (error) {
       toast({ tone: 'error', title: '保存失败', description: apiError(error) })
@@ -292,6 +300,37 @@ export default function WorldModelDevelopPage() {
       toast({ tone: 'error', title: '版本列表加载失败', description: apiError(error) })
     }
   }, [modelId, toast])
+
+  // 插入官方时序推演示例（ARIMA/SARIMA）：脚本与默认测试入参一并替换，
+  // 未保存修改先确认再覆盖；插入后需重新执行并保存（与版本恢复同一纪律）。
+  const insertTimeSeriesTemplate = useCallback(async () => {
+    if (!modelId || insertingTs) return
+    setInsertingTs(true)
+    try {
+      const template = await worldModelApi.getTimeSeriesTemplate()
+      setScript(template.script)
+      setTestInputText(JSON.stringify(template.test_input, null, 2))
+      setValidatedKey(null)
+      setConfirmInsertTs(false)
+      toast({
+        tone: 'success',
+        title: '已插入时序推演示例（ARIMA/SARIMA）',
+        description: '已同步替换默认测试入参（36 点季节序列），执行通过后保存即可发布。',
+      })
+    } catch (error) {
+      toast({ tone: 'error', title: '时序示例加载失败', description: apiError(error) })
+    } finally {
+      setInsertingTs(false)
+    }
+  }, [modelId, insertingTs, toast])
+
+  const requestInsertTs = useCallback(() => {
+    if (dirty) {
+      setConfirmInsertTs(true)
+    } else {
+      void insertTimeSeriesTemplate()
+    }
+  }, [dirty, insertTimeSeriesTemplate])
 
   const toggleServiceStatus = useCallback(async () => {
     if (!modelId || !service) return
@@ -372,6 +411,15 @@ export default function WorldModelDevelopPage() {
             className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-600 transition-colors hover:bg-slate-50"
           >
             <History size={14} /> 历史版本
+          </button>
+          <button
+            type="button"
+            onClick={requestInsertTs}
+            disabled={insertingTs}
+            title="插入官方时序推演示例：ARIMA/SARIMA 建模与预测（覆盖当前脚本内容）"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50"
+          >
+            {insertingTs ? <Loader2 size={14} className="animate-spin" /> : <TrendingUp size={14} />} 时序示例
           </button>
           <button
             type="button"
@@ -619,6 +667,14 @@ export default function WorldModelDevelopPage() {
               <p className="mt-1">JSON 可序列化的 dict，建议包含 <code>trajectory</code>（各时点轨迹）、<code>confidence</code>（置信度）、<code>boundary</code>（适用边界说明）。</p>
             </section>
             <section>
+              <h3 className="text-sm font-semibold text-slate-800">可用的时序/科学计算库</h3>
+              <p className="mt-1">
+                脚本在平台 Python 内核中执行，可直接使用 numpy、pandas、duckdb 与
+                statsmodels（ARIMA/SARIMAX、指数平滑、ACF/PACF 等）。
+                点击页头「时序示例」可一键插入官方 ARIMA/SARIMA 建模与预测脚本。
+              </p>
+            </section>
+            <section>
               <h3 className="text-sm font-semibold text-slate-800">保存规则</h3>
               <ul className="mt-1 list-disc space-y-1 pl-4">
                 <li>只有当前内容与测试入参执行通过，保存按钮才可用</li>
@@ -630,6 +686,15 @@ export default function WorldModelDevelopPage() {
         </SheetContent>
       </Sheet>
 
+      <ConfirmDialog
+        open={confirmInsertTs}
+        title="插入时序推演示例？"
+        message="当前未保存的修改将被示例脚本覆盖丢弃，此操作无法撤销。建议先执行并保存当前内容。"
+        confirmLabel="插入示例"
+        tone="primary"
+        onConfirm={() => void insertTimeSeriesTemplate()}
+        onCancel={() => setConfirmInsertTs(false)}
+      />
       <ConfirmDialog
         open={confirmRevert}
         title="恢复到已保存内容？"
