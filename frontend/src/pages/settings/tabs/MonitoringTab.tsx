@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Button, Drawer, Empty, Segmented, Table, Tag, Tooltip } from 'antd'
+import { Button, Drawer, Empty, Modal, Segmented, Table, Tag, Tooltip } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
@@ -244,25 +244,43 @@ export default function MonitoringTab() {
   const [slowPage, setSlowPage] = useState(1)
   const [slowRoute, setSlowRoute] = useState('')
   const [traceRequest, setTraceRequest] = useState<SlowRequestItem | null>(null)
+  const [promptText, setPromptText] = useState<string | null>(null)
   const { toast } = useToast()
 
   const copyAnalysisPrompt = async () => {
     if (!traceRequest) return
     const text = buildAnalysisPrompt(traceRequest)
+    // 始终弹出全文：普通 HTTP 部署没有 Clipboard API，execCommand 回退在
+    // 非聚焦页面等场景会静默失败且页面侧无法验证，弹出全文（已全选）与
+    // 下载入口保证用户一定能拿到内容，绝不只依赖剪贴板单一路径。
+    setPromptText(text)
     try {
       await writeTextToClipboard(text)
       toast({
         tone: 'success',
-        title: '分析提示词已复制',
-        description: '可直接粘贴给其他 Agent，进行调用链瓶颈分析与优化建议',
+        title: '已尝试写入剪贴板',
+        description: '若粘贴没有内容，请在弹出框中按 ⌘C / Ctrl+C 手动复制（文本已全选）',
       })
     } catch {
       toast({
-        tone: 'error',
-        title: '复制失败',
-        description: '浏览器未授予剪贴板权限，请在提示框中手动选择文本复制',
+        tone: 'warning',
+        title: '自动复制不可用',
+        description: '请在弹出的文本框中使用 ⌘C / Ctrl+C 复制，或直接下载 .md 文件',
       })
     }
+  }
+
+  const downloadPrompt = () => {
+    if (!traceRequest || !promptText) return
+    const blob = new Blob([promptText], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `slow-request-${traceRequest.request_id || traceRequest.id}.md`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
   }
 
   const overview = useQuery({
@@ -527,6 +545,31 @@ export default function MonitoringTab() {
       >
         {traceRequest && <TraceView request={traceRequest} />}
       </Drawer>
+
+      <Modal
+        title="慢请求分析提示词"
+        open={Boolean(promptText)}
+        onCancel={() => setPromptText(null)}
+        width={760}
+        footer={
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <span className="text-xs text-gray-400">
+              文本框已自动全选：粘贴无内容时按 ⌘C / Ctrl+C 复制，或直接下载文件
+            </span>
+            <Button size="small" onClick={downloadPrompt}>
+              下载 .md 文件
+            </Button>
+          </div>
+        }
+      >
+        <textarea
+          readOnly
+          value={promptText ?? ''}
+          autoFocus
+          onFocus={event => event.currentTarget.select()}
+          className="h-96 w-full resize-none rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-[11px] leading-relaxed text-gray-700 outline-none focus:ring-2 focus:ring-cyan-200"
+        />
+      </Modal>
     </div>
   )
 }

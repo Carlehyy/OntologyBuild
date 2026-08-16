@@ -221,13 +221,26 @@ test.describe('系统设置 · 运行监控（admin）', () => {
     await expect(page.getByText('调用链时间轴（相对请求开始）')).toBeVisible()
 
     await page.getByRole('button', { name: '复制分析提示词' }).click()
-    await expect(page.getByText('分析提示词已复制')).toBeVisible()
+
+    // 兜底弹窗：始终展示提示词全文，文本框自动全选，可手动复制或下载
+    const modal = page.locator('.ant-modal')
+    await expect(modal.getByText('慢请求分析提示词')).toBeVisible()
+    const textarea = modal.locator('textarea')
+    await expect(textarea).toHaveValue(/# 平台慢接口调用链分析请求/)
+    const selection = await textarea.evaluate((element: HTMLTextAreaElement) => ({
+      start: element.selectionStart,
+      end: element.selectionEnd,
+      length: element.value.length,
+    }))
+    expect(selection.start).toBe(0)
+    expect(selection.end).toBeGreaterThan(0)
+    await expect(modal.getByRole('button', { name: '下载 .md 文件' })).toBeVisible()
 
     // z 层级契约：抽屉 z-index 1000，toast 必须位于其上方（此前被遮挡却仍判
     // 可见，靠 elementFromPoint 命中检测才能真正防止回归）
     const toastOnTop = await page.evaluate(() => {
       const title = [...document.querySelectorAll('body *')].find(
-        element => element.textContent === '分析提示词已复制' && element.children.length === 0,
+        element => element.textContent === '已尝试写入剪贴板' && element.children.length === 0,
       )
       if (!title) return false
       let card: Element | null = title
@@ -268,7 +281,9 @@ test.describe('系统设置 · 运行监控（admin）', () => {
     await expect(drawer.getByText('DB 9 次')).toBeVisible()
     // 历史记录同样可以生成提示词（说明缺失调用链）
     await drawer.getByRole('button', { name: '复制分析提示词' }).click()
-    await expect(page.getByText('分析提示词已复制')).toBeVisible()
+    const modal = page.locator('.ant-modal')
+    await expect(modal.getByText('慢请求分析提示词')).toBeVisible()
+    await expect(modal.locator('textarea')).toHaveValue(/未采集到逐步调用链/)
   })
 })
 
