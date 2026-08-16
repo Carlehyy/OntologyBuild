@@ -120,6 +120,34 @@ def request_with_safe_redirects(
     trusted_hosts: tuple[str, ...] = (),
     **kwargs,
 ) -> requests.Response:
+    from app.shared import perf_spans
+
+    span = perf_spans.begin_span(
+        "http", name=method.upper(), target=perf_spans.http_target(url))
+    status = {"value": "error"}
+    try:
+        response = _request_with_safe_redirects(
+            session, method, url, validator=validator,
+            trusted_hosts=trusted_hosts, **kwargs,
+        )
+        status["value"] = str(response.status_code)
+        return response
+    except requests.TooManyRedirects:
+        status["value"] = "too_many_redirects"
+        raise
+    finally:
+        perf_spans.end_span(span, status=status["value"])
+
+
+def _request_with_safe_redirects(
+    session: requests.Session,
+    method: str,
+    url: str,
+    *,
+    validator: Callable[[str], str] = validate_outbound_url,
+    trusted_hosts: tuple[str, ...] = (),
+    **kwargs,
+) -> requests.Response:
     def validate(target: str) -> str:
         if validator is validate_outbound_url:
             return validator(target, trusted_hosts=trusted_hosts)

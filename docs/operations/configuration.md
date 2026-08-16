@@ -233,16 +233,26 @@ Actions 日志。普通 push 不具有创建新加密 authority 的权限，后�
 请求计时中间件把每个 HTTP 请求按「分钟 × 方法 × 路由模板 × 状态类别」
 聚合进 PostgreSQL（api_perf_minute_rollups），超过慢阈值的请求同时以单条
 证据行落库（api_perf_slow_requests，含 request_id、用户名、来源 IP、
-User-Agent 与 db/llm/http 分层耗时分解）。聚合由进程内内存缓冲每
+User-Agent 与调用链）。聚合由进程内内存缓冲每
 API_PERF_FLUSH_INTERVAL_SECONDS 批量写入；进程崩溃最多丢失最后几秒聚合，
 慢请求证据不丢。/health*、/api/health、/api-hub/mcp*、SSE 流式、
 WebSocket、OPTIONS 与监控查询接口自身不参与统计。
+
+慢请求的调用链（breakdown 列 JSON 的 spans 数组）记录请求内部各步骤的
+有序时间轴：每条 span 含层级（db/llm/http）、操作名、目标（表名/模型/
+下游 URL，查询参数已脱敏）、相对请求开始的时间偏移、耗时、状态与明细。
+db 层由 SQLAlchemy 引擎事件自动捕获，明细为单行化、截断到 400 字符的
+SQL 语句文本；llm 层覆盖模型网关、超级助手与本体抽取三条 LLM 路径；
+http 层覆盖 Python 执行引擎、n8n、MCP、网页搜索、数据通道 REST 连接与
+API Hub 出站代理等下游调用。慢请求明细表中点击「调用链」可查看瀑布时间
+轴与步骤明细；单条调用链超过 128KB 时按耗时保留最慢步骤并标记
+spans_truncated，旧版本记录的慢请求无 spans 数组仍可正常展示。
 
 - API_PERF_ENABLED（默认 true）：整体开关；出现问题时置 false 可完全
   关闭采集（请求路径零额外开销）；
 - API_PERF_SLOW_THRESHOLD_MS（默认 1000）：慢接口判定阈值；
 - API_PERF_FLUSH_INTERVAL_SECONDS（默认 30）：分钟聚合批量落库周期；
-- API_PERF_SLOW_RETENTION_DAYS（默认 7）：慢请求明细保留天数；
+- API_PERF_SLOW_RETENTION_DAYS（默认 7）：慢请求明细（含调用链）保留天数；
 - API_PERF_AGG_RETENTION_DAYS（默认 30）：分钟聚合保留天数（后台维护
   循环按日清理过期行）。
 

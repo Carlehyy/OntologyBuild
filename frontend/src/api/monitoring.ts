@@ -57,6 +57,20 @@ export interface SlowRequestBreakdown {
   http?: { count: number; total_ms: number }
 }
 
+/** 单条慢请求调用链中的一个步骤（db/llm/http 分层 span）。 */
+export interface TraceSpan {
+  seq: number
+  layer: string
+  name: string
+  target: string
+  /** 相对请求开始的偏移（ms）。 */
+  start_ms: number
+  duration_ms: number
+  status: string
+  /** 明细（如截断后的 SQL 文本）。 */
+  detail: string
+}
+
 export interface SlowRequestItem {
   id: number
   created_at: string | null
@@ -69,6 +83,9 @@ export interface SlowRequestItem {
   source_ip: string
   user_agent: string
   breakdown: SlowRequestBreakdown
+  /** 有序调用链（老数据为空数组）。 */
+  spans: TraceSpan[]
+  spans_truncated: boolean
 }
 
 export interface SlowRequestsResponse {

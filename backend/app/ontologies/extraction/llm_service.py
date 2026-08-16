@@ -3,6 +3,21 @@ import re
 
 
 def _call_llm(provider: str, api_key: str, api_base: str | None, model: str, messages: list, json_mode: bool = True) -> str:
+    """OpenAI/Anthropic 结构化抽取调用（带调用链埋点）。"""
+    from app.shared import perf_spans
+
+    span = perf_spans.begin_span("llm", name="chat.completions", target=f"{provider}/{model}")
+    status = "success"
+    try:
+        return _call_llm_impl(provider, api_key, api_base, model, messages, json_mode)
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        perf_spans.end_span(span, status=status)
+
+
+def _call_llm_impl(provider: str, api_key: str, api_base: str | None, model: str, messages: list, json_mode: bool = True) -> str:
     # Stable seed for reproducibility: derived from message content so same input → same seed.
     import hashlib as _hashlib, json as _json
     try:

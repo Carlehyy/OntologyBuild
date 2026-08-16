@@ -159,17 +159,27 @@ def execute_code(code: str, *, timeout: int | None = None, cancel_event=None,
 
     started = time.monotonic()
     kernel_id = ""
+    from app.shared import perf_spans
+
+    create_span = perf_spans.begin_span(
+        "http", name="POST", target=f"{base_url}/api/kernels")
+    create_status = "error"
     try:
         resp = httpx.post(f"{base_url}/api/kernels", headers=headers, timeout=30)
+        raw_status = getattr(resp, "status_code", None)
+        create_status = str(raw_status) if raw_status is not None else ""
         resp.raise_for_status()
         kernel_id = str(resp.json().get("id") or "")
         if not kernel_id:
             raise PythonEngineError("Python 执行网关未返回内核 id，无法执行脚本。")
+        create_status = "success"
     except PythonEngineError:
         raise
     except Exception as exc:
         raise PythonEngineError(
             f"无法连接 Python 执行网关（{base_url}）：{exc}") from exc
+    finally:
+        perf_spans.end_span(create_span, status=create_status)
 
     execution = ScriptExecution(kernel_id=kernel_id)
     try:
@@ -196,6 +206,41 @@ def _run_on_kernel(
     cancel_event=None,
 ) -> tuple[str, str, str, str]:
     """经 Jupyter WebSocket 通道执行代码，回收 (stdout, ename, evalue, traceback)。"""
+    from app.shared import perf_spans
+
+    ws_url = base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
+    run_span = perf_spans.begin_span(
+        "http",
+        name="WS execute",
+        target=f"{ws_url}/api/kernels/{kernel_id}/channels",
+    )
+    status = "success"
+    try:
+        return _run_on_kernel_impl(
+            base_url, kernel_id, headers, code, timeout, cancel_event=cancel_event,
+        )
+    except PythonEngineError as exc:
+        message = str(exc)
+        status = (
+            "canceled" if "取消" in message
+            else "timeout" if "超过平台时限" in message
+            else "error"
+        )
+        raise
+    finally:
+        perf_spans.end_span(run_span, status=status)
+
+
+def _run_on_kernel_impl(
+    base_url: str,
+    kernel_id: str,
+    headers: dict[str, str],
+    code: str,
+    timeout: int,
+    *,
+    cancel_event=None,
+) -> tuple[str, str, str, str]:
+    """WS 执行实现（供 _run_on_kernel 包装埋点）。"""
     import websocket  # websocket-client；延迟导入保持模块加载轻量
 
     ws_url = base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)

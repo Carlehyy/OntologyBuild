@@ -54,5 +54,6 @@ class ApiPerfSlowRequest(Base):
     username: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     source_ip: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     user_agent: Mapped[str] = mapped_column(String(512), nullable=False, default="")
-    # JSON object: {layer: {count, total_ms}} for db/llm/http spans.
+    # JSON object: legacy per-layer aggregates {layer: {count, total_ms}}
+    # plus an ordered "spans" array (调用链) and "spans_truncated" flag.
     breakdown: Mapped[str] = mapped_column(Text, nullable=False, default="{}")

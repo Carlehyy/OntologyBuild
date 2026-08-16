@@ -40,18 +40,36 @@ def fetch_items(mode: str = "selected", category: str | None = None,
         params["category"] = category
     if q and len(q) >= 2:
         params["q"] = q
-    with httpx.Client(timeout=20, headers=_HEADERS) as client:
-        resp = client.get(f"{BASE_URL}/api/public/items", params=params)
-        resp.raise_for_status()
-        return resp.json()
+    from app.shared import perf_spans
+
+    url = f"{BASE_URL}/api/public/items"
+    span = perf_spans.begin_span("http", name="GET", target=perf_spans.http_target(url))
+    request_status = "error"
+    try:
+        with httpx.Client(timeout=20, headers=_HEADERS) as client:
+            resp = client.get(url, params=params)
+            request_status = str(resp.status_code)
+            resp.raise_for_status()
+            return resp.json()
+    finally:
+        perf_spans.end_span(span, status=request_status)
 
 
 def fetch_daily() -> dict[str, Any]:
     """拉取最新日报。"""
-    with httpx.Client(timeout=20, headers=_HEADERS) as client:
-        resp = client.get(f"{BASE_URL}/api/public/daily")
-        resp.raise_for_status()
-        return resp.json()
+    from app.shared import perf_spans
+
+    url = f"{BASE_URL}/api/public/daily"
+    span = perf_spans.begin_span("http", name="GET", target=perf_spans.http_target(url))
+    request_status = "error"
+    try:
+        with httpx.Client(timeout=20, headers=_HEADERS) as client:
+            resp = client.get(url)
+            request_status = str(resp.status_code)
+            resp.raise_for_status()
+            return resp.json()
+    finally:
+        perf_spans.end_span(span, status=request_status)
 
 
 def item_to_properties(item: dict[str, Any]) -> dict[str, Any]:

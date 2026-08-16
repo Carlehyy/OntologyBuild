@@ -13,7 +13,6 @@ four SSE chat endpoints and break streaming.  The middleware:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 import uuid
@@ -185,9 +184,7 @@ class PerfMonitoringMiddleware:
                 "username": "",
                 "source_ip": _client_ip(scope, raw_headers),
                 "user_agent": _header_value(raw_headers, b"user-agent")[:512],
-                "breakdown": json.dumps(
-                    perf_spans.summarize_spans(spans), ensure_ascii=False
-                ),
+                "breakdown": perf_spans.serialize_spans(spans),
                 "_authorization": authorization,
             }
             logger.warning(

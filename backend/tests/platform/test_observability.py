@@ -5,12 +5,15 @@
 """
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import timedelta
 
 import pytest
 
 from app.database import SessionLocal
+from app.shared import perf_spans
+from app.shared.perf_spans import http_target, parse_breakdown, serialize_spans
 from app.platform.observability import collector as perf_collector
 from app.platform.observability.collector import (
     BUCKET_COUNT,
@@ -324,4 +327,357 @@ def test_monitoring_openapi_operations_exist():
     assert expected <= set(paths)
     for path in expected:
         assert "get" in paths[path]
+
+
+# ──────────────────────────── 调用链 span 机制 ────────────────────────────
+
+
+def test_span_lifecycle_offsets_and_idempotent_end():
+    perf_spans.begin_request()
+    spans = []
+    try:
+        span = perf_spans.begin_span("http", name="GET", target="https://example.com/x")
+        assert span is not None
+        assert span["seq"] == 1
+        assert span["start_ms"] >= 0
+        assert span["duration_ms"] is None
+        perf_spans.end_span(span, status="200", detail="ok")
+        duration = span["duration_ms"]
+        assert duration is not None and duration >= 0
+        perf_spans.end_span(span, status="999")
+        assert span["duration_ms"] == duration
+        assert span["status"] == "200"
+        spans = perf_spans.end_request()
+    finally:
+        perf_spans.end_request()
+    assert len(spans) == 1
+    assert spans[0]["name"] == "GET"
+
+
+def test_begin_span_without_request_bag_is_noop():
+    assert perf_spans.begin_span("db", name="SELECT") is None
+    perf_spans.end_span(None, status="x")  # must not raise
+
+
+def test_db_listener_records_real_elapsed_and_sql(monkeypatch):
+    import time as _time
+
+    perf_spans.begin_request()
+    _time.sleep(0.06)  # 让请求偏移超过伪造的查询耗时，避免起点被钳制为 0
+    spans = []
+    try:
+        slot = perf_spans._db_stack_slot()
+        assert slot is not None
+        slot.append((_time.monotonic() - 0.05, "SELECT * FROM domains WHERE id = ?"))
+        perf_spans._db_after(None, None, "SELECT * FROM domains WHERE id = ?", None, None, False)
+        spans = perf_spans.end_request()
+    finally:
+        perf_spans.end_request()
+    assert len(spans) == 1
+    db_span = spans[0]
+    assert db_span["layer"] == "db"
+    assert db_span["name"] == "SELECT"
+    assert db_span["target"] == "domains"
+    assert db_span["duration_ms"] >= 40  # 真实耗时，而非 0
+    assert db_span["start_ms"] >= 0
+    assert db_span["detail"].startswith("SELECT * FROM domains")
+
+
+
+
+def test_legacy_record_span_keeps_layer_summary():
+    perf_spans.begin_request()
+    try:
+        perf_spans.record_span("llm", 123.4, count=2)
+        spans = perf_spans.end_request()
+    finally:
+        perf_spans.end_request()
+    summary = perf_spans.summarize_spans(spans)
+    assert summary["llm"]["count"] == 2
+    assert summary["llm"]["total_ms"] == 246
+
+
+def test_sql_signature_extracts_operation_and_table():
+    assert perf_spans._sql_signature("  SELECT * FROM public.ontologies o") == (
+        "SELECT", "public.ontologies",
+    )
+    assert perf_spans._sql_signature("UPDATE domains SET name=$1") == ("UPDATE", "domains")
+    assert perf_spans._sql_signature("INSERT INTO aiot.news (title) VALUES (%s)") == (
+        "INSERT", "aiot.news",
+    )
+    assert perf_spans._sql_signature("") == ("SQL", "")
+
+
+def test_detail_is_single_line_and_truncated():
+    perf_spans.begin_request()
+    try:
+        span = perf_spans.begin_span("db", name="SELECT", target="t")
+        raw = "SELECT col\nFROM t\nWHERE x = 1 " + "y" * 600
+        perf_spans.end_span(span, detail=raw)
+        spans = perf_spans.end_request()
+    finally:
+        perf_spans.end_request()
+    detail = spans[0]["detail"]
+    assert "\n" not in detail
+    assert len(detail) <= perf_spans.MAX_DETAIL_CHARS
+    assert detail.startswith("SELECT col FROM t WHERE x = 1")
+
+
+def test_serialize_spans_layout_and_backward_compat():
+    perf_spans.begin_request()
+    try:
+        span = perf_spans.begin_span("llm", name="chat.completions", target="openai/m1")
+        perf_spans.end_span(span, status="success")
+        spans = perf_spans.end_request()
+    finally:
+        perf_spans.end_request()
+    parsed = parse_breakdown(serialize_spans(spans))
+    assert parsed["llm"]["count"] == 1
+    assert isinstance(parsed["spans"], list) and len(parsed["spans"]) == 1
+    assert parsed["spans_truncated"] is False
+    chain = parsed["spans"][0]
+    assert chain["layer"] == "llm"
+    assert chain["name"] == "chat.completions"
+    assert chain["target"] == "openai/m1"
+    assert chain["status"] == "success"
+
+
+def test_serialize_spans_truncates_large_payloads():
+    perf_spans.begin_request()
+    try:
+        for index in range(400):
+            span = perf_spans.begin_span("db", name="SELECT", target=f"table_{index}")
+            perf_spans.end_span(span, detail="x" * 390)
+        spans = perf_spans.end_request()
+    finally:
+        perf_spans.end_request()
+    parsed = parse_breakdown(serialize_spans(spans))
+    assert parsed["spans_truncated"] is True
+    assert len(parsed["spans"]) < 400
+    # 保留的是耗时最大的 span，且仍按时间顺序排列
+    starts = [s["start_ms"] for s in parsed["spans"]]
+    assert starts == sorted(starts)
+
+
+def test_parse_breakdown_tolerates_legacy_and_garbage():
+    assert parse_breakdown('{"llm": {"count": 1, "total_ms": 100}}') == {
+        "llm": {"count": 1, "total_ms": 100}
+    }
+    assert parse_breakdown("not-json") == {}
+    assert parse_breakdown("[1, 2]") == {}
+    assert parse_breakdown(None) == {}
+
+
+def test_http_target_redacts_query():
+    assert http_target("https://engine.internal:8000/api/kernels/x?token=abc") == (
+        "https://engine.internal:8000/api/kernels/x"
+    )
+    assert http_target("http://127.0.0.1:5678/webhook/demo") == (
+        "http://127.0.0.1:5678/webhook/demo"
+    )
+    assert http_target("not a url") == "not a url"
+
+
+# ──────────────────────────── 端到端：慢请求携带调用链 ────────────────────────────
+
+
+def test_slow_request_persists_db_span_with_sql_detail(client, monkeypatch, auth_headers, db):
+    # 测试夹具的 get_db 覆盖绑定在夹具引擎上，需为其安装 span 监听器
+    # （生产环境只使用 app.database.engine，中间件启动时已安装）。
+    perf_spans.install_db_span_listeners(db.get_bind())
+    monkeypatch.setattr(settings, "api_perf_slow_threshold_ms", 0)
+    r = client.get("/api/v1/domains", headers=auth_headers)
+    assert r.status_code == 200
+    request_id = r.headers.get("x-request-id")
+    db = SessionLocal()
+    try:
+        row = None
+        for _ in range(30):
+            row = (
+                db.query(ApiPerfSlowRequest)
+                .filter(ApiPerfSlowRequest.request_id == request_id)
+                .first()
+            )
+            if row is not None:
+                break
+            import time as _time
+
+            _time.sleep(0.05)
+        assert row is not None
+        parsed = parse_breakdown(row.breakdown)
+        assert isinstance(parsed.get("spans"), list)
+        db_spans = [s for s in parsed["spans"] if s.get("layer") == "db"]
+        assert db_spans
+        assert any(s.get("detail") for s in db_spans)
+        assert all(s.get("duration_ms") is not None for s in db_spans)
+        assert parsed["db"]["count"] >= len(db_spans)
+    finally:
+        db.close()
+
+
+def test_slow_requests_api_returns_spans(client, db, auth_headers):
+    breakdown = {
+        "llm": {"count": 1, "total_ms": 3800},
+        "spans": [
+            {
+                "seq": 1, "layer": "llm", "name": "chat.completions",
+                "target": "openai/m1", "start_ms": 10, "duration_ms": 3800,
+                "status": "success", "detail": "",
+            },
+        ],
+        "spans_truncated": False,
+    }
+    slow = ApiPerfSlowRequest(
+        created_at=perf_collector.utc_now(),
+        method="POST",
+        route="/api/v2/super-assistant/conversations/x/chat",
+        status_code=200,
+        duration_ms=4200,
+        request_id=uuid.uuid4().hex,
+        username="admin",
+        source_ip="10.0.0.8",
+        user_agent="pytest",
+        breakdown=json.dumps(breakdown),
+    )
+    db.add(slow)
+    db.commit()
+    r = client.get(
+        "/api/v1/settings/monitoring/slow-requests",
+        params={"route": "super-assistant"},
+        headers=auth_headers,
+    )
+    item = r.json()["data"]["items"][0]
+    assert item["breakdown"] == {"llm": {"count": 1, "total_ms": 3800}}
+    assert item["spans"][0]["name"] == "chat.completions"
+    assert item["spans_truncated"] is False
+
+
+def test_slow_requests_api_tolerates_legacy_breakdown(client, db, auth_headers):
+    slow = ApiPerfSlowRequest(
+        created_at=perf_collector.utc_now(),
+        method="GET",
+        route="/api/v1/domains",
+        status_code=200,
+        duration_ms=1500,
+        request_id=uuid.uuid4().hex,
+        breakdown='{"db": {"count": 3, "total_ms": 120}}',
+    )
+    db.add(slow)
+    db.commit()
+    r = client.get(
+        "/api/v1/settings/monitoring/slow-requests",
+        params={"route": "domains"},
+        headers=auth_headers,
+    )
+    item = r.json()["data"]["items"][0]
+    assert item["breakdown"] == {"db": {"count": 3, "total_ms": 120}}
+    assert item["spans"] == []
+    assert item["spans_truncated"] is False
+
+
+# ──────────────────────────── 埋点站点：LLM / HTTP ────────────────────────────
+
+
+def _fake_openai_client():
+    class FakeMessage:
+        content = "PONG"
+        tool_calls = None
+
+    class FakeChoice:
+        message = FakeMessage()
+
+    class FakeUsage:
+        prompt_tokens = 1
+        completion_tokens = 1
+
+    class FakeResponse:
+        choices = [FakeChoice()]
+        usage = FakeUsage()
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            return FakeResponse()
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        chat = FakeChat()
+
+    return FakeClient
+
+
+def test_llm_gateway_chat_records_call_chain_span(monkeypatch):
+    from app.model_configs import llm_gateway
+
+    monkeypatch.setattr("openai.OpenAI", _fake_openai_client())
+    perf_spans.begin_request()
+    try:
+        result = llm_gateway.chat(
+            {"provider": "openai", "model": "test-model"},
+            [{"role": "user", "content": "ping"}],
+            [],
+        )
+        spans = perf_spans.end_request()
+    finally:
+        perf_spans.end_request()
+    assert result["content"] == "PONG"
+    llm_spans = [s for s in spans if s.get("layer") == "llm"]
+    assert len(llm_spans) == 1
+    assert llm_spans[0]["name"] == "chat.completions"
+    assert llm_spans[0]["target"] == "openai/test-model"
+    assert llm_spans[0]["status"] == "success"
+
+
+def test_super_assistant_chat_records_call_chain_span(monkeypatch):
+    from app.super_assistant import provider
+
+    monkeypatch.setattr("openai.OpenAI", _fake_openai_client())
+    perf_spans.begin_request()
+    try:
+        result = provider.chat(
+            {"provider": "openai", "model": "m1"},
+            [{"role": "user", "content": "hi"}],
+            [],
+        )
+        spans = perf_spans.end_request()
+    finally:
+        perf_spans.end_request()
+    assert result["content"] == "PONG"
+    llm_spans = [s for s in spans if s.get("layer") == "llm"]
+    assert len(llm_spans) == 1
+    assert llm_spans[0]["target"] == "openai/m1"
+
+
+def test_outbound_request_records_http_span():
+    from app.api_hub import outbound_security
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+    class FakeSession:
+        def request(self, method, url, **kwargs):
+            return FakeResponse()
+
+    perf_spans.begin_request()
+    try:
+        response = outbound_security.request_with_safe_redirects(
+            FakeSession(),
+            "GET",
+            "https://example.com/data?token=secret123",
+            validator=lambda target: target,
+        )
+        spans = perf_spans.end_request()
+    finally:
+        perf_spans.end_request()
+    assert response.status_code == 200
+    http_spans = [s for s in spans if s.get("layer") == "http"]
+    assert len(http_spans) == 1
+    assert http_spans[0]["name"] == "GET"
+    assert http_spans[0]["target"] == "https://example.com/data"
+    assert http_spans[0]["status"] == "200"
 

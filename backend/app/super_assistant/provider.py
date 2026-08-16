@@ -84,16 +84,28 @@ def _with_retry(call: Callable[[], Any]) -> Any:
 def chat(call_kwargs: dict[str, Any], messages: list[dict[str, Any]],
          tools: list[dict[str, Any]]) -> dict[str, Any]:
     provider = str(call_kwargs.get("provider") or "openai").lower()
+    from app.shared import perf_spans
+
+    span = perf_spans.begin_span(
+        "llm",
+        name="chat.completions",
+        target=f"{provider}/{call_kwargs.get('model') or 'unknown'}",
+    )
+    status = "success"
     try:
         result = _chat_anthropic(call_kwargs, messages, tools) if provider == "anthropic" else _chat_openai(
             call_kwargs, messages, tools,
         )
     except ProviderError:
+        status = "error"
         raise
     except Exception as exc:
+        status = "error"
         raise ProviderError(
             f"模型调用失败 ({provider}/{call_kwargs.get('model') or 'unknown'}): {exc}"
         ) from exc
+    finally:
+        perf_spans.end_span(span, status=status)
     content = result.get("content")
     if isinstance(content, str) and "</think>" in content:
         result["content"] = content.split("</think>", 1)[1].strip()
