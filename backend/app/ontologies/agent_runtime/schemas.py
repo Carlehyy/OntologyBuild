@@ -45,6 +45,12 @@ class ChatRequest(CamelModel):
     model_id: Optional[str] = None
     release_id: Optional[str] = None
     stream: bool = True
+    # 客户端生成的回合标识：取消端点与取消注册表用它定位正在执行的回合
+    run_id: Optional[str] = None
+
+
+class ChatCancelRequest(CamelModel):
+    run_id: str
 
 
 class ExecuteProposalRequest(CamelModel):

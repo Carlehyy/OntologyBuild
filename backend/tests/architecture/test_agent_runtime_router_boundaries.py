@@ -91,6 +91,7 @@ ROUTE_PARAMETERS = {
     "get_report_run": ("ontology_id", "run_id", "db", "current_user"),
     "get_report_html": ("ontology_id", "run_id", "db", "current_user"),
     "chat": ("ontology_id", "body", "db", "current_user"),
+    "cancel_chat": ("ontology_id", "body", "db", "current_user"),
     "list_conversations": (
         "ontology_id", "db", "release_id", "current_user",
     ),
@@ -120,12 +121,13 @@ BODY_TYPES = {
     "preview_report_template": schemas.ReportRunRequest,
     "run_published_report": schemas.ReportRunRequest,
     "chat": schemas.ChatRequest,
+    "cancel_chat": schemas.ChatCancelRequest,
     "execute_proposal": schemas.ExecuteProposalRequest,
 }
 
 
 def test_agent_runtime_route_signatures_remain_stable():
-    assert len(agent_router.router.routes) == 31
+    assert len(agent_router.router.routes) == 32
     for name, expected in ROUTE_PARAMETERS.items():
         parameters = inspect.signature(
             getattr(agent_router, name), eval_str=True
@@ -440,7 +442,10 @@ def test_conversation_delete_preserves_transaction_order():
 
 def test_agent_runtime_modules_stay_bounded():
     maximum_lines = {
-        "router.py": 600,
+        "router.py": 620,
+        "limits.py": 160,
+        "answer_verifier.py": 160,
+        "chat_cancel.py": 80,
         "application_errors.py": 60,
         "profile_service.py": 100,
         "graph_queries.py": 130,
@@ -482,14 +487,14 @@ def test_agent_runtime_openapi_contract_is_stable():
         sort_keys=True,
         separators=(",", ":"),
     )
-    assert len(paths) == 26
+    assert len(paths) == 27
     assert sum(
         method in {"get", "post", "put", "patch", "delete"}
         for operations in paths.values()
         for method in operations
-    ) == 34
+    ) == 35
     assert hashlib.sha256(payload.encode()).hexdigest() == (
-        "6b83743827143a7defa2d06154c12ea9688ad16010a4e1b46026e3789027d540"
+        "035a864f14d544fc657e9e9da0f03bfd626a3846693ff004c52483450a03e4ad"
     )
     normalized_payload = json.dumps(
         normalize(paths),
@@ -498,5 +503,5 @@ def test_agent_runtime_openapi_contract_is_stable():
         separators=(",", ":"),
     )
     assert hashlib.sha256(normalized_payload.encode()).hexdigest() == (
-        "da86e171182d829241692818945980dc358f547b28b7404c88016b4cefaaa361"
+        "6ad326f3adb457d1d7b702d8fb5898f9a5a14053dc98bfb05119b4a31ce63911"
     )

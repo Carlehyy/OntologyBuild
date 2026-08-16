@@ -8,12 +8,16 @@ proposals / token 用量）持久化为 AgentMessage —— 审计与回放的�
 事件流协议（SSE 每条 data 一个 JSON）：
   {"type": "meta",   "conversationId", "model"}
   {"type": "step",   "tool", "arguments", "summary", "durationMs", "result", "error"?}
-  {"type": "answer", "content", "citations", "proposals", "usage"}
+  {"type": "answer", "content", "citations", "proposals", "usage", "verification"?}
   {"type": "error",  "message"}
+  {"type": "cancelled"}
   {"type": "done"}
 
 step.result 是适合前端展示的工具输出（过大自动截断）；持久化时 result 保存完整
 审计结果，displayResult 仅在需要截断展示时保存，兼顾完整导出与历史回放性能。
+
+终答前经 answer_verifier 做确定性结论校验（数值断言必须能对应到工具结果），
+失败先给模型一次修正机会，仍不通过则显式标注。全部限额来自 limits 统一注册表。
 """
 from __future__ import annotations
 
@@ -27,17 +31,16 @@ from sqlalchemy.orm import Session
 
 from app.model_configs.selector import select_llm_model_config, llm_call_kwargs
 from app.ontologies.agent_runtime import llm_bridge
+from app.ontologies.agent_runtime import answer_verifier
 from app.ontologies.agent_runtime.boundary import ToolError, build_scope
+from app.ontologies.agent_runtime.chat_cancel import chat_cancel_registry
+from app.ontologies.agent_runtime.limits import limit
 from app.ontologies.agent_runtime.models import AgentConversation, AgentMessage
 from app.ontologies.agent_runtime.toolkit import TOOL_DEFS, ToolRunner
 
 logger = logging.getLogger(__name__)
 
-_TOOL_RESULT_CAP = 8000     # 回填给 LLM 的单个工具结果长度上限
-_RESULT_DISPLAY_CAP = 6000  # 推送/持久化给前端展示的工具结果长度上限
-_GRAPH_DISPLAY_CAP = 18000  # 图谱步骤需保留结构供前端联动，仍限制单步持久化体积
-_HISTORY_LIMIT = 10         # 逐字带入的最近消息条数
-_HISTORY_DIGEST_SCAN = 40   # 为「对话回顾」额外回溯的条数（滑出窗口的更早提问压成摘要）
+# 各限额的默认值见 agent_runtime/limits.py 统一注册表（环境变量可覆盖）。
 
 
 # 图表可视化能力（普通字符串，含 JSON 花括号，勿并入 f-string）
@@ -194,7 +197,7 @@ def _graph_display_result(result: dict) -> dict:
 
     # 极密图谱继续按层级收紧，但始终保留合法、可直接渲染的 JSON，而不是字符串预览。
     payload = json.dumps(compact, ensure_ascii=False, default=str)
-    if len(payload) > _GRAPH_DISPLAY_CAP:
+    if len(payload) > limit("graph_display_cap"):
         compact["nodes"] = compact["nodes"][:40]
         compact["edges"] = compact["edges"][:60]
         if "impacts" in compact:
@@ -205,7 +208,7 @@ def _graph_display_result(result: dict) -> dict:
             "edges": len(compact["edges"]),
             "impacts": len(compact.get("impacts") or []),
         }
-    if len(json.dumps(compact, ensure_ascii=False, default=str)) > _GRAPH_DISPLAY_CAP:
+    if len(json.dumps(compact, ensure_ascii=False, default=str)) > limit("graph_display_cap"):
         compact["nodes"] = compact["nodes"][:32]
         compact["edges"] = compact["edges"][:48]
         if "impacts" in compact:
@@ -220,18 +223,19 @@ def _graph_display_result(result: dict) -> dict:
 
 def _display_result(result: dict):
     """给前端「查看工具输出」用的结果；过大则截断，避免 SSE 与页面膨胀。"""
+    cap = limit("tool_result_display_cap")
     try:
         payload = json.dumps(result, ensure_ascii=False, default=str)
     except Exception:  # noqa: BLE001
         return {"_note": "结果无法序列化展示"}
-    if len(payload) <= _RESULT_DISPLAY_CAP:
+    if len(payload) <= cap:
         return result
     if result.get("kind") in {"path", "impact"}:
         return _graph_display_result(result)
     return {
         "_truncated": True,
-        "_note": f"结果较大（约 {len(payload)} 字符），此处仅展示前 {_RESULT_DISPLAY_CAP} 字符预览。",
-        "preview": payload[:_RESULT_DISPLAY_CAP],
+        "_note": f"结果较大（约 {len(payload)} 字符），此处仅展示前 {cap} 字符预览。",
+        "preview": payload[:cap],
     }
 
 
@@ -254,14 +258,26 @@ def _history_digest(older: list) -> Optional[str]:
     return "# 对话回顾（更早轮次的提问，帮助理解指代与延续；不必逐条重新回答）\n" + lines
 
 
+def _finish_cancelled(db: Session, conv: AgentConversation, steps: list,
+                      runner: ToolRunner, call_kwargs: dict,
+                      usage: dict) -> Iterator[dict]:
+    """用户中止：落一条 [已取消] 的 assistant 消息（保留已执行轨迹供审计）。"""
+    _persist_assistant(db, conv, "[已取消]", steps, runner, call_kwargs, usage)
+    yield {"type": "cancelled"}
+
+
 def run_agent_turn(db: Session, ontology_id: str, user, question: str,
                    conversation_id: Optional[str] = None,
                    model_id: Optional[str] = None,
-                   release_id: Optional[str] = None) -> Iterator[dict]:
+                   release_id: Optional[str] = None,
+                   run_id: Optional[str] = None) -> Iterator[dict]:
     """执行一个回合，yield 事件流。所有异常都转成 error 事件，绝不让 SSE 中途裸断。"""
+    if run_id:
+        chat_cancel_registry.register(run_id)
     try:
         yield from _run(
-            db, ontology_id, user, question, conversation_id, model_id, release_id)
+            db, ontology_id, user, question, conversation_id, model_id,
+            release_id, run_id)
     except GeneratorExit:
         # 浏览器刷新/离开会主动关闭 SSE。生成器关闭后不能在 finally 中继续 yield，
         # 否则 Python 会抛出 ``generator ignored GeneratorExit`` 并污染服务日志。
@@ -269,12 +285,15 @@ def run_agent_turn(db: Session, ontology_id: str, user, question: str,
     except Exception as e:  # noqa: BLE001
         logger.exception("agent 回合失败")
         yield {"type": "error", "message": f"智能体执行失败: {e}"}
+    finally:
+        if run_id:
+            chat_cancel_registry.unregister(run_id)
     yield {"type": "done"}
 
 
 def _run(db: Session, ontology_id: str, user, question: str,
          conversation_id: Optional[str], model_id: Optional[str],
-         release_id: Optional[str]) -> Iterator[dict]:
+         release_id: Optional[str], run_id: Optional[str]) -> Iterator[dict]:
     try:
         ontology, profile, scope = build_scope(
             db, ontology_id, release_id=release_id)
@@ -314,9 +333,10 @@ def _run(db: Session, ontology_id: str, user, question: str,
     recent = (db.query(AgentMessage)
               .filter(AgentMessage.conversation_id == conv.id)
               .order_by(AgentMessage.created_at.desc())
-              .limit(_HISTORY_DIGEST_SCAN).all())[::-1]
-    verbatim = recent[-_HISTORY_LIMIT:]
-    older = recent[:-_HISTORY_LIMIT] if len(recent) > _HISTORY_LIMIT else []
+              .limit(limit("history_digest_scan")).all())[::-1]
+    history_verbatim = min(limit("history_verbatim"), limit("history_digest_scan"))
+    verbatim = recent[-history_verbatim:]
+    older = recent[:-history_verbatim] if len(recent) > history_verbatim else []
 
     db.add(AgentMessage(conversation_id=conv.id, role="user", content=question))
     db.commit()
@@ -342,9 +362,13 @@ def _run(db: Session, ontology_id: str, user, question: str,
     steps: list[dict] = []
     usage_total = {"inputTokens": 0, "outputTokens": 0}
     answer: Optional[str] = None
+    verification: Optional[answer_verifier.VerificationResult] = None
     max_steps = max(1, profile.max_steps or 8)
 
     for _ in range(max_steps):
+        if chat_cancel_registry.is_cancelled(run_id):
+            yield from _finish_cancelled(db, conv, steps, runner, call_kwargs, usage_total)
+            return
         try:
             resp = llm_bridge.chat(call_kwargs, messages, TOOL_DEFS)
         except llm_bridge.LLMError as e:
@@ -357,13 +381,47 @@ def _run(db: Session, ontology_id: str, user, question: str,
             if resp.get("usage") and resp["usage"].get(k):
                 usage_total[k] += resp["usage"][k]
 
+        if chat_cancel_registry.is_cancelled(run_id):
+            yield from _finish_cancelled(db, conv, steps, runner, call_kwargs, usage_total)
+            return
+
         if not resp["tool_calls"]:
             answer = resp.get("content") or "（模型未给出回答）"
+            # ── 确定性结论校验：数字断言必须能对应到工具结果 ──
+            if steps and answer:
+                verification = answer_verifier.verify_answer(answer, steps)
+                if (not verification.passed
+                        and len(verification.unverified)
+                        > limit("answer_verify_unverified_floor")):
+                    for _ in range(limit("answer_verify_retries")):
+                        if chat_cancel_registry.is_cancelled(run_id):
+                            yield from _finish_cancelled(db, conv, steps, runner, call_kwargs, usage_total)
+                            return
+                        messages.append({"role": "assistant", "content": answer})
+                        messages.append({"role": "user", "content": answer_verifier.correction_prompt(
+                            verification.unverified)})
+                        try:
+                            resp = llm_bridge.chat(call_kwargs, messages, [])
+                        except llm_bridge.LLMError:
+                            break
+                        for k in usage_total:
+                            if resp.get("usage") and resp["usage"].get(k):
+                                usage_total[k] += resp["usage"][k]
+                        answer = resp.get("content") or answer
+                        verification = answer_verifier.verify_answer(answer, steps)
+                        verification.retried = True
+                        if verification.passed:
+                            break
+                if not verification.passed:
+                    answer = answer + answer_verifier.unverified_notice(verification.unverified)
             break
 
         messages.append({"role": "assistant", "content": resp.get("content"),
                          "tool_calls": resp["tool_calls"]})
         for tc in resp["tool_calls"]:
+            if chat_cancel_registry.is_cancelled(run_id):
+                yield from _finish_cancelled(db, conv, steps, runner, call_kwargs, usage_total)
+                return
             started = time.time()
             try:
                 result = runner.run(tc["name"], tc.get("arguments") or {})
@@ -387,8 +445,8 @@ def _run(db: Session, ontology_id: str, user, question: str,
             yield {"type": "step", **step}
 
             payload = json.dumps(result, ensure_ascii=False, default=str)
-            if len(payload) > _TOOL_RESULT_CAP:
-                payload = payload[:_TOOL_RESULT_CAP] + '…（结果过长已截断，请缩小查询范围）"}'
+            if len(payload) > limit("tool_result_llm_cap"):
+                payload = payload[:limit("tool_result_llm_cap")] + '…（结果过长已截断，请缩小查询范围）"}'
             messages.append({"role": "tool", "tool_call_id": tc["id"],
                              "name": tc["name"], "content": payload})
     else:
@@ -397,7 +455,8 @@ def _run(db: Session, ontology_id: str, user, question: str,
     _persist_assistant(db, conv, answer or "", steps, runner, call_kwargs, usage_total)
     yield {"type": "answer", "content": answer,
            "citations": runner.citations, "proposals": runner.proposals,
-           "usage": usage_total}
+           "usage": usage_total,
+           "verification": verification.summary() if verification else None}
 
 
 def _persist_assistant(db: Session, conv: AgentConversation, content: str,

@@ -30,22 +30,12 @@ from app.models.ontology_formal import (
     ObjectInstance, LinkInstance, PropertyFact,
 )
 from app.ontologies.agent_runtime.boundary import AgentScope, ToolError
+from app.ontologies.agent_runtime.limits import limit as runtime_limit
 from app.ontologies.formal_modeling.facts import fact_order_clause
 from app.ontologies.versions.models import OntologyVersion
 from app.shared.time_utils import utc_iso
 
-_SCAN_CAP = 5000          # search 单次翻页最多扫描的实例行数（找一页，非计数）
-_AGG_SCAN_CAP = 100_000   # aggregate 流式扫描的安全阀：到此才停并标 partial（不再盲截断 5000）
-_VALUE_TRUNC = 200        # 单个属性值的输出截断长度
-_CITATION_CAP = 20        # 一次回答最多引用的实例数
-_CHART_POINT_CAP = 20     # 聚合图表最多展示的数据点（已按值降序取前 N）
-_SNIPPET_FIELDS = 3       # 引用卡片附带的属性摘要字段数
-
-# 多跳遍历的缰绳（防扇出爆炸）
-_MAX_HOPS = 5             # 单次多跳最多跳数
-_HOP_FANOUT_CAP = 200     # 每个节点每一跳最多考察的链接数
-_FRONTIER_CAP = 500       # 每一跳最多展开的前沿节点数
-_PATH_NODE_BUDGET = 2000  # 一次多跳最多访问的节点总数
+# 限额统一注册表（默认值/边界/环境变量见 limits.py）
 
 
 def _history_release_lineage(
@@ -214,7 +204,7 @@ TOOL_DEFS: list[dict] = [
                 "instance_id": {"type": "string", "description": "起点对象实例 id"},
                 "path": {
                     "type": "array",
-                    "description": f"有序的跳序列，每一跳指定一个链接类型和方向；最多 {_MAX_HOPS} 跳",
+                    "description": f"有序的跳序列，每一跳指定一个链接类型和方向；最多 {runtime_limit("max_hops")} 跳",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -435,8 +425,8 @@ def _match(props: dict, f: dict) -> bool:
 
 
 def _trunc(v: Any) -> Any:
-    if isinstance(v, str) and len(v) > _VALUE_TRUNC:
-        return v[:_VALUE_TRUNC] + f"…(截断,共{len(v)}字符)"
+    if isinstance(v, str) and len(v) > runtime_limit("value_trunc"):
+        return v[:runtime_limit("value_trunc")] + f"…(截断,共{len(v)}字符)"
     return v
 
 
@@ -486,7 +476,7 @@ def _build_aggregate_chart(ot_display: str, metric: str, metric_prop: Optional[s
     图表 spec 与前端 ```chart 块同构，直接交给 AgentChart 渲染。
     """
     points = [{"label": str(g.get("group")), "value": g.get("value")}
-              for g in groups if g.get("value") is not None][:_CHART_POINT_CAP]
+              for g in groups if g.get("value") is not None][:runtime_limit("chart_point_cap")]
     if len(points) < 2:
         return None
     metric_label = _METRIC_LABELS.get(metric, metric)
@@ -506,7 +496,7 @@ def _build_aggregate_chart(ot_display: str, metric: str, metric_prop: Optional[s
     }
 
 
-def _snippet(scope: AgentScope, inst: ObjectInstance, max_fields: int = _SNIPPET_FIELDS) -> str:
+def _snippet(scope: AgentScope, inst: ObjectInstance, max_fields: int = runtime_limit("snippet_fields")) -> str:
     """引用实例的一句话属性摘要（跳过与标签重复的值）——让引用卡片不只有一个名字。"""
     ot = scope.object_types.get(inst.object_type_id)
     prop_defs = {p.get("name"): p for p in (ot.properties or [])
@@ -542,7 +532,7 @@ class ToolRunner:
         self._cited: set[str] = set()
 
     def _cite(self, inst: ObjectInstance):
-        if inst.id in self._cited or len(self.citations) >= _CITATION_CAP:
+        if inst.id in self._cited or len(self.citations) >= runtime_limit("citation_cap"):
             return
         ot = self.scope.object_types.get(inst.object_type_id)
         ot_name = ot.display_name if ot else inst.object_type_id
@@ -585,7 +575,7 @@ class ToolRunner:
         return (self._instance_query()
                 .filter(ObjectInstance.object_type_id == type_id)
                 .order_by(ObjectInstance.created_at.desc())
-                .limit(_SCAN_CAP).all())
+                .limit(runtime_limit("search_scan_cap")).all())
 
     def _stream_instances(self, type_id: str):
         """流式产出某类型的全部实例（yield_per，不materialize全表）。聚合走此口，
@@ -642,7 +632,7 @@ class ToolRunner:
             "total": len(matched),
             "returned": len(page),
             "truncated": len(matched) > len(page),
-            "scannedCap": len(rows) >= _SCAN_CAP,
+            "scannedCap": len(rows) >= runtime_limit("search_scan_cap"),
             "items": [_row(i) for i in page],
         }
 
@@ -713,8 +703,8 @@ class ToolRunner:
         path = args.get("path")
         if not isinstance(path, list) or not path:
             raise ToolError('path 不能为空：给出有序跳序列，如 [{"link_type":"下单","direction":"out"}]')
-        if len(path) > _MAX_HOPS:
-            raise ToolError(f"最多 {_MAX_HOPS} 跳，当前 {len(path)} 跳。请缩短路径或分多次遍历")
+        if len(path) > runtime_limit("max_hops"):
+            raise ToolError(f"最多 {runtime_limit("max_hops")} 跳，当前 {len(path)} 跳。请缩短路径或分多次遍历")
 
         # 逐跳预解析链接类型（越界即失败：每一跳都受作用域约束，防经由链接泄露隐藏类型）
         hops = []
@@ -734,8 +724,8 @@ class ToolRunner:
         for depth, (lt, direction) in enumerate(hops):
             self_col = (LinkInstance.source_object_id if direction == "out"
                         else LinkInstance.target_object_id)
-            cur = frontier[:_FRONTIER_CAP]
-            if len(frontier) > _FRONTIER_CAP:
+            cur = frontier[:runtime_limit("frontier_cap")]
+            if len(frontier) > runtime_limit("frontier_cap"):
                 frontier_capped = True
             next_ids: list[str] = []
             next_seen: set[str] = set()
@@ -743,14 +733,14 @@ class ToolRunner:
                 links = (self._link_query(
                             LinkInstance.source_object_id, LinkInstance.target_object_id)
                          .filter(LinkInstance.link_type_id == lt.id, self_col == node_id)
-                         .limit(_HOP_FANOUT_CAP).all())
+                         .limit(runtime_limit("hop_fanout_cap")).all())
                 for src_id, tgt_id in links:
                     other = tgt_id if direction == "out" else src_id
                     if other in visited or other in next_seen:
                         continue
                     next_seen.add(other)
                     next_ids.append(other)
-                    if len(visited) + len(next_ids) > _PATH_NODE_BUDGET:
+                    if len(visited) + len(next_ids) > runtime_limit("path_node_budget"):
                         budget_hit = True
                         break
                 if budget_hit:
@@ -852,7 +842,7 @@ class ToolRunner:
         scanned = matched = 0
         partial = False
         for inst in self._stream_instances(ot.id):
-            if scanned >= _AGG_SCAN_CAP:
+            if scanned >= runtime_limit("aggregate_scan_cap"):
                 partial = True
                 break
             scanned += 1
@@ -1182,7 +1172,7 @@ class ToolRunner:
             and node.get("instanceId") and node["instanceId"] != inst.id
         })
         for other in self.db.query(ObjectInstance).filter(
-                ObjectInstance.id.in_(other_ids[:_CITATION_CAP * 2])).all():
+                ObjectInstance.id.in_(other_ids[:runtime_limit("citation_cap") * 2])).all():
             if other.object_type_id in self.scope.object_types:
                 self._cite(other)
         return result
