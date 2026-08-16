@@ -87,6 +87,8 @@ def _system_prompt(scope) -> str:
 7. 工具报错时，阅读错误信息里给出的可用选项，修正参数后重试；同一错误不要重复第三次。
 8. 用户询问某字段拟议变化会波及哪些对象时，先用 analyze_change_impact 展示直接/间接关系可达范围。它是只读模拟，不代表确定业务因果；除非工具返回了受治理的因果规则，否则必须称为“关联范围”，不得声称这些对象一定会改变。
 9. 管理哨兵时，只能管理来源为 assistant_dynamic 的动态哨兵。发布版本内置哨兵只读且绝不能生成其编辑、启停或删除提案。所有动态哨兵变更必须先用 propose_dynamic_sentinel_change 生成提案，等待用户在界面确认；创建后默认停用，必须通过当前发布版全量试跑才能启用。
+10. 用户问「这条哨兵为什么触发 / 为什么没触发 / 为什么执行了动作」时，用 explain_sentinel_firing：它基于触发记录与命中快照做确定性还原，给出条件表达式、每个命中元组的对象与属性值证据、条件与绑定过滤的求值结果、状态语义与动作结果。解释以工具返回为准，不得臆造求值细节；snapshotMissing=true 或 matchLimit 截断时必须如实说明。
+11. 用户明确要“决策推演、比较未来方案、what-if、辅助决策”时，必须调用 run_decision_simulation。可以先用查询工具澄清对象，但不能用普通文字冒充推演结果。推演中的多视角数量不是概率，评分不是因果证明；回答要说明数据截止时间、关键假设、分歧、早期信号和停止条件。推演只给建议，任何真实动作仍须另行生成提案并由用户确认。
 10. 用户明确要“决策推演、比较未来方案、what-if、辅助决策”时，必须调用 run_decision_simulation。可以先用查询工具澄清对象，但不能用普通文字冒充推演结果。推演中的多视角数量不是概率，评分不是因果证明；回答要说明数据截止时间、关键假设、分歧、早期信号和停止条件。推演只给建议，任何真实动作仍须另行生成提案并由用户确认。
 
 {_CHARTS_GUIDE}
@@ -122,6 +124,13 @@ def _summarize(name: str, result: dict) -> str:
                 f"{summary.get('actionNodes', 0)} 次动作 · "
                 f"{summary.get('decisionNodes', 0)} 条决策"
                 + ("（部分链）" if result.get("truncated") else ""))
+    if name == "explain_sentinel_firing":
+        sentinel = result.get("sentinel") or {}
+        firing = result.get("firing") or {}
+        limits = result.get("explanationLimits") or {}
+        return (f"哨兵「{sentinel.get('displayName', '')}」触发解释"
+                f"（{firing.get('status')}，展开 {len(result.get('matchedTuples', []))}"
+                f"/{limits.get('totalMatches', 0)} 个命中）")
     if name == "list_actions":
         return f"{len(result.get('actions', []))} 个可用动作"
     if name == "run_decision_simulation":
