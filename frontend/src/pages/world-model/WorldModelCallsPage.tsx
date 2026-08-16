@@ -245,7 +245,7 @@ export default function WorldModelCallsPage() {
             <ScrollText size={28} className="text-slate-300" />
             <p className="mt-3 text-sm font-medium text-slate-500">暂无调用记录</p>
             <p className="mt-1 max-w-md text-xs leading-5 text-slate-400">
-              调用记录随「发布为推演服务」能力（规划中）产生：模型发布后，每次经 HTTP 接口或 Agent 调用都会在此留下含输入快照、耗时与结果的审计记录。
+              发布推演服务后，每次经 HTTP 接口或 Agent 调用都会在此留下含输入快照、耗时与结果的审计记录。
             </p>
           </div>
         ) : (

@@ -135,6 +135,60 @@ async function mockWorldModel(page: Page) {
   })
 }
 
+/** 推演服务注册表页的 mock：可变状态（上线/下线切换后持久到本次测试会话）。 */
+async function mockWorldModelServices(page: Page) {
+  let serviceStatus = 'online'
+  const serviceRow = {
+    id: 'svc-registry-1',
+    project_id: projectRow.id,
+    project_name: '台区负荷短期推演',
+    version_id: 'v1',
+    version_no: 1,
+    name: '台区负荷短期推演服务',
+    description: '基于历史负荷曲线做 24 步外推',
+    status: 'online',
+    endpoint_path: '/api/v2/world-model/services/svc-registry-1/invoke',
+    applicable_object_types: { ontology_id: 'ontology-1', object_type_ids: ['ot-line', 'ot-user'] },
+    preconditions: [{ object_type_id: 'ot-line', min_count: 12 }],
+    call_count: 3,
+    failed_count: 0,
+    created_at: now,
+    updated_at: now,
+  }
+  await page.route('**/api/v2/world-model/services**', route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (path === '/api/v2/world-model/services' && request.method() === 'GET') {
+      const url = new URL(request.url())
+      const statusParam = url.searchParams.get('status') || ''
+      const keywordParam = url.searchParams.get('keyword') || ''
+      const visible = serviceStatus === statusParam || !statusParam
+      const matched = visible && (!keywordParam || serviceRow.name.includes(keywordParam))
+      return json(route, {
+        items: matched ? [{ ...serviceRow, status: serviceStatus }] : [],
+        total: matched ? 1 : 0,
+      })
+    }
+    if (path === '/api/v2/world-model/services/svc-registry-1' && request.method() === 'GET') {
+      return json(route, { ...serviceRow, status: serviceStatus })
+    }
+    if (path === '/api/v2/world-model/services/svc-registry-1/status' && request.method() === 'POST') {
+      serviceStatus = (request.postDataJSON() as { status: string }).status
+      return json(route, { ...serviceRow, status: serviceStatus })
+    }
+    if (path === '/api/v2/world-model/services/svc-registry-1/invoke' && request.method() === 'POST') {
+      return json(route, {
+        ok: true,
+        payload: { trajectory: [100, 101, 102] },
+        error: null,
+        duration_ms: 18,
+        call_id: 'call-registry-1',
+      })
+    }
+    return json(route, [])
+  })
+}
+
 test('世界模型为一级导航分组，本体管理恢复单项链接', async ({ page }) => {
   await seedAuth(page)
   await mockPlatformShell(page)
@@ -145,12 +199,13 @@ test('世界模型为一级导航分组，本体管理恢复单项链接', async
   const sidebar = page.locator('aside')
   // 本体管理恢复为单项链接（不再是分组按钮）
   await expect(sidebar.getByRole('link', { name: '本体管理', exact: true })).toBeVisible()
-  // 世界模型是一级分组按钮，展开后出现两个子项并自动导航到推演模型
+  // 世界模型是一级分组按钮，展开后出现三个子项并自动导航到推演模型
   const worldModelGroup = sidebar.getByRole('button', { name: '世界模型' })
   await expect(worldModelGroup).toBeVisible()
   await worldModelGroup.click()
   await expect(page).toHaveURL(/#\/world-model\/models$/)
   await expect(sidebar.getByRole('link', { name: '推演模型' })).toBeVisible()
+  await expect(sidebar.getByRole('link', { name: '推演服务' })).toBeVisible()
   await expect(sidebar.getByRole('link', { name: '调用记录' })).toBeVisible()
 })
 
@@ -412,6 +467,63 @@ test('发布为推演服务：语义注册、服务面板与状态切换', async
   await expect(panel.getByText('已下线')).toBeVisible()
   // 重新发布入口存在
   await expect(page.getByRole('button', { name: '重新发布' })).toBeVisible()
+})
+
+test('推演服务页：注册表、状态切换、试调用与详情', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+  await mockWorldModel(page)
+  await mockWorldModelServices(page)
+  // 详情抽屉需要解析本体名与对象类型名
+  await page.route('**/api/v1/ontologies**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/v1/ontologies') {
+      return json(route, {
+        items: [{ id: 'ontology-1', name: '供应链本体', current_release_id: 'release-1' }],
+        total: 1, page: 1, page_size: 200,
+      })
+    }
+    if (path === '/api/v1/ontologies/ontology-1/entities') {
+      return json(route, [{ id: 'ot-line', name_cn: '线路' }, { id: 'ot-user', name_cn: '用户' }])
+    }
+    return json(route, [])
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/#/world-model/services')
+
+  // 注册表渲染：名称 / 所属模型 / 版本 / 状态 / 调用统计 / 端点动作
+  const table = page.getByRole('table')
+  await expect(page.getByText('台区负荷短期推演服务')).toBeVisible()
+  await expect(table.getByText('v1')).toBeVisible()
+  await expect(table.getByText('在线')).toBeVisible()
+  await expect(page.getByText('共 1 个推演服务')).toBeVisible()
+
+  // 下线切换：状态徽标随之更新，试调用按钮禁用
+  const powerButton = page.getByRole('button', { name: '下线 台区负荷短期推演服务' })
+  await powerButton.click()
+  await expect(table.getByText('已下线')).toBeVisible()
+  await expect(page.getByRole('button', { name: '试调用 台区负荷短期推演服务' })).toBeDisabled()
+
+  // 重新上线后试调用：入参编辑 → 调用 → 轨迹与耗时展示
+  await page.getByRole('button', { name: '上线 台区负荷短期推演服务' }).click()
+  await expect(table.getByText('在线')).toBeVisible()
+  await page.getByRole('button', { name: '试调用 台区负荷短期推演服务' }).click()
+  const invokeDialog = page.getByRole('dialog')
+  await expect(invokeDialog.getByText('试调用推演服务')).toBeVisible()
+  await invokeDialog.getByLabel('试调用测试入参 JSON').fill('{"context": {"current_value": 100}, "actions": [], "horizon": 3}')
+  await invokeDialog.getByRole('button', { name: '调用' }).click()
+  await expect(invokeDialog.getByText('调用成功 · 18 ms')).toBeVisible()
+  await expect(invokeDialog.getByText('trajectory')).toBeVisible()
+  await invokeDialog.getByRole('button', { name: '关闭', exact: true }).click()
+
+  // 详情抽屉：语义注册 + 该服务调用记录
+  await page.getByRole('button', { name: '查看 台区负荷短期推演服务 详情' }).click()
+  const detailDialog = page.getByRole('dialog', { name: '推演服务详情' })
+  await expect(detailDialog.getByText('本体语义注册')).toBeVisible()
+  await expect(detailDialog.getByText('线路 ≥ 12')).toBeVisible()
+  await expect(detailDialog.getByText('最近调用（共 1 条）')).toBeVisible()
+  await detailDialog.getByRole('button', { name: '关闭详情' }).click()
+  await expect(detailDialog).toHaveCount(0)
 })
 
 test('无 world_model 菜单权限的用户不可见且直达被拒', async ({ page }) => {

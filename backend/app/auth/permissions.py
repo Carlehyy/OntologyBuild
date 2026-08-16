@@ -12,6 +12,7 @@ ALL_MENU_KEYS = (
     "ontologies",
     "world_model",
     "world_model.models",
+    "world_model.services",
     "world_model.calls",
     "agent",
     "events",
@@ -51,10 +52,11 @@ PARENT_MENU_KEYS = {
     "community.skills": "community",
     "community.plugins": "community",
     "world_model.models": "world_model",
+    "world_model.services": "world_model",
     "world_model.calls": "world_model",
 }
 GROUP_MENU_KEYS = {
-    "world_model": ("world_model.models", "world_model.calls"),
+    "world_model": ("world_model.models", "world_model.services", "world_model.calls"),
     "data": ("data.pipelines", "data.sync_tasks", "data.structured"),
     "api_hub": (
         "api_hub.interfaces",

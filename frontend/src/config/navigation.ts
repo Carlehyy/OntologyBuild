@@ -19,6 +19,7 @@ import {
   Orbit,
   PlugZap,
   Repeat,
+  Rocket,
   Settings,
   Table2,
   Waypoints,
@@ -45,6 +46,7 @@ export const DEFAULT_NON_ADMIN_MENU_KEYS = [
   'ontologies',
   'world_model',
   'world_model.models',
+  'world_model.services',
   'world_model.calls',
   'agent',
   'events',
@@ -67,8 +69,9 @@ export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
   { key: 'explore', to: '/explore', icon: Compass, label: '业务探索', description: '业务建模与需求探索' },
   { key: 'ontologies', to: '/ontologies', icon: Network, label: '本体管理', description: '本体、图谱与对象建模' },
   {
-    key: 'world_model', to: '/world-model', icon: Orbit, label: '世界模型', description: '演化层：推演模型与调用记录', subItems: [
+    key: 'world_model', to: '/world-model', icon: Orbit, label: '世界模型', description: '演化层：推演模型、推演服务与调用记录', subItems: [
       { key: 'world_model.models', to: '/world-model/models', icon: FlaskConical, label: '推演模型', description: '推演模型项目开发、调试与版本' },
+      { key: 'world_model.services', to: '/world-model/services', icon: Rocket, label: '推演服务', description: '推演服务注册表、状态管理与试调用' },
       { key: 'world_model.calls', to: '/world-model/calls', icon: History, label: '调用记录', description: '推演服务调用审计与回测依据' },
     ],
   },
