@@ -198,6 +198,11 @@ def project_to_formal_ontology(
                 flattened.update(business)
             ent_props_list.append(flattened)
         meta = class_meta.get(ec, {})
+        # 来源湖版本（事实血缘）：本类实体由哪一版数据快照投影而来。
+        # binding_context 可能缺失（旧映射行），此时事实血缘保持 NULL。
+        source_version_id = (
+            (meta.get("binding_context") or {}).get("source_dataset_version_id")
+            or None)
         # property_mappings 里的 property 名是落地后的属性键
         pk_source_fields = [part.strip() for part in str(
             meta.get("pk_col") or "").split(",") if part.strip()]
@@ -391,7 +396,8 @@ def project_to_formal_ontology(
                         db, ontology_id=ontology_id, instance_id=inst_id,
                         object_type_id=ot_id, old_props=old_props, new_props=props,
                         source="pipeline",
-                        ontology_release_id=ontology_release_id)
+                        ontology_release_id=ontology_release_id,
+                        source_dataset_version_id=source_version_id)
                     if new_facts:
                         recompute_instance_derived(
                             db, ontology_id=ontology_id, instance=existing_inst,
@@ -418,12 +424,14 @@ def project_to_formal_ontology(
                     object_type_id=ot_id,
                     source="pipeline",
                     ontology_release_id=ontology_release_id,
+                    source_dataset_version_id=source_version_id,
                 )
                 new_facts = record_property_facts(
                     db, ontology_id=ontology_id, instance_id=inst_id,
                     object_type_id=ot_id, old_props=None, new_props=props,
                     source="pipeline",
-                    ontology_release_id=ontology_release_id)
+                    ontology_release_id=ontology_release_id,
+                    source_dataset_version_id=source_version_id)
                 if new_facts:
                     recompute_instance_derived(
                         db, ontology_id=ontology_id, instance=inst_obj,
@@ -446,9 +454,15 @@ def project_to_formal_ontology(
         )
 
         mapped_type_ids: set[str] = set()
+        # 血缘：object_type_id → 本次应用该类型的来源湖版本（墓碑/悬挂边删除同样带版本）
+        version_by_type_id: dict[str, str | None] = {}
         for entity_class in reconciliation_classes:
+            class_meta_item = class_meta.get(entity_class, {}) or {}
+            version = (
+                (class_meta_item.get("binding_context") or {})
+                .get("source_dataset_version_id"))
             object_type_id = (
-                class_meta.get(entity_class, {}).get("target_object_type_id")
+                class_meta_item.get("target_object_type_id")
                 or class_to_ot_id.get(entity_class)
             )
             if not object_type_id:
@@ -462,6 +476,7 @@ def project_to_formal_ontology(
                 object_type_id = mapped_type.id if mapped_type is not None else None
             if object_type_id:
                 mapped_type_ids.add(str(object_type_id))
+                version_by_type_id.setdefault(str(object_type_id), version)
             elif schema_locked:
                 raise ValueError(
                     f"已发布映射实体类型「{entity_class}」无法解析到 ObjectType，"
@@ -497,6 +512,7 @@ def project_to_formal_ontology(
                     stale_instances.append(instance)
 
         for instance in stale_instances:
+            instance_version = version_by_type_id.get(instance.object_type_id)
             dangling_links = db.query(LinkInstance).filter(
                 LinkInstance.ontology_id == ontology_id,
                 LinkInstance.ontology_release_id == ontology_release_id,
@@ -514,6 +530,7 @@ def project_to_formal_ontology(
                     exists=False,
                     source="pipeline-reconcile",
                     ontology_release_id=ontology_release_id,
+                    source_dataset_version_id=instance_version,
                 )
                 db.delete(link)
                 summary["removed_link_instances"] += 1
@@ -524,6 +541,7 @@ def project_to_formal_ontology(
                 object_type_id=instance.object_type_id,
                 source="pipeline-reconcile",
                 ontology_release_id=ontology_release_id,
+                source_dataset_version_id=instance_version,
             )
             db.delete(instance)
             summary["removed_object_instances"] += 1
@@ -613,6 +631,9 @@ def project_to_formal_ontology(
         _rels_by_key.setdefault((_sc, _tc, _rt), []).append(_r)
 
     for rel in relations:
+        from app.ontologies.formal_modeling.facts import (
+            record_link_fact, record_link_property_facts,
+        )
         src_ent = rel.source_entity
         tgt_ent = rel.target_entity
         src_inst = entity_to_instance.get(src_ent)
@@ -624,6 +645,10 @@ def project_to_formal_ontology(
         src_class = entity_class_of.get(src_ent, "Object")
         tgt_class = entity_class_of.get(tgt_ent, "Object")
         rel_type = rel.type or "RELATED_TO"
+        # 边的事实血缘：以源实体类的来源湖版本归因（边的生成数据来自该快照）
+        link_source_version = (
+            ((class_meta.get(src_class, {}) or {}).get("binding_context") or {})
+            .get("source_dataset_version_id"))
         # 优先取 Relation.properties 里上游 FK 推断写入的基数；缺失时按实际边重数兜底推断，
         # 避免一律退化成 many-to-many。
         raw_card = (rel.properties or {}).get("cardinality")
@@ -746,10 +771,11 @@ def project_to_formal_ontology(
                 existing_li = legacy_candidates[0]
         if existing_li:
             li_id = existing_li.id
+            old_li_props = dict(existing_li.properties or {})
             if (existing_li.link_type_id != lt_id
                     or existing_li.source_object_id != src_inst
                     or existing_li.target_object_id != tgt_inst
-                    or (existing_li.properties or {}) != li_props
+                    or old_li_props != li_props
                     or existing_li.source_relation_id != rel.id
                     or existing_li.ontology_release_id != ontology_release_id):
                 existing_li.link_type_id = lt_id
@@ -758,8 +784,18 @@ def project_to_formal_ontology(
                 existing_li.target_object_id = tgt_inst
                 existing_li.properties = li_props
                 existing_li.source_relation_id = rel.id
+                if old_li_props != li_props:
+                    # 关系属性变化同样是事实（kind='link' 属性级），可时态回放
+                    record_link_property_facts(
+                        db, ontology_id=ontology_id, instance_id=li_id,
+                        link_type_id=lt_id, old_props=old_li_props,
+                        new_props=li_props, source="pipeline",
+                        ontology_release_id=ontology_release_id,
+                        source_dataset_version_id=link_source_version)
         else:
-            from app.ontologies.formal_modeling.facts import record_link_fact
+            from app.ontologies.formal_modeling.facts import (
+                record_link_fact, record_link_property_facts,
+            )
             li_obj = LinkInstance(
                 id=li_id,
                 ontology_id=ontology_id,
@@ -775,7 +811,13 @@ def project_to_formal_ontology(
             record_link_fact(
                 db, ontology_id=ontology_id, link_instance_id=li_id,
                 link_type_id=lt_id, exists=True, source="pipeline",
-                ontology_release_id=ontology_release_id)
+                ontology_release_id=ontology_release_id,
+                source_dataset_version_id=link_source_version)
+            record_link_property_facts(
+                db, ontology_id=ontology_id, instance_id=li_id,
+                link_type_id=lt_id, old_props=None, new_props=li_props,
+                source="pipeline", ontology_release_id=ontology_release_id,
+                source_dataset_version_id=link_source_version)
             summary["link_instances"] += 1
 
     # Materialized links must mirror the current Relation projection.  Keep the

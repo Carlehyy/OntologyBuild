@@ -382,6 +382,21 @@ def delete_link_instance(ontology_id: str, link_id: str,
     )
 
 
+@router.patch("/{ontology_id}/link-instances/{link_id}")
+def update_link_instance(ontology_id: str, link_id: str,
+                         body: S.LinkInstanceUpdate,
+                         db: Session = Depends(get_db),
+                         current_user=Depends(get_current_user)):
+    return instance_service.update_link_instance(
+        ontology_id,
+        link_id,
+        body,
+        db,
+        current_user,
+        reject_runtime_write_fn=_reject_direct_runtime_data_write,
+    )
+
+
 # ============================================================
 #  Runtime: Run Action / Test Function / HITL 审批
 # ============================================================

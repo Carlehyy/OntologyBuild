@@ -388,7 +388,8 @@ class MappingService(
             self._adopt_legacy_projection_ownership(mapping)
             v1_count = self._write_v1_entities(mapping, entities)
             stale_entity_ids = self._reconcile_mapping_entities(
-                mapping, {entity["id"] for entity in entities})
+                mapping, {entity["id"] for entity in entities},
+                source_dataset_version_id=source_dataset_version_id)
 
             # 单映射路径同样要投影到正规本体（fo_object_instances）。该投影是
             # Mapping applied 的必需条件，不再作为可吞掉的 best-effort 尾步骤。
@@ -403,6 +404,7 @@ class MappingService(
                 "entity_class": mapping.entity_class, "pk_col": pk_col,
                 "pk_source": (mapping.field_mapping or {}).get("__pk_source__"),
                 "target_object_type_id": mapping.target_object_type_id,
+                "source_dataset_version_id": source_dataset_version_id,
                 "rows": data,
                 "entity_id_map": {
                     self._row_identity_value(row, pk_col):

@@ -26,6 +26,7 @@ from app.ontologies.formal_modeling.derived import recompute_instance_derived
 from app.ontologies.formal_modeling.facts import (
     fact_order_clause,
     record_link_fact,
+    record_link_property_facts,
     record_object_presence,
     record_object_tombstone,
     record_property_facts,
@@ -890,7 +891,11 @@ def instance_as_of(
         t: str,
         db: Session):
     """时态回放：时刻 T 的实例投影 = recorded_at ≤ T 且未被 T 前事实 supersede 的
-    每个属性最新事实。含存在性（墓碑事实之后视为已删除）。t 为 ISO 时间串。"""
+    每个属性最新事实。含存在性（墓碑事实之后视为已删除）。t 为 ISO 时间串。
+
+    对象与链接实例共用本端点：存在性事实对象为 kind='object'、链接为
+    kind='link'（均 property_name='exists'），链接属性事实同为 kind='link'。
+    """
     _require_ontology(db, ontology_id)
     try:
         cutoff = datetime.fromisoformat(t.replace("Z", "+00:00"))
@@ -907,12 +912,15 @@ def instance_as_of(
             .all())
     # 每条同 kind/属性链是线性的（supersedes 单链），≤T 的最新事实即当时值。
     # object.exists 与业务属性名 "exists" 必须分开，否则新增的对象存在性事实
-    # 会遮蔽一个完全合法的同名业务属性。
+    # 会遮蔽一个完全合法的同名业务属性。链接（kind='link'）的 exists 同样
+    # 承担存在性语义，且其属性事实与对象属性事实共用回放桶。
     latest: dict[tuple[str, str], PropertyFact] = {}
     for r in rows:
         latest.setdefault((r.kind or "property", r.property_name), r)
 
-    existence_fact = latest.get(("object", "exists"))
+    existence_fact = (
+        latest.get(("object", "exists"))
+        or latest.get(("link", "exists")))
     # Legacy instances can predate the Fact stream, so absence of an existence
     # fact normally means "present".  The one unambiguous exception is a chain
     # whose first Fact is an explicit creation after the requested cutoff.
@@ -923,7 +931,7 @@ def instance_as_of(
             .filter(
                 PropertyFact.ontology_id == ontology_id,
                 PropertyFact.instance_id == instance_id,
-                PropertyFact.kind == "object",
+                PropertyFact.kind.in_(("object", "link")),
                 PropertyFact.property_name == "exists",
             )
             .order_by(
@@ -941,7 +949,7 @@ def instance_as_of(
     for (_, name), f in latest.items():
         fact_value = f.value or {}
         v = fact_value.get("v")
-        if f.kind == "object" and name == "exists":
+        if f.kind in ("object", "link") and name == "exists":
             exists = bool(v)
             continue
         if f.kind == "decision":
@@ -1040,7 +1048,59 @@ def create_link_instance(
     # 链接存在性也是事实（对齐演示：assigned_to(CA1234, A5).exists = true）
     record_link_fact(db, ontology_id=ontology_id, link_instance_id=obj.id,
                      link_type_id=obj.link_type_id, exists=True,
-                     source="manual", actor_id=getattr(current_user, "id", None))
+                     source="manual", actor_id=getattr(current_user, "id", None),
+                     ontology_release_id=obj.ontology_release_id)
+    # 边自身的业务属性同样是事实（kind='link' 属性级），关系孪生可时态回放
+    record_link_property_facts(
+        db, ontology_id=ontology_id, instance_id=obj.id,
+        link_type_id=obj.link_type_id, old_props=None,
+        new_props=obj.properties or {}, source="manual",
+        actor_id=getattr(current_user, "id", None),
+        ontology_release_id=obj.ontology_release_id)
+    project.updated_at = datetime.now(timezone.utc)
+    _commit_graph_mutation(db, ontology_id, refresh=obj)
+    return _ok(S.LinkInstanceOut.model_validate(obj).model_dump(by_alias=True))
+
+
+@_projection_locked_writer
+def update_link_instance(
+        ontology_id: str,
+        link_id: str,
+        body: S.LinkInstanceUpdate,
+        db: Session,
+        current_user,
+        *,
+        reject_runtime_write_fn: Optional[Callable] = None):
+    """更新链接实例的业务属性（kind='link' 属性级事实留痕）。
+
+    端点在发布本体上默认被 _reject_direct_runtime_data_write 拒绝；
+    采集器/导入回写路径复用同一函数并传入自己的 reject 策略。
+    """
+    (reject_runtime_write_fn or _reject_direct_runtime_data_write)()
+    project = _require_ontology(db, ontology_id, for_update=True)
+    obj = db.query(LinkInstance).filter(LinkInstance.id == link_id,
+                                        LinkInstance.ontology_id == ontology_id).first()
+    if not obj:
+        raise HTTPException(404, "Not found")
+    old_props = dict(obj.properties or {})
+    updates = body.model_dump(exclude_unset=True)
+    candidate = _orm_view(obj, updates)
+    link_types = db.query(LinkType).filter(LinkType.ontology_id == ontology_id).all()
+    instances = db.query(ObjectInstance).filter(ObjectInstance.ontology_id == ontology_id).all()
+    links = db.query(LinkInstance).filter(LinkInstance.ontology_id == ontology_id).all()
+    merged_links = [candidate if item.id == link_id else item for item in links]
+    errors = validate_link_instance_contract(
+        link_types, instances, merged_links, validate_ids={link_id})
+    _raise_validation_failed(errors, "链接实例更新被拒绝")
+    for k, v in updates.items():
+        setattr(obj, k, v)
+    if old_props != dict(obj.properties or {}):
+        record_link_property_facts(
+            db, ontology_id=ontology_id, instance_id=obj.id,
+            link_type_id=obj.link_type_id, old_props=old_props,
+            new_props=obj.properties or {}, source="manual",
+            actor_id=getattr(current_user, "id", None),
+            ontology_release_id=obj.ontology_release_id)
     project.updated_at = datetime.now(timezone.utc)
     _commit_graph_mutation(db, ontology_id, refresh=obj)
     return _ok(S.LinkInstanceOut.model_validate(obj).model_dump(by_alias=True))

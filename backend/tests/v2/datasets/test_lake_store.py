@@ -168,6 +168,24 @@ def test_drop_lake_table_idempotent(db):
 
 
 # ── upsert 三态对拍 merge.py 参考实现 ───────────────────────
+def test_upsert_run_records_producer_run_lineage(db):
+    """湖版本记录产出它的流水线运行（producer_run_id 血缘）。"""
+    from app.data_channel.pipelines.models import PipelineRun
+
+    run = PipelineRun(pipeline_id="pl-1", status="success")
+    db.add(run)
+    db.flush()
+
+    ds = _make_dataset(db)
+    ver, _ = upsert_run(db, ds, BASE_ROWS, "overwrite", ["id"],
+                         producer_run_id=run.id)
+    assert ver.producer_run_id == run.id
+
+    # 无运行的写入路径（人工/导入）不伪造血缘
+    ver2, _ = upsert_run(db, ds, BASE_ROWS, "overwrite", ["id"])
+    assert ver2.producer_run_id is None
+
+
 def test_upsert_run_overwrite_matches_reference(db):
     ds = _make_dataset(db)
     upsert_run(db, ds, BASE_ROWS, "overwrite", ["id"])

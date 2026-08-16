@@ -56,7 +56,8 @@ def run_external_pipeline(db, pl, run, write_opts: dict | None = None, *,
         outputs = _save_curated_outputs(db, svc, pl, source, rows, ctx,
                                         multi_source=False, write_opts=write_opts,
                                         contract_columns=contract_columns,
-                                        run_params=(run.stats or {}).get("run_params"))
+                                        run_params=(run.stats or {}).get("run_params"),
+                                        producer_run_id=run.id)
 
         curated_ids = [o["curated_dataset_id"] for o in outputs]
         dataset_version_id = next(

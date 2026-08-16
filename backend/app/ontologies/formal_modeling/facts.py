@@ -80,6 +80,7 @@ def record_property_facts(
     confidence: Optional[float] = None,
     ontology_version: Optional[str] = None,
     ontology_release_id: Optional[str] = None,
+    source_dataset_version_id: Optional[str] = None,
 ) -> list[PropertyFact]:
     """对比新旧属性，把发生变化的属性逐条追加为事实。返回新追加的事实列表。
 
@@ -139,6 +140,7 @@ def record_property_facts(
             confidence=confidence,
             ontology_version=release_version,
             ontology_release_id=release_id,
+            source_dataset_version_id=source_dataset_version_id,
             seq=(prev.seq or 0) + 1 if prev is not None else 1,
         )
         db.add(fact)
@@ -173,6 +175,7 @@ def record_link_fact(
     caused_by: Optional[str] = None,
     ontology_version: Optional[str] = None,
     ontology_release_id: Optional[str] = None,
+    source_dataset_version_id: Optional[str] = None,
 ) -> Optional[PropertyFact]:
     """链接存在性事实（kind='link'）。建链 exists=True，删链 exists=False 并
     supersede 建链事实——关系变化从此可时态回放。同值幂等（不重复追加）。"""
@@ -194,12 +197,52 @@ def record_link_fact(
         caused_by=caused_by,
         ontology_version=release_version,
         ontology_release_id=release_id,
+        source_dataset_version_id=source_dataset_version_id,
         supersedes_id=prev.id if prev is not None else None,
         seq=(prev.seq or 0) + 1 if prev is not None else 1,
     )
     db.add(fact)
     db.flush()
     return fact
+
+
+def record_link_property_facts(
+    db: Session,
+    *,
+    ontology_id: str,
+    instance_id: str,
+    link_type_id: Optional[str],
+    old_props: Optional[dict],
+    new_props: dict,
+    source: str,
+    actor_id: Optional[str] = None,
+    caused_by: Optional[str] = None,
+    ontology_version: Optional[str] = None,
+    ontology_release_id: Optional[str] = None,
+    source_dataset_version_id: Optional[str] = None,
+) -> list[PropertyFact]:
+    """链接属性事实（kind='link' 的属性级变更）。
+
+    与 record_link_fact（kind='link', property_name='exists'）共用
+    (instance_id, kind) 空间：exists 事实记存在性，这里记边自身的业务属性
+    （如权重、生效日期）。old_props 为 None 表示链接新建。数字孪生对关系的
+    时态回放依赖本函数——边属性变化与对象属性变化同等留痕。
+    """
+    return record_property_facts(
+        db,
+        ontology_id=ontology_id,
+        instance_id=instance_id,
+        object_type_id=link_type_id,
+        old_props=old_props,
+        new_props=new_props,
+        source=source,
+        actor_id=actor_id,
+        caused_by=caused_by,
+        kind="link",
+        ontology_version=ontology_version,
+        ontology_release_id=ontology_release_id,
+        source_dataset_version_id=source_dataset_version_id,
+    )
 
 
 def _record_object_existence(
@@ -214,6 +257,7 @@ def _record_object_existence(
     caused_by: Optional[str] = None,
     ontology_version: Optional[str] = None,
     ontology_release_id: Optional[str] = None,
+    source_dataset_version_id: Optional[str] = None,
 ) -> Optional[PropertyFact]:
     """Append an object-existence edge when the state actually changes."""
     prev = _latest_fact(
@@ -234,6 +278,7 @@ def _record_object_existence(
         caused_by=caused_by,
         ontology_version=release_version,
         ontology_release_id=release_id,
+        source_dataset_version_id=source_dataset_version_id,
         supersedes_id=prev.id if prev is not None else None,
         seq=(prev.seq or 0) + 1 if prev is not None else 1,
     )
@@ -253,6 +298,7 @@ def record_object_presence(
     caused_by: Optional[str] = None,
     ontology_version: Optional[str] = None,
     ontology_release_id: Optional[str] = None,
+    source_dataset_version_id: Optional[str] = None,
 ) -> Optional[PropertyFact]:
     """实例新建或墓碑后重建（kind='object'，exists=True）。"""
     return _record_object_existence(
@@ -266,6 +312,7 @@ def record_object_presence(
         caused_by=caused_by,
         ontology_version=ontology_version,
         ontology_release_id=ontology_release_id,
+        source_dataset_version_id=source_dataset_version_id,
     )
 
 
@@ -280,6 +327,7 @@ def record_object_tombstone(
     caused_by: Optional[str] = None,
     ontology_version: Optional[str] = None,
     ontology_release_id: Optional[str] = None,
+    source_dataset_version_id: Optional[str] = None,
 ) -> Optional[PropertyFact]:
     """实例删除墓碑（kind='object'，exists=False）。投影硬删后，
     事实流仍能回答"它存在过、何时被谁删除"。幂等。"""
@@ -294,6 +342,7 @@ def record_object_tombstone(
         caused_by=caused_by,
         ontology_version=ontology_version,
         ontology_release_id=ontology_release_id,
+        source_dataset_version_id=source_dataset_version_id,
     )
 
 

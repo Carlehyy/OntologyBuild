@@ -218,6 +218,7 @@ def _fact_to_dict(fact: PropertyFact) -> dict:
         "confidence": fact.confidence,
         "ontologyVersion": fact.ontology_version,
         "ontologyReleaseId": fact.ontology_release_id,
+        "sourceDatasetVersionId": fact.source_dataset_version_id,
         "seq": fact.seq,
         "recordedAt": utc_iso(fact.recorded_at),
     }
