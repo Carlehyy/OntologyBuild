@@ -155,7 +155,7 @@ test('超级助手：待审批与记忆面板全链路', async ({ page }) => {
   await expect(page.getByText(/相似度 87%/)).toBeVisible()
 })
 
-test('超级助手：蒸馏收敛、Skill 常驻与自主模式', async ({ page }) => {
+test('超级助手：蒸馏收敛与 Skill 常驻', async ({ page }) => {
   await seedAuth(page)
 
   let alwaysActive = false
@@ -251,11 +251,8 @@ test('超级助手：蒸馏收敛、Skill 常驻与自主模式', async ({ page 
 
   await page.goto('/#/super-assistant')
 
-  // 自主模式开关随输入区渲染并切换状态
-  const agentToggle = page.getByTestId('agent-mode-toggle')
-  await expect(agentToggle).toHaveAttribute('aria-checked', 'false')
-  await agentToggle.click()
-  await expect(agentToggle).toHaveAttribute('aria-checked', 'true')
+  // 自主模式已内置：输入区不再提供切换开关
+  await expect(page.getByTestId('agent-mode-toggle')).toHaveCount(0)
 
   await page.getByRole('button', { name: '打开助手配置' }).click()
 
