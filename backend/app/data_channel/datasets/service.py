@@ -787,6 +787,10 @@ class DatasetService:
                 raise
         self._db.refresh(ver)
         self._prune_versions_best_effort(dataset_id)
+        # 尽力失效资产湖总览缓存（失败静默降级，不影响发布主流程）。
+        from app.data_channel.datasets import redis_cache
+
+        redis_cache.invalidate_overview()
         return ver
 
     @staticmethod

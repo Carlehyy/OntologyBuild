@@ -1,13 +1,26 @@
 """Dataset overview, preview, schema, export, and dependency queries."""
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.data_channel.datasets import redis_cache
 from app.services.v2.dataset_service import DatasetService
+
+
+def _as_int(value, fallback: int) -> int:
+    """把直接调用路由函数时可能出现的 FastAPI Query 默认值对象归一化为整数。"""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    default = getattr(value, "default", None)
+    if isinstance(default, int) and not isinstance(default, bool):
+        return default
+    return fallback
 
 
 def datasets_overview(
@@ -21,7 +34,51 @@ def datasets_overview(
     *,
     consumer_map_fn: Callable[[Session], dict[str, list[dict]]],
 ):
-    """原始数据集总览；人工资产可按创建时间倒序分页。"""
+    """原始数据集总览；人工资产可按创建时间倒序分页。
+
+    缓存键覆盖全部查询参数（含分页/排序/搜索词），短 TTL 兜底写路径
+    未及时失效的场景；Redis 不可用时自动回退数据库查询。
+    """
+    # 直接调用路由函数时 page/page_size 可能是 FastAPI Query 默认值对象，
+    # 先归一化为整数，保证缓存键与分页计算行为一致。
+    page = _as_int(page, 1)
+    page_size = _as_int(page_size, 20)
+    fingerprint = hashlib.sha1(
+        json.dumps(
+            [source, search, sort_by, page, page_size, bool(paginated)],
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    cache_key = f"lake:cache:overview:{fingerprint}"
+
+    def _build() -> dict:
+        return _datasets_overview_from_db(
+            db,
+            source,
+            search,
+            sort_by,
+            page,
+            page_size,
+            paginated,
+            consumer_map_fn=consumer_map_fn,
+        )
+
+    return redis_cache.cache_aside(
+        cache_key, redis_cache.OVERVIEW_TTL_SECONDS, _build
+    )
+
+
+def _datasets_overview_from_db(
+    db: Session,
+    source: str,
+    search: str,
+    sort_by: str,
+    page: int,
+    page_size: int,
+    paginated: bool,
+    *,
+    consumer_map_fn: Callable[[Session], dict[str, list[dict]]],
+) -> dict:
     from app.models.v2.dataset import Dataset, DatasetVersion
     from app.models.v2.connection import Connection
 
@@ -206,7 +263,15 @@ def preview_data(
         DatasetVersion.version_no == version_no,
     ).first()
     require_curated_preview_approved_fn(db, ds, version)
-    return svc.preview(dataset_id, version_no, limit)
+    if version is None:
+        return []
+    # 版本内容不可变：键携带 version id，新版本自动换键，无需失效。
+    cache_key = f"lake:cache:previewv:{dataset_id}:{version.id}:{limit}"
+    return redis_cache.cache_aside(
+        cache_key,
+        redis_cache.VERSION_TTL_SECONDS,
+        lambda: svc.preview(dataset_id, version_no, limit),
+    )
 
 
 def get_schema(dataset_id: str, db: Session):
@@ -262,64 +327,79 @@ def get_schema(dataset_id: str, db: Session):
             "is_primary_key": name in pk_columns,
         }
 
-    if (
-        schema_json.get("types_source")
-        in {"declared", "published_pipeline_contract"}
-        and schema_json.get("columns_typed")
-    ):
-        rows = svc.preview(dataset_id, None, limit=10)
+    # 契约缓存键 = 数据集 + 最新版本 + 契约指纹：列声明（主键/类型/显示名）
+    # 变了或版本变了都会换键；旧键靠 TTL 自然回收。
+    versions = svc.list_versions(dataset_id)
+    latest_version_id = versions[-1].id if versions else "none"
+    schema_fingerprint = hashlib.sha1(
+        json.dumps(
+            schema_json, ensure_ascii=False, sort_keys=True, default=str
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    cache_key = (
+        f"lake:cache:schema:{dataset_id}:{latest_version_id}:{schema_fingerprint}"
+    )
+
+    def _build() -> dict:
+        if (
+            schema_json.get("types_source")
+            in {"declared", "published_pipeline_contract"}
+            and schema_json.get("columns_typed")
+        ):
+            rows = svc.preview(dataset_id, None, limit=10)
+            columns = []
+            for c in schema_json["columns_typed"]:
+                if not isinstance(c, dict) or not c.get("name"):
+                    continue
+                name = c["name"]
+                samples = [row.get(name) for row in rows if row.get(name) not in (None, "")][:5]
+                columns.append({**column_contract(name, c), "sample_values": samples})
+            return {"dataset_id": dataset_id, "columns": columns}
+
+        # Use latest version for schema inference
+        if not versions:
+            return {"dataset_id": dataset_id, "columns": []}
+
+        latest_version_no = versions[-1].version_no
+        rows = svc.preview(dataset_id, latest_version_no, limit=10)
+        if not rows:
+            return {"dataset_id": dataset_id, "columns": []}
+
         columns = []
-        for c in schema_json["columns_typed"]:
-            if not isinstance(c, dict) or not c.get("name"):
-                continue
-            name = c["name"]
-            samples = [row.get(name) for row in rows if row.get(name) not in (None, "")][:5]
-            columns.append({**column_contract(name, c), "sample_values": samples})
+        all_keys = list(rows[0].keys()) if rows else []
+        for key in all_keys:
+            sample_values = [row.get(key) for row in rows if row.get(key) is not None][:5]
+            # Infer type from sample values
+            col_type = "string"
+            for val in sample_values:
+                if isinstance(val, bool):
+                    col_type = "boolean"
+                    break
+                elif isinstance(val, int):
+                    col_type = "integer"
+                    break
+                elif isinstance(val, float):
+                    col_type = "float"
+                    break
+                elif isinstance(val, str):
+                    try:
+                        int(val)
+                        col_type = "integer"
+                    except ValueError:
+                        try:
+                            float(val)
+                            col_type = "float"
+                        except ValueError:
+                            col_type = "string"
+                    break
+            columns.append({
+                **column_contract(key, {"type": col_type}),
+                "sample_values": sample_values,
+            })
+
         return {"dataset_id": dataset_id, "columns": columns}
 
-    # Use latest version for schema inference
-    versions = svc.list_versions(dataset_id)
-    if not versions:
-        return {"dataset_id": dataset_id, "columns": []}
-
-    latest_version_no = versions[-1].version_no
-    rows = svc.preview(dataset_id, latest_version_no, limit=10)
-    if not rows:
-        return {"dataset_id": dataset_id, "columns": []}
-
-    columns = []
-    all_keys = list(rows[0].keys()) if rows else []
-    for key in all_keys:
-        sample_values = [row.get(key) for row in rows if row.get(key) is not None][:5]
-        # Infer type from sample values
-        col_type = "string"
-        for val in sample_values:
-            if isinstance(val, bool):
-                col_type = "boolean"
-                break
-            elif isinstance(val, int):
-                col_type = "integer"
-                break
-            elif isinstance(val, float):
-                col_type = "float"
-                break
-            elif isinstance(val, str):
-                try:
-                    int(val)
-                    col_type = "integer"
-                except ValueError:
-                    try:
-                        float(val)
-                        col_type = "float"
-                    except ValueError:
-                        col_type = "string"
-                break
-        columns.append({
-            **column_contract(key, {"type": col_type}),
-            "sample_values": sample_values,
-        })
-
-    return {"dataset_id": dataset_id, "columns": columns}
+    return redis_cache.cache_aside(cache_key, redis_cache.VERSION_TTL_SECONDS, _build)
 
 
 def export_dataset(
@@ -389,31 +469,38 @@ def get_stats(dataset_id: str, db: Session):
         raise HTTPException(404, "Dataset not found")
 
     versions = svc.list_versions(dataset_id)
-    version_count = len(versions)
+    # 统计只随最新版本变化：键携带 latest version id，无需显式失效。
+    latest_version_id = versions[-1].id if versions else "none"
+    cache_key = f"lake:cache:stats:{dataset_id}:{latest_version_id}"
 
-    # Use latest version for row/column counts and null rates
-    row_count = 0
-    column_count = 0
-    null_rates: dict = {}
+    def _build() -> dict:
+        version_count = len(versions)
 
-    if versions:
-        latest = versions[-1]
-        row_count = latest.rowcount or 0
-        rows = svc.preview(dataset_id, latest.version_no, limit=100)
-        if rows:
-            column_count = len(rows[0].keys())
-            # Compute null rates per column
-            for key in rows[0].keys():
-                null_count = sum(1 for row in rows if row.get(key) is None or row.get(key) == "")
-                null_rates[key] = round(null_count / len(rows), 4)
+        # Use latest version for row/column counts and null rates
+        row_count = 0
+        column_count = 0
+        null_rates: dict = {}
 
-    return {
-        "dataset_id": dataset_id,
-        "row_count": row_count,
-        "column_count": column_count,
-        "null_rates": null_rates,
-        "version_count": version_count,
-    }
+        if versions:
+            latest = versions[-1]
+            row_count = latest.rowcount or 0
+            rows = svc.preview(dataset_id, latest.version_no, limit=100)
+            if rows:
+                column_count = len(rows[0].keys())
+                # Compute null rates per column
+                for key in rows[0].keys():
+                    null_count = sum(1 for row in rows if row.get(key) is None or row.get(key) == "")
+                    null_rates[key] = round(null_count / len(rows), 4)
+
+        return {
+            "dataset_id": dataset_id,
+            "row_count": row_count,
+            "column_count": column_count,
+            "null_rates": null_rates,
+            "version_count": version_count,
+        }
+
+    return redis_cache.cache_aside(cache_key, redis_cache.VERSION_TTL_SECONDS, _build)
 
 
 def preview_dataset(
@@ -434,20 +521,28 @@ def preview_dataset(
         return {"dataset_id": dataset_id, "rows": [], "columns": [], "total_rows": 0,
                 "offset": 0, "limit": limit}
     latest = versions[-1]
+    # 审核门禁每次请求都执行，缓存不能绕过它。
     require_curated_preview_approved_fn(db, ds, latest)
     limit = max(1, min(limit, 1000))
     offset = max(0, offset)
-    rows = svc.preview(dataset_id, latest.version_no, limit=limit, offset=offset)
-    # 分页表头稳定性：offset>0 的页可能因该页某列全空而缺列，优先用契约列
-    schema_cols = (ds.schema_json or {}).get("columns") if ds.schema_json else None
-    columns = list(schema_cols) if schema_cols else (list(rows[0].keys()) if rows else [])
-    return {
-        "dataset_id": dataset_id,
-        "dataset_name": ds.name,
-        "version_no": latest.version_no,
-        "total_rows": latest.rowcount or 0,
-        "offset": offset,
-        "limit": limit,
-        "columns": columns,
-        "rows": rows,
-    }
+    # 版本内容不可变：键携带 latest version id 与分页参数，编辑/上传新版本后
+    # 自动换键，读取失败时回退原路径。
+    cache_key = f"lake:cache:preview:{dataset_id}:{latest.id}:{offset}:{limit}"
+
+    def _build() -> dict:
+        rows = svc.preview(dataset_id, latest.version_no, limit=limit, offset=offset)
+        # 分页表头稳定性：offset>0 的页可能因该页某列全空而缺列，优先用契约列
+        schema_cols = (ds.schema_json or {}).get("columns") if ds.schema_json else None
+        columns = list(schema_cols) if schema_cols else (list(rows[0].keys()) if rows else [])
+        return {
+            "dataset_id": dataset_id,
+            "dataset_name": ds.name,
+            "version_no": latest.version_no,
+            "total_rows": latest.rowcount or 0,
+            "offset": offset,
+            "limit": limit,
+            "columns": columns,
+            "rows": rows,
+        }
+
+    return redis_cache.cache_aside(cache_key, redis_cache.VERSION_TTL_SECONDS, _build)
