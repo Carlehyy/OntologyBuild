@@ -157,6 +157,7 @@ def test_world_model_group_requires_child_after_normalize(db):
         ["world_model", "world_model.models"])
     # 只有子 key 时自动补父 key
     assert "world_model" in normalize_menu_keys(["world_model.calls"])
+    assert "world_model" in normalize_menu_keys(["world_model.services"])
     assert "world_model.models" in normalize_menu_keys(["world_model.models"])
     # 本体管理恢复单项：独立保留
     assert "ontologies" in normalize_menu_keys(["ontologies"])
@@ -615,5 +616,146 @@ def test_publish_and_invoke_require_menu(client, custom_headers, project):
     r = client.post(
         f"{BASE}/services/any/invoke",
         json={"context": {}}, headers=custom_headers,
+    )
+    assert r.status_code == 403
+
+
+# ──────────────────────────── 推演服务注册表（跨项目） ────────────────────────────
+
+
+def test_service_registry_lists_published_service_with_stats(
+    client, auth_headers, project, monkeypatch,
+):
+    version_no = _save_version(client, auth_headers, project["id"], monkeypatch)
+    svc = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=auth_headers,
+    ).json()["data"]
+    assert svc["status"] == "online"
+
+    r = client.get(f"{BASE}/services", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["total"] == 1
+    item = data["items"][0]
+    assert item["id"] == svc["id"]
+    assert item["project_name"] == "负荷推演"
+    assert item["version_no"] == version_no
+    assert item["name"] == "负荷推演服务"
+    assert item["endpoint_path"].endswith(f"/services/{svc['id']}/invoke")
+    assert item["applicable_object_types"]["ontology_id"] == "ontology-1"
+    assert item["call_count"] == 0
+    assert item["failed_count"] == 0
+
+    # 调用一次后统计随之更新
+    client.post(
+        f"{BASE}/services/{svc['id']}/invoke",
+        json={"context": {}, "actions": [], "horizon": 1},
+        headers=auth_headers,
+    )
+    r = client.get(f"{BASE}/services", headers=auth_headers)
+    item = r.json()["data"]["items"][0]
+    assert item["call_count"] == 1
+    assert item["failed_count"] == 0
+
+
+def test_service_registry_filters_and_pagination(
+    client, auth_headers, project, monkeypatch,
+):
+    _save_version(client, auth_headers, project["id"], monkeypatch)
+    client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=auth_headers,
+    )
+
+    r = client.get(
+        f"{BASE}/services", params={"keyword": "不存在"}, headers=auth_headers)
+    assert r.json()["data"]["total"] == 0
+    r = client.get(
+        f"{BASE}/services", params={"status": "offline"}, headers=auth_headers)
+    assert r.json()["data"]["total"] == 0
+    r = client.get(
+        f"{BASE}/services", params={"status": "online"}, headers=auth_headers)
+    assert r.json()["data"]["total"] == 1
+    r = client.get(
+        f"{BASE}/services", params={"status": "bogus"}, headers=auth_headers)
+    assert r.status_code == 400
+    r = client.get(
+        f"{BASE}/services", params={"page": 2, "size": 1}, headers=auth_headers)
+    assert r.json()["data"]["total"] == 1
+    assert r.json()["data"]["items"] == []
+
+
+def test_service_registry_detail_and_status_by_id(
+    client, auth_headers, project, monkeypatch,
+):
+    _save_version(client, auth_headers, project["id"], monkeypatch)
+    svc = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=auth_headers,
+    ).json()["data"]
+
+    r = client.get(f"{BASE}/services/{svc['id']}", headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json()["data"]["id"] == svc["id"]
+    assert r.json()["data"]["preconditions"] == [
+        {"object_type_id": "ot-line", "min_count": 1}]
+
+    r = client.get(f"{BASE}/services/nonexistent", headers=auth_headers)
+    assert r.status_code == 404
+
+    r = client.post(
+        f"{BASE}/services/{svc['id']}/status",
+        json={"status": "offline"}, headers=auth_headers,
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "offline"
+
+    # 下线后调用被拒绝（服务侧状态入口与项目侧入口语义一致）
+    r = client.post(
+        f"{BASE}/services/{svc['id']}/invoke",
+        json={"context": {}, "actions": [], "horizon": 1},
+        headers=auth_headers,
+    )
+    assert r.status_code == 409
+
+    r = client.post(
+        f"{BASE}/services/{svc['id']}/status",
+        json={"status": "online"}, headers=auth_headers,
+    )
+    assert r.json()["data"]["status"] == "online"
+
+
+def test_calls_list_filters_by_service_id(
+    client, auth_headers, project, monkeypatch,
+):
+    _save_version(client, auth_headers, project["id"], monkeypatch)
+    svc = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=auth_headers,
+    ).json()["data"]
+    client.post(
+        f"{BASE}/services/{svc['id']}/invoke",
+        json={"context": {}, "actions": [], "horizon": 1},
+        headers=auth_headers,
+    )
+
+    r = client.get(f"{BASE}/calls", headers=auth_headers)
+    assert r.json()["data"]["total"] == 1
+    r = client.get(
+        f"{BASE}/calls", params={"service_id": svc["id"]}, headers=auth_headers)
+    assert r.json()["data"]["total"] == 1
+    r = client.get(
+        f"{BASE}/calls", params={"service_id": "other"}, headers=auth_headers)
+    assert r.json()["data"]["total"] == 0
+
+
+def test_service_registry_requires_menu(client, custom_headers):
+    assert client.get(f"{BASE}/services", headers=custom_headers).status_code == 403
+    assert client.get(
+        f"{BASE}/services/any", headers=custom_headers).status_code == 403
+    r = client.post(
+        f"{BASE}/services/any/status",
+        json={"status": "online"}, headers=custom_headers,
     )
     assert r.status_code == 403

@@ -63,16 +63,19 @@ def test_upgrade_creates_tables_and_backfills_role_menu_keys(
     engine.dispose()
 
     by_role = {row["role"]: json.loads(row["menu_keys"]) for row in rows}
-    # 0065 先回填 ontologies 子 key，0066 再把世界模型迁为一级分组：
+    # 0065 先回填 ontologies 子 key，0066 再把世界模型迁为一级分组，
+    # 0071 为世界模型组新增「推演服务」子 key：
     # 终态 = 持有 ontologies 的角色获得 world_model 全家，旧子 key 全部移除
     assert "ontologies" in by_role["editor"]
     assert "world_model" in by_role["editor"]
     assert "world_model.models" in by_role["editor"]
+    assert "world_model.services" in by_role["editor"]
     assert "world_model.calls" in by_role["editor"]
     assert "ontologies.library" not in by_role["editor"]
     assert "ontologies.world_model" not in by_role["editor"]
     # 未持有 ontologies 的角色不受影响
     assert "world_model" not in by_role["viewer"]
+    assert "world_model.services" not in by_role["viewer"]
     assert "ontologies.library" not in by_role["viewer"]
     assert "ontologies.world_model" not in by_role["viewer"]
 

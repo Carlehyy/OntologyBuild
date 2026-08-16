@@ -25,6 +25,7 @@ from app.world_model import schemas
 from app.world_model.models import (
     ENGINE_TYPES,
     SCRIPT_VERSION_KEEP,
+    SERVICE_STATUS_DRAFT,
     SERVICE_STATUS_OFFLINE,
     SERVICE_STATUS_ONLINE,
     STATUS_DRAFT,
@@ -562,12 +563,15 @@ def list_call_records(
     *,
     keyword: str = "",
     result: str = "all",
+    service_id: str | None = None,
     start=None,
     end=None,
     page: int = 1,
     size: int = 20,
 ) -> schemas.CallRecordListResponse:
     query = db.query(WorldModelCallRecord)
+    if service_id:
+        query = query.filter(WorldModelCallRecord.service_id == service_id)
     if keyword.strip():
         like = f"%{keyword.strip()}%"
         query = query.filter(
@@ -709,16 +713,28 @@ def publish_service(
     return service
 
 
+def _apply_service_status(
+    db: Session, service: WorldModelService, status: str,
+) -> WorldModelService:
+    service.status = status
+    db.commit()
+    db.refresh(service)
+    return service
+
+
 def set_service_status(
     db: Session, project_id: str, status: str,
 ) -> WorldModelService:
     service = get_project_service(db, project_id)
     if service is None:
         raise HTTPException(404, "该项目尚未发布推演服务。")
-    service.status = status
-    db.commit()
-    db.refresh(service)
-    return service
+    return _apply_service_status(db, service, status)
+
+
+def set_service_status_by_id(
+    db: Session, service_id: str, status: str,
+) -> WorldModelService:
+    return _apply_service_status(db, get_service_by_id(db, service_id), status)
 
 
 def invoke_service(
@@ -787,6 +803,137 @@ def service_out(db: Session, service: WorldModelService) -> schemas.ServiceOut:
         endpoint_path=service.endpoint_path,
         applicable_object_types=service.applicable_object_types,
         preconditions=service.preconditions,
+        created_at=service.created_at,
+        updated_at=service.updated_at,
+    )
+
+
+# ──────────────────────────── 推演服务注册表（跨项目） ────────────────────────────
+
+
+def get_service_by_id(db: Session, service_id: str) -> WorldModelService:
+    service = db.get(WorldModelService, service_id)
+    if service is None:
+        raise HTTPException(404, "推演服务不存在或已被删除。")
+    return service
+
+
+def list_services(
+    db: Session,
+    *,
+    keyword: str = "",
+    status: str = "",
+    page: int = 1,
+    size: int = 20,
+) -> schemas.ServiceListResponse:
+    """跨项目服务注册表：服务 + 所属模型名 + 冻结版本号 + 调用统计。"""
+    query = (
+        db.query(WorldModelService, WorldModelProject.name)
+        .join(WorldModelProject, WorldModelService.project_id == WorldModelProject.id)
+    )
+    if keyword.strip():
+        like = f"%{keyword.strip()}%"
+        query = query.filter(
+            WorldModelService.name.like(like)
+            | WorldModelService.description.like(like))
+    if status:
+        if status not in (
+            SERVICE_STATUS_DRAFT, SERVICE_STATUS_ONLINE, SERVICE_STATUS_OFFLINE,
+        ):
+            raise HTTPException(400, f"未知服务状态：{status}")
+        query = query.filter(WorldModelService.status == status)
+    total = query.count()
+    rows = (
+        query.order_by(WorldModelService.updated_at.desc())
+        .offset((page - 1) * size)
+        .limit(size)
+        .all()
+    )
+    services = [row[0] for row in rows]
+    project_names = {row[0].id: row[1] for row in rows}
+
+    version_nos: dict[str, int | None] = {}
+    version_ids = [s.version_id for s in services if s.version_id]
+    if version_ids:
+        version_nos = dict(
+            db.query(WorldModelScriptVersion.id, WorldModelScriptVersion.version_no)
+            .filter(WorldModelScriptVersion.id.in_(version_ids))
+            .all()
+        )
+    call_stats: dict[str, tuple[int, int]] = {}
+    if services:
+        stats = (
+            db.query(
+                WorldModelCallRecord.service_id,
+                func.count(WorldModelCallRecord.id),
+                func.count(WorldModelCallRecord.id).filter(
+                    WorldModelCallRecord.ok.is_(False)),
+            )
+            .filter(WorldModelCallRecord.service_id.in_([s.id for s in services]))
+            .group_by(WorldModelCallRecord.service_id)
+            .all()
+        )
+        call_stats = {sid: (int(cnt), int(failed)) for sid, cnt, failed in stats}
+
+    return schemas.ServiceListResponse(
+        items=[
+            schemas.ServiceSummary(
+                id=service.id,
+                project_id=service.project_id,
+                project_name=project_names.get(service.id, ""),
+                version_id=service.version_id,
+                version_no=version_nos.get(service.version_id),
+                name=service.name,
+                description=service.description or "",
+                status=service.status,
+                endpoint_path=service.endpoint_path,
+                applicable_object_types=service.applicable_object_types,
+                preconditions=service.preconditions,
+                call_count=call_stats.get(service.id, (0, 0))[0],
+                failed_count=call_stats.get(service.id, (0, 0))[1],
+                created_at=service.created_at,
+                updated_at=service.updated_at,
+            )
+            for service in services
+        ],
+        total=total,
+    )
+
+
+def service_summary_out(
+    db: Session, service: WorldModelService,
+) -> schemas.ServiceSummary:
+    """单个服务的注册表条目输出（与列表字段口径一致）。"""
+    project = db.get(WorldModelProject, service.project_id)
+    version_no = None
+    if service.version_id:
+        version = db.get(WorldModelScriptVersion, service.version_id)
+        version_no = version.version_no if version else None
+    total = (
+        db.query(func.count(WorldModelCallRecord.id))
+        .filter(WorldModelCallRecord.service_id == service.id)
+        .scalar() or 0
+    )
+    failed = (
+        db.query(func.count(WorldModelCallRecord.id))
+        .filter(WorldModelCallRecord.service_id == service.id)
+        .filter(WorldModelCallRecord.ok.is_(False))
+        .scalar() or 0
+    )
+    return schemas.ServiceSummary(
+        id=service.id,
+        project_id=service.project_id,
+        project_name=project.name if project else "",
+        version_id=service.version_id,
+        version_no=version_no,
+        name=service.name,
+        description=service.description or "",
+        status=service.status,
+        endpoint_path=service.endpoint_path,
+        applicable_object_types=service.applicable_object_types,
+        preconditions=service.preconditions,
+        call_count=int(total),
+        failed_count=int(failed),
         created_at=service.created_at,
         updated_at=service.updated_at,
     )

@@ -169,3 +169,27 @@ class TemplateOut(BaseModel):
     description: str
     script: str
     test_input: dict[str, Any]
+
+
+class ServiceSummary(BaseModel):
+    """推演服务注册表条目（跨项目列表）。"""
+    id: str
+    project_id: str
+    project_name: str
+    version_id: str | None
+    version_no: int | None = None
+    name: str
+    description: str
+    status: str
+    endpoint_path: str | None
+    applicable_object_types: dict[str, Any] | None
+    preconditions: list[dict[str, Any]] | None
+    call_count: int = 0
+    failed_count: int = 0
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+class ServiceListResponse(BaseModel):
+    items: list[ServiceSummary]
+    total: int

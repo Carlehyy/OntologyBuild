@@ -20,11 +20,16 @@
   POST   /projects/{id}/service/status  上线 / 下线
   POST   /services/{id}/invoke          调用（写调用记录）
 
+  推演服务注册表（跨项目，推演服务页数据源）：
+  GET    /services                      列表（keyword / status / 分页，含调用统计）
+  GET    /services/{id}                 详情（注册表条目口径）
+  POST   /services/{id}/status          上线 / 下线（服务侧入口）
+
   官方脚本模板：
   GET    /templates/time-series         时序推演示例（ARIMA/SARIMA），开发页一键插入
 
   调用记录（只读；由 invoke 写入）：
-  GET    /calls                         列表（keyword / result / 时间范围 / 分页）
+  GET    /calls                         列表（keyword / result / service_id / 时间范围 / 分页）
   GET    /calls/overview                概览统计
   GET    /calls/{id}                    详情（含请求/响应快照）
 """
@@ -249,6 +254,44 @@ def invoke_world_model_service(
     return _ok(result.model_dump())
 
 
+# ── 推演服务注册表（跨项目） ──
+
+
+@router.get("/services")
+def list_services(
+    keyword: str = Query(default=""),
+    status: str = Query(default=""),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    result_page = service.list_services(
+        db, keyword=keyword, status=status, page=page, size=size)
+    return _ok(result_page.model_dump())
+
+
+@router.get("/services/{service_id}")
+def get_service(
+    service_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    svc = service.get_service_by_id(db, service_id)
+    return _ok(service.service_summary_out(db, svc).model_dump())
+
+
+@router.post("/services/{service_id}/status")
+def set_service_status(
+    service_id: str,
+    body: schemas.ServiceStatusRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    svc = service.set_service_status_by_id(db, service_id, body.status)
+    return _ok(service.service_summary_out(db, svc).model_dump())
+
+
 # ── 调用记录（只读） ──
 
 
@@ -256,6 +299,7 @@ def invoke_world_model_service(
 def list_calls(
     keyword: str = Query(default=""),
     result: str = Query(default="all"),
+    service_id: str = Query(default=""),
     start: Optional[datetime] = Query(default=None),
     end: Optional[datetime] = Query(default=None),
     page: int = Query(default=1, ge=1),
@@ -264,8 +308,8 @@ def list_calls(
     current_user=Depends(get_current_user),
 ):
     result_page = service.list_call_records(
-        db, keyword=keyword, result=result, start=start, end=end,
-        page=page, size=size)
+        db, keyword=keyword, result=result, service_id=service_id,
+        start=start, end=end, page=page, size=size)
     return _ok(result_page.model_dump())
 
 
