@@ -35,14 +35,23 @@ describe('recordVisit', () => {
   it('reuses the same tab for in-domain navigation, updating title/path/lastUsedAt', () => {
     let state = recordVisit(EMPTY_NAV_TAB_STATE, 'admin', { key: 'agent', title: '本体助手', path: '/agent' }, 1000)
     state = recordVisit(state, 'admin', { key: 'ontologies', title: '本体管理', path: '/ontologies' }, 2000)
-    state = recordVisit(state, 'admin', { key: 'ontologies', title: '本体管理 · 详情', path: '/ontologies/123' }, 3000)
+    state = recordVisit(state, 'admin', { key: 'ontologies', title: '详情', fullTitle: '本体管理 · 详情', path: '/ontologies/123' }, 3000)
     assert.equal(state.tabs.length, 2)
     assert.deepEqual(state.tabs.map(t => t.key), ['agent', 'ontologies'])
     const tab = state.tabs[1]
-    assert.equal(tab.title, '本体管理 · 详情')
+    assert.equal(tab.title, '详情')
+    assert.equal(tab.fullTitle, '本体管理 · 详情')
     assert.equal(tab.path, '/ontologies/123')
     assert.equal(tab.lastUsedAt, 3000)
     assert.equal(state.activeKey, 'ontologies')
+  })
+
+  it('keeps the previous fullTitle when a later visit does not provide one', () => {
+    let state = recordVisit(EMPTY_NAV_TAB_STATE, 'admin', { key: 'ontologies', title: '详情', fullTitle: '本体管理 · 详情', path: '/ontologies/123' }, 1000)
+    state = recordVisit(state, 'admin', { key: 'ontologies', title: '本体管理', path: '/ontologies' }, 2000)
+    const tab = state.tabs[0]
+    assert.equal(tab.title, '本体管理')
+    assert.equal(tab.fullTitle, '本体管理 · 详情')
   })
 
   it('resets the tab list when the signed-in user changes', () => {

@@ -8,9 +8,20 @@
 /** 一个顶栏标签：key 为叶子 menu key（或无菜单映射时的路径），path 含 query。 */
 export interface NavTab {
   key: string
+  /** 标签栏可见的一层标题（页面自身描述）。 */
   title: string
+  /** 完整两级标题（菜单名 · 页面），仅用于悬停提示；旧持久化数据可能缺失。 */
+  fullTitle?: string
   path: string
   lastUsedAt: number
+}
+
+/** recordVisit 的入参：一次页面访问产生的标签信息。 */
+export interface NavTabVisit {
+  key: string
+  title: string
+  fullTitle?: string
+  path: string
 }
 
 export interface NavTabListState {
@@ -33,14 +44,14 @@ export const EMPTY_NAV_TAB_STATE: NavTabListState = {
 export function recordVisit(
   state: NavTabListState,
   username: string,
-  tab: { key: string; title: string; path: string },
+  tab: NavTabVisit,
   now: number,
 ): NavTabListState {
   const base = state.owner === username ? state : { ...EMPTY_NAV_TAB_STATE, owner: username }
   const existing = base.tabs.find(t => t.key === tab.key)
   const tabs = existing
     ? base.tabs.map(t => (t.key === tab.key
-        ? { ...t, title: tab.title, path: tab.path, lastUsedAt: now }
+        ? { ...t, title: tab.title, fullTitle: tab.fullTitle ?? t.fullTitle, path: tab.path, lastUsedAt: now }
         : t))
     : [...base.tabs, { ...tab, lastUsedAt: now }]
   return { tabs, activeKey: tab.key, owner: username }

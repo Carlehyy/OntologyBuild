@@ -24,6 +24,7 @@ import {
   Waypoints,
 } from 'lucide-react'
 import type { User } from '@/types/auth'
+import { buildTabTitles, menuKeyForPath, tabSuffixForPath } from '@/stores/tabTitle'
 
 
 export interface PlatformNavItem {
@@ -139,47 +140,9 @@ export function visibleNavigation(user: User | null): PlatformNavItem[] {
   })
 }
 
-export function menuKeyForPath(pathname: string): string | null {
-  if (pathname === '/settings' || pathname.startsWith('/settings/')) return 'system_settings'
-  if (pathname === '/data/pipelines/sync-tasks' || pathname.startsWith('/data/pipelines/sync-tasks/')) return 'data.sync_tasks'
-  if (pathname === '/data/structured' || pathname.startsWith('/data/structured/')) return 'data.structured'
-  if (pathname === '/data' || pathname === '/data/') return 'data'
-  if (pathname.startsWith('/data/pipelines')) return 'data.pipelines'
-  if (pathname === '/api-hub' || pathname === '/api-hub/') return 'api_hub'
-  if (pathname.startsWith('/api-hub/history')) return 'api_hub.history'
-  if (pathname.startsWith('/api-hub/authorization') || pathname.startsWith('/api-hub/operations')) return 'api_hub.authorization'
-  if (pathname.startsWith('/api-hub/interfaces')) return 'api_hub.interfaces'
-  if (pathname === '/community' || pathname === '/community/') return 'community'
-  if (pathname.startsWith('/community/skills')) return 'community.skills'
-  if (pathname.startsWith('/community/plugins')) return 'community.plugins'
-  if (pathname.startsWith('/world-model/calls')) return 'world_model.calls'
-  if (pathname === '/world-model' || pathname.startsWith('/world-model/')) return 'world_model.models'
-  if (pathname.startsWith('/ontologies')) return 'ontologies'
-  if (pathname.startsWith('/agent')) return 'agent'
-  if (pathname.startsWith('/overview')) return 'overview'
-  if (pathname.startsWith('/super-assistant')) return 'super_assistant'
-  if (pathname.startsWith('/explore')) return 'explore'
-  if (pathname.startsWith('/events')) return 'events'
-  if (pathname.startsWith('/models')) return 'models'
-  return null
-}
-
 export function canAccessPath(user: User | null, pathname: string): boolean {
   const key = menuKeyForPath(pathname)
   return key === null || hasMenuAccess(user, key)
-}
-
-/** 顶栏标签标题的子页面后缀规则：命中即显示为“菜单名 · 后缀”。 */
-function tabSubTitleForPath(pathname: string): string | null {
-  if (/^\/ontologies\/[^/]+\/mapping-config$/.test(pathname)) return '映射配置'
-  if (/^\/ontologies\/[^/]+\/graph$/.test(pathname)) return '图谱'
-  if (/^\/ontologies\/[^/]+\/(entities|logic|actions)\//.test(pathname)) return '详情'
-  if (/^\/ontologies\/(?!new$)[^/]+$/.test(pathname)) return '详情'
-  if (/^\/world-model\/develop\//.test(pathname)) return '开发'
-  if (/^\/agent\/reports(\/|$)/.test(pathname)) return '报告'
-  if (pathname === '/data/pipelines/steward') return '数据管家'
-  if (/^\/data\/pipelines\/script\//.test(pathname)) return '脚本'
-  return null
 }
 
 function labelForMenuKey(key: string): string | null {
@@ -198,23 +161,29 @@ const FALLBACK_TAB_PATHS: Record<string, string> = {
 
 export interface NavTabInfo {
   key: string
+  /** 标签栏可见的一层标题（页面自身描述，不再拼接菜单名）。 */
   title: string
+  /** 完整两级标题（菜单名 + 页面），仅用于悬停提示。 */
+  fullTitle: string
 }
 
 /**
  * 顶栏多标签页：把路径解析为标签，按叶子菜单项粒度（菜单域内的页内跳转
  * 复用同一标签）。返回 null 表示该路径不产生标签（如 /no-access）。
+ *
+ * 标题规则见 stores/tabTitle.ts：可见标题只保留页面自身的一层描述，
+ * 完整两级标题（菜单名 · 页面）保留在 fullTitle 供悬停提示。
  */
 export function navTabForPath(pathname: string): NavTabInfo | null {
   const key = menuKeyForPath(pathname)
   if (!key) {
     const title = FALLBACK_TAB_PATHS[pathname]
-    return title ? { key: pathname, title } : null
+    return title ? { key: pathname, title, fullTitle: title } : null
   }
   const label = labelForMenuKey(key)
-  if (!label) return null
-  const subTitle = tabSubTitleForPath(pathname)
-  return { key, title: subTitle ? `${label} · ${subTitle}` : label }
+  const { title, fullTitle } = buildTabTitles(label, tabSuffixForPath(pathname))
+  if (!title || !fullTitle) return null
+  return { key, title, fullTitle }
 }
 
 export function firstAccessiblePath(user: User | null): string {

@@ -7,13 +7,14 @@ import {
   EMPTY_NAV_TAB_STATE,
   type CloseTabResult,
   type NavTabListState,
+  type NavTabVisit,
 } from '@/stores/tabLogic'
 
 /** localStorage 持久化 key：增量新增，不复用 auth-store/token 等既有 key。 */
 export const NAV_TABS_STORAGE_KEY = 'nav-tabs'
 
 interface NavTabStore extends NavTabListState {
-  recordVisit: (username: string, tab: { key: string; title: string; path: string }) => void
+  recordVisit: (username: string, tab: NavTabVisit) => void
   close: (key: string) => CloseTabResult
 }
 
