@@ -283,112 +283,105 @@ export default function SuperAssistantPage() {
   const hasMessages = messages.length > 0
 
   const renderComposer = (prominent = false) => (
-    <ConfigProvider
-      theme={{
-        algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
-        token: { colorPrimary: '#0d9488', colorLink: '#0d9488' },
-      }}
-    >
-      <div className="w-full">
-        <div data-testid="super-assistant-composer" className={`flex items-end gap-2 rounded-2xl border bg-[var(--color-bg-elevated)] p-2 transition-all focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-100 ${prominent
-          ? 'border-slate-200 shadow-[0_18px_50px_rgba(15,118,110,0.12)]'
-          : 'border-[var(--color-border)] shadow-[0_8px_28px_rgba(15,23,42,0.08)]'}`}>
-          <Sender
-            ref={senderRef}
-            {...senderNativeProps}
-            value={input}
-            onChange={value => setInput(value)}
-            onSubmit={value => { if (canSend) void send(value) }}
-            onKeyDown={event => {
-              // 自行处理 Enter 提交（保留平台语义）；输入法组合期间的 Enter 不触发发送
-              if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent.isComposing) return
-              event.preventDefault()
-              if (canSend) void send()
-              return false
-            }}
-            onCancel={() => void stop()}
-            loading={running}
-            placeholder={placeholder}
-            disabled={running || models.length === 0}
-            autoSize={{ minRows: 1, maxRows: 6 }}
-            suffix={false}
-            className="min-w-0 flex-1"
-            style={{ border: 'none', boxShadow: 'none', background: 'transparent' }}
-            styles={{
-              // antd textarea 自带 5px 纵向内边距（行高 22px），content 上下 6px 时
-              // 单行总高恰为 44px（h-11），与右侧按钮一致，保证历史浮层间距不变
-              content: { paddingBlock: 6 },
-            }}
-          />
-          <div className="flex h-11 shrink-0 items-center gap-1.5">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={agentMode}
-              aria-label="自主模式"
-              data-testid="agent-mode-toggle"
-              title="助手将自主拆解并执行多步任务（最多 50 轮）"
-              onClick={() => setAgentMode(value => !value)}
-              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${agentMode ? 'bg-teal-600' : 'bg-slate-300'}`}
-            >
-              <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${agentMode ? 'left-[22px]' : 'left-0.5'}`} />
+    <div className="w-full">
+      <div data-testid="super-assistant-composer" className={`flex items-end gap-2 rounded-2xl border bg-[var(--color-bg-elevated)] p-2 transition-all focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-100 ${prominent
+        ? 'border-slate-200 shadow-[0_18px_50px_rgba(15,118,110,0.12)]'
+        : 'border-[var(--color-border)] shadow-[0_8px_28px_rgba(15,23,42,0.08)]'}`}>
+        <Sender
+          ref={senderRef}
+          {...senderNativeProps}
+          value={input}
+          onChange={value => setInput(value)}
+          onSubmit={value => { if (canSend) void send(value) }}
+          onKeyDown={event => {
+            // 自行处理 Enter 提交（保留平台语义）；输入法组合期间的 Enter 不触发发送
+            if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent.isComposing) return
+            event.preventDefault()
+            if (canSend) void send()
+            return false
+          }}
+          onCancel={() => void stop()}
+          loading={running}
+          placeholder={placeholder}
+          disabled={running || models.length === 0}
+          autoSize={{ minRows: 1, maxRows: 6 }}
+          suffix={false}
+          className="min-w-0 flex-1"
+          style={{ border: 'none', boxShadow: 'none', background: 'transparent' }}
+          styles={{
+            // antd textarea 自带 5px 纵向内边距（行高 22px），content 上下 6px 时
+            // 单行总高恰为 44px（h-11），与右侧按钮一致，保证历史浮层间距不变
+            content: { paddingBlock: 6 },
+          }}
+        />
+        <div className="flex h-11 shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={agentMode}
+            aria-label="自主模式"
+            data-testid="agent-mode-toggle"
+            title="助手将自主拆解并执行多步任务（最多 50 轮）"
+            onClick={() => setAgentMode(value => !value)}
+            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${agentMode ? 'bg-teal-600' : 'bg-slate-300'}`}
+          >
+            <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${agentMode ? 'left-[22px]' : 'left-0.5'}`} />
+          </button>
+          <span className="whitespace-nowrap text-xs text-[var(--color-text-secondary)]">自主模式</span>
+        </div>
+        <div className="relative flex shrink-0 items-center gap-2">
+          {running ? (
+            <button type="button" onClick={() => void stop()} disabled={stopping} aria-label="停止生成" title="停止生成"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--color-text-primary)] text-white transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
+              {stopping ? <Loader2 size={15} className="animate-spin" /> : <Square size={14} fill="currentColor" />}
             </button>
-            <span className="whitespace-nowrap text-xs text-[var(--color-text-secondary)]">自主模式</span>
-          </div>
-          <div className="relative flex shrink-0 items-center gap-2">
-            {running ? (
-              <button type="button" onClick={() => void stop()} disabled={stopping} aria-label="停止生成" title="停止生成"
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--color-text-primary)] text-white transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
-                {stopping ? <Loader2 size={15} className="animate-spin" /> : <Square size={14} fill="currentColor" />}
-              </button>
-            ) : (
-              <button type="button" onClick={() => void send()} disabled={!canSend} aria-label="发送消息" title="发送消息"
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white transition-colors hover:bg-teal-800 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40">
-                <Send size={16} />
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setShowMessageHistory(value => !value)}
-              disabled={myMessages.length === 0}
-              title="我发送的消息 · 快速跳转"
-              aria-label="查看我发送的消息"
-              aria-expanded={showMessageHistory}
-              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${showMessageHistory
-                ? 'border-teal-300 bg-teal-50 text-teal-700'
-                : 'border-[var(--color-border)] text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
-            >
-              <List size={16} />
+          ) : (
+            <button type="button" onClick={() => void send()} disabled={!canSend} aria-label="发送消息" title="发送消息"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white transition-colors hover:bg-teal-800 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40">
+              <Send size={16} />
             </button>
-            {showMessageHistory && (
-              <>
-                <div className="fixed inset-0 z-20" onClick={() => setShowMessageHistory(false)} />
-                <div data-testid="super-assistant-message-history" className="absolute bottom-full right-0 z-30 mb-5 w-72 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_16px_40px_rgba(15,23,42,0.16)]">
-                  <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2.5">
-                    <span className="text-[11px] font-medium text-[var(--color-text-secondary)]">我发送的消息</span>
-                    <span className="text-[10px] text-[var(--color-text-tertiary)]">点击跳转 · 共 {myMessages.length} 条</span>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto py-1">
-                    {[...myMessages].reverse().map((message, index) => (
-                      <button
-                        type="button"
-                        key={message.id}
-                        onClick={() => jumpToMessage(message.id)}
-                        title={message.content}
-                        className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-bg-hover)] focus-visible:bg-[var(--color-bg-hover)] focus-visible:outline-none"
-                      >
-                        <span className="mt-0.5 shrink-0 font-mono text-[10px] text-[var(--color-text-tertiary)]">#{myMessages.length - index}</span>
-                        <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-secondary)]">{message.content}</span>
-                      </button>
-                    ))}
-                  </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowMessageHistory(value => !value)}
+            disabled={myMessages.length === 0}
+            title="我发送的消息 · 快速跳转"
+            aria-label="查看我发送的消息"
+            aria-expanded={showMessageHistory}
+            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${showMessageHistory
+              ? 'border-teal-300 bg-teal-50 text-teal-700'
+              : 'border-[var(--color-border)] text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
+          >
+            <List size={16} />
+          </button>
+          {showMessageHistory && (
+            <>
+              <div className="fixed inset-0 z-20" onClick={() => setShowMessageHistory(false)} />
+              <div data-testid="super-assistant-message-history" className="absolute bottom-full right-0 z-30 mb-5 w-72 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_16px_40px_rgba(15,23,42,0.16)]">
+                <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2.5">
+                  <span className="text-[11px] font-medium text-[var(--color-text-secondary)]">我发送的消息</span>
+                  <span className="text-[10px] text-[var(--color-text-tertiary)]">点击跳转 · 共 {myMessages.length} 条</span>
                 </div>
-              </>
-            )}
-          </div>
+                <div className="max-h-64 overflow-y-auto py-1">
+                  {[...myMessages].reverse().map((message, index) => (
+                    <button
+                      type="button"
+                      key={message.id}
+                      onClick={() => jumpToMessage(message.id)}
+                      title={message.content}
+                      className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-bg-hover)] focus-visible:bg-[var(--color-bg-hover)] focus-visible:outline-none"
+                    >
+                      <span className="mt-0.5 shrink-0 font-mono text-[10px] text-[var(--color-text-tertiary)]">#{myMessages.length - index}</span>
+                      <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-secondary)]">{message.content}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
-    </ConfigProvider>
+    </div>
   )
 
   return (
@@ -489,34 +482,44 @@ export default function SuperAssistantPage() {
           </div>
         </header>
 
-        <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-          {loading ? (
-            <div className="flex flex-1 items-center justify-center"><Loader2 size={22} className="animate-spin text-teal-600" /></div>
-          ) : !hasMessages ? (
-            <div className="flex flex-1 items-center justify-center px-4 sm:px-8">
-              <div className="relative w-full max-w-3xl -translate-y-10 sm:-translate-y-14">
-                <EmptyState />
-                {renderComposer(true)}
+        <ConfigProvider
+          theme={{
+            algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+            token: { colorPrimary: '#0d9488', colorLink: '#0d9488' },
+          }}
+        >
+          <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+            {loading ? (
+              <div className="flex flex-1 items-center justify-center"><Loader2 size={22} className="animate-spin text-teal-600" /></div>
+            ) : !hasMessages ? (
+              <div className="flex flex-1 items-center justify-center px-4 sm:px-8">
+                <div className="relative w-full max-w-3xl -translate-y-10 sm:-translate-y-14">
+                  <EmptyState onPromptSelect={text => {
+                    setInput(text)
+                    requestAnimationFrame(() => senderRef.current?.focus())
+                  }} />
+                  {renderComposer(true)}
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="h-full overflow-y-auto">
-              <div className="mx-auto w-full max-w-4xl space-y-7 px-4 pb-28 pt-6 sm:px-8">
-                {messages.map(message => <ChatMessage key={message.id} message={message} />)}
-                {pending && <ConfirmationCard pending={pending} busy={decisionBusy} onDecision={decision => void decide(decision)} />}
-                <div ref={messagesEndRef} />
+            ) : (
+              <div className="h-full overflow-y-auto">
+                <div className="mx-auto w-full max-w-4xl space-y-7 px-4 pb-28 pt-6 sm:px-8">
+                  {messages.map(message => <ChatMessage key={message.id} message={message} />)}
+                  {pending && <ConfirmationCard pending={pending} busy={decisionBusy} onDecision={decision => void decide(decision)} />}
+                  <div ref={messagesEndRef} />
+                </div>
               </div>
-            </div>
-          )}
-        </main>
+            )}
+          </main>
 
-        {hasMessages && (
-          <footer className="shrink-0 bg-[var(--color-bg-elevated)] px-4 pb-8 pt-2 sm:px-8 sm:pb-10">
-            <div className="mx-auto max-w-4xl">
-              {renderComposer()}
-            </div>
-          </footer>
-        )}
+          {hasMessages && (
+            <footer className="shrink-0 bg-[var(--color-bg-elevated)] px-4 pb-8 pt-2 sm:px-8 sm:pb-10">
+              <div className="mx-auto max-w-4xl">
+                {renderComposer()}
+              </div>
+            </footer>
+          )}
+        </ConfigProvider>
       </section>
 
       <ConfigurationPanel
