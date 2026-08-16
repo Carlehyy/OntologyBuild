@@ -165,10 +165,28 @@ npm run test:e2e:mocked
 - PostgreSQL、Redis/Celery worker、Neo4j、MinIO、n8n、Chromium CDP；
 - Alembic、对象存储、文件上传下载或公开分享；
 - SSE、WebSocket、浏览器接管、n8n、API Hub proxy；
-- 本体映射/发布、Sentinel 执行动作、生产部署与回滚。
+- 本体映射/发布、Sentinel 执行动作、生产部署与回滚；
+- 剪贴板写入、浏览器下载、系统通知等依赖浏览器/系统副作用的交互。
 
 真实验收必须在隔离的 staging/canary 环境执行，证据作为 CI artifact，
 不得提交截图、trace、数据库或运行结果到 Git。
+
+#### 副作用类交互的验收标准（防"假成功"）
+
+依赖浏览器/系统副作用的交互（剪贴板、下载、通知等）在普通 HTTP 部署下
+没有 Clipboard API，document.execCommand('copy') 在非聚焦页面等场景会
+返回成功但实际未写入剪贴板，且页面侧无法验证真实结果。因此：
+
+- 验收必须作用在**最终结果**上：真实粘贴内容（生产环境可用 pbpaste
+  等系统命令核对）或下载文件的内容校验，不得以中间信号（提示出现、
+  API/execCommand 返回值）代替；
+- 禁止依据无法验证的中间信号向用户宣称"已复制/已下载"；提示文案必须
+  如实（如"已尝试写入剪贴板"+ 失败时的手动路径指引）；
+- 此类功能必须提供不依赖单一剪贴板路径的兜底：如全文弹窗（自动全选、
+  手动 Cmd+C / Ctrl+C）或文件下载入口；
+- 自动化测试需断言真实结果：Playwright 可读取剪贴板（需
+  clipboard-read/write 权限）与下载内容；可见性断言（toBeVisible）
+  不检测遮挡，凡层叠场景须用 elementFromPoint 命中检测断言层级契约。
 
 ## 5. 安全与仓库卫生
 
