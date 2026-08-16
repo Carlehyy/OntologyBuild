@@ -233,6 +233,14 @@ async def discover_tools(*, transport: str, url: str, headers: dict[str, str],
 async def call_tool(*, transport: str, url: str, headers: dict[str, str], tool_name: str,
                     arguments: dict[str, Any], command: str | None = None,
                     args: list[str] | None = None, env: dict[str, str] | None = None) -> str:
+    from app.shared import perf_spans
+
+    span_target = (
+        perf_spans.http_target(url) if transport != "stdio" else f"stdio:{command or ''}"
+    )
+    span = perf_spans.begin_span(
+        "http", name=f"MCP {tool_name}", target=span_target)
+    status = "success"
     try:
         async with _client_session(
             transport=transport, url=url, headers=headers, command=command,
@@ -243,6 +251,10 @@ async def call_tool(*, transport: str, url: str, headers: dict[str, str], tool_n
                 return result.model_dump_json(by_alias=True, exclude_none=True)
             return json.dumps(result, ensure_ascii=False, default=str)
     except McpClientError:
+        status = "error"
         raise
     except Exception as exc:
+        status = "error"
         raise McpClientError(f"MCP 工具 {tool_name} 执行失败: {_error_message(exc)}") from exc
+    finally:
+        perf_spans.end_span(span, status=status)

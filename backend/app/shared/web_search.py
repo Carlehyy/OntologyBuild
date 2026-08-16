@@ -235,20 +235,31 @@ def search_web(query: str, limit: int = _DEFAULT_LIMIT) -> list[dict[str, str]]:
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
     }
     errors: list[Exception] = []
+    from app.shared import perf_spans
+
+    duck_span = perf_spans.begin_span(
+        "http", name="GET", target=perf_spans.http_target(_DUCK_SEARCH_URL))
+    duck_status = "error"
     try:
         response = httpx.get(
             _DUCK_SEARCH_URL, params={"q": cleaned}, headers=headers,
             follow_redirects=True, timeout=httpx.Timeout(10.0, connect=5.0),
         )
+        duck_status = str(response.status_code)
         response.raise_for_status()
         results = parse_duck_results(response.text, limit=limit)
         if results:
             return results
     except httpx.HTTPError as exc:
         errors.append(exc)
+    finally:
+        perf_spans.end_span(duck_span, status=duck_status)
 
     # RSS is a stable, server-rendered fallback and avoids Bing's browser
     # challenge, though its Chinese relevance is weaker than DuckDuckGo's.
+    bing_span = perf_spans.begin_span(
+        "http", name="GET", target=perf_spans.http_target(_BING_SEARCH_URL))
+    bing_status = "error"
     try:
         response = httpx.get(
             _BING_SEARCH_URL,
@@ -256,6 +267,7 @@ def search_web(query: str, limit: int = _DEFAULT_LIMIT) -> list[dict[str, str]]:
             headers=headers, follow_redirects=True,
             timeout=httpx.Timeout(10.0, connect=5.0),
         )
+        bing_status = str(response.status_code)
         response.raise_for_status()
         results = parse_bing_rss(response.text, limit=limit)
         if not results:
@@ -264,6 +276,8 @@ def search_web(query: str, limit: int = _DEFAULT_LIMIT) -> list[dict[str, str]]:
             return results
     except httpx.HTTPError as exc:
         errors.append(exc)
+    finally:
+        perf_spans.end_span(bing_span, status=bing_status)
     if errors:
         raise WebSearchError("搜索服务暂时不可用，请稍后重试") from errors[-1]
     raise WebSearchError("没有找到可用的公开网页结果")

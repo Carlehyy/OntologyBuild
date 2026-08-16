@@ -137,8 +137,17 @@ class RestConnector(ConnectorBase):
             pagination.get("page_param", "page"): 1,
             pagination.get("size_param", "page_size"): min(limit, 100),
         })
-        resp = self._get_session().get(resource, params=params)
-        resp.raise_for_status()
+        from app.shared import perf_spans
+
+        span = perf_spans.begin_span(
+            "http", name="GET", target=perf_spans.http_target(resource))
+        request_status = "error"
+        try:
+            resp = self._get_session().get(resource, params=params)
+            request_status = str(resp.status_code)
+            resp.raise_for_status()
+        finally:
+            perf_spans.end_span(span, status=request_status)
         return self._extract_records(resp.json())[:limit]
 
     def pull_full(self, resource: str) -> list[dict]:
@@ -152,10 +161,19 @@ class RestConnector(ConnectorBase):
         base_params = dict(self._config.get("params", {}))
 
         session = self._get_session()
+        from app.shared import perf_spans
+
         while True:
             params = {**base_params, page_param: page, size_param: 100}
-            resp = session.get(resource, params=params)
-            resp.raise_for_status()
+            span = perf_spans.begin_span(
+                "http", name="GET", target=perf_spans.http_target(resource))
+            request_status = "error"
+            try:
+                resp = session.get(resource, params=params)
+                request_status = str(resp.status_code)
+                resp.raise_for_status()
+            finally:
+                perf_spans.end_span(span, status=request_status)
             data = resp.json()
             records = self._extract_records(data)
             if not records:

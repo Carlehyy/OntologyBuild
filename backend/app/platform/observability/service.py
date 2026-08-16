@@ -7,7 +7,6 @@ every rollup row.
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -22,6 +21,7 @@ from app.platform.observability.collector import (
     utc_now,
 )
 from app.platform.observability.models import ApiPerfMinuteRollup, ApiPerfSlowRequest
+from app.shared.perf_spans import parse_breakdown
 
 WINDOW_OPTIONS = ("24h", "7d")
 
@@ -279,10 +279,13 @@ def slow_requests(
     )
     items = []
     for row in rows:
-        try:
-            breakdown = json.loads(row.breakdown or "{}")
-        except json.JSONDecodeError:
-            breakdown = {}
+        parsed = parse_breakdown(row.breakdown)
+        spans = parsed.get("spans") if isinstance(parsed.get("spans"), list) else []
+        breakdown = {
+            key: value
+            for key, value in parsed.items()
+            if key not in ("spans", "spans_truncated")
+        }
         items.append(
             {
                 "id": row.id,
@@ -298,6 +301,8 @@ def slow_requests(
                 "source_ip": row.source_ip,
                 "user_agent": row.user_agent,
                 "breakdown": breakdown,
+                "spans": spans,
+                "spans_truncated": bool(parsed.get("spans_truncated")),
             }
         )
     return {"items": items, "total": total, "page": page, "size": size}

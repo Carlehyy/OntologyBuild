@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Empty, Segmented, Table, Tag } from 'antd'
+import { Button, Drawer, Empty, Segmented, Table, Tag } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
@@ -11,6 +11,7 @@ import {
   type SlowRequestBreakdown,
   type SlowRequestItem,
   type TopRouteItem,
+  type TraceSpan,
 } from '@/api/monitoring'
 
 const REFRESH_MS = 30_000
@@ -69,11 +70,158 @@ function BreakdownTags({ breakdown }: { breakdown: SlowRequestBreakdown }) {
   )
 }
 
+const LAYER_COLORS: Record<string, string> = {
+  db: '#3b82f6',
+  llm: '#8b5cf6',
+  http: '#f59e0b',
+}
+
+const LAYER_LABELS: Record<string, string> = {
+  db: 'DB',
+  llm: 'LLM',
+  http: 'HTTP',
+}
+
+function TraceView({ request }: { request: SlowRequestItem }) {
+  const spans = request.spans ?? []
+  const total = Math.max(request.duration_ms, 1)
+  const attributed = spans.reduce((sum, span) => sum + (span.duration_ms || 0), 0)
+  const unattributed = Math.max(0, request.duration_ms - attributed)
+
+  const columns: ColumnsType<TraceSpan> = [
+    {
+      title: '#', dataIndex: 'seq', key: 'seq', width: 44, align: 'right',
+      render: value => <span className="text-[11px] text-gray-400">{value}</span>,
+    },
+    {
+      title: '层级', dataIndex: 'layer', key: 'layer', width: 72,
+      render: layer => (
+        <Tag color={LAYER_COLORS[layer] ?? 'default'} className="!mb-0 !text-[11px]">
+          {LAYER_LABELS[layer] ?? layer}
+        </Tag>
+      ),
+    },
+    {
+      title: '操作', dataIndex: 'name', key: 'name', width: 150, ellipsis: true,
+      render: value => value || <span className="text-gray-300">-</span>,
+    },
+    {
+      title: '目标', dataIndex: 'target', key: 'target', ellipsis: true,
+      render: value => (
+        <span className="font-mono text-[11px] text-gray-500">{value || '-'}</span>
+      ),
+    },
+    {
+      title: '开始', dataIndex: 'start_ms', key: 'start_ms', width: 84, align: 'right',
+      render: value => <span className="font-mono text-[11px]">+{value}ms</span>,
+    },
+    {
+      title: '耗时', dataIndex: 'duration_ms', key: 'duration_ms', width: 96, align: 'right',
+      sorter: (a, b) => a.duration_ms - b.duration_ms,
+      defaultSortOrder: 'descend',
+      render: value => (
+        <span className="font-medium text-red-500">{(value / 1000).toFixed(3)}s</span>
+      ),
+    },
+    {
+      title: '占比', key: 'pct', width: 76, align: 'right',
+      render: (_, span) => <span>{((span.duration_ms / total) * 100).toFixed(1)}%</span>,
+    },
+    {
+      title: '状态', dataIndex: 'status', key: 'status', width: 86, ellipsis: true,
+      render: value => value || '-',
+    },
+  ]
+
+  return (
+    <div className="flex flex-col gap-3 text-xs text-gray-600">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-gray-50 px-3 py-2">
+        <span className="font-mono text-xs">
+          {request.method} {request.route}
+        </span>
+        <span className="text-red-500 font-medium">{(request.duration_ms / 1000).toFixed(2)}s</span>
+        <span className="text-gray-400 font-mono text-[10px]">{request.request_id}</span>
+      </div>
+
+      <div>
+        <div className="mb-1 flex items-center justify-between text-[11px] text-gray-400">
+          <span>调用链时间轴（相对请求开始）</span>
+          <span className="flex gap-3">
+            {(['db', 'llm', 'http'] as const).map(layer => (
+              <span key={layer} className="flex items-center gap-1">
+                <span
+                  className="inline-block h-2 w-2 rounded-sm"
+                  style={{ backgroundColor: LAYER_COLORS[layer] }}
+                />
+                {LAYER_LABELS[layer]}
+              </span>
+            ))}
+          </span>
+        </div>
+        <div className="rounded-lg border border-gray-100 bg-white p-2">
+          <div className="relative mb-1 h-4 text-[9px] text-gray-300">
+            {[0, 25, 50, 75, 100].map(pct => (
+              <span key={pct} className="absolute -translate-x-1/2" style={{ left: pct + '%' }}>
+                {pct}%
+              </span>
+            ))}
+          </div>
+          {spans.map(span => (
+            <div key={span.seq} className="relative my-1 h-3.5 rounded-sm bg-gray-50">
+              <div
+                className="absolute top-0 h-full min-w-[2px] rounded-sm"
+                style={{
+                  left: Math.min(100, (span.start_ms / total) * 100) + '%',
+                  width: Math.max(0.3, Math.min(100, (span.duration_ms / total) * 100)) + '%',
+                  backgroundColor: LAYER_COLORS[span.layer] ?? '#9ca3af',
+                }}
+                title={LAYER_LABELS[span.layer] ?? span.layer + ' ' + span.name + ' ' + span.target + ' · ' + span.duration_ms + 'ms'}
+              />
+            </div>
+          ))}
+          {!spans.length && (
+            <div className="py-3 text-center text-[11px] text-gray-400">
+              该请求没有调用链数据（可能为旧版本记录的慢请求）
+            </div>
+          )}
+        </div>
+        <div className="mt-1 text-[11px] text-gray-400">
+          {unattributed > 0 && (
+            <span>
+              未归因耗时 {(unattributed / 1000).toFixed(2)}s（Python 计算及其他未埋点环节）·{' '}
+            </span>
+          )}
+          已归因 {(attributed / 1000).toFixed(2)}s / 总耗时 {(request.duration_ms / 1000).toFixed(2)}s
+          {request.spans_truncated && ' · 调用链过长已按耗时截断'}
+        </div>
+      </div>
+
+      <Table<TraceSpan>
+        rowKey="seq"
+        size="small"
+        columns={columns}
+        dataSource={spans}
+        pagination={false}
+        locale={{ emptyText: <Empty description="暂无调用链数据" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+        expandable={{
+          rowExpandable: span => Boolean(span.detail),
+          expandedRowRender: span => (
+            <pre className="m-0 whitespace-pre-wrap break-all rounded bg-gray-50 p-2 font-mono text-[11px] leading-relaxed text-gray-600">
+              {span.detail}
+            </pre>
+          ),
+        }}
+      />
+    </div>
+  )
+}
+
 export default function MonitoringTab() {
   const [window, setWindow] = useState<MonitoringWindow>('24h')
   const [topSort, setTopSort] = useState('slow_count')
   const [slowPage, setSlowPage] = useState(1)
   const [slowRoute, setSlowRoute] = useState('')
+  const [traceRequest, setTraceRequest] = useState<SlowRequestItem | null>(null)
 
   const overview = useQuery({
     queryKey: ['monitoring', 'overview', window],
@@ -182,6 +330,24 @@ export default function MonitoringTab() {
     { title: '用户', dataIndex: 'username', key: 'username', width: 110, ellipsis: true, render: value => value || '-' },
     { title: '来源', dataIndex: 'source_ip', key: 'source_ip', width: 120, render: value => value || '-' },
     { title: 'request_id', dataIndex: 'request_id', key: 'request_id', width: 120, render: value => <span className="font-mono text-[10px] text-gray-400">{value || '-'}</span> },
+    {
+      title: '调用链',
+      key: 'trace',
+      width: 90,
+      align: 'center',
+      render: (_, row) => (
+        <Button
+          type="link"
+          size="small"
+          className="!text-xs"
+          disabled={!row.spans?.length}
+          title={row.spans?.length ? '查看该请求的调用链' : '该请求无调用链数据（旧版本记录）'}
+          onClick={() => setTraceRequest(row)}
+        >
+          调用链
+        </Button>
+      ),
+    },
   ]
 
   const overviewData = overview.data
@@ -274,6 +440,23 @@ export default function MonitoringTab() {
           locale={{ emptyText: <Empty description="暂无慢请求记录" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
         />
       </div>
+
+      <Drawer
+        title={
+          <span className="text-sm font-medium">
+            调用链
+            <span className="ml-2 text-xs font-normal text-gray-400">
+              慢请求内部步骤耗时分解（定位具体慢环节）
+            </span>
+          </span>
+        }
+        width={860}
+        open={Boolean(traceRequest)}
+        onClose={() => setTraceRequest(null)}
+        destroyOnClose
+      >
+        {traceRequest && <TraceView request={traceRequest} />}
+      </Drawer>
     </div>
   )
 }

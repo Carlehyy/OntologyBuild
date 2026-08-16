@@ -53,17 +53,26 @@ class N8nClient:
             raise ValueError("n8n API key is required")
 
         url = f"{self.api_base}{path}"
-        with httpx.Client(
-            timeout=float(self.timeout_seconds),
-            mounts=loopback_httpx_mounts(url),
-        ) as client:
-            resp = client.request(
-                method,
-                url,
-                params=params,
-                json=json,
-                headers=self._headers(),
-            )
+        from app.shared import perf_spans
+
+        span = perf_spans.begin_span(
+            "http", name=method.upper(), target=url)
+        request_status = "error"
+        try:
+            with httpx.Client(
+                timeout=float(self.timeout_seconds),
+                mounts=loopback_httpx_mounts(url),
+            ) as client:
+                resp = client.request(
+                    method,
+                    url,
+                    params=params,
+                    json=json,
+                    headers=self._headers(),
+                )
+            request_status = str(resp.status_code)
+        finally:
+            perf_spans.end_span(span, status=request_status)
 
         if resp.status_code >= 400:
             body: Any
@@ -192,15 +201,23 @@ class N8nClient:
         """
         url = f"{self.instance_root}/webhook/{webhook_path.lstrip('/')}"
         safe_headers = self.sanitize_webhook_headers(headers)
-        with httpx.Client(
-            timeout=timeout_seconds or float(self.timeout_seconds),
-            mounts=loopback_httpx_mounts(url),
-        ) as client:
-            resp = client.post(
-                url,
-                json=payload if payload is not None else {},
-                headers=safe_headers or None,
-            )
+        from app.shared import perf_spans
+
+        span = perf_spans.begin_span("http", name="POST", target=url)
+        request_status = "error"
+        try:
+            with httpx.Client(
+                timeout=timeout_seconds or float(self.timeout_seconds),
+                mounts=loopback_httpx_mounts(url),
+            ) as client:
+                resp = client.post(
+                    url,
+                    json=payload if payload is not None else {},
+                    headers=safe_headers or None,
+                )
+            request_status = str(resp.status_code)
+        finally:
+            perf_spans.end_span(span, status=request_status)
         try:
             body = resp.json()
         except ValueError:

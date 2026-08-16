@@ -67,6 +67,29 @@ const slowPayload = {
       source_ip: '10.0.0.8',
       user_agent: 'Mozilla/5.0 (X11; Linux x86_64)',
       breakdown: { llm: { count: 1, total_ms: 3800 }, db: { count: 14, total_ms: 210 } },
+      spans: [
+        {
+          seq: 1,
+          layer: 'db',
+          name: 'SELECT',
+          target: 'domains',
+          start_ms: 5,
+          duration_ms: 210,
+          status: '',
+          detail: 'SELECT domains.name FROM domains WHERE domains.id = ?',
+        },
+        {
+          seq: 2,
+          layer: 'llm',
+          name: 'chat.completions',
+          target: 'openai/deepseek-chat',
+          start_ms: 220,
+          duration_ms: 3800,
+          status: 'success',
+          detail: '',
+        },
+      ],
+      spans_truncated: false,
     },
   ],
   total: 1,
@@ -152,6 +175,26 @@ test.describe('系统设置 · 运行监控（admin）', () => {
 
     await page.locator('.ant-segmented-item', { hasText: '近 7 天' }).click()
     await expect(page.locator('.ant-segmented-item-selected', { hasText: '近 7 天' })).toBeVisible()
+  })
+
+  test('慢请求展开调用链抽屉展示时间轴与明细', async ({ page }) => {
+    await mockMonitoring(page)
+    await page.goto('/#/settings/monitoring')
+
+    await page.getByRole('button', { name: '调用链' }).first().click()
+    await expect(page.getByText('调用链时间轴（相对请求开始）')).toBeVisible()
+    await expect(page.getByText('chat.completions')).toBeVisible()
+    await expect(page.getByText('openai/deepseek-chat')).toBeVisible()
+    await expect(page.getByText(/未归因耗时/)).toBeVisible()
+    await expect(page.getByText(/已归因 4.01s/)).toBeVisible()
+
+    // 展开 span 明细行查看截断后的 SQL 文本（跳过无明细行的占位图标）
+    const drawer = page.locator('.ant-drawer')
+    await drawer
+      .locator('.ant-table-row-expand-icon:not(.ant-table-row-expand-icon-spaced)')
+      .first()
+      .click()
+    await expect(drawer.getByText(/SELECT domains.name FROM domains/)).toBeVisible()
   })
 })
 
