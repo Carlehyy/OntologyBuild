@@ -180,7 +180,10 @@ test('complete branch → real-data trial → reviewed release works in the brow
 
   // The project-level compatibility status is still draft at birth, but its
   // immutable v0 release must already be selectable and queryable by Agent.
+  // 登录已落地 /agent：同 URL 的 goto 不会重载页面，必须显式 reload 才能
+  // 让本体列表查询拿到刚创建的本体。
   await page.goto('/#/agent')
+  await page.reload()
   const ontologySelect = page.getByLabel('选择本体')
   const v0Option = ontologySelect.locator(`option[value="${ontology.id}"]`)
   await expect(v0Option).toContainText(`${ontology.name} · v0`)
@@ -301,10 +304,10 @@ test('complete branch → real-data trial → reviewed release works in the brow
     linkTypes: [], actions: [], functions: [], instances: [], linkInstances: [],
   })
 
-  // 日常入口不再要求用户选择版本：列表“查看”先进入本体总览。
+  // 日常入口不再要求用户选择版本：列表卡片点击本体名称先进入本体总览。
   await page.goto('/#/ontologies')
   const ontologyCard = page.locator('article').filter({ hasText: ontology.name })
-  await ontologyCard.getByRole('button', { name: '查看', exact: true }).click()
+  await ontologyCard.getByRole('button', { name: ontology.name, exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}$`))
   await expect(page.getByTestId('current-release-version')).toHaveText('v0')
   await expect(page.getByRole('button', { name: '本体总览' })).toHaveAttribute('aria-pressed', 'true')
@@ -698,6 +701,8 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page.getByRole('button', { name: '智能整理图谱' })).toBeVisible()
   const l1LayoutSaved = page.waitForResponse(response => response.request().method() === 'PUT' && response.url().endsWith('/layout'))
   await page.getByRole('button', { name: '智能整理图谱' }).click()
+  // 智能整理前先弹出确认弹窗（仅覆盖布局、不动模型），确认后才提交布局保存
+  await page.getByRole('button', { name: '整理并覆盖布局' }).click()
   expect((await l1LayoutSaved).ok()).toBeTruthy()
 
   // L2 追加属性和动作；函数/哨兵保持为分析选择器，不成为常驻节点。

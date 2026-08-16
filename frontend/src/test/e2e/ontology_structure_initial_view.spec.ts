@@ -19,6 +19,8 @@ async function mockOntologyStructure(page: Page) {
     contentType: 'application/json',
     body: JSON.stringify({ data, message: 'ok' }),
   })
+  const layoutCalls: Array<{ positions: Record<string, { x: number; y: number }> }> = []
+  let layoutFailure: string | null = null
 
   await page.route(/^https?:\/\/[^/]+\/api\/v[12]\//, async (route) => {
     const path = new URL(route.request().url()).pathname
@@ -106,8 +108,28 @@ async function mockOntologyStructure(page: Page) {
     if (path === `/api/v2/formal/ontologies/${ontologyId}/facts/recent`) {
       return ok(route, [])
     }
+    if (route.request().method() === 'PUT' && path === `/api/v2/ontologies/${ontologyId}/layout`) {
+      const body = JSON.parse(route.request().postData() || '{}')
+      layoutCalls.push({ positions: body.positions ?? {} })
+      if (layoutFailure) {
+        return route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: layoutFailure }),
+        })
+      }
+      // 让「正在保存布局」状态停留足够长，便于断言捕获
+      await new Promise(resolve => setTimeout(resolve, 400))
+      return ok(route, { versionId: 'release-1', positions: {} })
+    }
     return ok(route, [])
   })
+
+  return {
+    layoutCalls,
+    failLayout: (message: string) => { layoutFailure = message },
+    recoverLayout: () => { layoutFailure = null },
+  }
 }
 
 test('点击本体结构后画布内容首次可见时已经居中且不再横向滑动', async ({ page }) => {
@@ -144,6 +166,8 @@ test('点击本体结构后画布内容首次可见时已经居中且不再横�
   const node = page.getByTestId('structure-node-object')
   await expect(graph).toBeVisible()
   await expect(node).toBeVisible()
+  // 画布常驻操作提示
+  await expect(page.getByTestId('structure-canvas-hint')).toContainText('左键拖节点 · 拖空白平移 · 滚轮缩放')
   await page.waitForTimeout(750)
 
   const frames = await page.evaluate(() => {
@@ -217,4 +241,93 @@ test('切换 L1/L2 视角时视口直接到位而不从角落滑入', async ({ p
   expect(graphBox).not.toBeNull()
   expect(Math.abs(graphBox!.centerX - (canvasBox!.x + canvasBox!.width / 2))).toBeLessThanOrEqual(2)
   expect(Math.abs(graphBox!.centerY - (canvasBox!.y + canvasBox!.height / 2))).toBeLessThanOrEqual(2)
+})
+test('拖拽节点后自动保存提示按 3→2→1 倒计时并复位', async ({ page }) => {
+  const { layoutCalls } = await mockOntologyStructure(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/#/ontologies/' + ontologyId, { waitUntil: 'domcontentloaded' })
+  await page.getByRole('button', { name: '本体结构', exact: true }).click()
+  const node = page.getByTestId('structure-node-object')
+  await expect(node).toBeVisible()
+  // 等待初始适配稳定，避免拖拽起点落在视图过渡中
+  await page.waitForTimeout(750)
+
+  const box = await node.boundingBox()
+  expect(box).toBeTruthy()
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box!.x + box!.width / 2 + 60, box!.y + box!.height / 2 + 40, { steps: 8 })
+  await page.mouse.up()
+
+  const status = page.getByTestId('structure-save-status')
+  await expect(status).toContainText('3 秒后自动保存')
+  // 倒计时阶段使用琥珀色强调
+  expect(await status.evaluate(element => getComputedStyle(element).color)).toBe('rgb(217, 119, 6)')
+  await expect(status).toContainText('2 秒后自动保存', { timeout: 2500 })
+  await expect(status).toContainText('1 秒后自动保存', { timeout: 2500 })
+  await expect(status).toContainText('正在保存布局', { timeout: 3000 })
+  await expect(status).toContainText('布局已保存', { timeout: 3000 })
+  // 成功阶段使用绿色强调
+  expect(await status.evaluate(element => getComputedStyle(element).color)).toBe('rgb(5, 150, 105)')
+  // 成功提示短暂停留后回到空闲文案，不留存「布局已保存」
+  await expect(status).toContainText('拖动后自动保存布局', { timeout: 6000 })
+
+  expect(layoutCalls.length).toBe(1)
+  expect(layoutCalls[0].positions['l1:object-order']).toBeTruthy()
+  const saved = layoutCalls[0].positions['l1:object-order']
+  expect(typeof saved.x).toBe('number')
+  expect(typeof saved.y).toBe('number')
+})
+test('缩放控件固定在工具栏右侧，1100px 窄屏也不被挤出屏幕', async ({ page }) => {
+  await mockOntologyStructure(page)
+  await page.setViewportSize({ width: 1100, height: 800 })
+  await page.goto('/#/ontologies/' + ontologyId, { waitUntil: 'domcontentloaded' })
+  await page.getByRole('button', { name: '本体结构', exact: true }).click()
+  await expect(page.getByTestId('ontology-structure-graph')).toBeVisible()
+  const fitButton = page.getByRole('button', { name: '适应画布' })
+  await expect(fitButton).toBeVisible()
+  const box = await fitButton.boundingBox()
+  expect(box).toBeTruthy()
+  // 按钮完整落在视口内（修复 1440/1100 宽屏下缩放控件被横向溢出隐藏的问题）
+  expect(box!.x).toBeGreaterThanOrEqual(0)
+  expect(box!.x + box!.width).toBeLessThanOrEqual(1100)
+
+  // 768px 下固定区依然完整可见
+  await page.setViewportSize({ width: 768, height: 800 })
+  await expect(fitButton).toBeVisible()
+  const box768 = await fitButton.boundingBox()
+  expect(box768).toBeTruthy()
+  expect(box768!.x).toBeGreaterThanOrEqual(0)
+  expect(box768!.x + box768!.width).toBeLessThanOrEqual(768)
+})
+test('布局保存失败展示红色重试，接口恢复后点击重试成功并复位', async ({ page }) => {
+  const { layoutCalls, failLayout, recoverLayout } = await mockOntologyStructure(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/#/ontologies/' + ontologyId, { waitUntil: 'domcontentloaded' })
+  await page.getByRole('button', { name: '本体结构', exact: true }).click()
+  const node = page.getByTestId('structure-node-object')
+  await expect(node).toBeVisible()
+  await page.waitForTimeout(750)
+
+  failLayout('模拟布局保存失败')
+  const box = await node.boundingBox()
+  expect(box).toBeTruthy()
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box!.x + box!.width / 2 + 60, box!.y + box!.height / 2 + 40, { steps: 8 })
+  await page.mouse.up()
+
+  // 倒计时结束后保存失败，出现红色重试入口
+  const retry = page.getByRole('button', { name: '保存失败 · 点击重试' })
+  await expect(retry).toBeVisible({ timeout: 6000 })
+
+  // 恢复接口并点击重试：成功保存并最终复位为空闲文案
+  recoverLayout()
+  await retry.click()
+  const status = page.getByTestId('structure-save-status')
+  await expect(status).toContainText('布局已保存', { timeout: 4000 })
+  await expect(status).toContainText('拖动后自动保存布局', { timeout: 6000 })
+
+  // 至少包含第一次失败与重试成功两次提交
+  expect(layoutCalls.length).toBeGreaterThanOrEqual(2)
 })
