@@ -931,6 +931,14 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           </div>
         )}
 
+        <div
+          data-testid="structure-canvas-hint"
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-[7.5rem] left-3 z-10 rounded-lg bg-white/80 px-2.5 py-1 text-[10px] text-slate-400 shadow-sm backdrop-blur"
+        >
+          左键拖节点 · 拖空白平移 · 滚轮缩放
+        </div>
+
         <DetailPanel workspace={workspace} selection={detail} onClose={() => setDetail(null)} />
       </div>
 
@@ -942,9 +950,9 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           organizeGraph()
         }}
         title="重新整理画布布局？"
-        description="将忽略当前画布上所有手动拖动的位置，按实体关系力导向重新排列全部节点，并立即保存覆盖现有布局。此操作无法撤销。"
+        description="将按实体关系力导向重新排列全部节点并覆盖当前布局，之后仍可继续手动微调每个节点的位置。"
         confirmText="整理并覆盖布局"
-        variant="danger"
+        variant="warning"
       />
     </div>
   )

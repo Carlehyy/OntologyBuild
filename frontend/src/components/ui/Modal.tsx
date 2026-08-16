@@ -142,7 +142,7 @@ interface ConfirmModalProps {
   description?: string
   confirmText?: string
   cancelText?: string
-  variant?: 'danger' | 'default'
+  variant?: 'danger' | 'warning' | 'default'
   loading?: boolean
 }
 
@@ -158,6 +158,7 @@ export function ConfirmModal({
   loading,
 }: ConfirmModalProps) {
   const danger = variant === 'danger'
+  const warning = variant === 'warning'
   return (
     <Modal
       open={open}
@@ -166,7 +167,9 @@ export function ConfirmModal({
       size="sm"
       headerIcon={danger
         ? <AlertTriangle size={19} className="text-[var(--color-danger)]" />
-        : <Info size={19} className="text-[var(--color-nav-bg)]" />}
+        : warning
+          ? <AlertTriangle size={19} className="text-amber-600" />
+          : <Info size={19} className="text-[var(--color-nav-bg)]" />}
       footer={(
         <>
           <Button variant="outline" onClick={onClose} disabled={loading}>{cancelText}</Button>
@@ -186,7 +189,9 @@ export function ConfirmModal({
           'rounded-xl border px-4 py-3 text-sm leading-6',
           danger
             ? 'border-[var(--color-danger-bg)] bg-[var(--color-danger-bg)] text-[var(--color-danger)]'
-            : 'border-[var(--color-nav-light)] bg-[var(--color-nav-light)] text-[var(--color-text-secondary)]',
+            : warning
+              ? 'border-amber-200 bg-amber-50 text-amber-800'
+              : 'border-[var(--color-nav-light)] bg-[var(--color-nav-light)] text-[var(--color-text-secondary)]',
         )}>
           {description}
         </div>
