@@ -21,6 +21,7 @@ from app.data_channel.pipeline_tasks import (
 from app.data_channel.pipeline_tasks import (
     lifecycle_service as _lifecycle_service,
 )
+from app.data_channel.pipeline_tasks import cache as _cache
 from app.data_channel.pipeline_tasks import query_service as _query_service
 from app.data_channel.pipeline_tasks.contracts import (
     HistoryStatus,
@@ -52,6 +53,7 @@ from app.data_channel.pipeline_tasks.query_service import (
     _with_pipeline_info,
 )
 from app.data_channel.pipeline_tasks.validation_service import _validate
+from app.config import settings
 from app.deps import get_current_user, get_db
 from app.models.v2.pipeline import Pipeline, PipelineRun
 
@@ -81,12 +83,15 @@ def selectable_pipelines(db: Session = Depends(get_db)):
 
 @router.get("/stats")
 def stats_overview(db: Session = Depends(get_db)):
-    return _query_service.stats_overview(
-        db,
-        now_utc_fn=_now_utc,
-        shanghai_day_start_utc_fn=_shanghai_day_start_utc,
-        shanghai_date_fn=_shanghai_date,
-        utc_iso_fn=_utc_iso,
+    # 轮询热点：短 TTL 缓存，多客户端共享一次统计计算（fail-open 可降级）。
+    return _cache.cached_call(
+        _cache.stats_cache_key(),
+        settings.pipeline_task_stats_cache_ttl_seconds,
+        lambda: _query_service.stats_overview(
+            db, now_utc_fn=_now_utc,
+            shanghai_day_start_utc_fn=_shanghai_day_start_utc,
+            shanghai_date_fn=_shanghai_date, utc_iso_fn=_utc_iso,
+        ),
     )
 
 
@@ -119,22 +124,29 @@ def list_tasks(
     page_size: int = 50,
     db: Session = Depends(get_db),
 ):
-    return _query_service.list_tasks(
-        search,
-        status,
-        enabled,
-        pipeline_id,
-        page,
-        page_size,
-        db,
-        with_pipeline_info_fn=_with_pipeline_info,
+    # 轮询热点：按参数指纹 + 版本键缓存，写操作 bump 版本即整体失效。
+    return _cache.cached_call(
+        _cache.list_cache_key({
+            "search": search, "status": status, "enabled": enabled,
+            "pipeline_id": pipeline_id, "page": page,
+            "page_size": page_size,
+        }),
+        settings.pipeline_task_list_cache_ttl_seconds,
+        lambda: _query_service.list_tasks(
+            search, status, enabled, pipeline_id, page, page_size, db,
+            with_pipeline_info_fn=_with_pipeline_info,
+        ),
     )
 
 
 @router.get("/pipeline-options")
 def pipeline_filter_options(db: Session = Depends(get_db)):
     """任务池筛选候选：仅返回实际有关联任务的流水线及其任务数。"""
-    return _query_service.pipeline_filter_options(db)
+    return _cache.cached_call(
+        _cache.options_cache_key(),
+        settings.pipeline_task_options_cache_ttl_seconds,
+        lambda: _query_service.pipeline_filter_options(db),
+    )
 
 
 @router.get("/histories")

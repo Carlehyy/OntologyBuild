@@ -1,0 +1,17 @@
+# 仅用于 context 为仓库根目录的构建（agentloop/compose.agentloop.yml 的 backend 镜像）。
+# 其余服务的构建 context 为 backend/ 或 frontend/，使用各自的 .dockerignore，不受本文件影响。
+.git
+.github
+uploads
+storage
+test_data
+frontend
+docs
+config
+deploy
+scripts
+docker
+*.md
+*.log
+.DS_Store
+agentloop/.runtime
