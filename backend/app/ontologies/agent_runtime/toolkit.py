@@ -300,7 +300,7 @@ TOOL_DEFS: list[dict] = [
     },
     {
         "name": "trace_causal_chain",
-        "description": "沿事实流追溯实例属性变化的因果链：哪次决策/哪个动作导致了变更、此前值是什么、之后又被谁覆盖、派生值由哪些输入算出。返回带出处的节点与因果边（决策→动作→事实→后续覆盖）。回答'为什么变了/谁批准的/这个值从哪来/后来变成了什么'这类跨对象因果问题用这个；单实例的单点历史用 get_object_history。链受深度与数量上限约束，返回 truncated=true 时说明这是部分链。",
+        "description": "沿事实流追溯实例属性变化的因果链：哪次决策/哪个动作导致了变更、此前值是什么、之后又被谁覆盖、派生值由哪些输入算出。返回带出处的节点与因果边（决策→动作→事实→后续覆盖）；事实节点自带 causedBy/supersedesId/derivedFrom 指针，决策事实（factKind=decision）会拆出 decision/reason 字段。回答'为什么变了/谁批准的/这个值从哪来/后来变成了什么'这类跨对象因果问题用这个；单实例的单点历史用 get_object_history。链受深度与数量上限约束，返回 truncated=true 时说明这是部分链。",
         "parameters": {
             "type": "object",
             "properties": {
