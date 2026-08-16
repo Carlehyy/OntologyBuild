@@ -79,11 +79,12 @@ def _system_prompt(scope) -> str:
 2. 用中文回答，简洁、结构化；提到具体对象时带上它的标签（如订单号、名称），便于用户核对。
 3. 统计类问题（总共/平均/最多/分布）优先用 aggregate_objects，不要拉列表自己数；已知关系序列的多跳问题用 traverse_path；明确询问两个具体实例之间有哪些路径时，用 find_paths，必要时先 search_objects 确认两端 id。
 4. 用户问「为什么是这个值 / 谁改的 / 什么时候变的」，用 get_object_history 给出带出处的回答。
-5. 需要修改数据时：只能用 propose_action 做预演并生成提案，真实执行由用户在界面上确认。绝不能声称你已经完成了修改。
-6. 工具报错时，阅读错误信息里给出的可用选项，修正参数后重试；同一错误不要重复第三次。
-7. 用户询问某字段拟议变化会波及哪些对象时，先用 analyze_change_impact 展示直接/间接关系可达范围。它是只读模拟，不代表确定业务因果；除非工具返回了受治理的因果规则，否则必须称为“关联范围”，不得声称这些对象一定会改变。
-8. 管理哨兵时，只能管理来源为 assistant_dynamic 的动态哨兵。发布版本内置哨兵只读且绝不能生成其编辑、启停或删除提案。所有动态哨兵变更必须先用 propose_dynamic_sentinel_change 生成提案，等待用户在界面确认；创建后默认停用，必须通过当前发布版全量试跑才能启用。
-9. 用户明确要“决策推演、比较未来方案、what-if、辅助决策”时，必须调用 run_decision_simulation。可以先用查询工具澄清对象，但不能用普通文字冒充推演结果。推演中的多视角数量不是概率，评分不是因果证明；回答要说明数据截止时间、关键假设、分歧、早期信号和停止条件。推演只给建议，任何真实动作仍须另行生成提案并由用户确认。
+5. 用户问跨对象因果问题（「这个值为什么变了 / 哪个决策或动作导致的 / 谁批准的 / 后来又变成了什么 / 这个派生值怎么算出来的」），用 trace_causal_chain 沿事实流追溯：它给出 决策→动作→事实变更→后续覆盖 的因果链与出处，比 get_object_history 的单实例历史更进一步。链受深度与数量上限约束，返回 truncated=true 时必须说明这是部分链、可能还有未展示的上游或下游。
+6. 需要修改数据时：只能用 propose_action 做预演并生成提案，真实执行由用户在界面上确认。绝不能声称你已经完成了修改。
+7. 工具报错时，阅读错误信息里给出的可用选项，修正参数后重试；同一错误不要重复第三次。
+8. 用户询问某字段拟议变化会波及哪些对象时，先用 analyze_change_impact 展示直接/间接关系可达范围。它是只读模拟，不代表确定业务因果；除非工具返回了受治理的因果规则，否则必须称为“关联范围”，不得声称这些对象一定会改变。
+9. 管理哨兵时，只能管理来源为 assistant_dynamic 的动态哨兵。发布版本内置哨兵只读且绝不能生成其编辑、启停或删除提案。所有动态哨兵变更必须先用 propose_dynamic_sentinel_change 生成提案，等待用户在界面确认；创建后默认停用，必须通过当前发布版全量试跑才能启用。
+10. 用户明确要“决策推演、比较未来方案、what-if、辅助决策”时，必须调用 run_decision_simulation。可以先用查询工具澄清对象，但不能用普通文字冒充推演结果。推演中的多视角数量不是概率，评分不是因果证明；回答要说明数据截止时间、关键假设、分歧、早期信号和停止条件。推演只给建议，任何真实动作仍须另行生成提案并由用户确认。
 
 {_CHARTS_GUIDE}
 {extra_block}"""
@@ -112,6 +113,12 @@ def _summarize(name: str, result: dict) -> str:
         return f"{result.get('objectType', '')} {result.get('metric')} = {result.get('value')}"
     if name == "get_object_history":
         return f"{result.get('instance', '')} 的 {len(result.get('facts', []))} 条事实"
+    if name == "trace_causal_chain":
+        summary = result.get("summary") or {}
+        return (f"因果链：{summary.get('factNodes', 0)} 条事实 · "
+                f"{summary.get('actionNodes', 0)} 次动作 · "
+                f"{summary.get('decisionNodes', 0)} 条决策"
+                + ("（部分链）" if result.get("truncated") else ""))
     if name == "list_actions":
         return f"{len(result.get('actions', []))} 个可用动作"
     if name == "run_decision_simulation":
