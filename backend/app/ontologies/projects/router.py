@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 from typing import Optional
+from app.config import settings
 from app.deps import get_db, get_current_user
 from app.models.ontology import OntologyProject
 from app.models.user import User
@@ -11,6 +13,7 @@ from app.ontologies.versions.snapshot_contract import (
 )
 from app.ontologies.versions.release_service import resolve_current_release
 from app.ontologies.access import require_ontology_access
+from app.ontologies import cache as ontology_cache
 from app.ontologies.export.schemas import OntologyStructurePackage
 from app.ontologies.export.service import import_structure_package
 from app.ontologies.projection_state import mark_failed, mark_projecting
@@ -181,11 +184,23 @@ def import_ontology_structure(
 
 @router.get("/{ontology_id}")
 def get_ontology(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    # 详情页高频入口：短 TTL 只读缓存，写操作 bump 版本即整体失效（fail-open）。
+    return ontology_cache.cached_call(
+        ontology_cache.detail_cache_key(ontology_id),
+        settings.ontology_detail_cache_ttl_seconds,
+        lambda: _get_ontology_uncached(ontology_id, db),
+    )
+
+
+def _get_ontology_uncached(ontology_id: str, db: Session) -> dict:
     p = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
     if not p:
         raise HTTPException(404, "Not found")
     release = _resolved_release_map(db, [p]).get(p.current_release_id)
-    return {"data": _project_payload(p, OntologyOut, release)}
+    # jsonable_encoder 把 datetime 归一为与 FastAPI 响应一致的 ISO 串，
+    # 保证缓存命中与直查两种路径返回逐字节相同的 JSON。
+    return jsonable_encoder(
+        {"data": _project_payload(p, OntologyOut, release)})
 
 
 @router.post("/{ontology_id}/assistant-card-clicks")
@@ -233,6 +248,7 @@ def update_ontology(ontology_id: str, body: OntologyUpdate, db: Session = Depend
     for k, v in update.items():
         setattr(p, k, v)
     db.commit(); db.refresh(p)
+    ontology_cache.invalidate_detail()
     release = _resolved_release_map(db, [p]).get(p.current_release_id)
     return {"data": _project_payload(p, OntologyOut, release)}
 
@@ -289,6 +305,9 @@ def delete_ontology(ontology_id: str, db: Session = Depends(get_db), current_use
                 # PostgreSQL has durably accepted the DELETE. Neo4j was already
                 # cleared above, so an absent authoritative row is the complete
                 # requested outcome and must converge to the normal 204 result.
+                ontology_cache.invalidate_detail()
+                ontology_cache.invalidate_overview()
+                ontology_cache.invalidate_pending()
                 return None
             mark_failed(
                 db,
@@ -303,3 +322,7 @@ def delete_ontology(ontology_id: str, db: Session = Depends(get_db), current_use
                     "message": "本体删除未完成，已阻断图读取，请重试",
                 },
             ) from exc
+        else:
+            ontology_cache.invalidate_detail()
+            ontology_cache.invalidate_overview()
+            ontology_cache.invalidate_pending()

@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     pipeline_task_list_cache_ttl_seconds: int = Field(default=4, ge=1, le=60)
     pipeline_task_stats_cache_ttl_seconds: int = Field(default=5, ge=1, le=60)
     pipeline_task_options_cache_ttl_seconds: int = Field(default=30, ge=1, le=300)
+    # 本体详情页读接口缓存（fail-open 加速层，可整体关闭；与 Celery 无关，
+    # 键落 db 1）。TTL 均短于前端轮询/停留节奏，写路径 bump 版本立即失效；
+    # executor/外部灌数进程侧的数据推进无法事件失效，由短 TTL 兜底。
+    ontology_detail_cache_enabled: bool = True
+    ontology_detail_cache_ttl_seconds: int = Field(default=60, ge=1, le=300)
+    ontology_overview_cache_ttl_seconds: int = Field(default=20, ge=1, le=60)
+    ontology_pending_cache_ttl_seconds: int = Field(default=15, ge=1, le=60)
     # NATS JetStream 消息队列：流水线任务派发通道（PR-3 接入执行器）
     nats_url: str = ""
     # 流水线 executor 进程内同时执行的任务数上限；每条任务在独立线程执行，

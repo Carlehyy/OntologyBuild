@@ -39,6 +39,18 @@ def ontology_overview(ontology_id: str, db: Session):
     mutable runtime tables.  Runtime projections and telemetry are then
     constrained to identifiers/version lineage owned by that release.
     """
+    # 详情页默认落点：重统计轮询热点，多客户端共享一次计算（fail-open）。
+    # 写路径 bump 版本立即失效，进程外数据推进由短 TTL 兜底。
+    from app.config import settings
+    from app.ontologies import cache as ontology_cache
+    return ontology_cache.cached_call(
+        ontology_cache.overview_cache_key(ontology_id),
+        settings.ontology_overview_cache_ttl_seconds,
+        lambda: _ontology_overview_uncached(ontology_id, db),
+    )
+
+
+def _ontology_overview_uncached(ontology_id: str, db: Session):
     from datetime import timedelta
     project = _require_ontology(db, ontology_id)
     release, snapshot = _current_release_view(db, project)

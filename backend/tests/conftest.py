@@ -10,6 +10,9 @@ os.environ["ENVIRONMENT"] = "test"
 # 测试环境不依赖本机 Redis：任务池缓存整体关闭，行为与直查路径一致；
 # 缓存命中/失效/降级语义由 test_pipeline_task_cache.py 用假客户端验证。
 os.environ["PIPELINE_TASK_CACHE_ENABLED"] = "false"
+# 本体详情页缓存同理：默认关闭，缓存语义由 test_ontology_detail_cache.py
+# 用假客户端按需开启验证。
+os.environ["ONTOLOGY_DETAIL_CACHE_ENABLED"] = "false"
 
 # 应用的 SessionLocal/engine 在 import 时按 DATABASE_URL 绑定。默认的固定路径
 # /tmp/ontoprompt.db 会被 xdist 多 worker 共享，并发 lifespan seeding 的
