@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Plus, Search, Play, GitBranch, Trash2, Pencil, ChevronLeft, ChevronRight,
   X, Loader2, CheckCircle2, XCircle, Clock, Table2, ListChecks, Sparkles, ExternalLink,
-  AlertCircle, FileCode2, Copy, MoreHorizontal, Activity,
+  AlertCircle, FileCode2, Copy,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
-import type { Pipeline, PipelineOverview } from '@/api/v2/pipelines'
+import type { Pipeline } from '@/api/v2/pipelines'
 import { getPipelineEngine } from '@/api/v2/pipelines'
 import { stewardApi } from '@/api/steward'
 import type { StewardStatus } from '@/api/steward'
@@ -65,26 +64,6 @@ function mergePipeline(current: Pipeline, updated: Pipeline): Pipeline {
   }
 }
 
-function updateOverview(
-  current: PipelineOverview | null,
-  before?: Pipeline,
-  after?: Pipeline,
-): PipelineOverview | null {
-  if (!current) return current
-  const contributes = (pipeline: Pipeline | undefined, key: 'published' | 'enabled' | 'latest_failed') => {
-    if (!pipeline) return 0
-    if (key === 'published') return normStatus(pipeline.status) === 'published' ? 1 : 0
-    if (key === 'enabled') return (pipeline.enabled ?? true) ? 1 : 0
-    return pipeline.last_run_status === 'failed' ? 1 : 0
-  }
-  return {
-    total: Math.max(0, current.total + (after ? 1 : 0) - (before ? 1 : 0)),
-    published: Math.max(0, current.published + contributes(after, 'published') - contributes(before, 'published')),
-    enabled: Math.max(0, current.enabled + contributes(after, 'enabled') - contributes(before, 'enabled')),
-    latest_failed: Math.max(0, current.latest_failed + contributes(after, 'latest_failed') - contributes(before, 'latest_failed')),
-  }
-}
-
 function formatTime(iso?: string | null): string {
   if (!iso) return '-'
   try {
@@ -104,8 +83,7 @@ function EnabledSwitch({ on, busy, lockReason, onToggle, onLocked }: {
   const locked = !!lockReason
   return (
     <button
-      type="button"
-      role="switch" aria-label={on ? '停用流水线' : '启用流水线'} aria-checked={on} aria-disabled={locked} disabled={busy}
+      role="switch" aria-checked={on} aria-disabled={locked} disabled={busy}
       onClick={locked ? onLocked : onToggle}
       className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors ${
         on ? 'bg-teal-700' : 'bg-slate-300'} ${busy ? 'opacity-60' : locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
@@ -133,21 +111,17 @@ export default function PipelineListPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [total, setTotal] = useState(0)
-  const [overview, setOverview] = useState<PipelineOverview | null>(null)
 
   const [showCreate, setShowCreate] = useState(false)
   const [previewTarget, setPreviewTarget] = useState<Pipeline | null>(null)
   const [editTarget, setEditTarget] = useState<Pipeline | null>(null)
   const [n8nApiUrl, setN8nApiUrl] = useState('')
   const [n8nStatus, setN8nStatus] = useState<StewardStatus['n8n'] | null>(null)
-  const [pythonStatus, setPythonStatus] = useState<StewardStatus['python'] | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Pipeline | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [cloneTarget, setCloneTarget] = useState<Pipeline | null>(null)
   const [cloning, setCloning] = useState(false)
-  const [actionMenuId, setActionMenuId] = useState<string | null>(null)
-  const [actionMenuPosition, setActionMenuPosition] = useState<React.CSSProperties>({})
 
   const load = useCallback(() => {
     setLoading(true)
@@ -162,13 +136,11 @@ export default function PipelineListPage() {
       .then(res => {
         setPipelines(Array.isArray(res.items) ? res.items : [])
         setTotal(res.total || 0)
-        setOverview(res.overview ?? null)
         if (page > 1 && res.items.length === 0 && res.total > 0) setPage(page - 1)
       })
       .catch(() => {
         setPipelines([])
         setTotal(0)
-        setOverview(null)
         toast({
           tone: 'error',
           title: '流水线列表加载失败',
@@ -185,39 +157,15 @@ export default function PipelineListPage() {
       .then(s => {
         setN8nStatus(s.n8n)
         setN8nApiUrl(s.n8n.api_url)
-        setPythonStatus(s.python ?? null)
       })
-      .catch(() => {
-        setN8nStatus({
-          configured: false,
-          enabled: false,
-          api_url: '',
-          reachable: false,
-          error: '无法读取 n8n 配置状态',
-        })
-        setPythonStatus(null)
-      })
+      .catch(() => setN8nStatus({
+        configured: false,
+        enabled: false,
+        api_url: '',
+        reachable: false,
+        error: '无法读取 n8n 配置状态',
+      }))
   }, [])
-
-  useEffect(() => {
-    if (!actionMenuId) return
-    const closeOnOutside = (event: PointerEvent) => {
-      const target = event.target as Element | null
-      if (!target?.closest('[data-pipeline-action-menu]')) setActionMenuId(null)
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setActionMenuId(null)
-    }
-    const closeOnViewportChange = () => setActionMenuId(null)
-    document.addEventListener('pointerdown', closeOnOutside)
-    document.addEventListener('keydown', closeOnEscape)
-    window.addEventListener('resize', closeOnViewportChange)
-    return () => {
-      document.removeEventListener('pointerdown', closeOnOutside)
-      document.removeEventListener('keydown', closeOnEscape)
-      window.removeEventListener('resize', closeOnViewportChange)
-    }
-  }, [actionMenuId])
 
   const matchesActiveFilters = useCallback((pl: Pipeline) => {
     const keyword = search.trim().toLowerCase()
@@ -234,7 +182,6 @@ export default function PipelineListPage() {
   }, [filterEnabled, filterSource, filterStatus, search])
 
   const insertPipelineLocally = (pl: Pipeline, toastTitle = '流水线已创建') => {
-    setOverview(current => updateOverview(current, undefined, pl))
     if (matchesActiveFilters(pl)) {
       setTotal(current => current + 1)
       if (page === 1) {
@@ -254,7 +201,6 @@ export default function PipelineListPage() {
     const current = pipelines.find(item => item.id === updated.id)
     if (!current) return
     const merged = mergePipeline(current, updated)
-    setOverview(value => updateOverview(value, current, merged))
     const remainsVisible = matchesActiveFilters(merged)
     setPipelines(items => remainsVisible
       ? items.map(item => item.id === merged.id ? merged : item)
@@ -271,13 +217,11 @@ export default function PipelineListPage() {
 
   const handleToggleEnabled = async (pl: Pipeline) => {
     const next = !(pl.enabled ?? true)
-    const optimistic = { ...pl, enabled: next }
     setTogglingId(pl.id)
     setPipelines(ps => ps.map(p => p.id === pl.id ? { ...p, enabled: next } : p))
-    setOverview(current => updateOverview(current, pl, optimistic))
     try {
       await pipelinesApi.setEnabled(pl.id, next)
-      const updated = optimistic
+      const updated = { ...pl, enabled: next }
       if (!matchesActiveFilters(updated)) {
         setPipelines(items => items.filter(item => item.id !== pl.id))
         setTotal(value => Math.max(0, value - 1))
@@ -290,7 +234,6 @@ export default function PipelineListPage() {
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
       setPipelines(ps => ps.map(p => p.id === pl.id ? { ...p, enabled: !next } : p))
-      setOverview(current => updateOverview(current, optimistic, pl))
       toast({
         tone: 'error',
         title: '启用状态更新失败',
@@ -310,7 +253,6 @@ export default function PipelineListPage() {
       setDeleteTarget(null)
       setPipelines(items => items.filter(item => item.id !== target.id))
       setTotal(value => Math.max(0, value - 1))
-      setOverview(current => updateOverview(current, target, undefined))
       toast({
         tone: 'success',
         title: '流水线已归档',
@@ -359,159 +301,9 @@ export default function PipelineListPage() {
     setFilterEnabled('')
     setPage(1)
   }
-
-  const openEngineEditor = (pl: Pipeline) => {
-    if (isPythonPipeline(pl)) {
-      navigate(`/data/pipelines/script/${pl.id}`)
-      return
-    }
-    if (!isN8nPipeline(pl)) return
-    const definition = pl.definition as Record<string, unknown> | null
-    const n8n = definition?.n8n as Record<string, unknown> | undefined
-    const workflowId = n8n?.n8n_workflow_id as string | undefined
-    if (!workflowId || !n8nApiUrl) return
-    const webUrl = n8nApiUrl.replace(/\/api\/.*$/, '').replace(/\/+$/, '')
-    window.open(`${webUrl}/workflow/${workflowId}`, '_blank', 'noopener,noreferrer')
-  }
-
-  const renderMoreActions = (
-    pl: Pipeline,
-    n8n: boolean,
-    python: boolean,
-    layout: 'mobile' | 'desktop',
-  ) => {
-    const definition = pl.definition as Record<string, unknown> | null
-    const n8nDefinition = definition?.n8n as Record<string, unknown> | undefined
-    const canOpenEngine = python || Boolean(n8n && n8nDefinition?.n8n_workflow_id && n8nApiUrl)
-    const openLabel = n8n ? '打开 n8n 工作流' : '编辑 Python 脚本'
-    const menuKey = `${layout}:${pl.id}`
-    const menuOpen = actionMenuId === menuKey
-    return (
-      <div className="relative" data-pipeline-action-menu>
-        <button
-          type="button"
-          onClick={event => {
-            if (actionMenuId === menuKey) {
-              setActionMenuId(null)
-              return
-            }
-            const rect = event.currentTarget.getBoundingClientRect()
-            const menuWidth = 192
-            const left = Math.max(8, Math.min(
-              window.innerWidth - menuWidth - 8,
-              rect.right - menuWidth,
-            ))
-            const openUp = window.innerHeight - rect.bottom < 170 && rect.top > 170
-            setActionMenuPosition(openUp
-              ? { left, bottom: window.innerHeight - rect.top + 6 }
-              : { left, top: rect.bottom + 6 })
-            setActionMenuId(menuKey)
-          }}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          aria-label={`更多操作：${pl.name}`}
-          className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
-        >
-          <MoreHorizontal size={14} /> 更多
-        </button>
-        {menuOpen && createPortal(
-          <div
-            role="menu"
-            data-pipeline-action-menu
-            style={actionMenuPosition}
-            className="fixed z-50 w-48 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 text-left shadow-[0_16px_44px_rgba(15,23,42,0.16)]"
-          >
-            {(n8n || python) && (
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!canOpenEngine}
-                onClick={() => { openEngineEditor(pl); setActionMenuId(null) }}
-                title={canOpenEngine ? openLabel : 'n8n 工作流地址暂不可用'}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <ExternalLink size={14} /> {openLabel}
-              </button>
-            )}
-            {(n8n || python) && (
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => { setCloneTarget(pl); setActionMenuId(null) }}
-                title="克隆流水线结构为未发布草稿"
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
-              >
-                <Copy size={14} /> 克隆为草稿
-              </button>
-            )}
-            <div className="my-1 h-px bg-slate-100" />
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => { setDeleteTarget(pl); setActionMenuId(null) }}
-              title="归档流水线"
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-rose-600 transition hover:bg-rose-50"
-            >
-              <Trash2 size={14} /> 归档流水线
-            </button>
-          </div>,
-          document.body,
-        )}
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-4 pb-4">
-      <header className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white px-5 py-5 shadow-[0_8px_30px_rgba(15,23,42,0.04)] sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2.5">
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-teal-700 text-white shadow-[0_6px_18px_rgba(15,118,110,0.18)]">
-              <GitBranch size={17} />
-            </span>
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight text-slate-950">数据流水线</h1>
-              <p className="mt-0.5 text-sm text-slate-500">管理采集编排，依次完成试执行、字段契约、发布与任务调度。</p>
-            </div>
-          </div>
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => navigate('/data/pipelines/steward')}
-            className="flex h-10 items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3.5 text-sm font-medium text-teal-800 transition hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
-            title="用对话创建与编排 n8n 数据流水线"
-          >
-            <Sparkles size={15} /> 数据管家
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowCreate(true)}
-            className="flex h-10 items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-sm font-medium text-white transition hover:bg-teal-800 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
-          >
-            <Plus size={15} /> 新建流水线
-          </button>
-        </div>
-      </header>
-
-      <section aria-label="流水线运行概览" className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <PipelineOverviewCard label="流水线总数" value={overview?.total ?? (loading ? '—' : total)} note="未归档的全部流水线" icon={<GitBranch size={14} />} tone="slate" />
-        <PipelineOverviewCard label="已发布" value={overview?.published ?? '—'} note="字段契约与版本已锁定" icon={<CheckCircle2 size={14} />} tone="teal" />
-        <PipelineOverviewCard label="已启用" value={overview?.enabled ?? '—'} note="可被任务池调度" icon={<Activity size={14} />} tone="emerald" />
-        <PipelineOverviewCard label="最近执行失败" value={overview?.latest_failed ?? '—'} note="最新一次运行仍异常" icon={<XCircle size={14} />} tone="rose" alert={(overview?.latest_failed ?? 0) > 0} />
-      </section>
-
-      {pythonStatus?.configured === false && (
-        <div role="status" className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          <AlertCircle size={16} className="mt-0.5 shrink-0 text-amber-600" />
-          <div>
-            <p className="font-medium">Python 执行网关尚未配置</p>
-            <p className="mt-0.5 text-xs leading-5 text-amber-700">仍可创建和编辑脚本草稿，但试执行、保存校验与任务调度暂不可用。请联系管理员配置 PYTHON_KERNEL_GATEWAY_URL。</p>
-          </div>
-        </div>
-      )}
-
-      {/* 搜索与筛选 */}
+      {/* 搜索、筛选、操作按钮 */}
       <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 xl:flex-nowrap">
         <div className="relative w-full sm:w-64 xl:w-72 xl:flex-none">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -562,6 +354,21 @@ export default function PipelineListPage() {
             清除筛选
           </button>
         )}
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          <button
+            onClick={() => navigate('/data/pipelines/steward')}
+            className="flex items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3.5 py-2 text-sm font-medium text-teal-800 transition hover:bg-teal-100 active:translate-y-px"
+            title="用对话创建与编排 n8n 数据流水线"
+          >
+            <Sparkles size={15} /> 数据管家
+          </button>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-teal-800 active:translate-y-px"
+          >
+            <Plus size={15} /> 新建流水线
+          </button>
+        </div>
       </div>
 
       {/* 列表 */}
@@ -574,125 +381,20 @@ export default function PipelineListPage() {
           <p className="text-xs">新建 n8n 流水线后，可到数据管家完善编排，再通过编辑向导验证并发布</p>
         </div>
       ) : (
-        <>
-          <div className="space-y-3 lg:hidden">
-            {pipelines.map(pl => {
-              const runMeta = pl.last_run_status ? RUN_STATUS_META[pl.last_run_status] : null
-              const n8n = isN8nPipeline(pl)
-              const python = isPythonPipeline(pl)
-              const enabled = pl.enabled ?? true
-              const taskCount = pl.task_count ?? 0
-              const curatedCount = pl.target_curated_ids?.length ?? 0
-              const enableLockReason = taskCount > 0
-                ? `流水线「${pl.name}」已被 ${taskCount} 个数据任务关联。为避免影响任务调度，请先在数据任务池删除或改绑关联任务，解除关联后再更改启用状态。`
-                : !enabled && normStatus(pl.status) !== 'published'
-                  ? '只有已发布的流水线才能启用，请先在编辑向导中完成发布'
-                  : undefined
-              return (
-                <article key={pl.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_8px_30px_rgba(15,23,42,0.04)]">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h2 className="truncate text-sm font-semibold text-slate-950" title={pl.name}>{pl.name}</h2>
-                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{pl.description || '暂未设置描述信息'}</p>
-                    </div>
-                    <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[11px] ${STATUS_STYLE[normStatus(pl.status)]}`}>
-                      {STATUS_LABEL[normStatus(pl.status)]}
-                    </span>
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <span className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium ${n8n ? 'border-teal-200 bg-teal-50 text-teal-700' : python ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
-                      {n8n ? <Sparkles size={11} /> : python ? <FileCode2 size={11} /> : <GitBranch size={11} />}
-                      {n8n ? 'n8n 流水线' : python ? 'Python 脚本' : '未知引擎'}
-                    </span>
-                    {runMeta ? (
-                      <span className={`inline-flex items-center gap-1 text-xs ${runMeta.color}`}>
-                        {runMeta.icon}{runMeta.label}<span className="text-slate-400">· {formatTime(pl.last_run_at)}</span>
-                      </span>
-                    ) : <span className="text-xs text-slate-400">从未运行</span>}
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2.5">
-                    <div className="inline-flex items-center gap-2">
-                      <EnabledSwitch
-                        on={enabled}
-                        busy={togglingId === pl.id}
-                        lockReason={enableLockReason}
-                        onToggle={() => handleToggleEnabled(pl)}
-                        onLocked={() => enableLockReason && toast({
-                          tone: 'warning',
-                          title: '当前无法切换启用状态',
-                          description: enableLockReason,
-                        })}
-                      />
-                      <span className={`text-xs ${enabled ? 'text-teal-700' : 'text-slate-400'}`}>{enabled ? '已启用' : '未启用'}</span>
-                    </div>
-                    <div className="flex items-center gap-3 text-xs text-slate-500">
-                      <span>{curatedCount} 个数据集</span>
-                      <span>{taskCount} 个任务</span>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setEditTarget(pl)}
-                      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-3 text-xs font-medium text-teal-800 transition hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
-                    >
-                      <Pencil size={13} /> {normStatus(pl.status) === 'published' ? '查看契约' : '配置'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPreviewTarget(pl)}
-                      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
-                    >
-                      <Play size={13} /> 试执行
-                    </button>
-                    <div className="ml-auto">{renderMoreActions(pl, n8n, python, 'mobile')}</div>
-                  </div>
-                </article>
-              )
-            })}
-          </div>
-
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5 lg:hidden">
-            <span className="text-xs tabular-nums text-slate-500">第 {page} / {totalPages} 页</span>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setPage(current => Math.max(1, current - 1))}
-                disabled={page <= 1}
-                className="flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition-colors hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
-                aria-label="上一页"
-              >
-                <ChevronLeft size={14} /> 上一页
-              </button>
-              <button
-                type="button"
-                onClick={() => setPage(current => Math.min(totalPages, current + 1))}
-                disabled={page >= totalPages}
-                className="flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition-colors hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
-                aria-label="下一页"
-              >
-                下一页 <ChevronRight size={14} />
-              </button>
-            </div>
-          </div>
-
-          <div className="hidden overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)] lg:block">
+        <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)]">
           <table className="w-full min-w-[1080px] text-sm table-fixed">
             <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 backdrop-blur">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: '20%' }}>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: '22%' }}>
                   流水线信息
                 </th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '10%' }}>流水线类型</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '9%' }}>流水线类型</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '9%' }}>发布状态</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '9%' }}>启用状态</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '13%' }}>最近执行结果</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '9%' }}>产物</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '9%' }}>关联任务</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl" style={{ width: '21%' }}>操作</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '10%' }}>启用状态</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '14%' }}>最近执行结果</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '11%' }}>产物</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '11%' }}>关联任务</th>
+                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl" style={{ width: '14%' }}>操作</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -812,24 +514,57 @@ export default function PipelineListPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center justify-center gap-1.5">
+                      <div className="flex gap-1 justify-center">
+                        {(n8n || python) && (
+                          <button
+                            onClick={() => {
+                              if (n8n) {
+                                const wfId = (pl.definition as Record<string, unknown> | null)?.n8n as Record<string, unknown> | undefined
+                                const workflowId = wfId?.n8n_workflow_id as string | undefined
+                                if (workflowId && n8nApiUrl) {
+                                  const webUrl = n8nApiUrl.replace(/\/api\/.*$/, '').replace(/\/+$/, '')
+                                  window.open(`${webUrl}/workflow/${workflowId}`, '_blank')
+                                }
+                              } else {
+                                navigate(`/data/pipelines/script/${pl.id}`)
+                              }
+                            }}
+                            className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
+                            title={n8n ? '跳转 n8n 工作流' : '编辑 Python 脚本'}
+                          >
+                            <ExternalLink size={14} />
+                          </button>
+                        )}
                         <button
-                          type="button"
                           onClick={() => setEditTarget(pl)}
-                          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-800 transition hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
+                          className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
                           title={normStatus(pl.status) === 'published' ? '查看发布契约 / 编辑名称与描述' : '配置流水线：信息 / 执行预览 / 主键组 / 发布'}
                         >
-                          <Pencil size={13} /> {normStatus(pl.status) === 'published' ? '查看契约' : '配置'}
+                          <Pencil size={14} />
                         </button>
                         <button
-                          type="button"
                           onClick={() => setPreviewTarget(pl)}
-                          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
+                          className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
                           title="试执行流水线并查看输出"
                         >
-                          <Play size={13} /> 试执行
+                          <Play size={14} />
                         </button>
-                        {renderMoreActions(pl, n8n, python, 'desktop')}
+                        {(n8n || python) && (
+                          <button
+                            onClick={() => setCloneTarget(pl)}
+                            className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
+                            title="克隆流水线结构为未发布草稿"
+                          >
+                            <Copy size={14} />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setDeleteTarget(pl)}
+                          className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
+                          title="归档流水线"
+                        >
+                          <Trash2 size={14} />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -872,8 +607,7 @@ export default function PipelineListPage() {
               </button>
             </div>
           </div>
-          </div>
-        </>
+        </div>
       )}
 
       {/* 试执行：仅运行并查看输出，入湖统一由数据任务池负责 */}
@@ -932,34 +666,6 @@ export default function PipelineListPage() {
   )
 }
 
-function PipelineOverviewCard({
-  label, value, note, icon, tone, alert = false,
-}: {
-  label: string
-  value: number | string
-  note: string
-  icon: React.ReactNode
-  tone: 'slate' | 'teal' | 'emerald' | 'rose'
-  alert?: boolean
-}) {
-  const tones = {
-    slate: 'bg-slate-100 text-slate-600',
-    teal: 'bg-teal-50 text-teal-700',
-    emerald: 'bg-emerald-50 text-emerald-700',
-    rose: 'bg-rose-50 text-rose-600',
-  }
-  return (
-    <article className={`rounded-xl border bg-white px-4 py-3 shadow-[0_6px_22px_rgba(15,23,42,0.035)] ${alert ? 'border-rose-200' : 'border-slate-200'}`}>
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs font-medium text-slate-500">{label}</p>
-        <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg ${tones[tone]}`}>{icon}</span>
-      </div>
-      <p className={`mt-1 text-2xl font-semibold tracking-tight tabular-nums ${alert ? 'text-rose-600' : 'text-slate-950'}`}>{value}</p>
-      <p className="mt-0.5 truncate text-[11px] text-slate-400" title={note}>{note}</p>
-    </article>
-  )
-}
-
 function PipelineCreateModal({
   pipeline, n8nStatus, onClose, onCreated, onSaved,
 }: {
@@ -982,13 +688,10 @@ function PipelineCreateModal({
   const [description, setDescription] = useState(pipeline?.description || '')
   const [mode, setMode] = useState<'n8n' | 'python'>(defaultMode)
   const [saving, setSaving] = useState(false)
-  const [nameTouched, setNameTouched] = useState(false)
-  const nameError = nameTouched && !name.trim() ? '请输入流水线名称' : ''
 
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    setNameTouched(true)
+  const handleSubmit = async () => {
     if (!name.trim()) {
+      toast({ tone: 'warning', title: '请填写流水线名称' })
       return
     }
     if (!isEdit && mode === 'n8n' && !n8nReady) {
@@ -1044,14 +747,11 @@ function PipelineCreateModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]" onClick={onClose}>
-      <form noValidate onSubmit={handleSubmit} className="w-[500px] max-w-full rounded-2xl border border-white/70 bg-white p-6 shadow-[0_28px_90px_rgba(15,23,42,0.24)]" onClick={e => e.stopPropagation()}>
+      <div className="w-[500px] max-w-full rounded-2xl border border-white/70 bg-white p-6 shadow-[0_28px_90px_rgba(15,23,42,0.24)]" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-4">
-          <div>
-            <h3 className="text-lg font-semibold tracking-tight text-slate-950">{isEdit ? '编辑数据流水线' : '新建数据流水线'}</h3>
-            <p className="mt-1 text-xs text-slate-500">先选择执行引擎，再补充便于团队识别的名称与用途。</p>
-          </div>
-          <button type="button" onClick={onClose} aria-label="关闭新建流水线弹窗" className="grid h-9 w-9 place-items-center rounded-xl text-gray-400 transition hover:bg-slate-100 hover:text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30">
-            <X size={18} />
+          <h3 className="font-semibold">{isEdit ? '编辑数据流水线' : '新建数据流水线'}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-black">
+            <X size={16} />
           </button>
         </div>
         <div className="space-y-3">
@@ -1104,39 +804,28 @@ function PipelineCreateModal({
             </div>
           )}
           <div>
-            <label htmlFor="pipeline-name" className="block text-sm font-medium text-slate-700 mb-1.5">流水线名称 <span className="text-rose-500" aria-label="必填">*</span></label>
+            <label className="block text-xs text-gray-500 mb-1">流水线名称 *</label>
             <input
-              id="pipeline-name"
               value={name}
               onChange={e => setName(e.target.value)}
-              onBlur={() => setNameTouched(true)}
-              required
-              aria-invalid={Boolean(nameError)}
-              aria-describedby={nameError ? 'pipeline-name-error' : 'pipeline-name-help'}
-              className={`h-11 w-full rounded-xl border px-3 text-sm outline-none transition focus:ring-4 ${nameError ? 'border-rose-400 bg-rose-50/40 focus:border-rose-500 focus:ring-rose-500/10' : 'border-slate-200 focus:border-teal-500 focus:ring-teal-500/10'}`}
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200 focus:outline-none transition-colors"
               placeholder="例：供应链数据清洗"
               autoFocus
             />
-            {nameError ? (
-              <p id="pipeline-name-error" role="alert" className="mt-1.5 flex items-center gap-1 text-xs text-rose-600"><AlertCircle size={12} />{nameError}</p>
-            ) : (
-              <p id="pipeline-name-help" className="mt-1.5 text-xs text-slate-400">建议使用“业务对象 + 动作”，例如“供应链订单清洗”。</p>
-            )}
           </div>
           <div>
-            <label htmlFor="pipeline-description" className="block text-sm font-medium text-slate-700 mb-1.5">流水线描述</label>
+            <label className="block text-xs text-gray-500 mb-1">流水线描述</label>
             <textarea
-              id="pipeline-description"
               value={description}
               onChange={e => setDescription(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10"
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200 focus:outline-none transition-colors"
               rows={3}
-              placeholder="说明数据来源、处理目标或使用场景"
+              placeholder="流水线用途说明"
             />
           </div>
         </div>
-        <div className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs leading-relaxed text-gray-400 sm:max-w-[60%]">
+        <div className="flex items-center justify-between mt-4">
+          <p className="text-xs text-gray-400 max-w-[60%] leading-relaxed">
             {isEdit
               ? '名称和描述始终可修改；发布后仅编排与字段契约封版。'
               : n8nReady
@@ -1144,20 +833,20 @@ function PipelineCreateModal({
                 : 'n8n 当前不可用；可创建 Python 脚本流水线，或检查启动配置与服务连通性后再创建 n8n 流水线。'}
           </p>
           <div className="flex gap-3 shrink-0">
-            <button type="button" onClick={onClose} className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-medium text-slate-600 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/30">
+            <button onClick={onClose} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">
               取消
             </button>
             <button
-              type="submit"
+              onClick={handleSubmit}
               disabled={saving}
-              className="flex h-10 items-center gap-1.5 rounded-xl bg-[var(--color-nav-bg)] px-4 text-sm font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+              className="flex items-center gap-1.5 px-4 py-2 bg-[var(--color-nav-bg)] text-white rounded-lg text-sm disabled:opacity-50 hover:opacity-90 transition-opacity"
             >
               {saving && <Loader2 size={13} className="animate-spin" />}
               {saving ? (isEdit ? '保存中...' : '创建中...') : (isEdit ? '保存' : '创建')}
             </button>
           </div>
         </div>
-      </form>
+      </div>
     </div>
   )
 }

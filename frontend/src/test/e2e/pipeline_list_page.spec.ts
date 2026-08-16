@@ -47,10 +47,7 @@ async function mockListPage(page: Page, capture: { putBody?: unknown }) {
       body: JSON.stringify(data),
     })
     if (url.pathname === '/api/v2/pipelines' && url.searchParams.get('paginated') === 'true') {
-      return ok({
-        items: [PYTHON_PIPELINE, N8N_PIPELINE], total: 2, page: 1, page_size: 10,
-        overview: { total: 2, published: 1, enabled: 1, latest_failed: 0 },
-      })
+      return ok({ items: [PYTHON_PIPELINE, N8N_PIPELINE], total: 2, page: 1, page_size: 10 })
     }
     if (url.pathname === `/api/v2/pipelines/${PYTHON_PIPELINE.id}/clone`) {
       return ok({ ...PYTHON_PIPELINE, id: 'py-pipe-clone', name: `${PYTHON_PIPELINE.name}_复制` }, 201)
@@ -61,10 +58,7 @@ async function mockListPage(page: Page, capture: { putBody?: unknown }) {
       return ok({ ...PYTHON_PIPELINE, name: body.name ?? PYTHON_PIPELINE.name })
     }
     if (url.pathname === '/api/v2/steward/status') {
-      return ok({
-        n8n: { configured: false, enabled: false, api_url: '', reachable: false },
-        python: { configured: false },
-      })
+      return ok({ n8n: { configured: false, enabled: false, api_url: '', reachable: false } })
     }
     return ok({})
   })
@@ -85,8 +79,6 @@ test.describe('数据流水线列表页', () => {
     const n8nBox = await n8nBadge.boundingBox()
     const pythonBox = await pythonBadge.boundingBox()
     expect(n8nBox?.width).toBe(pythonBox?.width)
-    await expect(page.getByRole('heading', { name: '数据流水线' })).toBeVisible()
-    await expect(page.getByText('Python 执行网关尚未配置')).toBeVisible()
   })
 
   test('克隆需二次确认，确认后副本以「_复制」尾缀加入列表', async ({ page }) => {
@@ -94,8 +86,7 @@ test.describe('数据流水线列表页', () => {
     await page.goto('/#/data/pipelines')
 
     const pythonRow = page.locator('tr', { hasText: '订单取数脚本' })
-    await pythonRow.getByRole('button', { name: '更多操作：订单取数脚本' }).click()
-    await page.getByRole('menuitem', { name: '克隆为草稿' }).click()
+    await pythonRow.getByTitle('克隆流水线结构为未发布草稿').click()
     await expect(page.getByText('确认克隆流水线「订单取数脚本」', { exact: false })).toBeVisible()
 
     const cloneCall = page.waitForRequest(`/api/v2/pipelines/${PYTHON_PIPELINE.id}/clone`)
@@ -128,29 +119,5 @@ test.describe('数据流水线列表页', () => {
       description: '每日抓取订单',
     })
     await expect(page.getByText('配置流水线「订单取数脚本」')).toHaveCount(0)
-  })
-
-  test('新建流水线名称错误在字段旁展示并关联无障碍状态', async ({ page }) => {
-    await mockListPage(page, {})
-    await page.goto('/#/data/pipelines')
-
-    await page.getByRole('button', { name: '新建流水线' }).click()
-    await page.getByRole('button', { name: '创建', exact: true }).click()
-
-    const nameInput = page.getByLabel(/流水线名称/)
-    await expect(nameInput).toHaveAttribute('aria-invalid', 'true')
-    await expect(page.getByText('请输入流水线名称')).toBeVisible()
-  })
-
-  test('窄屏使用卡片布局，主操作无需横向滚动', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
-    await mockListPage(page, {})
-    await page.goto('/#/data/pipelines')
-
-    const pythonCard = page.locator('article', { hasText: '订单取数脚本' })
-    await expect(pythonCard).toBeVisible()
-    await expect(pythonCard.getByRole('button', { name: '配置' })).toBeVisible()
-    await expect(pythonCard.getByRole('button', { name: '试执行' })).toBeVisible()
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
   })
 })

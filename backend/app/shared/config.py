@@ -54,6 +54,19 @@ class Settings(BaseSettings):
     # 流水线执行对账器的运行周期（秒）：只收口租约已过期的中断执行，
     # 租约仍有效的长任务不受影响。
     pipeline_run_reconcile_interval_seconds: int = 300
+    # ── 数据流水线读接口 Redis 缓存（fail-open 加速层，键落 db 1，与
+    # Celery 无关，Celery 下线后不受影响）。开关可整体关闭；TTL 均小于
+    # 前端轮询间隔或远端状态自然漂移窗口。
+    pipeline_read_cache_enabled: bool = True
+    sync_task_list_cache_ttl_seconds: int = Field(default=4, ge=1, le=60)
+    sync_task_stats_cache_ttl_seconds: int = Field(default=5, ge=1, le=60)
+    sync_task_source_cache_ttl_seconds: int = Field(default=60, ge=10, le=600)
+    steward_n8n_cache_ttl_seconds: int = Field(default=10, ge=2, le=120)
+    pipeline_runs_cache_ttl_seconds: int = Field(default=2, ge=1, le=60)
+    pipeline_dryrun_cache_ttl_seconds: int = Field(default=1800, ge=60, le=86400)
+    pipeline_dryrun_cache_max_bytes: int = Field(
+        default=5_000_000, ge=100_000, le=100_000_000
+    )
     secret_key: str = "dev-secret-key"
     encryption_key: str = ""
     cors_allowed_origins: str = "*"

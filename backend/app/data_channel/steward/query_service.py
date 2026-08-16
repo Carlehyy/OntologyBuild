@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.data_channel.steward import browser_sources, service, workspace
+from app.data_channel.steward import browser_sources, cache as _cache, service, workspace
 from app.data_channel.steward.models import (
     N8nPipeline,
     StewardConversation,
@@ -86,12 +86,10 @@ def steward_status(
 ):
     n8n = service_module.n8n_config_status(db)
     if n8n["configured"] and n8n["enabled"]:
-        try:
-            service_module.get_n8n_client(db).test_connection()
-            n8n["reachable"] = True
-        except Exception as exc:  # noqa: BLE001
-            n8n["reachable"] = False
-            n8n["error"] = str(exc)[:300]
+        probe = _cache.cached_n8n_probe(service_module, db)
+        n8n["reachable"] = bool(probe.get("reachable"))
+        if probe.get("error"):
+            n8n["error"] = probe["error"]
     llm_ready = select_llm_model_config_fn(db) is not None
 
     counts: dict[str, int] = {}
@@ -280,7 +278,10 @@ def list_pipeline_records(
     active_map: dict[str, bool] = {}
     try:
         client = service_module.get_n8n_client(db)
-        for workflow in client.list_workflows(limit=200):
+        workflows = _cache.cached_n8n_workflows(
+            lambda: client.list_workflows(limit=200)
+        )
+        for workflow in workflows:
             active_map[str(workflow.get("id"))] = bool(
                 workflow.get("active")
             )
@@ -321,7 +322,10 @@ def get_pipeline_record(
     out["workflow"] = record.workflow_snapshot
     try:
         client = service_module.get_n8n_client(db)
-        workflow = client.get_workflow(record.n8n_workflow_id)
+        workflow = _cache.cached_n8n_workflow(
+            record.n8n_workflow_id,
+            lambda: client.get_workflow(record.n8n_workflow_id),
+        )
         live_snapshot, changed = service_module.refresh_draft_snapshot(
             db, record, workflow
         )

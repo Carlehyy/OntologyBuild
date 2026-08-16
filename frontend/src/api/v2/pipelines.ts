@@ -51,14 +51,6 @@ export interface PipelinePage {
   total: number
   page: number
   page_size: number
-  overview?: PipelineOverview
-}
-
-export interface PipelineOverview {
-  total: number
-  published: number
-  enabled: number
-  latest_failed: number
 }
 
 /** 字段契约——流水线产出列的入湖元数据（发布后封版） */
