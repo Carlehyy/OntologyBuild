@@ -28,6 +28,8 @@ class ProjectSummary(BaseModel):
     engine_type: str
     status: str
     version_count: int = 0
+    # 推演服务状态（null=未发布）；列表徽标据此展示 草稿/在线/已下线
+    service_status: str | None = None
     created_at: datetime | None
     updated_at: datetime | None
 

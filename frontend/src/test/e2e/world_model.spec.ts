@@ -13,7 +13,8 @@ const projectRow = {
   name: '台区负荷短期推演',
   description: '基于历史负荷曲线做 24 步外推',
   engine_type: 'statistical',
-  status: 'draft',
+  status: 'published',
+  service_status: 'online',
   version_count: 1,
   created_at: now,
   updated_at: now,
@@ -177,8 +178,10 @@ test('推演模型与调用记录为独立页面（无页内 Tab 与共享标题
   await expect(page.getByRole('heading', { name: '世界模型' })).toHaveCount(0)
   await expect(page.getByText('演化层能力', { exact: false })).toHaveCount(0)
   await expect(page.getByRole('navigation', { name: '世界模型子功能' })).toHaveCount(0)
-  // 列表页内容正常
+  // 列表页内容正常；已发布服务徽标必须显示「在线」（回归：schema 缺字段
+  // 导致 service_status 被静默丢弃、徽标永远显示「草稿」）
   await expect(page.getByText('台区负荷短期推演')).toBeVisible()
+  await expect(page.getByText('在线')).toBeVisible()
 
   // 列表筛选（本地过滤）
   await page.getByLabel('按模型名称或描述筛选').fill('不存在的模型')
