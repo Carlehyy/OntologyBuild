@@ -89,6 +89,14 @@ DELEGATES = {
     "run_audit": ("_history_service", "run_audit"),
 }
 
+# 经 _cache.cached_call 包装的读接口：处理器仍只做委托，builder 内直接
+# 调用目标服务。
+CACHED_DELEGATES = {
+    "stats_overview",
+    "list_tasks",
+    "pipeline_filter_options",
+}
+
 HELPER_KEYWORDS = {
     "selectable_pipelines": {
         "curated_columns_fn",
@@ -221,13 +229,38 @@ def test_pipeline_task_handlers_only_delegate_with_compatibility_helpers():
         statement = executable[0]
         assert isinstance(statement, ast.Return)
         assert isinstance(statement.value, ast.Call)
-        assert isinstance(statement.value.func, ast.Attribute)
-        assert isinstance(statement.value.func.value, ast.Name)
-        assert statement.value.func.value.id == module_name
-        assert statement.value.func.attr == function_name
+        call = statement.value
+        if name in CACHED_DELEGATES:
+            # 缓存包装形态：_cache.cached_call(键, TTL, lambda: service(...))
+            # 处理器仍只做委托——缓存层不承载业务逻辑，builder 内必须
+            # 直接调用目标服务并仅传兼容 helper 关键字。
+            assert isinstance(call.func, ast.Attribute)
+            assert isinstance(call.func.value, ast.Name)
+            assert call.func.value.id == "_cache"
+            assert call.func.attr == "cached_call"
+            assert len(call.args) >= 3
+            builder = call.args[2]
+            assert isinstance(builder, ast.Lambda), (
+                f"{name} 缓存 builder 必须是 lambda 表达式"
+            )
+            delegate_call = builder.body
+            assert isinstance(delegate_call, ast.Call)
+            assert isinstance(delegate_call.func, ast.Attribute)
+            assert isinstance(delegate_call.func.value, ast.Name)
+            assert delegate_call.func.value.id == module_name
+            assert delegate_call.func.attr == function_name
+            assert {
+                keyword.arg
+                for keyword in delegate_call.keywords
+            } == HELPER_KEYWORDS[name]
+            continue
+        assert isinstance(call.func, ast.Attribute)
+        assert isinstance(call.func.value, ast.Name)
+        assert call.func.value.id == module_name
+        assert call.func.attr == function_name
         assert {
             keyword.arg
-            for keyword in statement.value.keywords
+            for keyword in call.keywords
         } == HELPER_KEYWORDS[name]
 
 

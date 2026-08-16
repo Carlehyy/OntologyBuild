@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     # application startup validates PostgreSQL before importing the app.
     database_url: str = "sqlite:////tmp/ontoprompt.db"
     redis_url: str = "redis://localhost:6379/0"
+    # 任务池读接口缓存（fail-open 加速层，可整体关闭；与 Celery 无关，
+    # 键落 db 1）。TTL 均小于前端轮询间隔，感知新鲜度与直查一致。
+    pipeline_task_cache_enabled: bool = True
+    pipeline_task_list_cache_ttl_seconds: int = Field(default=4, ge=1, le=60)
+    pipeline_task_stats_cache_ttl_seconds: int = Field(default=5, ge=1, le=60)
+    pipeline_task_options_cache_ttl_seconds: int = Field(default=30, ge=1, le=300)
     # NATS JetStream 消息队列：流水线任务派发通道（PR-3 接入执行器）
     nats_url: str = ""
     # 流水线 executor 进程内同时执行的任务数上限；每条任务在独立线程执行，

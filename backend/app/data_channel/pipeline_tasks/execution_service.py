@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.data_channel.pipeline_tasks import cache as _cache
 from app.data_channel.pipeline_tasks.models import PipelineTask
 
 logger = logging.getLogger(__name__)
@@ -40,11 +41,16 @@ def trigger_task(
         from app.data_channel.pipeline_tasks.engine import (
             execute_pipeline_task,
         )
-        return execute_pipeline_task(
+
+        result = execute_pipeline_task(
             task_id,
             trigger_type="manual",
             full_refresh=full_refresh,
         )
+        # 内联执行会推进任务状态/运行记录：立即失效缓存，让下一次轮询
+        # 立刻看到最新状态（executor 侧的状态变更同样由短 TTL 兜底）。
+        _cache.invalidate_all()
+        return result
 
     # sync=false 经 NATS 派发给独立 executor 进程执行，不再占用 Web 进程
     from app.data_channel.pipeline_tasks.dispatch import dispatch_pipeline_task
@@ -53,4 +59,5 @@ def trigger_task(
     except Exception as exc:  # noqa: BLE001 - 任何通道故障对用户都是 503
         logger.error("PipelineTask %s 派发失败: %s", task_id, exc)
         raise HTTPException(503, "任务派发失败：消息通道不可用，请稍后重试")
+    _cache.invalidate_all()
     return {"status": "triggered", "task_id": task_id}
