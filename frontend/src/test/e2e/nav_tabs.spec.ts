@@ -155,35 +155,46 @@ test('顶栏多标签页：打开、切换、域内路径恢复、关闭与刷�
   await expect(page).toHaveURL(/\/#\/agent$/)
   await expect(tabList.getByRole('tab', { name: '本体助手' })).toHaveAttribute('aria-selected', 'true')
 })
-
-test('标签可见标题只保留页面一层描述，悬停提示保留两级', async ({ page }) => {
+test('标签可见标题使用平台导航的一级/二级菜单标签，不使用页面级描述', async ({ page }) => {
   await mockNavTabs(page)
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/#/agent')
 
   const tabList = page.getByRole('tablist', { name: '页面标签' })
 
-  // 列表页：可见标题为菜单名
+  // 列表页：一级菜单名
   await page.getByRole('navigation').getByRole('link', { name: '本体管理' }).click()
   await expect(page).toHaveURL(/\/#\/ontologies$/)
-  const listTab = tabList.getByRole('tab', { name: '本体管理' })
-  await expect(listTab).toBeVisible()
-  await expect(listTab).toHaveAttribute('title', '本体管理')
+  const ontologiesTab = tabList.getByRole('tab', { name: '本体管理' })
+  await expect(ontologiesTab).toBeVisible()
+  await expect(ontologiesTab).toHaveAttribute('title', '本体管理')
 
-  // 详情页：只显示“详情”，悬停提示为“本体管理 · 详情”
+  // 详情页：标签仍为菜单标签“本体管理”，不显示“详情”
   await page.goto('/#/ontologies/ontology-1')
-  const detailTab = tabList.getByRole('tab', { name: '详情' })
-  await expect(detailTab).toBeVisible()
-  await expect(detailTab).toHaveAttribute('aria-selected', 'true')
-  await expect(detailTab).toHaveAttribute('title', '本体管理 · 详情')
+  await expect(tabList.getByRole('tab', { name: '本体管理' })).toHaveAttribute('aria-selected', 'true')
+  await expect(tabList.getByRole('tab', { name: '本体管理' })).toHaveAttribute('title', '本体管理')
+  await expect(tabList.getByRole('tab', { name: '详情' })).toHaveCount(0)
 
-  // 图谱页：只显示“图谱”
+  // 图谱页：同一菜单域复用标签
   await page.goto('/#/ontologies/ontology-1/graph')
-  await expect(tabList.getByRole('tab', { name: '图谱' })).toBeVisible()
+  await expect(tabList.getByRole('tab', { name: '本体管理' })).toBeVisible()
+  await expect(tabList.getByRole('tab', { name: '图谱' })).toHaveCount(0)
 
-  // 系统设置子页：显示页面自身名称，悬停提示两级
+  // 系统设置子页：一级 · 二级菜单标签
   await page.goto('/#/settings/users')
-  const settingsTab = tabList.getByRole('tab', { name: '用户管理' })
+  const settingsTab = tabList.getByRole('tab', { name: '系统设置 · 用户管理' })
   await expect(settingsTab).toBeVisible()
   await expect(settingsTab).toHaveAttribute('title', '系统设置 · 用户管理')
+
+  // 世界模型列表页：一级 · 二级菜单标签
+  await page.goto('/#/world-model/models')
+  const wmTab = tabList.getByRole('tab', { name: '世界模型 · 推演模型' })
+  await expect(wmTab).toBeVisible()
+  await expect(wmTab).toHaveAttribute('aria-selected', 'true')
+
+  // 数据管家页：一级 · 二级菜单标签（不显示“数据管家”）
+  await page.goto('/#/data/pipelines/steward')
+  const stewardTab = tabList.getByRole('tab', { name: '数据通道 · 数据流水线' })
+  await expect(stewardTab).toBeVisible()
+  await expect(tabList.getByRole('tab', { name: '数据管家' })).toHaveCount(0)
 })

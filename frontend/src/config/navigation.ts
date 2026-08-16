@@ -24,7 +24,7 @@ import {
   Waypoints,
 } from 'lucide-react'
 import type { User } from '@/types/auth'
-import { buildTabTitles, menuKeyForPath, tabSuffixForPath } from '@/stores/tabTitle'
+import { menuKeyForPath } from '@/stores/tabTitle'
 
 
 export interface PlatformNavItem {
@@ -145,11 +145,20 @@ export function canAccessPath(user: User | null, pathname: string): boolean {
   return key === null || hasMenuAccess(user, key)
 }
 
-function labelForMenuKey(key: string): string | null {
+/**
+ * 顶栏标签可见标题：与左侧导航保持一致的菜单标签链（一级 · 二级）。
+ * 不使用“详情/映射配置”等更深层的页面级描述，
+ * 保证顶部标签栏与左侧平台导航的文字一致。
+ */
+function menuChainLabelForPath(pathname: string, key: string): string | null {
   for (const item of PLATFORM_NAV_ITEMS) {
-    if (item.key === key) return item.label
+    if (item.key === key) {
+      // 系统设置组的叶子菜单键统一为 system_settings，需按路径定位二级子菜单
+      const child = item.subItems?.find(sub => pathname === sub.to || pathname.startsWith(sub.to + '/'))
+      return child ? item.label + ' · ' + child.label : item.label
+    }
     const child = item.subItems?.find(sub => sub.key === key)
-    if (child) return child.label
+    if (child) return item.label + ' · ' + child.label
   }
   return null
 }
@@ -161,29 +170,26 @@ const FALLBACK_TAB_PATHS: Record<string, string> = {
 
 export interface NavTabInfo {
   key: string
-  /** 标签栏可见的一层标题（页面自身描述，不再拼接菜单名）。 */
+  /** 顶栏标签可见标题：与左侧导航一致的菜单标签链（一级 · 二级），最多两层。 */
   title: string
-  /** 完整两级标题（菜单名 + 页面），仅用于悬停提示。 */
-  fullTitle: string
 }
 
 /**
  * 顶栏多标签页：把路径解析为标签，按叶子菜单项粒度（菜单域内的页内跳转
  * 复用同一标签）。返回 null 表示该路径不产生标签（如 /no-access）。
  *
- * 标题规则见 stores/tabTitle.ts：可见标题只保留页面自身的一层描述，
- * 完整两级标题（菜单名 · 页面）保留在 fullTitle 供悬停提示。
+ * 可见标题使用平台导航的一级/二级菜单标签（与左侧导航文字一致），
+ * 不再拼接“详情/映射配置”等更深层的页面级描述。
  */
 export function navTabForPath(pathname: string): NavTabInfo | null {
   const key = menuKeyForPath(pathname)
   if (!key) {
     const title = FALLBACK_TAB_PATHS[pathname]
-    return title ? { key: pathname, title, fullTitle: title } : null
+    return title ? { key: pathname, title } : null
   }
-  const label = labelForMenuKey(key)
-  const { title, fullTitle } = buildTabTitles(label, tabSuffixForPath(pathname))
-  if (!title || !fullTitle) return null
-  return { key, title, fullTitle }
+  const title = menuChainLabelForPath(pathname, key)
+  if (!title) return null
+  return { key, title }
 }
 
 export function firstAccessiblePath(user: User | null): string {

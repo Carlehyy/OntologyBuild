@@ -93,8 +93,8 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   await page.goto('/#/community/skills')
   await expect(page.getByRole('heading', { name: '此功能正在修缮中，稍等片刻~' })).toBeVisible()
 
-  const apiHub = page.getByRole('button', { name: '接口代理' })
-  const community = page.getByRole('button', { name: '开放社区' })
+  const apiHub = page.getByRole('button', { name: '接口代理', exact: true })
+  const community = page.getByRole('button', { name: '开放社区', exact: true })
   const models = page.getByRole('link', { name: '模型配置' })
   const [apiHubBox, communityBox, modelsBox] = await Promise.all([
     apiHub.boundingBox(),
