@@ -54,10 +54,21 @@ if [ "$(printf '%s\n%s\n' '3.3.15' "$ver" | sort -V | head -1)" != "3.3.15" ]; t
   echo "aliyun CLI 版本过低（当前 ${ver}，需要 >= 3.3.15），请执行 aliyun upgrade" >&2
   exit 1
 fi
-aliyun cms2 --help >/dev/null 2>&1 || {
+# cms2 命令存在性检查：未配置凭证时 `aliyun cms2 --help` 会以
+# "config failed: region can't be empty" 报错退出，但命令本身可用，
+# 此时不应误报"插件不可用"。
+cms2_err="$(aliyun cms2 --help 2>&1 || true)"
+if printf '%s' "$cms2_err" | grep -qiE 'unknown command|is not a command|command not found'; then
   echo "cms2 插件不可用，请执行 aliyun plugin update" >&2
   exit 1
-}
+fi
+
+# 凭证校验：此后的命令都需要阿里云账号凭证（aliyun configure 配置的 AccessKey）。
+log "[0/5] 校验阿里云凭证（需已执行 aliyun configure）..."
+if ! aliyun sts get-caller-identity >/dev/null 2>&1; then
+  echo "凭证校验失败：请先执行 aliyun configure 配置你的 AccessKey（在阿里云控制台 RAM 访问控制里创建）" >&2
+  exit 1
+fi
 
 log "工作区: ${WORKSPACE}  地域: ${REGION}  应用名: ${SERVICE_NAME}"
 
