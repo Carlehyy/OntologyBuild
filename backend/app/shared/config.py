@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     pipeline_task_list_cache_ttl_seconds: int = Field(default=4, ge=1, le=60)
     pipeline_task_stats_cache_ttl_seconds: int = Field(default=5, ge=1, le=60)
     pipeline_task_options_cache_ttl_seconds: int = Field(default=30, ge=1, le=300)
+    # 数据资产湖读缓存（fail-open 加速层，可整体关闭；键落 db 1）。
+    # 版本级数据键携带 version id 自然换键；总览用短 TTL + 写路径 bump 失效。
+    dataset_cache_enabled: bool = True
     # NATS JetStream 消息队列：流水线任务派发通道（PR-3 接入执行器）
     nats_url: str = ""
     # 流水线 executor 进程内同时执行的任务数上限；每条任务在独立线程执行，

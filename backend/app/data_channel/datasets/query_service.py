@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.data_channel.datasets import redis_cache
+from app.data_channel.datasets import cache as lake_cache
 from app.services.v2.dataset_service import DatasetService
 
 
@@ -36,20 +36,22 @@ def datasets_overview(
 ):
     """原始数据集总览；人工资产可按创建时间倒序分页。
 
-    缓存键覆盖全部查询参数（含分页/排序/搜索词），短 TTL 兜底写路径
-    未及时失效的场景；Redis 不可用时自动回退数据库查询。
+    缓存键覆盖全部查询参数（含分页/排序/搜索词）并携带总览版本号，
+    写路径 bump 版本即整体失效；短 TTL 兜底，Redis 不可用时自动回退
+    数据库查询。
     """
     # 直接调用路由函数时 page/page_size 可能是 FastAPI Query 默认值对象，
     # 先归一化为整数，保证缓存键与分页计算行为一致。
     page = _as_int(page, 1)
     page_size = _as_int(page_size, 20)
-    fingerprint = hashlib.sha1(
-        json.dumps(
-            [source, search, sort_by, page, page_size, bool(paginated)],
-            ensure_ascii=False,
-        ).encode("utf-8")
-    ).hexdigest()
-    cache_key = f"lake:cache:overview:{fingerprint}"
+    cache_key = lake_cache.overview_key({
+        "source": source,
+        "search": search,
+        "sort_by": sort_by,
+        "page": page,
+        "page_size": page_size,
+        "paginated": bool(paginated),
+    })
 
     def _build() -> dict:
         return _datasets_overview_from_db(
@@ -63,8 +65,8 @@ def datasets_overview(
             consumer_map_fn=consumer_map_fn,
         )
 
-    return redis_cache.cache_aside(
-        cache_key, redis_cache.OVERVIEW_TTL_SECONDS, _build
+    return lake_cache.cached_call(
+        cache_key, lake_cache.OVERVIEW_TTL_SECONDS, _build
     )
 
 
@@ -266,10 +268,10 @@ def preview_data(
     if version is None:
         return []
     # 版本内容不可变：键携带 version id，新版本自动换键，无需失效。
-    cache_key = f"lake:cache:previewv:{dataset_id}:{version.id}:{limit}"
-    return redis_cache.cache_aside(
+    cache_key = f"ob:lake:previewv:{dataset_id}:{version.id}:{limit}"
+    return lake_cache.cached_call(
         cache_key,
-        redis_cache.VERSION_TTL_SECONDS,
+        lake_cache.VERSION_TTL_SECONDS,
         lambda: svc.preview(dataset_id, version_no, limit),
     )
 
@@ -337,7 +339,7 @@ def get_schema(dataset_id: str, db: Session):
         ).encode("utf-8")
     ).hexdigest()[:16]
     cache_key = (
-        f"lake:cache:schema:{dataset_id}:{latest_version_id}:{schema_fingerprint}"
+        f"ob:lake:schema:{dataset_id}:{latest_version_id}:{schema_fingerprint}"
     )
 
     def _build() -> dict:
@@ -399,7 +401,7 @@ def get_schema(dataset_id: str, db: Session):
 
         return {"dataset_id": dataset_id, "columns": columns}
 
-    return redis_cache.cache_aside(cache_key, redis_cache.VERSION_TTL_SECONDS, _build)
+    return lake_cache.cached_call(cache_key, lake_cache.VERSION_TTL_SECONDS, _build)
 
 
 def export_dataset(
@@ -471,7 +473,7 @@ def get_stats(dataset_id: str, db: Session):
     versions = svc.list_versions(dataset_id)
     # 统计只随最新版本变化：键携带 latest version id，无需显式失效。
     latest_version_id = versions[-1].id if versions else "none"
-    cache_key = f"lake:cache:stats:{dataset_id}:{latest_version_id}"
+    cache_key = f"ob:lake:stats:{dataset_id}:{latest_version_id}"
 
     def _build() -> dict:
         version_count = len(versions)
@@ -500,7 +502,7 @@ def get_stats(dataset_id: str, db: Session):
             "version_count": version_count,
         }
 
-    return redis_cache.cache_aside(cache_key, redis_cache.VERSION_TTL_SECONDS, _build)
+    return lake_cache.cached_call(cache_key, lake_cache.VERSION_TTL_SECONDS, _build)
 
 
 def preview_dataset(
@@ -527,7 +529,7 @@ def preview_dataset(
     offset = max(0, offset)
     # 版本内容不可变：键携带 latest version id 与分页参数，编辑/上传新版本后
     # 自动换键，读取失败时回退原路径。
-    cache_key = f"lake:cache:preview:{dataset_id}:{latest.id}:{offset}:{limit}"
+    cache_key = f"ob:lake:preview:{dataset_id}:{latest.id}:{offset}:{limit}"
 
     def _build() -> dict:
         rows = svc.preview(dataset_id, latest.version_no, limit=limit, offset=offset)
@@ -545,4 +547,4 @@ def preview_dataset(
             "rows": rows,
         }
 
-    return redis_cache.cache_aside(cache_key, redis_cache.VERSION_TTL_SECONDS, _build)
+    return lake_cache.cached_call(cache_key, lake_cache.VERSION_TTL_SECONDS, _build)

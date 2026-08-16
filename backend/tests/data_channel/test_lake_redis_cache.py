@@ -1,14 +1,16 @@
-"""数据资产湖 Redis 读缓存测试：命中/回源/降级/失效与键空间正确性。
+"""数据资产湖 Redis 读缓存测试：命中/回源/降级/版本失效与键空间正确性。
 
-所有用例用内存版 fake 客户端，不依赖真实 Redis；缓存模块的对外契约是
-「Redis 出现任何问题都必须等价于没启用缓存」，这部分用故障注入显式验证。
+所有用例用内存版 fake 客户端，不依赖真实 Redis；缓存层的对外契约是
+「Redis 出现任何问题都必须等价于没启用缓存」，用故障注入显式验证。
 """
 import json
 import uuid
 
 import pytest
 
-from app.data_channel.datasets import redis_cache
+from app.config import settings
+from app.data_channel.datasets import cache as lake_cache
+from app.shared import redis_cache as shared_redis
 
 # 顶层导入保证 Dataset/DatasetVersion/Connection/Pipeline 模型在 conftest
 # 的 create_all 执行前注册到 Base.metadata。
@@ -18,7 +20,7 @@ from app.models.v2.pipeline import Pipeline  # noqa: F401
 
 
 class FakeRedis:
-    """内存版 redis 客户端：只实现缓存模块用到的接口，可注入故障。"""
+    """内存版 redis 客户端：只实现共享缓存模块用到的接口，可注入故障。"""
 
     def __init__(self):
         self.store: dict[str, str] = {}
@@ -37,17 +39,11 @@ class FakeRedis:
         self.store[key] = value
         return True
 
-    def delete(self, *keys):
-        self._maybe_fail("delete")
-        for key in keys:
-            self.store.pop(key, None)
-        return len(keys)
-
-    def scan(self, cursor=0, match=None, count=200):
-        self._maybe_fail("scan")
-        prefix = (match or "*").rstrip("*")
-        keys = [key for key in self.store if key.startswith(prefix)]
-        return 0, keys
+    def incr(self, key, amount=1):
+        self._maybe_fail("incr")
+        current = int(self.store.get(key, "0"))
+        self.store[key] = str(current + int(amount))
+        return current + int(amount)
 
     def close(self):
         pass
@@ -56,124 +52,101 @@ class FakeRedis:
 @pytest.fixture
 def fake(monkeypatch):
     client = FakeRedis()
-    monkeypatch.setattr(redis_cache, "_client", client)
-    monkeypatch.setattr(redis_cache, "_last_failure_mono", 0.0)
+    monkeypatch.setattr(shared_redis, "get_client", lambda: client)
+    monkeypatch.setattr(shared_redis, "_client", None)
+    monkeypatch.setattr(shared_redis, "_client_failed_at", 0.0)
     return client
 
 
 # ---------------------------------------------------------------------------
-# 缓存助手：命中 / 回源 / 降级
+# 缓存胶水层：命中 / 回源 / 降级 / 体积上限 / 版本失效
 # ---------------------------------------------------------------------------
 
-def test_cache_aside_miss_loads_and_hit_skips_loader(fake):
+def test_cached_call_miss_loads_and_hit_skips_builder(fake):
     calls = {"n": 0}
 
-    def loader():
+    def builder():
         calls["n"] += 1
         return {"rows": [1, 2]}
 
-    key = "lake:cache:k1"
-    first = redis_cache.cache_aside(key, 60, loader)
-    second = redis_cache.cache_aside(key, 60, loader)
+    key = "ob:lake:k1"
+    first = lake_cache.cached_call(key, 60, builder)
+    second = lake_cache.cached_call(key, 60, builder)
     assert first == {"rows": [1, 2]}
     assert second == first
     assert calls["n"] == 1
     assert json.loads(fake.store[key]) == {"rows": [1, 2]}
 
 
-def test_cache_aside_caches_empty_payload(fake):
+def test_cached_call_caches_empty_payload(fake):
     calls = {"n": 0}
 
-    def loader():
+    def builder():
         calls["n"] += 1
         return []
 
-    key = "lake:cache:k2"
-    assert redis_cache.cache_aside(key, 60, loader) == []
-    assert redis_cache.cache_aside(key, 60, loader) == []
+    key = "ob:lake:k2"
+    assert lake_cache.cached_call(key, 60, builder) == []
+    assert lake_cache.cached_call(key, 60, builder) == []
     assert calls["n"] == 1
 
 
-def test_redis_get_failure_falls_back_to_loader_without_raising(fake):
+def test_redis_get_failure_falls_back_to_builder_without_raising(fake):
     fake.fail_on = {"get"}
     calls = {"n": 0}
 
-    def loader():
+    def builder():
         calls["n"] += 1
         return {"ok": True}
 
-    key = "lake:cache:k3"
-    first = redis_cache.cache_aside(key, 60, loader)
-    second = redis_cache.cache_aside(key, 60, loader)
+    key = "ob:lake:k3"
+    first = lake_cache.cached_call(key, 60, builder)
+    second = lake_cache.cached_call(key, 60, builder)
     assert first == second == {"ok": True}
     assert calls["n"] == 2  # 每次失败都回源，绝不吞结果
 
 
-def test_redis_set_failure_still_returns_loader_value(fake):
+def test_redis_set_failure_still_returns_builder_value(fake):
     fake.fail_on = {"set"}
-    value = redis_cache.cache_aside("lake:cache:k4", 60, lambda: {"a": 1})
+    value = lake_cache.cached_call("ob:lake:k4", 60, lambda: {"a": 1})
     assert value == {"a": 1}
     assert not fake.store
 
 
 def test_oversize_payload_is_not_cached(fake):
-    value = {"blob": "x" * (redis_cache.MAX_PAYLOAD_BYTES + 10)}
-    result = redis_cache.cache_aside("lake:cache:big", 60, lambda: value)
+    value = {"blob": "x" * (lake_cache.MAX_PAYLOAD_BYTES + 10)}
+    result = lake_cache.cached_call("ob:lake:big", 60, lambda: value)
     assert result == value
     assert not fake.store
 
 
-def test_client_creation_failure_degrades_to_loader(monkeypatch):
-    monkeypatch.setattr(redis_cache, "_client", None)
-    monkeypatch.setattr(redis_cache, "_last_failure_mono", 0.0)
-    import redis as redis_lib
+def test_disabled_flag_bypasses_cache_entirely(monkeypatch):
+    monkeypatch.setattr(settings, "dataset_cache_enabled", False)
+    calls = {"n": 0}
 
-    def boom(*args, **kwargs):
-        raise RuntimeError("no redis")
+    def builder():
+        calls["n"] += 1
+        return {"ok": True}
 
-    monkeypatch.setattr(redis_lib.Redis, "from_url", staticmethod(boom))
-    value = redis_cache.cache_aside("lake:cache:x", 60, lambda: {"ok": True})
-    assert value == {"ok": True}
-
-
-def test_failure_opens_circuit_until_cooldown(monkeypatch):
-    monkeypatch.setattr(redis_cache, "_client", None)
-    monkeypatch.setattr(redis_cache, "_last_failure_mono", 0.0)
-    import redis as redis_lib
-
-    now = {"t": 100.0}
-    monkeypatch.setattr(redis_cache.time, "monotonic", lambda: now["t"])
-
-    def boom(*args, **kwargs):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(redis_lib.Redis, "from_url", staticmethod(boom))
-    assert redis_cache._client_or_none() is None
-
-    # 冷却期内不再尝试建连（每个请求零 Redis 等待）
-    monkeypatch.setattr(
-        redis_lib.Redis, "from_url", staticmethod(lambda *a, **k: FakeRedis())
-    )
-    assert redis_cache._client_or_none() is None
-
-    # 冷却结束后恢复
-    now["t"] += redis_cache.COOLDOWN_SECONDS + 0.1
-    assert redis_cache._client_or_none() is not None
+    first = lake_cache.cached_call("ob:lake:off", 60, builder)
+    second = lake_cache.cached_call("ob:lake:off", 60, builder)
+    assert first == second == {"ok": True}
+    assert calls["n"] == 2
 
 
-def test_delete_prefix_only_removes_matching_keys(fake):
-    fake.store = {
-        "lake:cache:overview:abc": "{}",
-        "lake:cache:preview:x": "{}",
-        "other:key": "{}",
-    }
-    deleted = redis_cache.delete_prefix("lake:cache:overview:")
-    assert deleted == 1
-    assert set(fake.store) == {"lake:cache:preview:x", "other:key"}
+def test_overview_key_rotates_after_invalidate(fake):
+    params = {"source": "manual", "page": 1}
+    before = lake_cache.overview_key(params)
+    assert before == lake_cache.overview_key(params)
+    lake_cache.invalidate_overview()
+    after = lake_cache.overview_key(params)
+    assert after != before
+    assert before.startswith("ob:lake:overview:v0:")
+    assert after.startswith("ob:lake:overview:v1:")
 
 
 # ---------------------------------------------------------------------------
-# 查询路径集成：键空间与写路径失效
+# 查询路径集成：键空间、短 TTL 语义与写路径失效
 # ---------------------------------------------------------------------------
 
 def _dataset(dataset_id: str, name: str) -> Dataset:
@@ -203,8 +176,8 @@ def test_overview_cache_hit_and_invalidate(db, monkeypatch, fake):
     third = datasets_overview(db, consumer_map_fn=dataset_consumer_map)
     assert third["total"] == 1
 
-    # 写路径失效后立即回源
-    redis_cache.invalidate_overview()
+    # 写路径 bump 版本后立即回源
+    lake_cache.invalidate_overview()
     fourth = datasets_overview(db, consumer_map_fn=dataset_consumer_map)
     assert fourth["total"] == 2
 
@@ -299,7 +272,7 @@ def test_schema_cache_uses_contract_fingerprint(db, monkeypatch, fake):
 
 
 def test_version_publish_invalidates_overview(db, monkeypatch, fake):
-    """DatasetService.create_version 成功后尽力失效总览缓存。"""
+    """DatasetService.create_version 成功后 bump 总览版本键。"""
     from app.data_channel.datasets.service import DatasetService
     from app.data_channel.datasets.consumers import dataset_consumer_map
     from app.data_channel.datasets.query_service import datasets_overview

@@ -714,9 +714,9 @@ def _publish_run(db, dataset, *, rowcount: int, entries: list[dict],
     db.refresh(version)
     db.refresh(changeset)
     # 尽力失效资产湖总览缓存（失败静默降级，不影响发布主流程）。
-    from app.data_channel.datasets import redis_cache
+    from app.data_channel.datasets import cache
 
-    redis_cache.invalidate_overview()
+    cache.invalidate_overview()
     return version, changeset
 
 
