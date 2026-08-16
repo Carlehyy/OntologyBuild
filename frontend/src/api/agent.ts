@@ -216,11 +216,19 @@ export interface AgentConversationExport {
   }
 }
 
+export interface AnswerVerification {
+  passed: boolean
+  answerNumberCount?: number
+  unverified?: number[]
+  retried?: boolean
+}
+
 export type AgentEvent =
   | { type: 'meta'; conversationId: string; model: string; releaseId?: string | null }
   | ({ type: 'step' } & AgentStep)
-  | { type: 'answer'; content: string; citations: AgentCitation[]; proposals: AgentProposal[]; usage?: unknown }
+  | { type: 'answer'; content: string; citations: AgentCitation[]; proposals: AgentProposal[]; usage?: unknown; verification?: AnswerVerification | null }
   | { type: 'error'; message: string }
+  | { type: 'cancelled' }
   | { type: 'done' }
 
 export interface ExecuteProposalResult {
@@ -636,6 +644,9 @@ export const agentApi = {
     apiClientV2.delete(`${base(oid)}/conversations/${cid}`),
   executeProposal: (oid: string, body: { actionId: string; parameters: Record<string, unknown>; targetInstanceId?: string | null; releaseId?: string | null }) =>
     apiClientV2.post<ExecuteProposalResult>(`${base(oid)}/execute-proposal`, body),
+  cancelChat: (oid: string, runId: string) =>
+    apiClientV2.post<{ runId: string; cancelled: boolean; note: string }>(
+      `${base(oid)}/chat/cancel`, { runId }),
   dynamicSentinels: (oid: string, releaseId: string) =>
     apiClientV2.get<DynamicSentinel[]>(`${base(oid)}/dynamic-sentinels`, { params: { release_id: releaseId } }),
   createDynamicSentinel: (oid: string, releaseId: string, definition: DynamicSentinelDefinition) =>
@@ -715,7 +726,7 @@ function apiRoot(): string {
 
 export async function streamAgentChat(
   oid: string,
-  body: { message: string; conversationId?: string | null; modelId?: string | null; releaseId?: string | null },
+  body: { message: string; conversationId?: string | null; modelId?: string | null; releaseId?: string | null; runId?: string | null },
   onEvent: (e: AgentEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -728,6 +739,7 @@ export async function streamAgentChat(
       conversationId: body.conversationId || undefined,
       modelId: body.modelId || undefined,
       releaseId: body.releaseId || undefined,
+      runId: body.runId || undefined,
       stream: true,
     }),
     signal,

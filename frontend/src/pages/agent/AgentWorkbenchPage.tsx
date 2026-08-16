@@ -12,7 +12,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   AlertTriangle, ArrowLeftRight, BadgeCheck, BellRing, Bot, FileSearch,
   FileText, History, List, Loader2, Network, PenLine, Scale, Send, Shield,
-  Sparkles, User, Workflow,
+  Sparkles, Square, User, Workflow, X,
 } from 'lucide-react'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { useToast } from '@/components/ui/Toast'
@@ -28,6 +28,14 @@ import { SentinelProposalCard } from './SentinelProposalCard'
 import { BoundaryDrawer } from './BoundaryDrawer'
 import { DynamicSentinelDrawer } from './DynamicSentinelDrawer'
 import { AgentChart } from './AgentChart'
+import {
+  enqueuePrompt,
+  loadQueuedPrompts,
+  mergeQueuedPrompts,
+  persistQueuedPrompts,
+  queuedPromptsKey,
+  type QueuedPrompt,
+} from './components/queuedPrompts'
 import {
   AgentCallChainView,
   Md,
@@ -159,6 +167,12 @@ export default function AgentWorkbenchPage() {
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const abortRef = useRef<AbortController | null>(null)
+  const runIdRef = useRef<string | null>(null)
+  const stoppedRef = useRef(false)
+  // 追问队列：运行中提交的问题排队，回合终态后自动派发下一条
+  const queuedRef = useRef<QueuedPrompt[]>([])
+  const [queuedCount, setQueuedCount] = useState(0)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sentinelDrawerOpen, setSentinelDrawerOpen] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
@@ -193,6 +207,38 @@ export default function AgentWorkbenchPage() {
     setDecisionRunId(null)
   }, [])
   useEffect(() => { resetChat() }, [oid, releaseId, resetChat])
+
+  // 会话切换时装载该会话的追问队列；新会话创建时把 'pending' 占位桶的排队项并入
+  useEffect(() => {
+    const key = queuedPromptsKey(conversationId)
+    const current = loadQueuedPrompts(key)
+    const pending = loadQueuedPrompts(queuedPromptsKey(null))
+    const merged = mergeQueuedPrompts(current, pending)
+    queuedRef.current = merged
+    setQueuedCount(merged.length)
+    persistQueuedPrompts(key, merged)
+    if (pending.length > 0) persistQueuedPrompts(queuedPromptsKey(null), [])
+  }, [conversationId])
+
+  const updateQueue = useCallback((next: QueuedPrompt[]) => {
+    queuedRef.current = next
+    setQueuedCount(next.length)
+    persistQueuedPrompts(queuedPromptsKey(conversationId), next)
+  }, [conversationId])
+
+  const queuePrompt = useCallback((text: string) => {
+    updateQueue(enqueuePrompt(queuedRef.current, text))
+  }, [updateQueue])
+
+  const clearQueue = useCallback(() => {
+    updateQueue([])
+  }, [updateQueue])
+
+  const stopCurrentTurn = useCallback(() => {
+    stoppedRef.current = true
+    if (runIdRef.current) agentApi.cancelChat(oid, runIdRef.current).catch(() => {})
+    abortRef.current?.abort()
+  }, [oid])
 
   const loadConversation = async (cid: string) => {
     const conv = await agentApi.conversation(oid, cid)
@@ -256,9 +302,20 @@ export default function AgentWorkbenchPage() {
 
   const send = useCallback(async (text?: string) => {
     const question = (text ?? input).trim()
-    if (!question || busy || !oid) return
+    if (!question || !oid) return
+    // 运行中：追问进入会话级队列，回合终态后自动派发
+    if (busy) {
+      queuePrompt(question)
+      setInput('')
+      return
+    }
     setInput('')
     setBusy(true)
+    stoppedRef.current = false
+    runIdRef.current = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    abortRef.current = new AbortController()
     if (/(决策推演|推演.{0,24}(方案|策略|未来|决策)|(?:方案|策略).{0,24}(比较|推演))/.test(question)) {
       setWorkspaceView('decision')
     }
@@ -277,7 +334,7 @@ export default function AgentWorkbenchPage() {
     const turnSteps: AgentStep[] = []
     try {
       await streamAgentChat(oid, {
-        message: question, conversationId, modelId, releaseId,
+        message: question, conversationId, modelId, releaseId, runId: runIdRef.current,
       }, ev => {
         if (ev.type === 'meta') setConversationId(ev.conversationId)
         else if (ev.type === 'step') {
@@ -298,17 +355,32 @@ export default function AgentWorkbenchPage() {
           if ((ev.citations || []).length > 0 || turnSteps.some(step => ['path', 'impact'].includes((step.result as any)?.kind))) {
             setGraphSignal({ sequence: Date.now(), steps: [...turnSteps], citations: ev.citations || [] })
           }
+        } else if (ev.type === 'cancelled') {
+          patch({ content: '（已停止）', loading: false })
         } else if (ev.type === 'error') {
           patch({ error: ev.message, loading: false })
         }
-      })
+      }, abortRef.current.signal)
     } catch (e: any) {
-      patch({ error: e?.message || '请求失败', loading: false })
+      if (stoppedRef.current || (e?.name === 'AbortError')) {
+        patch(m => m.loading ? { content: '（已停止）', loading: false } : {})
+      } else {
+        patch({ error: e?.message || '请求失败', loading: false })
+      }
     } finally {
+      abortRef.current = null
+      runIdRef.current = null
       setBusy(false)
       refetchConversations()
+      // 追问队列自动派发下一条
+      const remaining = queuedRef.current
+      if (remaining.length > 0) {
+        const [head, ...tail] = remaining
+        updateQueue(tail)
+        void send(head.text)
+      }
     }
-  }, [busy, conversationId, input, modelId, oid, releaseId, refetchConversations])
+  }, [busy, conversationId, input, modelId, oid, queuePrompt, releaseId, refetchConversations, updateQueue])
 
   const suggested = useMemo<string[]>(() => {
     const first = caps?.objectTypes?.[0]?.displayName
@@ -668,17 +740,42 @@ export default function AgentWorkbenchPage() {
           <div data-testid="agent-input-bar" className="border-t border-[var(--color-border)] bg-white px-4 pb-2.5 pt-2.5">
             <div className="relative flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-white py-1.5 pl-3 pr-1.5 transition-all focus-within:border-teal-400 focus-within:ring-2 focus-within:ring-teal-100">
               <input
-                placeholder={oid ? '问业务问题，或让它帮你预演一个操作…' : '请先选择一个本体'}
+                placeholder={oid ? (busy ? '可继续输入，回车进入追问队列…' : '问业务问题，或让它帮你预演一个操作…') : '请先选择一个本体'}
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && send()}
-                disabled={!oid || busy}
+                disabled={!oid}
                 className="min-w-0 flex-1 bg-transparent text-sm text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:opacity-50"
               />
-              <button onClick={() => send()} disabled={!input.trim() || busy || !oid}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-teal-700 text-white transition-all duration-200 hover:bg-teal-600 disabled:cursor-not-allowed disabled:opacity-25">
-                {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-              </button>
+              {busy ? (
+                <button
+                  type="button"
+                  onClick={stopCurrentTurn}
+                  aria-label="停止生成"
+                  data-testid="agent-stop-button"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-rose-600 text-white transition-all duration-200 hover:bg-rose-500"
+                >
+                  <Square size={13} fill="currentColor" />
+                </button>
+              ) : (
+                <button onClick={() => send()} disabled={!input.trim() || !oid}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-teal-700 text-white transition-all duration-200 hover:bg-teal-600 disabled:cursor-not-allowed disabled:opacity-25">
+                  <Send size={14} />
+                </button>
+              )}
+              {queuedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={clearQueue}
+                  title={`追问队列中有 ${queuedCount} 条，点击清空`}
+                  aria-label="清空追问队列"
+                  data-testid="agent-queue-clear"
+                  className="flex h-6 shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 text-[11px] font-medium text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100"
+                >
+                  排队 {queuedCount}
+                  <X size={11} />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setShowJump(v => !v)}
