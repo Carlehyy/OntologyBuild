@@ -133,6 +133,10 @@ def delete_connection(connection_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Connection not found")
     db.delete(conn)
     db.commit()
+    # 数据源元数据/样例缓存随连接删除失效（best-effort，旧键靠 TTL 兜底）
+    from app.data_channel.sync_tasks import cache as _sync_cache
+
+    _sync_cache.invalidate_source(connection_id)
 
 
 @router.post("/{connection_id}/schedule")

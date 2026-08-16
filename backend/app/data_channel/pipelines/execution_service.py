@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.data_channel.pipelines import cache as _pl_cache
 from app.data_channel.pipelines.contracts import EnabledBody
 from app.models.v2.pipeline import Pipeline, PipelineRun
 
@@ -104,15 +105,49 @@ def list_pipeline_runs(pipeline_id: str, db: Session, limit: int = 50) -> list[d
     # 线性膨胀。前端各调用点均只消费最新一条（runs[0]）后转详情接口；
     # 需要更早记录走数据任务池的执行历史（已分页）。
     limit = max(1, min(int(limit or 50), 200))
-    runs = db.query(PipelineRun).filter(
-        PipelineRun.pipeline_id == pipeline_id
-    ).order_by(PipelineRun.created_at.desc()).limit(limit).all()
-    return [
-        {
+
+    def _build() -> list[dict]:
+        runs = db.query(PipelineRun).filter(
+            PipelineRun.pipeline_id == pipeline_id
+        ).order_by(PipelineRun.created_at.desc()).limit(limit).all()
+        return [
+            {
+                "id": run.id,
+                "status": run.status,
+                "stats": run.stats,
+                "error_log": run.error_log or "",
+                "started_at": (
+                    run.started_at.isoformat()
+                    if run.started_at
+                    else None
+                ),
+                "finished_at": (
+                    run.finished_at.isoformat()
+                    if run.finished_at
+                    else None
+                ),
+            }
+            for run in runs
+        ]
+
+    # 运行中轮询接口：2s 级 TTL（小于前端轮询间隔，状态最多延迟 2s）。
+    return _pl_cache.cached_call(
+        _pl_cache.runs_key(pipeline_id, limit),
+        settings.pipeline_runs_cache_ttl_seconds,
+        _build,
+    )
+
+
+def get_pipeline_run(run_id: str, db: Session) -> dict:
+    def _build() -> dict:
+        run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+        if not run:
+            raise HTTPException(404, "Run not found")
+        return {
             "id": run.id,
             "status": run.status,
             "stats": run.stats,
-            "error_log": run.error_log or "",
+            "error_log": run.error_log,
             "started_at": (
                 run.started_at.isoformat()
                 if run.started_at
@@ -124,30 +159,12 @@ def list_pipeline_runs(pipeline_id: str, db: Session, limit: int = 50) -> list[d
                 else None
             ),
         }
-        for run in runs
-    ]
 
-
-def get_pipeline_run(run_id: str, db: Session) -> dict:
-    run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
-    if not run:
-        raise HTTPException(404, "Run not found")
-    return {
-        "id": run.id,
-        "status": run.status,
-        "stats": run.stats,
-        "error_log": run.error_log,
-        "started_at": (
-            run.started_at.isoformat()
-            if run.started_at
-            else None
-        ),
-        "finished_at": (
-            run.finished_at.isoformat()
-            if run.finished_at
-            else None
-        ),
-    }
+    return _pl_cache.cached_call(
+        _pl_cache.run_key(run_id),
+        settings.pipeline_runs_cache_ttl_seconds,
+        _build,
+    )
 
 
 def run_pipeline_synchronously(
@@ -551,6 +568,8 @@ def dry_run_pipeline(
             storage.delete_object(uri)
     except Exception:  # noqa: BLE001
         pass
+    # 旧试运行的解析缓存随旧对象一并失效（best-effort，TTL 兜底）。
+    _pl_cache.invalidate_pipeline_dryruns(pipeline.id)
     storage.put_bytes(
         dry_run_bucket,
         f"dry-runs/{pipeline.id}/{dry_run_id}.json",
@@ -560,6 +579,12 @@ def dry_run_pipeline(
             default=str,
         ).encode("utf-8"),
         content_type="application/json",
+    )
+    # 试运行结果分页读取加速：解析后的 payload 尽力缓存（超大小上限
+    # 或 Redis 不可用时静默跳过，对象存储仍是权威存储）。
+    _pl_cache.cache_dryrun_payload(
+        _pl_cache.dryrun_key(pipeline.id, dry_run_id),
+        payload,
     )
 
     total_out = sum(output["rows_out"] for output in outputs)
@@ -595,17 +620,24 @@ def dry_run_rows(
     ).first()
     if not pipeline:
         raise HTTPException(404, "Pipeline not found")
-    try:
-        from app.services.storage_service import get_storage_service
 
-        raw = get_storage_service().get_object(
-            dry_run_uri_fn(pipeline_id, dry_run_id)
-        )
-        payload = json_module.loads(raw.decode("utf-8"))
-    except ValueError:
-        raise HTTPException(400, "非法的 dry_run_id")
-    except Exception:
-        raise HTTPException(404, "试运行结果不存在或已过期，请重新执行")
+    # 优先读缓存（命中免去每次分页的全量下载解析）；缓存不可用/未命中
+    # 一律回对象存储，主流程不受影响。
+    payload = _pl_cache.get_dryrun_payload(
+        _pl_cache.dryrun_key(pipeline_id, dry_run_id)
+    )
+    if not isinstance(payload, dict):
+        try:
+            from app.services.storage_service import get_storage_service
+
+            raw = get_storage_service().get_object(
+                dry_run_uri_fn(pipeline_id, dry_run_id)
+            )
+            payload = json_module.loads(raw.decode("utf-8"))
+        except ValueError:
+            raise HTTPException(400, "非法的 dry_run_id")
+        except Exception:
+            raise HTTPException(404, "试运行结果不存在或已过期，请重新执行")
     if payload.get("pipeline_id") != pipeline_id:
         raise HTTPException(400, "试运行结果与流水线不匹配")
 

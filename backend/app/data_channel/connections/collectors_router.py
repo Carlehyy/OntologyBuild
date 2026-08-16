@@ -68,12 +68,33 @@ def list_collectors(_=Depends(get_current_user)):
 def preview_aihot(mode: str = "selected", category: Optional[str] = None,
                   take: int = 10, q: Optional[str] = None,
                   _=Depends(get_current_user)):
-    """预览 AI HOT 数据（不落库）"""
-    try:
-        data = aihot.fetch_items(mode=mode, category=category, take=take, q=q)
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"采集源不可用: {e}")
-    return _ok(data)
+    """预览 AI HOT 数据（不落库）
+
+    外部资讯源往返较慢，预览结果以中 TTL 缓存（fail-open：Redis 不可用
+    时直连采集源，主流程不受影响）。
+    """
+    import hashlib
+
+    from app.config import settings
+    from app.shared import redis_cache
+
+    def fetch():
+        try:
+            data = aihot.fetch_items(mode=mode, category=category, take=take, q=q)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(502, f"采集源不可用: {e}")
+        return _ok(data)
+
+    if (
+        not settings.pipeline_read_cache_enabled
+        or settings.environment.strip().lower() == "test"
+    ):
+        return fetch()
+    q_hash = hashlib.sha1((q or "").encode("utf-8")).hexdigest()[:16]
+    key = f"ob:col:aihot:{mode}:{category or ''}:{take}:{q_hash}"
+    return redis_cache.cache_aside(
+        key, settings.sync_task_source_cache_ttl_seconds, fetch
+    )
 
 
 class CollectRequest(BaseModel):

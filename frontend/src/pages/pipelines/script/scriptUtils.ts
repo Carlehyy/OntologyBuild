@@ -1,7 +1,7 @@
 /** Python 脚本页的工具函数：列类型推断与 traceback 行号解析（纯函数，便于单测） */
 
 /** 与平台类型词表（入湖 columns_typed / 字段契约）一致 */
-export type InferredType = 'string' | 'integer' | 'float' | 'boolean' | 'timestamp' | 'json' | 'null'
+export type InferredType = 'string' | 'integer' | 'float' | 'boolean' | 'timestamp' | 'null'
 
 export const TYPE_LABELS: Record<InferredType, string> = {
   string: '文本',
@@ -9,7 +9,6 @@ export const TYPE_LABELS: Record<InferredType, string> = {
   float: '小数',
   boolean: '布尔',
   timestamp: '时间',
-  json: 'JSON',
   null: '空',
 }
 
@@ -23,7 +22,6 @@ export function inferValueType(value: unknown): InferredType {
   if (value === null || value === undefined) return 'null'
   if (typeof value === 'boolean') return 'boolean'
   if (typeof value === 'number') return Number.isInteger(value) ? 'integer' : 'float'
-  if (typeof value === 'object') return 'json'
   const text = String(value).trim()
   if (!text || ['none', 'null', 'nan'].includes(text.toLowerCase())) return 'null'
   if (DATE_RE.test(text)) return 'timestamp'
@@ -34,7 +32,7 @@ export function inferValueType(value: unknown): InferredType {
   return 'string'
 }
 
-const PRIORITY: InferredType[] = ['timestamp', 'integer', 'float', 'boolean', 'json', 'string', 'null']
+const PRIORITY: InferredType[] = ['timestamp', 'integer', 'float', 'boolean', 'string', 'null']
 
 /** 对每列取前若干行样本投票，返回更准确的列类型（与后端多样本投票一致） */
 export function inferColumnTypes(

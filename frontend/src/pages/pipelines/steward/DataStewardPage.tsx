@@ -494,12 +494,7 @@ export default function DataStewardPage() {
               timeline={timeline}
               busy={busy}
               bottomRef={bottomRef}
-              onSuggested={prompt => {
-                setInput(prompt)
-                requestAnimationFrame(() => {
-                  document.querySelector<HTMLTextAreaElement>('[data-testid="steward-composer"]')?.focus()
-                })
-              }}
+              onSuggested={send}
               onDownloadFile={downloadUploadedFile}
               onRemoveFile={removeUploadedFile}
             />

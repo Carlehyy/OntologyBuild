@@ -622,6 +622,10 @@ def declare_contract(
     schema["pk_source"] = "manual"
     ds.schema_json = schema  # 赋新 dict, 原地改 JSON 列不会被 SQLAlchemy 跟踪
     db.commit()
+    # 主键变化直接反映在总览列表里，尽力失效缓存（失败静默降级）。
+    from app.data_channel.datasets import cache
+
+    cache.invalidate_overview()
     return {"dataset_id": dataset_id, "primary_key": new_pk, "rows_validated": len(rows)}
 
 
@@ -775,6 +779,10 @@ def delete_dataset(
     db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).delete(synchronize_session=False)
     db.delete(ds)
     db.commit()
+    # 尽力失效资产湖总览缓存（失败静默降级，不影响删除主流程）。
+    from app.data_channel.datasets import cache
+
+    cache.invalidate_overview()
     storage_cleanup = drain_storage_deletion_outbox(db)
 
     result: dict = {

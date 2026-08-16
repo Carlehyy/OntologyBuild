@@ -14,6 +14,7 @@
   analyze_change_impact 字段拟议变更的关系可达范围（只读预演）
   aggregate_objects  分组计数 / 求和 / 均值 / 最值
   get_object_history 实例的事实流（谁、何时、为何改的 — 溯源问答）
+  trace_causal_chain 跨对象因果链追溯（决策 → 动作 → 事实 → 后续覆盖）
   list_actions       授权范围内的动作及参数说明
   run_decision_simulation 隔离快照上的多视角决策推演（只写推演运行记录）
   propose_action     动作预演（引擎 dry-run：校验 + 模拟效果，不落实际变更）
@@ -293,6 +294,20 @@ TOOL_DEFS: list[dict] = [
                 "instance_id": {"type": "string"},
                 "property_name": {"type": "string", "description": "可选：只看某个属性"},
                 "limit": {"type": "integer"},
+            },
+            "required": ["instance_id"],
+        },
+    },
+    {
+        "name": "trace_causal_chain",
+        "description": "沿事实流追溯实例属性变化的因果链：哪次决策/哪个动作导致了变更、此前值是什么、之后又被谁覆盖、派生值由哪些输入算出。返回带出处的节点与因果边（决策→动作→事实→后续覆盖）；事实节点自带 causedBy/supersedesId/derivedFrom 指针，决策事实（factKind=decision）会拆出 decision/reason 字段。回答'为什么变了/谁批准的/这个值从哪来/后来变成了什么'这类跨对象因果问题用这个；单实例的单点历史用 get_object_history。链受深度与数量上限约束，返回 truncated=true 时说明这是部分链。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "instance_id": {"type": "string", "description": "要追溯的实例 id"},
+                "property_name": {"type": "string", "description": "可选：只追溯某个属性"},
+                "direction": {"type": "string", "enum": ["upstream", "downstream", "both"], "description": "upstream=什么导致了这些变化；downstream=这些变化后来导致了什么；默认 both"},
+                "max_depth": {"type": "integer", "minimum": 1, "maximum": 4},
             },
             "required": ["instance_id"],
         },
@@ -1127,6 +1142,49 @@ class ToolRunner:
                             ),
                         )
                     ]
+        return result
+
+    def _tool_trace_causal_chain(self, args: dict) -> dict:
+        inst = self.scope.visible_instance(
+            self.db.query(ObjectInstance).filter(
+                ObjectInstance.id == args.get("instance_id", "")).first())
+        self._cite(inst)
+        property_name = args.get("property_name")
+        if property_name:
+            object_type = self.scope.object_types.get(inst.object_type_id)
+            if object_type is None:
+                raise ToolError("实例的对象类型不在授权范围内")
+            property_name = self.scope.resolve_property(
+                object_type, property_name)
+        authority_release_ids = None
+        if self.scope.release_id is not None:
+            lineage = _history_release_lineage(
+                self.db, self.scope.ontology.id, str(self.scope.release_id))
+            authority_release_ids = list(lineage["authorityReleaseIds"])
+        from app.ontologies.decision_intelligence.service import (
+            trace_causal_chain,
+        )
+        result = trace_causal_chain(
+            self.db,
+            ontology_id=self.scope.ontology.id,
+            instance_id=inst.id,
+            property_name=property_name,
+            direction=args.get("direction") or "both",
+            max_depth=args.get("max_depth") or 3,
+            authority_release_ids=authority_release_ids,
+        )
+        result["instance"] = _label(self.scope, inst)
+        # 链上涉及的其他实例也给引用（仅授权范围内的类型可引用）
+        other_ids = sorted({
+            node["instanceId"]
+            for node in result["nodes"]
+            if node["kind"] == "fact"
+            and node.get("instanceId") and node["instanceId"] != inst.id
+        })
+        for other in self.db.query(ObjectInstance).filter(
+                ObjectInstance.id.in_(other_ids[:_CITATION_CAP * 2])).all():
+            if other.object_type_id in self.scope.object_types:
+                self._cite(other)
         return result
 
     def _tool_list_actions(self, args: dict) -> dict:

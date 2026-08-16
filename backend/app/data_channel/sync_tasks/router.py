@@ -7,7 +7,9 @@ from typing import Optional, Literal
 from datetime import datetime
 import uuid
 
+from app.config import settings
 from app.deps import get_current_user, get_db
+from app.data_channel.sync_tasks import cache as _cache
 from app.models.v2.sync_task import DataSyncTask, DataSyncHistory, SyncMode, ScheduleType, SyncStatus, TriggerType, HistoryStatus
 from app.models.v2.connection import Connection
 from app.models.v2.pipeline import Pipeline
@@ -104,8 +106,7 @@ def _refresh_scheduler(task_id: str) -> None:
 
 # ========== 固定路径（必须放在 /{task_id} 之前） ==========
 
-@router.get("/stats")
-def stats_overview(db: Session = Depends(get_db)):
+def _stats_overview_direct(db: Session) -> dict:
     total = db.query(DataSyncTask).count()
     running = db.query(DataSyncTask).filter(DataSyncTask.status == "running").count()
     enabled = db.query(DataSyncTask).filter(DataSyncTask.enabled.is_(True)).count()
@@ -135,6 +136,17 @@ def stats_overview(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/stats")
+def stats_overview(db: Session = Depends(get_db)):
+    # 轮询接口短 TTL 缓存：旧版写入口已退役，统计只随历史记录追加变化，
+    # 秒级 TTL 即满足新鲜度（小于前端轮询间隔）。
+    return _cache.cached_call(
+        _cache.stats_key(),
+        settings.sync_task_stats_cache_ttl_seconds,
+        lambda: _stats_overview_direct(db),
+    )
+
+
 @router.get("/scheduler/status")
 def scheduler_status():
     try:
@@ -160,6 +172,16 @@ def scheduler_status():
 
 @router.get("/sources/{conn_id}/tables")
 def list_source_tables(conn_id: str, db: Session = Depends(get_db)):
+    # 外部系统元数据：中 TTL 缓存，免去配置界面反复浏览时的远端往返；
+    # 连接删除时经版本键失效（connections.router.delete_connection）。
+    return _cache.cached_call(
+        _cache.source_tables_key(conn_id),
+        settings.sync_task_source_cache_ttl_seconds,
+        lambda: _list_source_tables_direct(conn_id, db),
+    )
+
+
+def _list_source_tables_direct(conn_id: str, db: Session) -> dict:
     import json
     from app.services import encryption_service
     from app.services.connection.registry import get_connector
@@ -188,6 +210,15 @@ def list_source_tables(conn_id: str, db: Session = Depends(get_db)):
 
 @router.get("/sources/{conn_id}/tables/{table}/sample")
 def preview_source_table(conn_id: str, table: str, db: Session = Depends(get_db)):
+    # 外部系统表样例：中 TTL 缓存，失效语义同 list_source_tables。
+    return _cache.cached_call(
+        _cache.source_sample_key(conn_id, table),
+        settings.sync_task_source_cache_ttl_seconds,
+        lambda: _preview_source_table_direct(conn_id, table, db),
+    )
+
+
+def _preview_source_table_direct(conn_id: str, table: str, db: Session) -> dict:
     import json
     from app.services import encryption_service
     from app.services.connection.registry import get_connector
@@ -247,6 +278,34 @@ def list_tasks(
     page_size: int = 50,
     db: Session = Depends(get_db),
 ):
+    # SyncTasksTab 以 10s 级间隔轮询；短 TTL 缓存折叠并发轮询。
+    # 写入口已退役（410），列表只读，无写侧失效需求。
+    params = {
+        "connection_id": connection_id,
+        "status": status,
+        "search": search,
+        "enabled": enabled,
+        "page": page,
+        "page_size": page_size,
+    }
+    return _cache.cached_call(
+        _cache.list_tasks_key(params),
+        settings.sync_task_list_cache_ttl_seconds,
+        lambda: _list_tasks_direct(
+            connection_id, status, search, enabled, page, page_size, db
+        ),
+    )
+
+
+def _list_tasks_direct(
+    connection_id: Optional[str],
+    status: Optional[str],
+    search: Optional[str],
+    enabled: Optional[bool],
+    page: int,
+    page_size: int,
+    db: Session,
+) -> dict:
     q = db.query(DataSyncTask)
     if connection_id:
         q = q.filter(DataSyncTask.connection_id == connection_id)
