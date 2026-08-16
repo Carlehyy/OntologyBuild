@@ -30,6 +30,7 @@ export default function NavTabs() {
     recordVisit(user.username, {
       key: info.key,
       title: info.title,
+      fullTitle: info.fullTitle,
       path: `${location.pathname}${location.search}`,
     })
   }, [user, location, recordVisit])
@@ -63,7 +64,7 @@ export default function NavTabs() {
             role="tab"
             aria-selected={selected}
             tabIndex={0}
-            title={tab.title}
+            title={tab.fullTitle ?? tab.title}
             onClick={() => navigate(tab.path)}
             onKeyDown={e => {
               if (e.key === 'Enter' || e.key === ' ') {

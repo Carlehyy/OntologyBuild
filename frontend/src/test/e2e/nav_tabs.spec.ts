@@ -155,3 +155,35 @@ test('顶栏多标签页：打开、切换、域内路径恢复、关闭与刷�
   await expect(page).toHaveURL(/\/#\/agent$/)
   await expect(tabList.getByRole('tab', { name: '本体助手' })).toHaveAttribute('aria-selected', 'true')
 })
+
+test('标签可见标题只保留页面一层描述，悬停提示保留两级', async ({ page }) => {
+  await mockNavTabs(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/#/agent')
+
+  const tabList = page.getByRole('tablist', { name: '页面标签' })
+
+  // 列表页：可见标题为菜单名
+  await page.getByRole('navigation').getByRole('link', { name: '本体管理' }).click()
+  await expect(page).toHaveURL(/\/#\/ontologies$/)
+  const listTab = tabList.getByRole('tab', { name: '本体管理' })
+  await expect(listTab).toBeVisible()
+  await expect(listTab).toHaveAttribute('title', '本体管理')
+
+  // 详情页：只显示“详情”，悬停提示为“本体管理 · 详情”
+  await page.goto('/#/ontologies/ontology-1')
+  const detailTab = tabList.getByRole('tab', { name: '详情' })
+  await expect(detailTab).toBeVisible()
+  await expect(detailTab).toHaveAttribute('aria-selected', 'true')
+  await expect(detailTab).toHaveAttribute('title', '本体管理 · 详情')
+
+  // 图谱页：只显示“图谱”
+  await page.goto('/#/ontologies/ontology-1/graph')
+  await expect(tabList.getByRole('tab', { name: '图谱' })).toBeVisible()
+
+  // 系统设置子页：显示页面自身名称，悬停提示两级
+  await page.goto('/#/settings/users')
+  const settingsTab = tabList.getByRole('tab', { name: '用户管理' })
+  await expect(settingsTab).toBeVisible()
+  await expect(settingsTab).toHaveAttribute('title', '系统设置 · 用户管理')
+})
