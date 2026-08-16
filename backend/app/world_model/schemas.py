@@ -158,3 +158,12 @@ class InvokeResult(BaseModel):
     error: str | None = None
     duration_ms: int = 0
     call_id: str | None = None
+
+
+class TemplateOut(BaseModel):
+    """开发页可插入的官方脚本模板（唯一事实源在后端，前端不复制副本）。"""
+    key: str
+    name: str
+    description: str
+    script: str
+    test_input: dict[str, Any]

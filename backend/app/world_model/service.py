@@ -63,6 +63,185 @@ SCRIPT_TEMPLATE = '''def simulate(context, actions, horizon):
     }
 '''
 
+# 时序推演示例模板：ITSM 式 ARIMA / SARIMA 建模与预测（依赖 statsmodels）。
+# 该模板是开发页「时序示例」按钮的权威内容，前后端不得各自复制副本。
+TIME_SERIES_TEMPLATE = '''def simulate(context, actions, horizon):
+    """时序推演示例（ITSM 式流程）：ARIMA / SARIMA 拟合与预测。
+
+    context 约定：
+      series : list[float] — 历史时序观测值（按时间顺序，建议 >= 24 个点）
+      period : int（可选）  — 季节周期（如月度数据传 12）；数据足够时启用 SARIMA
+    actions（可选）：[{"step": int, "delta": float}] — 干预动作，
+      在预测轨迹第 step 步（从 0 起）叠加 delta，用于情景干预推演
+
+    流程：ADF 平稳性检验定差分阶数 d → ACF/PACF 显著滞后定 p/q 候选 →
+    AIC 小网格选优 → 拟合 ARIMA/SARIMA → 预测 horizon 步，
+    输出 trajectory / confidence / boundary / model_summary。
+    """
+    import warnings
+
+    import numpy as np
+    import pandas as pd
+    from statsmodels.tsa.arima.model import ARIMA
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+    from statsmodels.tsa.stattools import acf, adfuller, pacf
+
+    def _fail(message):
+        return {
+            "trajectory": [],
+            "confidence": 0.0,
+            "boundary": message,
+            "model_summary": None,
+        }
+
+    series = (context or {}).get("series")
+    if not isinstance(series, (list, tuple)) or len(series) < 12:
+        return _fail("context.series 必须是长度 >= 12 的数值列表（历史时序观测值）。")
+    try:
+        values = np.asarray(series, dtype=float)
+    except (TypeError, ValueError):
+        return _fail("context.series 含有无法转为数值的元素。")
+    if not np.all(np.isfinite(values)):
+        return _fail("context.series 含 NaN/Inf，请先清洗数据。")
+
+    horizon = int(horizon or 1)
+    horizon = max(1, min(horizon, max(1, len(values))))
+    period = (context or {}).get("period")
+    use_seasonal = (
+        isinstance(period, int) and period >= 2 and len(values) >= 2 * period
+    )
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+
+            # 1) 差分阶数 d：ADF 不平稳则差分（最多 2 阶）
+            d = 0
+            working = pd.Series(values)
+            p_values = []
+            p_value = float(adfuller(working)[1])
+            p_values.append(p_value)
+            while d < 2 and p_value > 0.05:
+                working = working.diff().dropna()
+                d += 1
+                p_value = float(adfuller(working)[1])
+                p_values.append(p_value)
+
+            # 2) p / q 候选：ACF/PACF 首个显著滞后（95% 置信带），上限 5
+            n = len(working)
+            threshold = 1.96 / np.sqrt(n) if n > 0 else 1.0
+            max_lag = max(1, min(5, n // 2))
+            acf_values = acf(working, nlags=max_lag)
+            pacf_values = pacf(working, nlags=max_lag)
+            q0 = next(
+                (k for k in range(1, len(acf_values))
+                 if abs(acf_values[k]) > threshold), 0)
+            p0 = next(
+                (k for k in range(1, len(pacf_values))
+                 if abs(pacf_values[k]) > threshold), 0)
+
+            # 3) AIC 小网格选优（候选邻域 + 朴素基准，控制拟合次数）
+            candidates = []
+            for p in (p0, p0 + 1, 1, 0):
+                for q in (q0, q0 + 1, 1, 0):
+                    pair = (min(p, 5), d, min(q, 5))
+                    if pair not in candidates:
+                        candidates.append(pair)
+            best = None
+            best_aic = float("inf")
+            for p, dd, q in candidates:
+                try:
+                    fit = ARIMA(values, order=(p, dd, q)).fit()
+                    aic = float(fit.aic)
+                    if aic < best_aic:
+                        best, best_aic = fit, aic
+                except Exception:
+                    continue
+            if best is None:
+                return _fail("ARIMA 拟合失败：候选阶数均未收敛，请检查数据质量。")
+
+            # 4) 预测 horizon 步（含 95% 置信区间）
+            order = (int(best.model.order[0]), d, int(best.model.order[2]))
+            method = "ARIMA"
+            seasonal_order = None
+            if use_seasonal:
+                try:
+                    seasonal = SARIMAX(
+                        values,
+                        order=order,
+                        seasonal_order=(1, 0, 1, period),
+                        enforce_stationarity=False,
+                    ).fit()
+                    method = "SARIMA"
+                    seasonal_order = [1, 0, 1, period]
+                except Exception:
+                    seasonal = None
+            fitted = seasonal if use_seasonal and seasonal is not None else best
+            forecast = fitted.get_forecast(horizon)
+            mean = np.asarray(forecast.predicted_mean, dtype=float)
+            interval = np.asarray(forecast.conf_int(alpha=0.05), dtype=float)
+
+            # 5) 干预动作：在轨迹上叠加 delta
+            for action in actions or []:
+                if not isinstance(action, dict):
+                    continue
+                step = action.get("step")
+                delta = action.get("delta")
+                if isinstance(step, int) and 0 <= step < len(mean):
+                    try:
+                        mean[step] += float(delta)
+                    except (TypeError, ValueError):
+                        continue
+
+            half_width = (interval[:, 1] - interval[:, 0]) / 2.0
+            step_conf = 1.0 - half_width / (
+                np.abs(mean) + half_width + 1e-9)
+            confidence = float(np.clip(np.mean(step_conf), 0.0, 1.0))
+
+            return {
+                "trajectory": [round(float(x), 6) for x in mean],
+                "confidence": round(confidence, 4),
+                "boundary": (
+                    f"{method}({order[0]},{order[1]},{order[2]})"
+                    f"{' 含季节项周期 ' + str(period) if use_seasonal and seasonal is not None else ''}"
+                    f"，基于 {len(values)} 个历史点外推 {horizon} 步；"
+                    "适用于平稳可建模的时序，结构突变与突发事件需人工复核。"
+                ),
+                "model_summary": {
+                    "method": method,
+                    "order": list(order),
+                    "seasonal_order": seasonal_order,
+                    "aic": round(float(fitted.aic), 4),
+                    "bic": round(float(fitted.bic), 4),
+                    "n_obs": int(len(values)),
+                    "adf_pvalues": [round(float(x), 4) for x in p_values],
+                    "acf_lags": [round(float(x), 4) for x in acf_values[1:]],
+                    "pacf_lags": [round(float(x), 4) for x in pacf_values[1:]],
+                    "candidates": [[int(x) for x in c] for c in candidates],
+                },
+            }
+    except Exception as exc:  # noqa: BLE001 — 模板需兜底返回可读信息
+        return _fail(f"时序建模执行异常：{type(exc).__name__}: {exc}")
+'''
+
+
+# 时序示例的默认测试入参：确定性生成 36 点“趋势 + 年度季节 + 扰动”序列
+def _default_ts_series():
+    import math
+
+    return [
+        round(100.0 + 2.0 * i + 8.0 * math.sin(2.0 * math.pi * i / 12.0)
+              + 3.0 * ((i * 17) % 5 - 2), 2)
+        for i in range(36)
+    ]
+
+
+def _default_ts_test_input() -> dict:
+    return {
+        "context": {"series": _default_ts_series(), "period": 12},
+        "actions": [],
+        "horizon": 6,
+    }
+
 # 调试执行注入的收尾代码：调用入口函数并把返回值序列化到输出标记之间。
 # 输出标记与 result 行提取共用（python_engine.client 的 __OB_RESULT_*__）。
 # 注意：{test_input} 必须以 Python 字符串字面量形式嵌入（repr），
@@ -94,6 +273,24 @@ def _load_project(db: Session, project_id: str) -> WorldModelProject:
     if project is None:
         raise HTTPException(404, "推演模型不存在或已被删除。")
     return project
+
+
+# ──────────────────────────── 官方脚本模板 ────────────────────────────
+
+
+def get_time_series_template() -> schemas.TemplateOut:
+    """时序推演示例模板（ITSM 式 ARIMA/SARIMA），供开发页一键插入。"""
+    return schemas.TemplateOut(
+        key="time-series",
+        name="时序推演示例（ARIMA / SARIMA）",
+        description=(
+            "ITSM 式统计时序建模：ADF 平稳性检验定差分阶数 → ACF/PACF 定阶 → "
+            "AIC 网格选优 → 拟合 ARIMA/SARIMA → horizon 步预测。"
+            "context.series 传历史序列（>= 12 点），context.period 可选季节周期。"
+        ),
+        script=TIME_SERIES_TEMPLATE,
+        test_input=_default_ts_test_input(),
+    )
 
 
 # ──────────────────────────── 项目 CRUD ────────────────────────────
