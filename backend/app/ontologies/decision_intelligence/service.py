@@ -42,7 +42,7 @@ def _trunc(value: Any) -> Any:
 
 
 def _fact_node(fact: PropertyFact) -> dict:
-    return {
+    node: dict[str, Any] = {
         "kind": "fact",
         "id": fact.id,
         "instanceId": fact.instance_id,
@@ -55,7 +55,19 @@ def _fact_node(fact: PropertyFact) -> dict:
         "actorId": fact.actor_id,
         "confidence": fact.confidence,
         "recordedAt": utc_iso(fact.recorded_at),
+        "causedBy": fact.caused_by,
+        "supersedesId": fact.supersedes_id,
+        "derivedFrom": fact.derived_from,
     }
+    # 决策事实（factKind='decision'）把 decision/reason 拆到顶层，
+    # 让助手能直接叙述「谁批准/拒绝、理由是什么」。
+    if (fact.kind or "property") == "decision":
+        raw = (fact.value or {}).get("v")
+        if isinstance(raw, dict):
+            node["decision"] = _trunc(raw.get("decision"))
+            if raw.get("reason") is not None:
+                node["reason"] = _trunc(raw.get("reason"))
+    return node
 
 
 def _log_node(log: ActionExecutionLog) -> dict:
@@ -419,10 +431,18 @@ def trace_causal_chain(
     nodes = list(graph.nodes.values())
     fact_nodes = [n for n in nodes if n["kind"] == "fact"]
     action_nodes = [n for n in nodes if n["kind"] == "action"]
+    decision_nodes = [
+        n for n in nodes
+        if n["kind"] == "decision"
+        or (n["kind"] == "fact" and n.get("factKind") == "decision")
+    ]
     decision_outcomes = [
-        {"decision": n["decision"], "reason": n["reason"],
-         "actorId": n["actorId"]}
-        for n in nodes if n["kind"] == "decision"
+        {
+            "decision": n.get("decision") or n.get("value"),
+            "reason": n.get("reason"),
+            "actorId": n.get("actorId"),
+        }
+        for n in decision_nodes
     ]
     return {
         "instanceId": instance_id,

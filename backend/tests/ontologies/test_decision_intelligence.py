@@ -237,6 +237,45 @@ def test_release_scope_excludes_out_of_authority_facts(
     assert "f-out" not in nodes
 
 
+def test_decision_facts_expose_decision_reason_and_count(
+        db, ontology):
+    oid = ontology["id"]
+    # 决策事实直接挂在实例上（E2E 数据形态）：kind='decision'，值为字典
+    _fact(
+        db, ontology_id=oid, fact_id="d-seed", value={
+            "decision": "APPROVED", "reason": "客户已付款"},
+        kind="decision", source="user://admin",
+        actor_id="actor-1")
+    db.commit()
+
+    result = trace_causal_chain(
+        db, ontology_id=oid, instance_id="obj-1",
+        direction="upstream", max_depth=2)
+    nodes = _node_map(result)
+    assert nodes["d-seed"]["factKind"] == "decision"
+    assert nodes["d-seed"]["decision"] == "APPROVED"
+    assert nodes["d-seed"]["reason"] == "客户已付款"
+    assert result["summary"]["decisionNodes"] == 1
+    assert result["summary"]["decisionOutcomes"][0]["decision"] == "APPROVED"
+
+
+def test_fact_nodes_carry_causal_pointers(db, ontology):
+    oid = ontology["id"]
+    _fact(
+        db, ontology_id=oid, fact_id="f-1", caused_by="log-1",
+        supersedes_id="f-0", derived_from=["f-in"])
+    _fact(db, ontology_id=oid, fact_id="f-0")
+    db.commit()
+
+    result = trace_causal_chain(
+        db, ontology_id=oid, instance_id="obj-1",
+        direction="upstream", max_depth=2)
+    node = _node_map(result)["f-1"]
+    assert node["causedBy"] == "log-1"
+    assert node["supersedesId"] == "f-0"
+    assert node["derivedFrom"] == ["f-in"]
+
+
 def test_invalid_direction_raises(db, ontology):
     oid = ontology["id"]
     try:
