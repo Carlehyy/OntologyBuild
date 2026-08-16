@@ -20,6 +20,9 @@
   POST   /projects/{id}/service/status  上线 / 下线
   POST   /services/{id}/invoke          调用（写调用记录）
 
+  官方脚本模板：
+  GET    /templates/time-series         时序推演示例（ARIMA/SARIMA），开发页一键插入
+
   调用记录（只读；由 invoke 写入）：
   GET    /calls                         列表（keyword / result / 时间范围 / 分页）
   GET    /calls/overview                概览统计
@@ -80,6 +83,16 @@ def _call_record_out(row, *, with_payloads: bool = False) -> dict:
         data["request_payload"] = row.request_payload
         data["response_payload"] = row.response_payload
     return data
+
+
+# ── 官方脚本模板 ──
+
+
+@router.get("/templates/time-series")
+def get_time_series_template(
+    current_user=Depends(get_current_user),
+):
+    return _ok(service.get_time_series_template().model_dump())
 
 
 # ── 项目管理 ──

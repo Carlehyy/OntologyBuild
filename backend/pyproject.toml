@@ -48,6 +48,7 @@ dependencies = [
   "ipykernel==6.29.5",
   "websocket-client==1.8.0",
   "nats-py>=2.15.0",
+  "statsmodels==0.14.6",
 ]
 
 [dependency-groups]

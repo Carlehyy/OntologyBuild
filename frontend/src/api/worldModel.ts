@@ -122,6 +122,15 @@ export interface ServicePublishBody {
   preconditions: ServicePrecondition[]
 }
 
+/** 官方脚本模板（唯一事实源在后端，前端不复制脚本副本） */
+export interface WorldModelTemplate {
+  key: string
+  name: string
+  description: string
+  script: string
+  test_input: Record<string, unknown>
+}
+
 export interface CallRecordOverview {
   total: number
   failed: number
@@ -209,6 +218,11 @@ export const worldModelApi = {
 
   setServiceStatus: (projectId: string, status: 'online' | 'offline') =>
     apiClientV2.post<WorldModelServiceInfo>(`/world-model/projects/${projectId}/service/status`, { status }),
+
+  // ---------- 官方脚本模板 ----------
+
+  getTimeSeriesTemplate: () =>
+    apiClientV2.get<WorldModelTemplate>('/world-model/templates/time-series'),
 }
 
 export default worldModelApi
