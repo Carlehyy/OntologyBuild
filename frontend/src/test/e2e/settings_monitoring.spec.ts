@@ -223,6 +223,27 @@ test.describe('系统设置 · 运行监控（admin）', () => {
     await page.getByRole('button', { name: '复制分析提示词' }).click()
     await expect(page.getByText('分析提示词已复制')).toBeVisible()
 
+    // z 层级契约：抽屉 z-index 1000，toast 必须位于其上方（此前被遮挡却仍判
+    // 可见，靠 elementFromPoint 命中检测才能真正防止回归）
+    const toastOnTop = await page.evaluate(() => {
+      const title = [...document.querySelectorAll('body *')].find(
+        element => element.textContent === '分析提示词已复制' && element.children.length === 0,
+      )
+      if (!title) return false
+      let card: Element | null = title
+      while (card && getComputedStyle(card).position !== 'fixed') {
+        card = card.parentElement
+      }
+      if (!card) return false
+      const rect = card.getBoundingClientRect()
+      const hit = document.elementFromPoint(
+        rect.x + rect.width / 2,
+        rect.y + rect.height / 2,
+      )
+      return Boolean(hit && card.contains(hit))
+    })
+    await expect(toastOnTop).toBe(true)
+
     const copied = await page.evaluate(() => navigator.clipboard.readText())
     await expect(copied).toContain('# 平台慢接口调用链分析请求')
     await expect(copied).toContain('/api/v2/super-assistant/conversations/x/chat')
