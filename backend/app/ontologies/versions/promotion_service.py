@@ -39,8 +39,15 @@ def promote_draft(
     # ``build_all`` uses the same advisory→row order; reversing it here would
     # allow an ABBA deadlock during publication.
     with _ontology_build_lock(db, ontology_id):
-        return _promote_draft_locked(
+        result = _promote_draft_locked(
             ontology_id, version_id, body, db, current_user)
+    # 新发布改变当前发布指针：详情头版本号、总览统计口径与待审批队列
+    # （release 维度）全部换版本（fail-open）。
+    from app.ontologies import cache as ontology_cache
+    ontology_cache.invalidate_detail()
+    ontology_cache.invalidate_overview()
+    ontology_cache.invalidate_pending()
+    return result
 
 
 def _promote_draft_locked(

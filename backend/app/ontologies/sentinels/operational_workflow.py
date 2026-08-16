@@ -19,7 +19,11 @@ def run(
     *,
     run_manual_fn: WorkflowDependency,
 ) -> dict:
-    return {"data": run_manual_fn(db, ontology_id)}
+    result = run_manual_fn(db, ontology_id)
+    # 手动触发产生新的触发记录（总览 7 天统计口径），失效总览缓存（fail-open）。
+    from app.ontologies import cache as ontology_cache
+    ontology_cache.invalidate_overview()
+    return {"data": result}
 
 
 def get_cdc_status(
@@ -189,6 +193,9 @@ def update_operational_state(
 
         db.commit()
         db.refresh(sentinel)
+        # 启停/静默状态直接影响总览哨兵统计与健康提示，失效总览缓存（fail-open）。
+        from app.ontologies import cache as ontology_cache
+        ontology_cache.invalidate_overview()
         return {
             "data": released_dict_fn(
                 ontology_id,
@@ -235,4 +242,7 @@ def toggle_sentinel(
             )
         sentinel.enabled = not sentinel.enabled
         db.commit()
+        # 启停状态直接影响总览哨兵统计，失效总览缓存（fail-open）。
+        from app.ontologies import cache as ontology_cache
+        ontology_cache.invalidate_overview()
         return {"enabled": sentinel.enabled}

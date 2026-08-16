@@ -1,0 +1,67 @@
+"""本体详情页读接口缓存胶水层。
+
+键名空间 ob:ont:*，独立于其他模块的缓存键（任务池 ob:pt:*、资产湖
+ob:lake:*、流水线 ob:pl:* 等）。失效策略：Web 进程内的写操作（本体更新/
+删除/发布、实例与关系灌数、动作执行与审批决策、哨兵配置变更）自增版本键，
+旧键依赖短 TTL 自然过期；executor 进程与外部灌数进程侧的状态推进无法事件
+失效，由短 TTL 兜底。
+
+设计契约与 ``app.shared.redis_cache`` 一致：Redis 只是加速器，任何连接/
+读写异常都静默降级直查，绝不影响接口可用性与正确性；开关关闭时完全绕过
+缓存，等价于现状直查路径。
+"""
+from __future__ import annotations
+
+from typing import Any, Callable, Optional
+
+from app.config import settings
+from app.shared import redis_cache
+
+_DETAIL_VERSION_KEY = "ob:ont:detail:ver"
+_OVERVIEW_VERSION_KEY = "ob:ont:overview:ver"
+_PENDING_VERSION_KEY = "ob:ont:pending:ver"
+
+
+def _enabled() -> bool:
+    return bool(settings.ontology_detail_cache_enabled)
+
+
+def _version(key: str) -> str:
+    if not _enabled():
+        return "0"
+    return redis_cache.cache_version(key)
+
+
+def detail_cache_key(ontology_id: str) -> str:
+    """本体详情头（名称/领域/当前发布版本指针）。"""
+    return f"ob:ont:detail:v{_version(_DETAIL_VERSION_KEY)}:{ontology_id}"
+
+
+def overview_cache_key(ontology_id: str) -> str:
+    """本体总览驾驶舱统计（模型/数据/运行/事实流/健康）。"""
+    return f"ob:ont:overview:v{_version(_OVERVIEW_VERSION_KEY)}:{ontology_id}"
+
+
+def pending_cache_key(ontology_id: str, release_id: Optional[str]) -> str:
+    """待审批/待恢复动作队列；release 维度分键。"""
+    scope = release_id or "any"
+    return f"ob:ont:pending:v{_version(_PENDING_VERSION_KEY)}:{ontology_id}:{scope}"
+
+
+def cached_call(key: str, ttl_seconds: int, builder: Callable[[], Any]) -> Any:
+    """开关关闭时完全绕过缓存，等价于现状直查路径。"""
+    if not _enabled():
+        return builder()
+    return redis_cache.cache_aside(key, ttl_seconds, builder)
+
+
+def invalidate_detail() -> None:
+    redis_cache.cache_bump(_DETAIL_VERSION_KEY)
+
+
+def invalidate_overview() -> None:
+    redis_cache.cache_bump(_OVERVIEW_VERSION_KEY)
+
+
+def invalidate_pending() -> None:
+    redis_cache.cache_bump(_PENDING_VERSION_KEY)
