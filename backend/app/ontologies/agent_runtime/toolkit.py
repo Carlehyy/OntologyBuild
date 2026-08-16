@@ -15,6 +15,7 @@
   aggregate_objects  分组计数 / 求和 / 均值 / 最值
   get_object_history 实例的事实流（谁、何时、为何改的 — 溯源问答）
   trace_causal_chain 跨对象因果链追溯（决策 → 动作 → 事实 → 后续覆盖）
+  explain_sentinel_firing 哨兵触发解释（条件求值 + 命中证据 + 状态语义）
   list_actions       授权范围内的动作及参数说明
   run_decision_simulation 隔离快照上的多视角决策推演（只写推演运行记录）
   propose_action     动作预演（引擎 dry-run：校验 + 模拟效果，不落实际变更）
@@ -306,6 +307,19 @@ TOOL_DEFS: list[dict] = [
         "name": "list_actions",
         "description": "列出授权范围内可用的业务动作及其参数说明。",
         "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "explain_sentinel_firing",
+        "description": "解释一条哨兵为什么触发（或为什么没触发）：给出条件表达式、每条命中元组的对象与属性值证据、条件与绑定过滤的求值结果、状态语义与动作结果。材料来自触发记录与命中时刻快照，是确定性还原而非猜测。用户问「这条哨兵为什么触发/为什么没触发/为什么执行了动作」时使用；只读，不产生任何提案。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sentinel_id": {"type": "string", "description": "哨兵的 id、name 或显示名"},
+                "firing_id": {"type": "string", "description": "可选：指定某次触发记录；缺省解释该哨兵最近一次"},
+                "match_limit": {"type": "integer", "minimum": 1, "maximum": 10, "description": "最多展开几个命中元组，默认 3"},
+            },
+            "required": ["sentinel_id"],
+        },
     },
     {
         "name": "list_dynamic_sentinels",
@@ -1175,6 +1189,77 @@ class ToolRunner:
                 ObjectInstance.id.in_(other_ids[:runtime_limit("citation_cap") * 2])).all():
             if other.object_type_id in self.scope.object_types:
                 self._cite(other)
+        return result
+
+    def _tool_explain_sentinel_firing(self, args: dict) -> dict:
+        from app.models.sentinel import Sentinel, SentinelFiring
+        from app.ontologies.sentinels.explanation_service import (
+            explain_sentinel_firing,
+            resolve_sentinel_definition,
+        )
+
+        sentinel_ref = str(
+            args.get("sentinel_id")
+            or args.get("sentinel_name")
+            or "").strip()
+        if not sentinel_ref:
+            raise ToolError("需要提供 sentinel_id（哨兵的 id、name 或显示名）")
+        firing_query = self.db.query(SentinelFiring).filter(
+            SentinelFiring.ontology_id == self.scope.ontology.id)
+        firing_id = args.get("firing_id")
+        if firing_id:
+            firing = firing_query.filter(
+                SentinelFiring.id == firing_id).first()
+            if firing is None:
+                raise ToolError("触发记录不存在")
+        else:
+            live = self.db.query(Sentinel).filter(
+                Sentinel.ontology_id == self.scope.ontology.id,
+                Sentinel.name == sentinel_ref,
+            ).first()
+            if live is None:
+                live = self.db.query(Sentinel).filter(
+                    Sentinel.ontology_id == self.scope.ontology.id,
+                    Sentinel.display_name == sentinel_ref,
+                ).first()
+            query = firing_query
+            if live is not None:
+                query = query.filter(
+                    SentinelFiring.sentinel_id == live.id)
+            else:
+                # 内置哨兵可能无 live 行：按 id 或触发名匹配
+                query = query.filter(
+                    (SentinelFiring.sentinel_id == sentinel_ref)
+                    | (SentinelFiring.sentinel_name == sentinel_ref))
+            firing = query.order_by(
+                SentinelFiring.created_at.desc()).first()
+            if firing is None:
+                raise ToolError(
+                    f"没有找到哨兵「{sentinel_ref}」的触发记录")
+        definition = resolve_sentinel_definition(
+            self.db, ontology_id=self.scope.ontology.id,
+            sentinel_id=firing.sentinel_id, firing=firing)
+        if definition is None:
+            raise ToolError(
+                "无法解析该哨兵的定义（既无 live 行，也不在触发所属"
+                " release 快照中）")
+        result = explain_sentinel_firing(
+            self.db, ontology_id=self.scope.ontology.id,
+            definition=definition, firing=firing,
+            match_limit=args.get("match_limit") or 3)
+        # 链上涉及的对象实例给引用（仅授权范围内的类型）
+        instance_ids = sorted({
+            alias.get("instanceId")
+            for item in result["matchedTuples"]
+            for alias in item.get("aliases", [])
+            if alias.get("instanceId")
+        })
+        for inst in self.db.query(ObjectInstance).filter(
+                ObjectInstance.id.in_(
+                    instance_ids[:int(runtime_limit("citation_cap")) * 2])
+        ).all():
+            if inst.object_type_id in self.scope.object_types:
+                self._cite(inst)
         return result
 
     def _tool_list_actions(self, args: dict) -> dict:
