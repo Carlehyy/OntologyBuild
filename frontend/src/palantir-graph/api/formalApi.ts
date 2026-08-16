@@ -312,6 +312,8 @@ export interface PropertyFactDTO {
   source: string;
   actorId?: string | null;
   causedBy?: string | null;
+  /** 来源湖版本（映射投影事实携带）：湖行 → 版本 → 运行/任务 血缘闭环 */
+  sourceDatasetVersionId?: string | null;
   supersedesId?: string | null;
   /** 派生事实的输入事实 id 列表（推导链） */
   derivedFrom?: string[];

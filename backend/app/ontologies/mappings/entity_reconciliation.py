@@ -74,7 +74,11 @@ class EntityReconciliationMixin:
         self._db.flush()
 
     def _reconcile_mapping_entities(
-        self, mapping: OntologyMapping, current_entity_ids: set[str],
+        self,
+        mapping: OntologyMapping,
+        current_entity_ids: set[str],
+        *,
+        source_dataset_version_id: str | None = None,
     ) -> list[str]:
         """Remove current-state projections absent from the new lake snapshot.
 
@@ -125,12 +129,14 @@ class EntityReconciliationMixin:
                     record_link_fact(
                         self._db, ontology_id=mapping.ontology_id,
                         link_instance_id=link.id, link_type_id=link.link_type_id,
-                        exists=False, source=f"mapping://{mapping.id}")
+                        exists=False, source=f"mapping://{mapping.id}",
+                        source_dataset_version_id=source_dataset_version_id)
                     self._db.delete(link)
                 record_object_tombstone(
                     self._db, ontology_id=mapping.ontology_id,
                     instance_id=instance.id, object_type_id=instance.object_type_id,
-                    source=f"mapping://{mapping.id}")
+                    source=f"mapping://{mapping.id}",
+                    source_dataset_version_id=source_dataset_version_id)
                 self._db.delete(instance)
             self._db.delete(entity)
             removed.append(entity.id)

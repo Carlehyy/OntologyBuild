@@ -239,7 +239,7 @@ def resolve_curated_target(db, pl, source: dict, multi_source: bool,
     return None, _disambiguated_curated_name(db, ds_name, pl.id, output_key)
 
 
-def _save_curated_dataset(db, svc, pl, source: dict, data, ctx, multi_source: bool, table_name: str | None = None, write_opts: dict | None = None, contract_columns: list[str] | None = None, run_params: dict | None = None) -> dict:
+def _save_curated_dataset(db, svc, pl, source: dict, data, ctx, multi_source: bool, table_name: str | None = None, write_opts: dict | None = None, contract_columns: list[str] | None = None, run_params: dict | None = None, producer_run_id: str | None = None) -> dict:
     """入湖是物理湖表上的行级 upsert（lake_store），全程持数据集写锁。
 
     任务调度与手动运行并发落同一 curated 数据集时后到者等待；不锁则双方
@@ -266,10 +266,10 @@ def _save_curated_dataset(db, svc, pl, source: dict, data, ctx, multi_source: bo
             db, svc, pl, source, data, ctx, multi_source, table_name,
             write_opts, contract_columns, ds_name,
             bound_ds_id=(bound_ds.id if bound_ds is not None else None),
-            run_params=run_params)
+            run_params=run_params, producer_run_id=producer_run_id)
 
 
-def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data, ctx, multi_source: bool, table_name: str | None, write_opts: dict | None, contract_columns: list[str] | None, ds_name: str, bound_ds_id: str | None = None, run_params: dict | None = None) -> dict:
+def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data, ctx, multi_source: bool, table_name: str | None, write_opts: dict | None, contract_columns: list[str] | None, ds_name: str, bound_ds_id: str | None = None, run_params: dict | None = None, producer_run_id: str | None = None) -> dict:
     # 复用既有 curated 数据集追加版本：同一管道反复运行不再无限增殖新数据集，
     # 下游 mapping 绑定的 curated id 保持稳定、能持续收到新版本。
     # 绑定关系按 id（resolve_curated_target），流水线改名不影响归属
@@ -476,7 +476,8 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data, ctx, multi_so
     ver, changeset = lake_store.upsert_run(
         db, curated_ds, None, mode, pk_cols, soft_delete_column=soft_col,
         rows_before=lake_rows_before,
-        staged_input=(writer.stage, writer.columns_union, row_count))
+        staged_input=(writer.stage, writer.columns_union, row_count),
+        producer_run_id=producer_run_id)
     # 版本保留窗口（元数据 + 变更集；回放链完整性规则见 _prune_versions）：
     # 与 blob 路径的 _create_version_locked 尾部一致，机会式清理
     svc._prune_versions_best_effort(curated_ds.id)
@@ -519,16 +520,16 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data, ctx, multi_so
     }
 
 
-def _save_curated_outputs(db, svc, pl, source: dict, data, ctx, multi_source: bool, write_opts: dict | None = None, contract_columns: list[str] | None = None, run_params: dict | None = None) -> list[dict]:
+def _save_curated_outputs(db, svc, pl, source: dict, data, ctx, multi_source: bool, write_opts: dict | None = None, contract_columns: list[str] | None = None, run_params: dict | None = None, producer_run_id: str | None = None) -> list[dict]:
     split_tables = ctx.meta.get("split_tables")
     if isinstance(split_tables, dict) and split_tables:
         outputs = []
         for table_name, rows in split_tables.items():
             outputs.append(_save_curated_dataset(
-                db, svc, pl, source, rows or [], ctx, multi_source=True, table_name=str(table_name), write_opts=write_opts, contract_columns=contract_columns, run_params=run_params
+                db, svc, pl, source, rows or [], ctx, multi_source=True, table_name=str(table_name), write_opts=write_opts, contract_columns=contract_columns, run_params=run_params, producer_run_id=producer_run_id
             ))
         return outputs
-    return [_save_curated_dataset(db, svc, pl, source, data, ctx, multi_source, write_opts=write_opts, contract_columns=contract_columns, run_params=run_params)]
+    return [_save_curated_dataset(db, svc, pl, source, data, ctx, multi_source, write_opts=write_opts, contract_columns=contract_columns, run_params=run_params, producer_run_id=producer_run_id)]
 
 
 def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = None):

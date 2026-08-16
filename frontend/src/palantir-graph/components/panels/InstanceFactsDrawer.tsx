@@ -32,7 +32,7 @@ function sourceMeta(source: string): { icon: React.ElementType; cls: string; lab
 
 const KIND_BADGE: Record<string, { label: string; cls: string; title: string }> = {
   derived: { label: '派生', cls: 'bg-purple-500/20 text-purple-300', title: '由函数从其他属性推算而来，不是数据源写入' },
-  link: { label: '链接', cls: 'bg-cyan-500/20 text-cyan-300', title: '链接存在性事实：关系的建立/解除也是事实' },
+  link: { label: '链接', cls: 'bg-cyan-500/20 text-cyan-300', title: '链接事实：关系的建立/解除与边属性变化都是事实' },
   object: { label: '存在性', cls: 'bg-red-500/20 text-red-300', title: '实例存在性（墓碑）事实：删除也留痕' },
   decision: { label: '决策', cls: 'bg-amber-500/20 text-amber-300', title: '人的审批决策：批准/拒绝都是事实' },
   absence: { label: '缺席', cls: 'bg-slate-500/30 text-slate-300', title: '缺席事实：查询结果为空/非空的翻转快照——"没有"也有出处，可回放当时确实是空的' },
@@ -215,6 +215,13 @@ export default function InstanceFactsDrawer({ instanceId, instanceLabel, onClose
                           title={`操作者：${f.actorId}`}>
                           <UserIcon className="w-2.5 h-2.5" />
                           {f.actorId.slice(0, 8)}
+                        </span>
+                      )}
+                      {f.sourceDatasetVersionId && (
+                        <span className="flex items-center gap-0.5 px-1 rounded bg-teal-900/40 text-teal-300/90"
+                          title={`来源数据版本：${f.sourceDatasetVersionId}`}>
+                          <CircleStackIcon className="w-2.5 h-2.5" />
+                          {f.sourceDatasetVersionId.slice(0, 8)}
                         </span>
                       )}
                       {typeof f.confidence === 'number' && f.confidence < 1 && (

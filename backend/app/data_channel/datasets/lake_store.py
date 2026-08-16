@@ -655,6 +655,7 @@ def _stage_dedup(conn, stage: sa.Table, seq_col: str,
 
 def _publish_run(db, dataset, *, rowcount: int, entries: list[dict],
                  added: int, updated: int, deleted: int,
+                 producer_run_id: str | None = None,
                  ) -> tuple[DatasetVersion, DatasetChangeset]:
     """版本发布终局，对齐 DatasetService._create_version_locked。
 
@@ -685,6 +686,7 @@ def _publish_run(db, dataset, *, rowcount: int, entries: list[dict],
         data_size=None,
         storage_uri=None,
         checksum=checksum,
+        producer_run_id=producer_run_id,
     )
     db.add(version)
     db.flush()
@@ -733,6 +735,7 @@ def _upsert_run_once(db, dataset, rows, mode: str,
                      soft_delete_column: str = "",
                      rows_before: int | None = None,
                      staged_input: tuple | None = None,
+                     producer_run_id: str | None = None,
                      ) -> tuple[DatasetVersion, DatasetChangeset]:
     conn = _connection(db)
     schema = dict(dataset.schema_json or {})
@@ -787,7 +790,8 @@ def _upsert_run_once(db, dataset, rows, mode: str,
             payload_stage.drop(bind=conn)
             payload_stage = None
             return _publish_run(db, dataset, rowcount=0, entries=[],
-                                added=0, updated=0, deleted=0)
+                                added=0, updated=0, deleted=0,
+                                producer_run_id=producer_run_id)
 
         mapping, rebuilt = _reconcile_structure(
             db, conn, dataset, schema, mode, pk_cols, columns_union)
@@ -1097,13 +1101,15 @@ def _upsert_run_once(db, dataset, rows, mode: str,
         rowcount = rows_before + len(insert_rows)
     return _publish_run(db, dataset, rowcount=rowcount, entries=entries,
                         added=len(added_keys), updated=len(updated_keys),
-                        deleted=len(deleted_keys))
+                        deleted=len(deleted_keys),
+                        producer_run_id=producer_run_id)
 
 
 def upsert_run(db, dataset, rows, write_mode: str,
                pk_cols: list[str], *, soft_delete_column: str = "",
                rows_before: int | None = None,
                staged_input: tuple | None = None,
+               producer_run_id: str | None = None,
                ) -> tuple[DatasetVersion, DatasetChangeset]:
     """按入库方式把来数合并进物理湖表，发布新版本并记录行级变更集。
 
@@ -1132,7 +1138,7 @@ def upsert_run(db, dataset, rows, write_mode: str,
         try:
             return _upsert_run_once(db, dataset, rows, mode, normalized_pk,
                                     soft_delete_column, rows_before,
-                                    staged_input)
+                                    staged_input, producer_run_id)
         except IntegrityError:
             db.rollback()
             # 回滚会销毁 TEMP 暂存表：非 list 形态（迭代器/预灌暂存）无法
