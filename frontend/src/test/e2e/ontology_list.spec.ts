@@ -123,7 +123,7 @@ test.describe('Ontology List', () => {
   })
 
   test('filter ontologies by name', async ({ page }) => {
-    await page.getByLabel('按本体名称筛选', { exact: true }).fill('不存在的本体xyz')
+    await page.getByLabel('按本体名称或描述筛选', { exact: true }).fill('不存在的本体xyz')
     await expect(page.getByText('没有符合条件的本体', { exact: true })).toBeVisible()
   })
 
