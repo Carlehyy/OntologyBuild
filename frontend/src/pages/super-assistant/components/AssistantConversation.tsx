@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Welcome } from '@ant-design/x'
+import { Bubble, Prompts, Welcome } from '@ant-design/x'
 import {
   Bot, Check, ChevronRight, CircleAlert, Copy, Gauge, Loader2, ShieldCheck, User,
 } from 'lucide-react'
@@ -12,9 +12,16 @@ import {
 import type { ModelConfig } from '@/types/ontology'
 import { writeTextToClipboard } from '@/utils/clipboard'
 
-export function EmptyState() {
+const QUICK_PROMPTS = [
+  { key: 'modeling', label: '帮我把一段业务需求梳理成本体概念' },
+  { key: 'explain', label: '解释一个本体术语的含义与用途' },
+  { key: 'data-channel', label: '分析当前数据通道的配置问题' },
+  { key: 'world-model', label: '给出世界模型推演场景的设计建议' },
+]
+
+export function EmptyState({ onPromptSelect }: { onPromptSelect?: (text: string) => void }) {
   return (
-    <div className="absolute inset-x-0 bottom-full mb-8 flex flex-col items-center px-4 text-center">
+    <div className="absolute inset-x-0 bottom-full mb-8 flex flex-col items-center gap-6 px-4 text-center">
       <Welcome
         variant="borderless"
         style={{ flexDirection: 'column', gap: 0 }}
@@ -32,6 +39,24 @@ export function EmptyState() {
             fontWeight: 600,
             letterSpacing: '-0.025em',
             color: 'var(--color-text-primary)',
+          },
+        }}
+      />
+      <Prompts
+        title="试试这样问"
+        items={QUICK_PROMPTS}
+        wrap
+        onItemClick={info => onPromptSelect?.(String(info.data.label ?? ''))}
+        styles={{
+          root: { width: '100%', maxWidth: 560, textAlign: 'left' },
+          title: { marginBottom: 8 },
+          list: { justifyContent: 'center', rowGap: 8 },
+          item: {
+            borderRadius: 12,
+            border: '1px solid var(--color-border)',
+            background: 'var(--color-bg-elevated)',
+            fontSize: 13,
+            color: 'var(--color-text-secondary)',
           },
         }}
       />
@@ -209,39 +234,62 @@ function AssistantMarkdown({ content }: { content: string }) {
 export function ChatMessage({ message }: { message: SuperMessage }) {
   const assistant = message.role === 'assistant'
   return (
-    <article
+    <Bubble
       id={assistant ? undefined : `super-assistant-msg-${message.id}`}
-      className={`flex scroll-mt-6 gap-3 ${assistant ? '' : 'justify-end'}`}
-    >
-      {assistant && (
-        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-100">
-          <Bot size={16} />
-        </div>
-      )}
-      <div className={`min-w-0 ${assistant ? 'w-full max-w-3xl' : 'max-w-[82%]'}`}>
-        {assistant && <ToolSteps steps={message.steps} />}
-        <div className={assistant
-          ? 'max-w-none text-[var(--color-text-primary)]'
-          : 'rounded-2xl rounded-br-md bg-[var(--color-nav-bg)] px-4 py-2.5 text-sm leading-6 text-white'}>
-          {assistant ? (
-            message.content
-              ? <AssistantMarkdown content={message.content} />
-              : <span className="inline-flex items-center gap-2 text-sm text-[var(--color-text-tertiary)]"><Loader2 size={14} className="animate-spin" /> 正在思考…</span>
-          ) : message.content}
-        </div>
-        {message.status === 'error' && (
-          <p role="alert" className="mt-2 inline-flex items-center gap-1 text-xs text-[var(--color-danger)]"><CircleAlert size={12} /> 生成失败</p>
+      placement={assistant ? 'start' : 'end'}
+      variant={assistant ? 'borderless' : 'filled'}
+      shape="default"
+      avatar={assistant
+        ? (
+          <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-100">
+            <Bot size={16} />
+          </div>
+        )
+        : (
+          <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)]">
+            <User size={16} />
+          </div>
         )}
-        {message.status === 'cancelled' && (
-          <p className="mt-2 text-xs text-[var(--color-text-tertiary)]">已停止生成</p>
-        )}
-      </div>
-      {!assistant && (
-        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)]">
-          <User size={16} />
-        </div>
-      )}
-    </article>
+      header={assistant ? <ToolSteps steps={message.steps} /> : undefined}
+      content={assistant
+        ? (
+          message.content
+            ? <AssistantMarkdown content={message.content} />
+            : <span className="inline-flex items-center gap-2 text-sm text-[var(--color-text-tertiary)]"><Loader2 size={14} className="animate-spin" /> 正在思考…</span>
+        )
+        : <span className="block whitespace-pre-wrap break-words">{message.content}</span>}
+      footer={assistant && message.status === 'error'
+        ? <p role="alert" className="inline-flex items-center gap-1 text-xs text-[var(--color-danger)]"><CircleAlert size={12} /> 生成失败</p>
+        : assistant && message.status === 'cancelled'
+          ? <p className="text-xs text-[var(--color-text-tertiary)]">已停止生成</p>
+          : undefined}
+      classNames={{ root: assistant ? '' : 'scroll-mt-6' }}
+      styles={{
+        // 气泡根节点占满消息列宽，内部再按内容约束宽度（与原先 w-full 行为一致）
+        root: { alignSelf: 'stretch' },
+        body: { width: '100%' },
+        header: { marginBottom: 0 },
+        footer: { marginBlockStart: 8, alignItems: 'flex-start' },
+        content: assistant
+          ? {
+            maxWidth: '48rem',
+            background: 'transparent',
+            color: 'var(--color-text-primary)',
+          }
+          : {
+            maxWidth: '82%',
+            marginLeft: 'auto',
+            background: 'var(--color-nav-bg)',
+            color: '#fff',
+            borderRadius: '16px 16px 6px 16px',
+            padding: '10px 16px',
+            fontSize: 14,
+            lineHeight: '24px',
+            whiteSpace: 'pre-wrap',
+            textAlign: 'left',
+          },
+      }}
+    />
   )
 }
 
