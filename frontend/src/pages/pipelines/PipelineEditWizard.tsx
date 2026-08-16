@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import {
   X, Loader2, CheckCircle2, XCircle, AlertTriangle, ChevronLeft, ChevronRight,
@@ -7,10 +7,19 @@ import {
 } from 'lucide-react'
 import pipelinesApi, { CONTRACT_FIELD_TYPES } from '@/api/v2/pipelines'
 import type { Pipeline, DryRunResult, DryRunRowsPage, ColumnDefinition, ValidateDefinitionsResult } from '@/api/v2/pipelines'
-import { buildInitialColumnDefinitions, normalizeContractType } from './contractUtils'
 
 const splitPk = (s?: string): string[] =>
   (s ?? '').split(',').map(x => x.trim()).filter(Boolean)
+
+/** 旧词表（int/bool/datetime）映射到平台词表，读旧契约时兜底 */
+const LEGACY_TYPE_MAP: Record<string, string> = {
+  int: 'integer', bool: 'boolean', datetime: 'timestamp', str: 'string', number: 'float',
+}
+const normType = (t?: string): string => {
+  const v = (t || 'string').toLowerCase()
+  const mapped = LEGACY_TYPE_MAP[v] || v
+  return (CONTRACT_FIELD_TYPES as readonly string[]).includes(mapped) ? mapped : 'string'
+}
 
 type RequiredContractField = 'field_key' | 'field_name' | 'field_type'
 
@@ -77,6 +86,33 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
   const [publishing, setPublishing] = useState(false)
   const [actionError, setActionError] = useState('')
 
+  // ── 初始化字段契约：按原始列合并已有定义（旧数据缺 source_key 时回退 field_key）──
+  const initColumnDefs = useCallback((columns: string[], existing?: ColumnDefinition[] | null, lockedPk?: Set<string>) => {
+    const existingMap = new Map((existing || []).map(d => [d.source_key || d.field_key, d]))
+    return columns.map(col => {
+      const prev = existingMap.get(col)
+      const def: ColumnDefinition = prev ? {
+        source_key: prev.source_key || prev.field_key,
+        field_key: prev.field_key,
+        field_name: prev.field_name || prev.field_key,
+        field_type: normType(prev.field_type),
+        is_primary_key: !!prev.is_primary_key,
+        nullable: prev.nullable !== false,
+      } : {
+        source_key: col,
+        field_key: col,
+        field_name: col,
+        field_type: 'string',
+        is_primary_key: false,
+        nullable: true,
+      }
+      // 湖中已固化主键：预填勾选（列名即入湖列名）；仍可修改，改动走全量覆盖重建
+      if (lockedPk?.has(def.field_key)) def.is_primary_key = true
+      if (def.is_primary_key) def.nullable = false
+      return def
+    })
+  }, [])
+
   // ── 阶段 2: 执行 dryRun ──
   const runDryRun = async () => {
     setDryRunPhase('running')
@@ -100,12 +136,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
       setTotalRows(total)
       const declared = res.outputs.length === 1 && res.outputs[0].pk_source === 'lake'
         ? new Set(splitPk(res.outputs[0].pk)) : undefined
-      setColumnDefs(buildInitialColumnDefinitions(
-        allCols,
-        allSample,
-        pipeline.column_definitions,
-        declared,
-      ))
+      setColumnDefs(initColumnDefs(allCols, pipeline.column_definitions, declared))
       setRequiredValidationAttempted(false)
       setDryRunPhase('done')
     } catch (e: unknown) {
@@ -126,7 +157,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
       const defs = (pipeline.column_definitions || []).map(d => ({
         ...d,
         source_key: d.source_key || d.field_key,
-        field_type: normalizeContractType(d.field_type),
+        field_type: normType(d.field_type),
       }))
       setColumnDefs(defs)
       setCachedColumns(defs.map(d => d.field_key))
@@ -485,13 +516,6 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                 <span>定义每个字段的入湖契约：字段标识（入湖列名，可改名）、名称、类型、主键、允许空值；<span className="text-red-500">*</span> 为必填项</span>
                 {isPublished && <span className="text-amber-600 font-medium">（已发布 · 只读）</span>}
               </div>
-
-              {!isPublished && !multiOutput && columnDefs.length > 0 && (
-                <div className="flex items-start gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs leading-5 text-teal-800">
-                  <Sparkles size={13} className="mt-0.5 shrink-0" />
-                  <span>字段类型已根据执行预览样本自动推荐；已有契约保持原值，发布前仍可逐列调整。</span>
-                </div>
-              )}
 
               {multiOutput && !isPublished && (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700 flex items-start gap-1.5">
