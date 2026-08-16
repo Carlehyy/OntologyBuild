@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { Welcome } from '@ant-design/x'
 import {
   Bot, Check, ChevronRight, CircleAlert, Copy, Gauge, Loader2, ShieldCheck, User,
 } from 'lucide-react'
@@ -14,10 +15,26 @@ import { writeTextToClipboard } from '@/utils/clipboard'
 export function EmptyState() {
   return (
     <div className="absolute inset-x-0 bottom-full mb-8 flex flex-col items-center px-4 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-50 text-teal-700 ring-1 ring-teal-100">
-        <Bot size={23} strokeWidth={1.8} />
-      </div>
-      <h1 className="mt-4 text-xl font-semibold tracking-tight text-[var(--color-text-primary)]">有什么可以帮你？</h1>
+      <Welcome
+        variant="borderless"
+        style={{ flexDirection: 'column', gap: 0 }}
+        icon={(
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-50 text-teal-700 ring-1 ring-teal-100">
+            <Bot size={23} strokeWidth={1.8} />
+          </div>
+        )}
+        title="有什么可以帮你？"
+        styles={{
+          title: {
+            marginTop: 16,
+            fontSize: 20,
+            lineHeight: '28px',
+            fontWeight: 600,
+            letterSpacing: '-0.025em',
+            color: 'var(--color-text-primary)',
+          },
+        }}
+      />
     </div>
   )
 }
