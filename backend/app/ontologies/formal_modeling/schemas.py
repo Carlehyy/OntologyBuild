@@ -223,6 +223,10 @@ class LinkInstanceCreate(LinkInstanceBase):
     pass
 
 
+class LinkInstanceUpdate(CamelModel):
+    properties: Optional[dict[str, Any]] = None
+
+
 class LinkInstanceOut(LinkInstanceBase):
     id: str
     ontology_release_id: Optional[str] = None

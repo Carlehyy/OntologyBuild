@@ -276,6 +276,14 @@ class PropertyFact(Base):
     ontology_release_id: Mapped[str | None] = mapped_column(
         String, nullable=True, index=True)
 
+    # End-to-end lineage: which immutable lake snapshot (DatasetVersion) the
+    # fact was projected from.  NULL for facts not derived from a lake source
+    # (editor saves, manual entries, action effects, decisions, absence).
+    # Together with DatasetVersion.producer_run_id this closes the loop
+    # lake row → lake version → mapping apply → fact → run/task.
+    source_dataset_version_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True)
+
     # 同一 (instance, property) 链内单调递增，供同毫秒事实的确定性排序
     seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 

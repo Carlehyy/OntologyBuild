@@ -81,6 +81,17 @@ class DatasetVersion(Base):
     data_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     storage_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
     checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # End-to-end lineage: which pipeline run produced this immutable version.
+    # NULL for versions created outside a pipeline run (manual data writes,
+    # import jobs, pre-lineage history).  The run row carries task_id, so
+    # version → run → task is one hop; facts reference this id via
+    # fo_property_facts.source_dataset_version_id.
+    producer_run_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey("v2_pipeline_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
