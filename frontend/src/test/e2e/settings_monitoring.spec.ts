@@ -91,8 +91,23 @@ const slowPayload = {
       ],
       spans_truncated: false,
     },
+    {
+      id: 2,
+      created_at: '2026-08-12T09:01:00Z',
+      method: 'GET',
+      route: '/api/v1/ontologies',
+      status_code: 200,
+      duration_ms: 1500,
+      request_id: 'f1e2d3c4b5a697887766554433221100',
+      username: 'admin',
+      source_ip: '10.0.0.8',
+      user_agent: 'Mozilla/5.0',
+      breakdown: { db: { count: 9, total_ms: 130 } },
+      spans: [],
+      spans_truncated: false,
+    },
   ],
-  total: 1,
+  total: 2,
   page: 1,
   size: 10,
 }
@@ -195,6 +210,44 @@ test.describe('系统设置 · 运行监控（admin）', () => {
       .first()
       .click()
     await expect(drawer.getByText(/SELECT domains.name FROM domains/)).toBeVisible()
+  })
+
+  test('复制分析提示词生成完整分析请求并提示成功', async ({ page }) => {
+    await mockMonitoring(page)
+    await page.goto('/#/settings/monitoring')
+
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+    await page.getByRole('button', { name: '调用链' }).first().click()
+    await expect(page.getByText('调用链时间轴（相对请求开始）')).toBeVisible()
+
+    await page.getByRole('button', { name: '复制分析提示词' }).click()
+    await expect(page.getByText('分析提示词已复制')).toBeVisible()
+
+    const copied = await page.evaluate(() => navigator.clipboard.readText())
+    await expect(copied).toContain('# 平台慢接口调用链分析请求')
+    await expect(copied).toContain('/api/v2/super-assistant/conversations/x/chat')
+    await expect(copied).toContain('chat.completions')
+    await expect(copied).toContain('SELECT domains.name FROM domains')
+    await expect(copied).toContain('未归因耗时')
+    await expect(copied).toContain('瓶颈定位')
+  })
+
+  test('旧版本慢请求标记为历史记录并解释原因', async ({ page }) => {
+    await mockMonitoring(page)
+    await page.goto('/#/settings/monitoring')
+
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+    await expect(page.getByRole('button', { name: /历史记录/ }).first()).toBeVisible()
+    await page.getByRole('button', { name: /历史记录/ }).first().click()
+
+    const drawer = page.locator('.ant-drawer')
+    await expect(
+      drawer.getByText(/该请求记录于调用链功能上线前的旧版本/),
+    ).toBeVisible()
+    await expect(drawer.getByText('DB 9 次')).toBeVisible()
+    // 历史记录同样可以生成提示词（说明缺失调用链）
+    await drawer.getByRole('button', { name: '复制分析提示词' }).click()
+    await expect(page.getByText('分析提示词已复制')).toBeVisible()
   })
 })
 

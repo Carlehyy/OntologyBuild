@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Button, Drawer, Empty, Segmented, Table, Tag } from 'antd'
+import { Button, Drawer, Empty, Segmented, Table, Tag, Tooltip } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
-import { Activity, Gauge, Timer, TriangleAlert } from 'lucide-react'
+import { Activity, Copy, Gauge, Info, Timer, TriangleAlert } from 'lucide-react'
+import { useToast } from '@/components/ui/Toast'
+import { writeTextToClipboard } from '@/utils/clipboard'
 import {
   monitoringApi,
   type MonitoringWindow,
@@ -13,6 +15,7 @@ import {
   type TopRouteItem,
   type TraceSpan,
 } from '@/api/monitoring'
+import { buildAnalysisPrompt } from './traceAnalysisPrompt'
 
 const REFRESH_MS = 30_000
 
@@ -85,7 +88,13 @@ const LAYER_LABELS: Record<string, string> = {
 function TraceView({ request }: { request: SlowRequestItem }) {
   const spans = request.spans ?? []
   const total = Math.max(request.duration_ms, 1)
-  const attributed = spans.reduce((sum, span) => sum + (span.duration_ms || 0), 0)
+  // 旧记录没有 spans，用分层汇总估算已归因耗时，避免把全部耗时误报为"未归因"
+  const attributed = spans.length
+    ? spans.reduce((sum, span) => sum + (span.duration_ms || 0), 0)
+    : Object.values(request.breakdown ?? {}).reduce(
+        (sum, entry) => sum + (entry?.total_ms || 0),
+        0,
+      )
   const unattributed = Math.max(0, request.duration_ms - attributed)
 
   const columns: ColumnsType<TraceSpan> = [
@@ -142,6 +151,19 @@ function TraceView({ request }: { request: SlowRequestItem }) {
         <span className="text-red-500 font-medium">{(request.duration_ms / 1000).toFixed(2)}s</span>
         <span className="text-gray-400 font-mono text-[10px]">{request.request_id}</span>
       </div>
+
+      {!spans.length && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 leading-5 text-amber-700">
+          <Info size={13} className="mt-1 shrink-0" />
+          <div>
+            该请求记录于调用链功能上线前的旧版本，系统未采集逐步调用链，仅保留分层耗时汇总：
+            <span className="ml-1"><BreakdownTags breakdown={request.breakdown} /></span>
+            <span className="ml-1 text-amber-600/80">
+              此类历史记录会随 7 天保留期自动清除；上线后产生的新慢请求均有完整调用链。
+            </span>
+          </div>
+        </div>
+      )}
 
       <div>
         <div className="mb-1 flex items-center justify-between text-[11px] text-gray-400">
@@ -222,6 +244,26 @@ export default function MonitoringTab() {
   const [slowPage, setSlowPage] = useState(1)
   const [slowRoute, setSlowRoute] = useState('')
   const [traceRequest, setTraceRequest] = useState<SlowRequestItem | null>(null)
+  const { toast } = useToast()
+
+  const copyAnalysisPrompt = async () => {
+    if (!traceRequest) return
+    const text = buildAnalysisPrompt(traceRequest)
+    try {
+      await writeTextToClipboard(text)
+      toast({
+        tone: 'success',
+        title: '分析提示词已复制',
+        description: '可直接粘贴给其他 Agent，进行调用链瓶颈分析与优化建议',
+      })
+    } catch {
+      toast({
+        tone: 'error',
+        title: '复制失败',
+        description: '浏览器未授予剪贴板权限，请在提示框中手动选择文本复制',
+      })
+    }
+  }
 
   const overview = useQuery({
     queryKey: ['monitoring', 'overview', window],
@@ -333,19 +375,31 @@ export default function MonitoringTab() {
     {
       title: '调用链',
       key: 'trace',
-      width: 90,
+      width: 110,
       align: 'center',
-      render: (_, row) => (
+      render: (_, row) => row.spans?.length ? (
         <Button
           type="link"
           size="small"
-          className="!text-xs"
-          disabled={!row.spans?.length}
-          title={row.spans?.length ? '查看该请求的调用链' : '该请求无调用链数据（旧版本记录）'}
+          className="!text-xs !text-cyan-700"
           onClick={() => setTraceRequest(row)}
         >
           调用链
         </Button>
+      ) : (
+        <Tooltip
+          title="该请求产生于调用链功能上线前的旧版本，未采集逐步调用链，仅保留 DB/LLM/HTTP 分层汇总；此类记录会随 7 天保留期自动清除"
+        >
+          <Button
+            type="link"
+            size="small"
+            className="!text-xs !text-gray-400 hover:!text-gray-500"
+            onClick={() => setTraceRequest(row)}
+          >
+            <Info size={12} className="mr-0.5" />
+            历史记录
+          </Button>
+        </Tooltip>
       ),
     },
   ]
@@ -406,6 +460,12 @@ export default function MonitoringTab() {
       <div className="rounded-lg border border-gray-200 bg-white p-4">
         <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
           <span className="text-sm font-medium text-gray-800">慢请求明细</span>
+          <Tooltip title="调用链采集自功能上线版本开始；「历史记录」为上线前的慢请求，仅保留分层汇总，随 7 天保留期自动清除">
+            <span className="inline-flex items-center gap-0.5 text-[11px] font-normal text-gray-400 cursor-help">
+              <Info size={12} />
+              调用链自上线版本开始采集
+            </span>
+          </Tooltip>
           <input
             value={slowRoute}
             onChange={event => {
@@ -454,6 +514,16 @@ export default function MonitoringTab() {
         open={Boolean(traceRequest)}
         onClose={() => setTraceRequest(null)}
         destroyOnClose
+        footer={
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <span className="text-xs text-gray-400">
+              将本次慢请求整理成完整分析提示词，可交给其他 Agent 深入分析优化空间
+            </span>
+            <Button type="primary" size="small" icon={<Copy size={13} />} onClick={copyAnalysisPrompt}>
+              复制分析提示词
+            </Button>
+          </div>
+        }
       >
         {traceRequest && <TraceView request={traceRequest} />}
       </Drawer>
