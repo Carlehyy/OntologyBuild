@@ -68,10 +68,12 @@ async def _execute_pipeline_task_message(payload: dict) -> None:
     """pipeline.task.execute：数据任务池调度/手动触发的单任务执行。"""
     task_id = str(payload["task_id"])
     trigger_type = str(payload.get("trigger_type") or "manual")
+    full_refresh = bool(payload.get("full_refresh", False))
 
     from app.data_channel.pipeline_tasks.engine import execute_pipeline_task
 
-    result = await asyncio.to_thread(execute_pipeline_task, task_id, trigger_type)
+    result = await asyncio.to_thread(
+        execute_pipeline_task, task_id, trigger_type, full_refresh)
     if isinstance(result, dict) and result.get("status") == "ok":
         logger.info("PipelineTask %s 执行完成", task_id)
     else:

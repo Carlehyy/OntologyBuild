@@ -58,14 +58,15 @@ async def test_successful_execution_acks(executor, monkeypatch):
     calls = []
     monkeypatch.setattr(
         "app.data_channel.pipeline_tasks.engine.execute_pipeline_task",
-        lambda task_id, trigger_type: calls.append((task_id, trigger_type))
+        lambda task_id, trigger_type, full_refresh=False: calls.append(
+            (task_id, trigger_type, full_refresh))
         or {"status": "ok"},
     )
     msg = _msg()
 
     await executor._process_message(msg, _PIPELINE_TASK_HANDLER, _PIPELINE_TASK_DESC)
 
-    assert calls == [("task-1", "scheduled")]
+    assert calls == [("task-1", "scheduled", False)]
     assert msg.acked == 1
     assert msg.naked == 0
 
@@ -341,7 +342,7 @@ async def test_fetch_loop_respects_concurrency_limit(executor, monkeypatch):
     max_active = 0
     counter_lock = threading.Lock()
 
-    def fake_execute(task_id, _trigger_type):
+    def fake_execute(task_id, _trigger_type, full_refresh=False):
         nonlocal active, max_active
         with counter_lock:
             active += 1
@@ -488,7 +489,8 @@ def test_dispatch_to_executor_end_to_end(monkeypatch):
     monkeypatch.setattr(
         task_engine,
         "execute_pipeline_task",
-        lambda task_id, trigger_type: executed.append((task_id, trigger_type))
+        lambda task_id, trigger_type, full_refresh=False: executed.append(
+            (task_id, trigger_type))
         or {"status": "ok"},
     )
 

@@ -46,6 +46,7 @@ def create_task(
         soft_delete_column=(
             body.soft_delete_column or ""
         ).strip(),
+        cursor_column=(body.cursor_column or "").strip(),
         skip_empty=body.skip_empty,
         schedule_type=body.schedule_type,
         cron_expression=body.cron_expression or "",
@@ -82,12 +83,17 @@ def update_task(
         body,
         existing=task,
     )
+    previous_cursor_column = task.cursor_column or ""
     for field, value in body.model_dump(
         exclude_unset=True
     ).items():
         if field == "primary_key":
             continue
         setattr(task, field, value)
+    # 游标列被修改/清空时，旧水位对新列不再可比较，必须归零——下次运行
+    # 按全量重建水位，避免沿用旧列的水位静默漏数
+    if (task.cursor_column or "") != previous_cursor_column:
+        task.last_cursor_value = ""
     # 兼容字段只保留当前发布契约快照，修复历史任务可能存在的自定义值。
     task.primary_key = pipeline_primary_key
     task.updated_at = datetime.utcnow()

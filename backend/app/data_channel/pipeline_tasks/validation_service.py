@@ -92,6 +92,13 @@ def _validate(
             f"软删除列「{soft_delete}」不在流水线发布契约中",
         )
 
+    cursor_column = (get_value("cursor_column") or "").strip()
+    if cursor_column and cursor_column not in contract_columns:
+        raise HTTPException(
+            400,
+            f"增量游标列「{cursor_column}」不在流水线发布契约中",
+        )
+
     schedule_type = get_value("schedule_type")
     if schedule_type == "CRON":
         expression = (get_value("cron_expression") or "").strip()

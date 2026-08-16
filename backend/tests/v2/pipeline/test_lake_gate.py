@@ -30,6 +30,55 @@ class FakeDataset:
         self.schema_json = schema_json
 
 
+def test_lake_gate_stream_chunked_matches_full_batch():
+    """LakeGateStream 分批形态与 gate_rows 全量形态：结果与报错逐项一致。"""
+    from app.data_channel.datasets.lake_gate import LakeGateStream
+
+    rows = [
+        {"order_id": "A-1", "amount": "10.5", "city": "北京", "note": "x"},
+        {"order_id": "A-2", "amount": "3", "city": "上海"},
+        {"order_id": "A-3", "amount": "", "city": "广州", "extra": "新列"},
+    ]
+    write_opts = {"mode": "upsert", "primary_key": "order_id"}
+    full = gate_rows(FakeDataset(), [dict(r) for r in rows], write_opts)
+
+    stream = LakeGateStream(FakeDataset(), write_opts)
+    gated = []
+    for i in range(0, len(rows), 2):  # 跨批（含列只在后续批出现的情形）
+        gated.extend(stream.accept_batch([dict(r) for r in rows[i:i + 2]]))
+    result = stream.finish()
+
+    assert gated == full["rows"]
+    assert result["pk"] == full["pk"]
+    assert result["pk_source"] == full["pk_source"]
+    assert result["drift"] == full["drift"]
+    assert result["warnings"] == full["warnings"]
+    assert result["total"] == len(rows)
+    assert result["columns"] == ["order_id", "amount", "city", "note", "extra"]
+    # 类型推断只看前 50 行：分批与全量一致
+    assert result["batch_typed"] == infer_columns_typed(full["rows"])
+
+
+def test_lake_gate_stream_error_identity_across_chunks():
+    """分批下报错误型/文案与全量一致（行号跨批连续）。"""
+    from app.data_channel.datasets.lake_gate import LakeGateStream
+
+    bad = [
+        {"order_id": "A-1"},
+        {"order_id": "A-2"},
+        {"order_id": ""},   # 第 3 行主键为空（跨批边界）
+        {"order_id": "A-2"},  # 与第 2 行重复
+    ]
+    write_opts = {"mode": "upsert", "primary_key": "order_id"}
+    with pytest.raises(LakeGateError, match="第 3 行的主键列「order_id」为空"):
+        gate_rows(FakeDataset(), [dict(r) for r in bad], write_opts)
+    stream = LakeGateStream(FakeDataset(), write_opts)
+    with pytest.raises(LakeGateError, match="第 3 行的主键列「order_id」为空"):
+        for i in range(0, len(bad), 2):
+            stream.accept_batch([dict(r) for r in bad[i:i + 2]])
+        stream.finish()
+
+
 ROWS = [
     {"order_id": "A-1", "amount": "10.5", "city": "北京"},
     {"order_id": "A-2", "amount": "3", "city": "上海"},

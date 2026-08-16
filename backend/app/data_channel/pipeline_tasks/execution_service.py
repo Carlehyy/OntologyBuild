@@ -18,6 +18,7 @@ def trigger_task(
     background: Any,
     sync: bool,
     db: Session,
+    full_refresh: bool = False,
 ) -> dict:
     task = (
         db.query(PipelineTask)
@@ -42,12 +43,13 @@ def trigger_task(
         return execute_pipeline_task(
             task_id,
             trigger_type="manual",
+            full_refresh=full_refresh,
         )
 
     # sync=false 经 NATS 派发给独立 executor 进程执行，不再占用 Web 进程
     from app.data_channel.pipeline_tasks.dispatch import dispatch_pipeline_task
     try:
-        dispatch_pipeline_task(task_id, "manual")
+        dispatch_pipeline_task(task_id, "manual", full_refresh=full_refresh)
     except Exception as exc:  # noqa: BLE001 - 任何通道故障对用户都是 503
         logger.error("PipelineTask %s 派发失败: %s", task_id, exc)
         raise HTTPException(503, "任务派发失败：消息通道不可用，请稍后重试")

@@ -235,23 +235,25 @@ def apply_column_contract(rows: list[dict], definitions: list | None, *,
     return rows, []
 
 
-def normalize_rows_for_lake(rows: list[dict], *, dataset_name: str = "") -> list[dict]:
+def normalize_rows_for_lake(rows: list[dict], *, dataset_name: str = "",
+                            row_offset: int = 0) -> list[dict]:
     """行格式规范化：键转 str、拒绝 bytes、嵌套结构原样保留（CSV 序列化时压 JSON）。
 
     route C 的 "content" 列携带原始文件 bytes 且从不写入 CSV，予以豁免。
+    row_offset：流式分批时的全局行号偏移（报错行号跨批连续）。
     """
     out: list[dict] = []
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             raise LakeGateError(
-                f"数据集「{dataset_name}」第 {i + 1} 行不是对象（实际为 {type(row).__name__}）。"
+                f"数据集「{dataset_name}」第 {row_offset + i + 1} 行不是对象（实际为 {type(row).__name__}）。"
                 f"流水线输出必须是行式数据：每行一个 {{列名: 值}} 对象。")
         clean: dict = {}
         for k, v in row.items():
             key = str(k)
             if isinstance(v, (bytes, bytearray)) and key != "content":
                 raise LakeGateError(
-                    f"数据集「{dataset_name}」第 {i + 1} 行的列「{key}」是二进制值（{len(v)} bytes），"
+                    f"数据集「{dataset_name}」第 {row_offset + i + 1} 行的列「{key}」是二进制值（{len(v)} bytes），"
                     f"无法作为行数据入湖。二进制内容请走非结构化路径（route C）或先在流水线中转码。")
             clean[key] = v
         out.append(clean)
@@ -473,6 +475,215 @@ def validate_declared_types(ops_values: list[dict], columns_typed: list | None, 
             f"数据集「{dataset_name}」类型校验未通过：{'；'.join(problems)}。请修正后再保存")
 
 
+class LakeGateStream:
+    """入湖闸门的流式形态：begin → accept_batch × N → finish。
+
+    与 gate_rows 全量形态逐项同语义（行号跨批连续）：
+    - 行格式错误（非对象/二进制）即时抛出——它优先于一切后续校验；
+    - 并集级校验（改名冲突/未声明列/主键列缺失）与行级校验（非空/类型/
+      主键非空与重复）在全消费后的 finish 统一抛出，保持旧报错优先级：
+      契约结构 > 改名冲突 > 未声明列 > 非空 > 类型 > 主键仲裁 > 主键校验；
+    - resolve_pk 在首个非空批求值（全空来数在 finish 补评），多类错误并存
+      时与旧顺序可能有先后差异，但抛出的永远是真实违规。
+    """
+
+    def __init__(self, curated_ds, write_opts: dict | None, *,
+                 engine_contract_cols: list[str] | None = None,
+                 column_definitions: list | None = None):
+        self.dataset_name = getattr(curated_ds, "name", "") or ""
+        self._schema = dict(getattr(curated_ds, "schema_json", None) or {})
+        self._write_opts = write_opts
+        self._raw_defs = column_definitions
+        self._defs = normalize_definitions(column_definitions)
+        self._rename = {d["source_key"]: d["field_key"] for d in self._defs
+                        if d["source_key"] != d["field_key"]}
+        self._source_keys = {d["source_key"] for d in self._defs}
+        self._engine_contract_cols = engine_contract_cols
+        # 累积态
+        self.total = 0
+        self.columns_union: list[str] = []   # 闸门后行（改名/重建后）的首现序列并集
+        self._seen_cols: set[str] = set()
+        self._typed_sample: list[dict] = []  # 前 50 行（类型推断样本）
+        self._structure_checked = False
+        self._pk_ready = False
+        self.pk = ""
+        self.pk_source = ""
+        self._pk_cols: list[str] = []
+        self._pk_seen: dict[tuple, int] = {}
+        self._pk_violation: str | None = None
+        self._nullable_violation: tuple[int, str, int] | None = None  # (def序, 列, 行号)
+        self._type_problems: list[str] = []
+        self._final_sources: dict[str, set[str]] = {}
+        self._raw_keys_union: set[str] = set()
+
+    def _resolve_pk_once(self) -> None:
+        if self._pk_ready:
+            return
+        self._pk_ready = True
+        # 全量覆盖（含无 write_opts 的手动运行/预览确认，合并默认即 overwrite）
+        # 是变更主键声明的唯一受控通道；增量/合并模式声明冲突照旧硬失败
+        allow_redeclare = (self._write_opts or {}).get("mode") in (None, "", "overwrite")
+        self.pk, self.pk_source = resolve_pk(
+            (self._write_opts or {}).get("primary_key"),
+            self._schema.get("primary_key"),
+            contract_pk(self._raw_defs), dataset_name=self.dataset_name,
+            allow_redeclare=allow_redeclare)
+        self._pk_cols = split_pk(self.pk)
+
+    def accept_batch(self, rows: list[dict]) -> list[dict]:
+        """校验并转化一批行，返回闸门后行（契约重建/改名后）。行号跨批连续。"""
+        name = self.dataset_name
+        rows = normalize_rows_for_lake(rows, dataset_name=name,
+                                       row_offset=self.total)
+        if rows and self._defs and not self._structure_checked:
+            self._structure_checked = True
+            structure_errors = validate_contract_structure(self._defs)
+            if structure_errors:
+                raise LakeGateError(
+                    f"数据集「{name}」的字段契约结构非法：{'；'.join(structure_errors)}")
+        if rows:
+            self._resolve_pk_once()
+        base = self.total
+        for i, row in enumerate(rows):
+            for key in row.keys():
+                if key == "content":
+                    continue
+                self._raw_keys_union.add(key)
+                if self._rename:
+                    self._final_sources.setdefault(
+                        self._rename.get(key, key), set()).add(key)
+        if self._defs:
+            gated = [{d["field_key"]: row.get(d["source_key"]) for d in self._defs}
+                     for row in rows]
+        else:
+            gated = rows
+        # 非空：旧实现按（契约列序 × 行序）列主序报首个违例，累积保持同序最小者
+        for def_idx, d in enumerate(self._defs):
+            if d["nullable"]:
+                continue
+            col = d["field_key"]
+            for i, row in enumerate(gated):
+                v = row.get(col)
+                if v is None or (isinstance(v, str) and not v.strip()):
+                    if (self._nullable_violation is None
+                            or (def_idx, base + i + 1)
+                               < (self._nullable_violation[0],
+                                  self._nullable_violation[2])):
+                        self._nullable_violation = (def_idx, col, base + i + 1)
+                    break  # 该列本批已记录最小行号，继续下一列
+        # 类型：行主序累积（上限 5 条，finish 统一抛）
+        if self._defs and len(self._type_problems) < 5:
+            types = {d["field_key"]: d["field_type"] for d in self._defs}
+            for row in gated:
+                for col, v in row.items():
+                    expected = types.get(col)
+                    if not expected or _cell_type_ok(v, expected):
+                        continue
+                    self._type_problems.append(
+                        f"列「{col}」的值「{v}」不符合声明类型 {expected}"
+                        f"（{FIELD_TYPE_LABELS.get(expected, expected)}）")
+                    if len(self._type_problems) >= 5:
+                        break
+                if len(self._type_problems) >= 5:
+                    break
+        # 主键三校验之值非空/组合唯一（行主序记录首个违例；列存在性在 finish）
+        if self._pk_cols and not self._pk_violation:
+            for i, row in enumerate(gated):
+                values = []
+                for c in self._pk_cols:
+                    v = row.get(c)
+                    if v is None or str(v).strip() == "":
+                        self._pk_violation = (
+                            f"数据集「{name}」本次输出第 {base + i + 1} 行的主键列「{c}」为空。"
+                            "主键值必须非空，否则该行无法获得稳定身份。请在流水线中过滤或补全该列。")
+                        break
+                    values.append(str(v).strip())
+                if self._pk_violation:
+                    break
+                key = tuple(values)
+                if key in self._pk_seen:
+                    self._pk_violation = (
+                        f"数据集「{name}」本次输出第 {self._pk_seen[key] + 1} 行与第 {base + i + 1} 行主键重复"
+                        f"（{dict(zip(self._pk_cols, key))}）。同一主键值代表同一业务对象，本次输出内不允许重复；"
+                        "若源端确有重复，请在流水线中先去重（保留最新）。")
+                    break
+                self._pk_seen[key] = base + i
+        for row in gated:
+            for key in row.keys():
+                if key != "content" and key not in self._seen_cols:
+                    self._seen_cols.add(key)
+                    self.columns_union.append(key)
+        if len(self._typed_sample) < 50:
+            self._typed_sample.extend(gated[:50 - len(self._typed_sample)])
+        self.total = base + len(rows)
+        return gated
+
+    def finish(self) -> dict:
+        """全消费后收口：并集级校验与延迟错误按旧优先级抛出，返回闸门结果。"""
+        name = self.dataset_name
+        self._resolve_pk_once()
+        if self._rename:
+            collided = sorted(f for f, srcs in self._final_sources.items()
+                              if len(srcs) > 1)
+            if collided:
+                raise LakeGateError(
+                    f"数据集「{name}」应用字段契约改名后出现列名冲突：{collided}。"
+                    "改名目标列与实际输出中的既有列同名会导致数据互相覆盖，请调整字段标识或流水线输出。")
+        if self._defs:
+            undeclared = sorted(self._raw_keys_union - self._source_keys)
+            if undeclared:
+                raise LakeGateError(
+                    f"数据集「{name}」的流水线输出出现未声明字段 {undeclared[:20]}。"
+                    "已发布数据契约不允许额外列静默入湖；请停用当前版本，新建流水线完成试跑、"
+                    "字段契约校验与发布，验证稳定后再归档旧版本。")
+        if self._nullable_violation is not None:
+            _, col, row_no = self._nullable_violation
+            raise LakeGateError(
+                f"数据集「{name}」第 {row_no} 行的非空列「{col}」为空，但流水线契约声明该列不允许为空。"
+                "请在未发布草稿中过滤/补全该列或放宽空值约束；若当前版本已发布，"
+                "请停用旧版本并新建替代流水线。")
+        if self._type_problems:
+            raise LakeGateError(
+                f"数据集「{name}」类型校验未通过：{'；'.join(self._type_problems)}。请修正后再保存")
+        if self._pk_cols and self.total:
+            missing = [c for c in self._pk_cols if c not in self._seen_cols]
+            if missing:
+                raise LakeGateError(
+                    f"数据集「{name}」本次输出中不存在主键列 {missing}（现有列：{sorted(self._seen_cols)[:20]}）。"
+                    "请核对任务的主键配置，或调整流水线让输出携带该列。")
+        if self._pk_violation:
+            raise LakeGateError(self._pk_violation)
+
+        warnings: list[str] = []
+        declared = self._schema.get("primary_key")
+        if declared and self.pk and split_pk(str(declared)) != split_pk(self.pk):
+            warnings.append(
+                f"本次全量覆盖将重写湖中主键声明：{declared} → {self.pk}（原声明派生的实例身份将随重建作废）")
+        new_cols = self.columns_union
+        # 漂移基线用「上次运行的输出列」：append 等合并模式下湖中列是历史并集，
+        # 拿它当基线会让正常的追加运行每次误报"缺失列"
+        baseline = self._schema.get("last_output_columns") or self._schema.get("columns")
+        drift = detect_drift(new_cols, baseline) if self.total else None
+        if drift:
+            warnings.append(f"列集合相对湖中上一版发生漂移：新增 {drift['added'] or '无'}，"
+                            f"缺失 {drift['missing'] or '无'}")
+        if self.total and self._engine_contract_cols:
+            contract_drift = detect_drift(new_cols, self._engine_contract_cols)
+            if contract_drift:
+                warnings.append(f"列集合相对引擎审批契约漂移：新增 {contract_drift['added'] or '无'}，"
+                                f"缺失 {contract_drift['missing'] or '无'}")
+                drift = drift or contract_drift
+        # 类型推断：列序取全量首现并集，类型只看前 50 行非空值（与
+        # infer_columns_typed 全量形态同口径——占位行只贡献列序，空值不参与推断）
+        typed = infer_columns_typed(
+            self._typed_sample + [{c: "" for c in self.columns_union}]) \
+            if self.total else []
+        return {"pk": self.pk, "pk_source": self.pk_source, "drift": drift,
+                "warnings": warnings, "columns": list(self.columns_union),
+                "batch_typed": typed, "sample": list(self._typed_sample),
+                "total": self.total}
+
+
 def gate_rows(curated_ds, rows: list[dict], write_opts: dict | None,
               engine_contract_cols: list[str] | None = None,
               column_definitions: list | None = None) -> dict:
@@ -481,45 +692,15 @@ def gate_rows(curated_ds, rows: list[dict], write_opts: dict | None,
     column_definitions：流水线字段契约（仅单产物流水线传入）——先改名/校验
     约束，其主键声明参与仲裁（lake > pipeline > task）。
     返回 {rows, pk, pk_source, drift, warnings}。主键/非空违规抛 LakeGateError。
+    本函数是 LakeGateStream 的全量兼容形态（单批 accept + finish）。
     """
-    name = getattr(curated_ds, "name", "") or ""
-    schema = dict(getattr(curated_ds, "schema_json", None) or {})
-    rows = normalize_rows_for_lake(rows, dataset_name=name)
-    rows, contract_warnings = apply_column_contract(
-        rows, column_definitions, dataset_name=name)
-
-    # 全量覆盖（含无 write_opts 的手动运行/预览确认，合并默认即 overwrite）
-    # 是变更主键声明的唯一受控通道；增量/合并模式声明冲突照旧硬失败
-    allow_redeclare = (write_opts or {}).get("mode") in (None, "", "overwrite")
-    declared = schema.get("primary_key")
-    pk, pk_source = resolve_pk((write_opts or {}).get("primary_key"),
-                               declared,
-                               contract_pk(column_definitions), dataset_name=name,
-                               allow_redeclare=allow_redeclare)
-    if pk and rows:
-        validate_pk(rows, split_pk(pk), dataset_name=name, scope="本次输出")
-
-    warnings: list[str] = list(contract_warnings)
-    if declared and pk and split_pk(str(declared)) != split_pk(pk):
-        warnings.append(
-            f"本次全量覆盖将重写湖中主键声明：{declared} → {pk}（原声明派生的实例身份将随重建作废）")
-    new_cols = [c["name"] for c in infer_columns_typed(rows)] if rows else []
-    # 漂移基线用「上次运行的输出列」：append 等合并模式下湖中列是历史并集，
-    # 拿它当基线会让正常的追加运行每次误报"缺失列"
-    baseline = schema.get("last_output_columns") or schema.get("columns")
-    drift = detect_drift(new_cols, baseline) if rows else None
-    if drift:
-        warnings.append(f"列集合相对湖中上一版发生漂移：新增 {drift['added'] or '无'}，"
-                        f"缺失 {drift['missing'] or '无'}")
-    if rows and engine_contract_cols:
-        contract_drift = detect_drift(new_cols, engine_contract_cols)
-        if contract_drift:
-            warnings.append(f"列集合相对引擎审批契约漂移：新增 {contract_drift['added'] or '无'}，"
-                            f"缺失 {contract_drift['missing'] or '无'}")
-            drift = drift or contract_drift
-
-    return {"rows": rows, "pk": pk, "pk_source": pk_source,
-            "drift": drift, "warnings": warnings}
+    stream = LakeGateStream(
+        curated_ds, write_opts, engine_contract_cols=engine_contract_cols,
+        column_definitions=column_definitions)
+    gated = stream.accept_batch(rows)
+    result = stream.finish()
+    return {"rows": gated, "pk": result["pk"], "pk_source": result["pk_source"],
+            "drift": result["drift"], "warnings": result["warnings"]}
 
 
 def validate_upsert_base(old_rows: list[dict], pk_cols: list[str], *,
@@ -564,6 +745,7 @@ def persist_contract(curated_ds, *, pk: str, pk_source: str,
                      lake_rows: list[dict] | None = None,
                      lake_columns_typed: list[dict] | None = None,
                      output_rows: list[dict] | None = None,
+                     output_columns: list[str] | None = None,
                      column_definitions: list | None = None,
                      allow_redeclare: bool = False) -> dict:
     """把契约固化/更新到 schema_json（返回新 schema dict，调用方负责赋值提交）。
@@ -591,7 +773,10 @@ def persist_contract(curated_ds, *, pk: str, pk_source: str,
         schema["types_source"] = "published_pipeline_contract"
     schema["columns"] = [c["name"] for c in typed]
     schema["columns_typed"] = typed
-    if output_rows:
+    if output_columns is not None:
+        # 流式管道直接供给「本次输出列」并集（首现序），避免物化全量行推断
+        schema["last_output_columns"] = [str(c) for c in output_columns]
+    elif output_rows:
         schema["last_output_columns"] = [
             c["name"] for c in infer_columns_typed(output_rows)]
     if defs:

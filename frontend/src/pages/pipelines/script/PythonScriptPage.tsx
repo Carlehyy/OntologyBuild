@@ -539,6 +539,7 @@ export default function PythonScriptPage() {
                         <li>执行不落库；「保存」时平台重新执行并复验输出格式，通过才写入。</li>
                         <li>执行环境自带 requests / httpx / pandas / pymysql / openpyxl 等依赖。</li>
                         <li>单次输出上限 50,000 行{timeoutLimit ? `；执行时限 ${timeoutLimit} 秒` : ''}，超限执行会失败。</li>
+                        <li>任务池声明增量游标后，脚本上下文注入 <code className="rounded bg-slate-100 px-1 font-mono">OB_RUN_PARAMS</code>（含 cursor_column / cursor_since / full_refresh），脚本可据此只拉取新数据。</li>
                         <li>流水线发布后脚本封版只读；变更需新建流水线。</li>
                       </ul>
                     </div>

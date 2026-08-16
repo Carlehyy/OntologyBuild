@@ -101,17 +101,28 @@ def tail_stdout(text: str) -> str:
     return text[-_STDOUT_TAIL_CHARS:]
 
 
-def execute_script(script: str, *, timeout: int | None = None, cancel_event=None) -> ScriptExecution:
+def execute_script(script: str, *, timeout: int | None = None, cancel_event=None,
+                   params: dict | None = None) -> ScriptExecution:
     """在 Jupyter Kernel Gateway 上执行脚本并提取 result 行数据。
 
     基础设施类失败（未配置/不可达/超时/输出协议非法）抛 PythonEngineError；
     脚本自身异常不抛出，以 ScriptExecution.error + traceback 承载。
     cancel_event（threading.Event）置位时在下一个轮询周期内取消执行，
     内核随 finally 销毁，远端不会留下空跑的执行。
+    params：平台运行参数（如增量游标），以 JSON 前导代码注入为
+    ``OB_RUN_PARAMS`` 变量（纯数据编码，不参与代码拼接）。
     """
+    prelude = ""
+    if params is not None:
+        prelude = (
+            "# ── OntologyBuild 平台运行参数（自动注入） ──\n"
+            "OB_RUN_PARAMS = "
+            + json.dumps(params, ensure_ascii=False)
+            + "\n"
+        )
     execution = execute_code(
-        script + _RESULT_EPILOGUE, timeout=timeout, cancel_event=cancel_event,
-        full_stdout=True)
+        prelude + script + _RESULT_EPILOGUE, timeout=timeout,
+        cancel_event=cancel_event, full_stdout=True)
     if not execution.error:
         try:
             # 在截断前的完整 stdout 上提取：结果块超过尾部保留上限时，

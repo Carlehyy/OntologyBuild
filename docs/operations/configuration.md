@@ -118,6 +118,22 @@ API 进程内的对账器（默认每 5 分钟，
 `PIPELINE_RUN_RECONCILE_INTERVAL_SECONDS`）随后把过期中断的任务与运行
 记录收口为 failed。executor 并发度由 `PIPELINE_EXECUTOR_CONCURRENCY`
 （默认 2）控制。
+
+### 数据任务池：源端增量游标（水位）
+
+数据任务可选声明「增量游标列」（`cursor_column`，必须是流水线发布契约
+中的列；词法可比较：ISO8601 时间戳、零填充序号或自增 ID）。声明后每次
+运行把上次成功水位经引擎运行参数注入源端——Python 脚本读取脚本上下文
+变量 `OB_RUN_PARAMS`（含 `cursor_column` / `cursor_since` /
+`full_refresh`），n8n 工作流读取 webhook body 的
+`incremental.cursor_since`——由流水线自行按键过滤只产出新数据；平台在
+运行成功时把当次产出的游标词法最大值回写为下次起点
+（`last_cursor_value`，仅成功推进；空产出/失败/被对账器收口均不推进）。
+首次运行或水位为空时按全量拉取并建立水位。漏数回填入口：任务池「全量
+回填」（`POST /pipeline-tasks/{id}/trigger?full_refresh=true`）——当次
+忽略水位全量拉取，成功后水位推进到当次最大值。修改/清空游标列会自动
+归零水位（旧水位对新列不可比较）。游标列词法序的口径约定：时间一律
+ISO8601 定长格式，数字 ID 需零填充或用字典序可比较的编码。
 CDP 配置只填写服务根地址（例如 `http://browser:9222`）；平台会自行请求
 `/json/version`。带该 discovery 路径、查询参数、fragment 或 URL 用户信息的
 地址会在配置阶段被拒绝，避免配置校验通过后实际探测到重复路径。

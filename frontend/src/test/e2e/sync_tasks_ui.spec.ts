@@ -543,3 +543,67 @@ test('编辑任务沿用五步向导，执行记录支持筛选分页且保留�
   await expect(page.getByText('第 2 / 3 页')).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('task-history-filters.png'), fullPage: true })
 })
+
+test('增量游标任务：徽标、全量回填触发参数与表单游标列选择', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1728, height: 1000 })
+  await mockTaskPool(page, [{
+    id: 'task-incr',
+    name: '订单增量入湖',
+    description: '按增量游标只拉新数据',
+    pipeline_id: 'pipeline-orders',
+    pipeline_name: '订单标准化流水线',
+    pipeline_status: 'published',
+    pipeline_enabled: true,
+    pipeline_version: 3,
+    write_mode: 'upsert',
+    primary_key: 'order_id',
+    soft_delete_column: '',
+    cursor_column: 'order_id',
+    last_cursor_value: '2026-08-10T00:00:00',
+    skip_empty: true,
+    schedule_type: 'MANUAL',
+    cron_expression: '',
+    interval_seconds: 0,
+    enabled: true,
+    status: 'idle',
+    last_run_at: null,
+    next_run_at: null,
+    last_rows: 0,
+    last_error: '',
+    created_at: '2026-07-18T02:00:00Z',
+    updated_at: '2026-07-18T02:00:00Z',
+  }])
+  await page.goto('/#/data/pipelines/sync-tasks', { waitUntil: 'domcontentloaded' })
+
+  // 增量徽标与全量回填按钮（仅声明游标的任务展示）
+  await expect(page.getByTestId('incremental-badge')).toBeVisible()
+  const backfillButton = page.getByTestId('full-refresh-btn')
+  await expect(backfillButton).toBeVisible()
+
+  // 点击全量回填：trigger 必须携带 full_refresh=true
+  const triggerRequest = page.waitForRequest(request => {
+    const url = new URL(request.url())
+    return url.pathname.endsWith('/task-incr/trigger')
+      && url.searchParams.get('full_refresh') === 'true'
+  })
+  await backfillButton.click()
+  await triggerRequest
+
+  // 表单：游标列下拉来自流水线发布契约列；overwrite + 游标组合给出警示
+  await page.getByRole('button', { name: '新建任务', exact: true }).click()
+  const modal = page.getByTestId('pipeline-task-modal')
+  await expect(modal).toBeVisible()
+  await page.getByLabel('任务名称').fill('订单增量入湖')
+  await page.getByRole('button', { name: '下一步' }).click()
+  await page.getByLabel('任务描述').fill('按增量游标只拉新数据')
+  await page.getByRole('button', { name: '下一步' }).click()
+  await modal.getByRole('button', { name: /订单标准化流水线/ }).click()
+  await page.getByRole('button', { name: '下一步' }).click()
+
+  const cursorSelect = page.getByTestId('cursor-column-select')
+  await expect(cursorSelect).toBeVisible()
+  await expect(cursorSelect.locator('option')).toHaveCount(4) // 「每次全量」+ 3 个契约列
+  await cursorSelect.selectOption('order_id')
+  await expect(modal.getByText('滚动窗口语义', { exact: false })).toBeVisible() // 默认 overwrite 组合警示
+  await page.screenshot({ path: testInfo.outputPath('incremental-cursor-form.png'), fullPage: true })
+})

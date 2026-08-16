@@ -50,7 +50,7 @@ ROUTE_PARAMETERS = {
     "update_task": ("task_id", "body", "db"),
     "delete_task": ("task_id", "db"),
     "toggle_task": ("task_id", "enabled", "db"),
-    "trigger_task": ("task_id", "background", "sync", "db"),
+    "trigger_task": ("task_id", "background", "sync", "db", "full_refresh"),
     "list_histories": (
         "task_id",
         "page",
@@ -353,5 +353,5 @@ def test_pipeline_task_openapi_matches_pre_extraction_baseline():
     assert len(paths) == 10
     assert sum(len(item) for item in paths.values()) == 13
     assert hashlib.sha256(payload).hexdigest() == (
-        "aedcdc9aba19080750ab5058e05d898662201e39089959ea7e75779a38eb1ba2"
+        "20275e90c7dd58201e68e49093deb058eeba752e6df212774660c70d90e1c2e4"
     )

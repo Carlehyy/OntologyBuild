@@ -1,9 +1,10 @@
 """
 流水线调度任务 (Pipeline Task)
 任务池的定位是「调度方」：数据流水线与数据资产湖之间的桥梁。
-一条任务只声明三件事——触发哪条已发布的流水线、按什么调度节奏触发、
-流水线的最终产物以什么入库方式写进数据资产湖。
-数据采集/加工细节（连接、表、水印等）全部属于流水线职责，任务不越界。
+一条任务声明四件事——触发哪条已发布的流水线、按什么调度节奏触发、
+流水线的最终产物以什么入库方式写进数据资产湖、可选的源端增量游标
+（cursor_column + last_cursor_value：声明后平台把上游产出的游标词法
+最大值在运行成功时回写为下次起点；如何按游标过滤源端仍属流水线职责）。
 """
 from __future__ import annotations
 import enum
@@ -70,6 +71,12 @@ class PipelineTask(Base):
     soft_delete_column = Column(String(200), default="")   # upsert 模式可选：源端软删除标识列
     skip_empty = Column(Boolean, default=True, nullable=False)  # 空输出保护：流水线输出 0 行时跳过入库
 
+    # 源端增量游标（可选）：cursor_column 为流水线契约列名（词法可比较——
+    # ISO8601 时间戳 / 零填充序号 / 自增 ID）；last_cursor_value 为上次成功
+    # 运行推进到的水位。两者皆空 = 每次全量（存量任务默认形态）。
+    cursor_column = Column(String(200), default="")
+    last_cursor_value = Column(Text, default="")
+
     # 调度
     schedule_type = Column(String(20), default=TaskScheduleType.MANUAL.value, nullable=False)
     cron_expression = Column(String(100), default="")
@@ -123,6 +130,8 @@ class PipelineTask(Base):
             "primary_key": self.primary_key,
             "soft_delete_column": self.soft_delete_column,
             "skip_empty": bool(self.skip_empty),
+            "cursor_column": self.cursor_column or "",
+            "last_cursor_value": self.last_cursor_value or "",
             "schedule_type": self.schedule_type,
             "cron_expression": self.cron_expression,
             "interval_seconds": self.interval_seconds,

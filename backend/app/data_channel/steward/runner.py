@@ -52,6 +52,19 @@ def _runtime_payload(*, pipeline_id: str, workflow_id: str, invocation_id: str,
     return result
 
 
+def _cursor_payload(run) -> dict:
+    """增量游标参数 → webhook body（任务池声明游标列时注入，供 workflow
+    在源端按 cursor_since 过滤只拉新数据；full_refresh 时为空串=全量）。"""
+    params = (getattr(run, "stats", None) or {}).get("run_params") or {}
+    if not params.get("cursor_column"):
+        return {}
+    return {"incremental": {
+        "cursor_column": str(params.get("cursor_column") or ""),
+        "cursor_since": str(params.get("cursor_since") or ""),
+        "full_refresh": bool(params.get("full_refresh")),
+    }}
+
+
 def _scrub_runtime_file_context(value: Any, gateway_token: str) -> Any:
     """Keep server-owned gateway credentials out of previews and lake rows.
 
@@ -59,12 +72,13 @@ def _scrub_runtime_file_context(value: Any, gateway_token: str) -> Any:
     Removing the well-known context key preserves their pre-existing columns.
     If a workflow copied/renamed the token, fail closed rather than persisting
     a live credential under an arbitrary user-controlled key.
+    平台注入的 incremental 游标键同理擦除（防止透传 body 变成湖内列）。
     """
     if isinstance(value, dict):
         return {
             key: _scrub_runtime_file_context(child, gateway_token)
             for key, child in value.items()
-            if key != "file_gateway"
+            if key not in ("file_gateway", "incremental")
         }
     if isinstance(value, list):
         return [_scrub_runtime_file_context(child, gateway_token) for child in value]
@@ -451,7 +465,7 @@ def run_n8n_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> No
                 invocation_id=run.id,
                 purpose="run",
                 owner_id=rec.created_by,
-                payload={"source": "ontoprompt"},
+                payload={"source": "ontoprompt", **_cursor_payload(run)},
             )
             rows, exec_meta = trigger_and_collect(
                 client, workflow_id, webhook_path,

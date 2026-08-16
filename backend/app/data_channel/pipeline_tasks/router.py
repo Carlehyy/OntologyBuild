@@ -226,12 +226,14 @@ def trigger_task(
     background: BackgroundTasks,
     sync: bool = False,
     db: Session = Depends(get_db),
+    full_refresh: bool = False,
 ):
     return _execution_service.trigger_task(
         task_id,
         background,
         sync,
         db,
+        full_refresh,
     )
 
 

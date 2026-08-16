@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 def run_python_pipeline(db: Session, pl, run, write_opts: dict | None = None) -> None:
     from app.data_channel.pipelines.external_runner import run_external_pipeline
 
+    # 任务池声明增量游标时，以 OB_RUN_PARAMS 变量注入脚本上下文
+    # （cursor_since 为空串 = 全量；脚本自行按键过滤源端只取新数据）
+    run_params = (getattr(run, "stats", None) or {}).get("run_params")
+
     def collector(db_: Session, pl_) -> tuple[list[dict], dict]:
         script = (((pl_.definition or {}).get("python") or {}).get("script") or "")
         if not script.strip():
@@ -30,6 +34,11 @@ def run_python_pipeline(db: Session, pl, run, write_opts: dict | None = None) ->
         execution = execute_script(
             script,
             timeout=settings.python_script_timeout_seconds,
+            params={
+                "cursor_column": str((run_params or {}).get("cursor_column") or ""),
+                "cursor_since": str((run_params or {}).get("cursor_since") or ""),
+                "full_refresh": bool((run_params or {}).get("full_refresh")),
+            },
         )
         if execution.error:
             raise PythonEngineError(execution.error)

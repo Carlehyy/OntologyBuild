@@ -354,21 +354,22 @@ def _rebuild_lake_table(db, conn, dataset, schema: dict, columns: list[str],
 
 
 def _reconcile_structure(db, conn, dataset, schema: dict, mode: str,
-                         pk_cols: list[str], rows: list[dict],
+                         pk_cols: list[str], source_columns: list[str],
                          ) -> tuple[dict[str, str], bool]:
     """ upsert 前的结构对齐，返回 (生效的列映射, 是否整表重建)。
 
-    - 表不存在：按契约列（或来数列）建表；
+    - 表不存在：按契约列（或来数列并集）建表；
     - overwrite：列集合或主键与契约漂移时整表重建（rebuilt=True，调用方
       据此把合并基座行数归零——旧表数据随 DROP 放弃）；
     - 增量模式：主键漂移拒绝（口径对齐 validate_upsert_base 的重建指引）；
       无契约时新列走并集演化，有契约时契约外列兜底抛错（gate 已先行拦截）。
+    source_columns：来数列并集（首现序），由调用方在灌入暂存时累积供给。
     """
     table_name = lake_table_name(dataset.id)
     if not sa.inspect(conn).has_table(table_name):
         return ensure_lake_table(
             db, dataset,
-            columns=schema.get("columns") or lake_columns_from_rows(rows)), False
+            columns=schema.get("columns") or source_columns), False
     _, mapping, _ = _contract(dataset)
     if mapping is None:
         raise LakeStoreError(
@@ -384,7 +385,7 @@ def _reconcile_structure(db, conn, dataset, schema: dict, mode: str,
         if pk_drift or column_drift:
             return _rebuild_lake_table(
                 db, conn, dataset, schema,
-                target_columns or lake_columns_from_rows(rows), pk_cols), True
+                target_columns or source_columns, pk_cols), True
         _assert_structure(conn, table_name, mapping, pk_cols)
         return mapping, False
     if pk_drift:
@@ -393,7 +394,7 @@ def _reconcile_structure(db, conn, dataset, schema: dict, mode: str,
             f"（{actual_pk or '无'}）与契约主键 {pk_cols} 不一致，无法安全执行"
             f"合并（{mode}）。请先用 overwrite 方式重建该资产，让全量数据经过"
             "主键校验后再切回增量模式。")
-    extra = [c for c in lake_columns_from_rows(rows) if c not in mapping]
+    extra = [c for c in source_columns if c not in mapping]
     if extra:
         markers = [c for c in extra if c in _SOFT_MARKER_COLS]
         business = [c for c in extra if c not in _SOFT_MARKER_COLS]
@@ -472,31 +473,10 @@ def decode_lake_row_pk(row_pk: str, pk_cols: list[str]) -> tuple[str, ...]:
     return tuple(str(v) for v in parsed)
 
 
-def _dedup_last_by_pk(rows: list[dict], pk_physical: list[str]) -> list[dict]:
-    """主键末现去重（对齐 merge._dedup_by_key：保留最后出现的记录）。"""
-    seen: dict[tuple, int] = {}
-    for i, row in enumerate(rows):
-        seen[tuple(row[p] for p in pk_physical)] = i
-    return [rows[i] for i in sorted(seen.values())]
-
-
 def _physical_signature(row: dict) -> str:
     """物理行的整行内容签名（无主键资产的行身份，对齐 merge._dedup_by_row）。"""
     return json.dumps(row, sort_keys=True, ensure_ascii=False,
                       separators=(",", ":"))
-
-
-def _dedup_first_by_signature(rows: list[dict]) -> list[dict]:
-    """整行内容去重（对齐 merge._dedup_by_row：保留首次出现）。"""
-    seen: set[str] = set()
-    out: list[dict] = []
-    for row in rows:
-        signature = _physical_signature(row)
-        if signature in seen:
-            continue
-        seen.add(signature)
-        out.append(row)
-    return out
 
 
 def compute_changeset_checksum(dataset_id: str, change_type: str, added_count: int,
@@ -537,17 +517,140 @@ def _chunked(values: list, size: int = _BATCH_SIZE):
         yield values[start:start + size]
 
 
-def _stage_rows(conn, table: sa.Table, rows: list[dict]) -> sa.Table:
-    """建 TEMP 暂存表并批量灌入（与调用方同一连接/事务）。"""
+# ── 流式暂存 ─────────────────────────────────────────────
+# 来数（list 或批次迭代器）统一先灌 JSON payload 暂存表（__seq 全程序号 +
+# 单元格文本），列并集收齐、结构对齐后再逐批规范化为物理暂存表：任意大小
+# 的来数批在 Python 侧只占一个批次块的内存，与来数总量脱钩。
+_INGEST_CHUNK = 2000
+
+
+class PayloadStageWriter:
+    """来数 payload 暂存表写入器（与调用方同一连接/事务，随其回滚/提交）。
+
+    单元格在写入时即按 snapshot_cell_text 文本化（与 normalize_lake_rows
+    同一规范化函数）；content 二进制列从不入暂存（与快照序列化口径一致）。
+    columns_union 按首现序累积（lake_columns_from_rows 同口径）。
+    """
+
+    def __init__(self, db):
+        self._conn = _connection(db)
+        self.stage = sa.Table(
+            f"lake_payload_{uuid.uuid4().hex[:12]}", sa.MetaData(),
+            sa.Column("__seq", sa.BigInteger, nullable=False),
+            sa.Column("payload", sa.Text, nullable=False),
+            prefixes=["TEMPORARY"],
+        )
+        self.stage.create(bind=self._conn)
+        self.total = 0
+        self.columns_union: list[str] = []
+        self._seen_cols: set[str] = set()
+
+    def write(self, rows: list[dict]) -> None:
+        buf = []
+        for row in rows:
+            self.total += 1
+            text_row = {str(k): snapshot_cell_text(v)
+                        for k, v in row.items() if str(k) != "content"}
+            for key in text_row:
+                if key not in self._seen_cols:
+                    self._seen_cols.add(key)
+                    self.columns_union.append(key)
+            buf.append({"__seq": self.total,
+                        "payload": json.dumps(text_row, ensure_ascii=False)})
+            if len(buf) >= _BATCH_SIZE:
+                self._conn.execute(self.stage.insert(), buf)
+                buf.clear()
+        if buf:
+            self._conn.execute(self.stage.insert(), buf)
+
+    def drop(self) -> None:
+        self.stage.drop(bind=self._conn)
+
+
+def _materialize_physical_stage(conn, payload_stage: sa.Table, table: sa.Table,
+                                mapping: dict[str, str], pk_cols: list[str],
+                                dataset_name: str) -> tuple[sa.Table, str]:
+    """payload 逐批读回 → 物理暂存表（附 __seq 序号列），返回 (stage, seq 列名)。
+
+    契约外列在首个违例行抛出（行号/文案与旧全量 normalize_lake_rows 一致）；
+    主键非空校验收集最小违例行号、全量灌完后抛出（与旧「先列校验、后主键
+    校验」的两段顺序一致）。
+    """
+    seq_col = "__seq"
+    suffix = 2
+    while seq_col in set(mapping.values()):
+        seq_col = f"__seq_{suffix}"
+        suffix += 1
     stage = sa.Table(
         f"lake_stage_{uuid.uuid4().hex[:12]}", sa.MetaData(),
         *[sa.Column(c.name, sa.Text, nullable=True) for c in table.columns],
+        sa.Column(seq_col, sa.BigInteger, nullable=False),
         prefixes=["TEMPORARY"],
     )
     stage.create(bind=conn)
-    for batch in _chunked(rows):
-        conn.execute(stage.insert(), batch)
-    return stage
+    pk_physical = [mapping[c] for c in pk_cols]
+    pk_physical_set = set(pk_physical)
+    first_pk_violation: tuple[int, str] | None = None
+    out: list[dict] = []
+    # 单次顺序扫描 + 分批 fetch（暂存表静态不变，无需键集翻页）
+    result = conn.execute(
+        sa.select(payload_stage).order_by(payload_stage.c.__seq)
+    ).yield_per(_INGEST_CHUNK)
+    for seq, payload in result:
+        row = json.loads(payload)
+        extra = sorted(set(row.keys()) - set(mapping))
+        if extra:
+            raise LakeStoreStructureError(
+                f"来数第 {seq} 行起出现契约外列 {extra[:20]}。湖表结构发布后不可变，"
+                "请核对流水线输出或以全量覆盖重建资产契约。")
+        physical_row: dict = {}
+        for logical, physical in mapping.items():
+            text = row.get(logical, "")
+            if physical in pk_physical_set:
+                text = text.strip()
+            physical_row[physical] = text
+        if first_pk_violation is None:
+            for logical, physical in zip(pk_cols, pk_physical):
+                if not physical_row[physical]:
+                    first_pk_violation = (seq, logical)
+                    break
+        physical_row[seq_col] = seq
+        out.append(physical_row)
+        if len(out) >= _INGEST_CHUNK:
+            conn.execute(stage.insert(), out)
+            out.clear()
+    if out:
+        conn.execute(stage.insert(), out)
+    if first_pk_violation is not None:
+        seq, logical = first_pk_violation
+        raise LakeGateError(
+            f"数据集「{dataset_name}」本次输出第 {seq} 行的主键列"
+            f"「{logical}」为空。主键值必须非空，否则该行无法获得"
+            "稳定身份。请在流水线中过滤或补全该列。")
+    return stage, seq_col
+
+
+def _stage_dedup(conn, stage: sa.Table, seq_col: str,
+                 mapping: dict[str, str], pk_cols: list[str], mode: str) -> None:
+    """暂存表内去重（DB 集合级，与旧 Python 全量去重同语义）：
+
+    - 有主键 overwrite/upsert：同主键保留 __seq 最大者（末现，对齐
+      _dedup_last_by_pk）；
+    - append_dedup：全列相同的行保留 __seq 最小者（首现，对齐
+      _dedup_first_by_signature）。
+
+    用 GROUP BY 子查询一次物化保留键（O(n)），不用相关子查询（O(n²)）。
+    """
+    if pk_cols and mode in ("overwrite", "upsert"):
+        pk_physical = [mapping[c] for c in pk_cols]
+        keep = sa.select(sa.func.max(stage.c[seq_col])).group_by(
+            *[stage.c[p] for p in pk_physical])
+        conn.execute(stage.delete().where(~stage.c[seq_col].in_(keep)))
+    if mode == "append_dedup":
+        all_physical = [p for p in mapping.values()]
+        keep = sa.select(sa.func.min(stage.c[seq_col])).group_by(
+            *[stage.c[p] for p in all_physical])
+        conn.execute(stage.delete().where(~stage.c[seq_col].in_(keep)))
 
 
 def _publish_run(db, dataset, *, rowcount: int, entries: list[dict],
@@ -625,17 +728,14 @@ def _normalize_single_row(logical: dict, mapping: dict[str, str],
     return physical_row
 
 
-def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
+def _upsert_run_once(db, dataset, rows, mode: str,
                      pk_cols: list[str],
                      soft_delete_column: str = "",
                      rows_before: int | None = None,
+                     staged_input: tuple | None = None,
                      ) -> tuple[DatasetVersion, DatasetChangeset]:
     conn = _connection(db)
     schema = dict(dataset.schema_json or {})
-    # 软删除：upsert 模式对来数就地打标/摘除（merge_rows 作用于合并后全量时
-    # 的就地语义之来数部分）；湖中未触及行的重评估在暂存后做
-    if mode == "upsert" and soft_delete_column:
-        _apply_soft_delete(rows, soft_delete_column)
 
     contract_pk = split_pk(schema.get("primary_key"))
     if list(pk_cols) != contract_pk:
@@ -644,75 +744,85 @@ def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
             f"{list(pk_cols)}。主键仲裁（lake_gate.resolve_pk）是调用方职责，"
             "存储层不接受与契约不一致的主键。")
 
-    table_name = lake_table_name(dataset.id)
-    if (not schema.get("lake_columns")
-            and not sa.inspect(conn).has_table(table_name)):
-        # 有 blob 历史而未引导物理表时，任何模式的入湖都会丢审计基座（增量
-        # 丢存量、overwrite 把删除/更新误记为新增）——拒绝执行并指引引导入口
-        last_ver = (db.query(DatasetVersion)
-                    .filter(DatasetVersion.dataset_id == dataset.id)
-                    .order_by(DatasetVersion.version_no.desc()).first())
-        if last_ver is not None and (
-                last_ver.data_size is not None or last_ver.storage_uri):
-            raise LakeStoreError(
-                f"数据集「{dataset.name}」存在迁移前的快照版本（v"
-                f"{last_ver.version_no}）但尚未引导物理湖表，直接入湖会把湖中"
-                "存量当空湖丢失。请先经 DatasetService.bootstrap_lake_base "
-                "引导遗留基座后再入湖。")
-    if (not rows
-            and not (schema.get("lake_columns") or schema.get("columns"))
-            and not sa.inspect(conn).has_table(table_name)):
-        # 空湖上的空运行：无行无契约无物理表，只发空版本与空变更集
-        return _publish_run(db, dataset, rowcount=0, entries=[],
-                            added=0, updated=0, deleted=0)
+    # 来数统一灌入 payload 暂存表：rows 为 list[dict] 或批次迭代器；
+    # staged_input = (payload_stage, 列并集, 总行数) 时来数已由调用方
+    # （pipeline_run 流式管道）完成闸门校验/软删除打标/文本化并灌好，
+    # 传入后暂存表归本函数清理。软删除打标对齐 merge_rows 作用于合并后
+    # 全量时的就地语义之来数部分；湖中未触及行的重评估在暂存后做。
+    if staged_input is not None:
+        payload_stage, columns_union, total_rows = staged_input
+    else:
+        writer = PayloadStageWriter(db)
+        payload_stage = writer.stage
+        batches = [rows] if isinstance(rows, list) else rows
+        for batch in batches:
+            if mode == "upsert" and soft_delete_column:
+                _apply_soft_delete(batch, soft_delete_column)
+            writer.write(batch)
+        columns_union = writer.columns_union
+        total_rows = writer.total
 
-    mapping, rebuilt = _reconcile_structure(
-        db, conn, dataset, schema, mode, pk_cols, rows)
-
-    # 软删除标记列进物理表：来数携带的标记列已随 reconcile 演化；湖中存量
-    # truthy 行需要标记列存在才能重评估（无打标需求时不引入标记列，对齐
-    # merge._apply_soft_delete 只在有删除行时出现标记键的行为）
-    if (mode == "upsert" and soft_delete_column
-            and soft_delete_column in mapping
-            and _SOFT_MARKER_COLS[0] not in mapping):
-        probe = lake_table_definition(table_name, mapping, pk_cols)
-        flag_p = mapping[soft_delete_column]
-        has_truthy = conn.execute(
-            sa.select(probe.c[flag_p]).where(
-                sa.func.lower(sa.func.trim(probe.c[flag_p])).in_(
-                    sorted(_SOFT_DELETE_TRUTHY))).limit(1)).first()
-        if has_truthy:
-            mapping = evolve_lake_table_columns(
-                db, dataset, list(_SOFT_MARKER_COLS))
-
-    table = lake_table_definition(table_name, mapping, pk_cols)
-    pk_physical = [mapping[c] for c in pk_cols]
-    normalized = normalize_lake_rows(rows, mapping, pk_cols)
-    if pk_physical:
-        # 主键值非空校验（口径对齐 lake_gate.validate_pk；物理 PK 约束只保证
-        # 唯一性，空串主键会让行失去稳定身份）
-        for i, row in enumerate(normalized):
-            for logical, physical in zip(pk_cols, pk_physical):
-                if not row[physical]:
-                    raise LakeGateError(
-                        f"数据集「{dataset.name}」本次输出第 {i + 1} 行的主键列"
-                        f"「{logical}」为空。主键值必须非空，否则该行无法获得"
-                        "稳定身份。请在流水线中过滤或补全该列。")
-    if pk_physical and mode in ("overwrite", "upsert"):
-        normalized = _dedup_last_by_pk(normalized, pk_physical)
-    if mode == "append_dedup":
-        normalized = _dedup_first_by_signature(normalized)
-
-    stage = _stage_rows(conn, table, normalized)
-    # 合并基座行数：overwrite 整表重建后为 0（旧表已 DROP）；调用方在写锁内
-    # 已计数的直接复用；否则此处一次性计数。结尾 rowcount 由各分支的精确
-    # 物理增删推导，不再另做一次全表 count(*)。
-    if rebuilt:
-        rows_before = 0
-    elif rows_before is None and (pk_physical or mode != "overwrite"):
-        rows_before = conn.execute(
-            sa.select(sa.func.count()).select_from(table)).scalar_one()
+    stage: sa.Table | None = None
     try:
+        table_name = lake_table_name(dataset.id)
+        if (not schema.get("lake_columns")
+                and not sa.inspect(conn).has_table(table_name)):
+            # 有 blob 历史而未引导物理表时，任何模式的入湖都会丢审计基座（增量
+            # 丢存量、overwrite 把删除/更新误记为新增）——拒绝执行并指引引导入口
+            last_ver = (db.query(DatasetVersion)
+                        .filter(DatasetVersion.dataset_id == dataset.id)
+                        .order_by(DatasetVersion.version_no.desc()).first())
+            if last_ver is not None and (
+                    last_ver.data_size is not None or last_ver.storage_uri):
+                raise LakeStoreError(
+                    f"数据集「{dataset.name}」存在迁移前的快照版本（v"
+                    f"{last_ver.version_no}）但尚未引导物理湖表，直接入湖会把湖中"
+                    "存量当空湖丢失。请先经 DatasetService.bootstrap_lake_base "
+                    "引导遗留基座后再入湖。")
+        if (not total_rows
+                and not (schema.get("lake_columns") or schema.get("columns"))
+                and not sa.inspect(conn).has_table(table_name)):
+            # 空湖上的空运行：无行无契约无物理表，只发空版本与空变更集
+            # （_publish_run 会 commit 使连接失效，暂存表须先显式清理）
+            payload_stage.drop(bind=conn)
+            payload_stage = None
+            return _publish_run(db, dataset, rowcount=0, entries=[],
+                                added=0, updated=0, deleted=0)
+
+        mapping, rebuilt = _reconcile_structure(
+            db, conn, dataset, schema, mode, pk_cols, columns_union)
+
+        # 软删除标记列进物理表：来数携带的标记列已随 reconcile 演化；湖中存量
+        # truthy 行需要标记列存在才能重评估（无打标需求时不引入标记列，对齐
+        # merge._apply_soft_delete 只在有删除行时出现标记键的行为）
+        if (mode == "upsert" and soft_delete_column
+                and soft_delete_column in mapping
+                and _SOFT_MARKER_COLS[0] not in mapping):
+            probe = lake_table_definition(table_name, mapping, pk_cols)
+            flag_p = mapping[soft_delete_column]
+            has_truthy = conn.execute(
+                sa.select(probe.c[flag_p]).where(
+                    sa.func.lower(sa.func.trim(probe.c[flag_p])).in_(
+                        sorted(_SOFT_DELETE_TRUTHY))).limit(1)).first()
+            if has_truthy:
+                mapping = evolve_lake_table_columns(
+                    db, dataset, list(_SOFT_MARKER_COLS))
+
+        table = lake_table_definition(table_name, mapping, pk_cols)
+        pk_physical = [mapping[c] for c in pk_cols]
+        # payload 逐批规范化为物理暂存表（契约外列/主键非空校验与旧全量
+        # 路径同文案同行号），再做暂存表内 SQL 去重（末现/首现语义不变）
+        stage, seq_col = _materialize_physical_stage(
+            conn, payload_stage, table, mapping, pk_cols, dataset.name)
+        _stage_dedup(conn, stage, seq_col, mapping, pk_cols, mode)
+        # 合并基座行数：overwrite 整表重建后为 0（旧表已 DROP）；调用方在写锁内
+        # 已计数的直接复用；否则此处一次性计数。结尾 rowcount 由各分支的精确
+        # 物理增删推导，不再另做一次全表 count(*)。
+        if rebuilt:
+            rows_before = 0
+        elif rows_before is None and (pk_physical or mode != "overwrite"):
+            rows_before = conn.execute(
+                sa.select(sa.func.count()).select_from(table)).scalar_one()
         added_keys: list = []
         updated_keys: list = []
         deleted_keys: list = []
@@ -791,8 +901,7 @@ def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
                     deleted_keys.append(key)
                     old_rows_by_key[key] = record
 
-            new_rows_by_key = {tuple(row[p] for p in pk_physical): row
-                               for row in normalized}
+            new_rows_by_key = {}  # 软删除重评估直接入账；来数行在下文按键回捞
 
             # 软删除湖中重评估：未被本次来数触及的行按同一词表打标/摘除标记。
             # 已正确打标的 truthy 行保持原标记与时间戳（不每次运行刷新 ts 制造
@@ -828,6 +937,20 @@ def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
                         updated_keys.append(key)
                         old_rows_by_key[key] = old_phys
                         new_rows_by_key[key] = new_phys
+
+            # 来数行内容（变更集 new_row 与回写行）：按 added+updated 键从
+            # 暂存回捞（软删除重评估的构造行不在暂存，已在上文直接入账），
+            # 不再持有全量来数字典
+            wanted = [key for key in added_keys + updated_keys
+                      if key not in new_rows_by_key]
+            for batch in _chunked(wanted):
+                for record in conn.execute(
+                        sa.select(stage).where(
+                            _key_match(stage, pk_physical, batch))).mappings():
+                    record = dict(record)
+                    record.pop(seq_col, None)
+                    new_rows_by_key[
+                        tuple(record[p] for p in pk_physical)] = record
 
             # 应用：先 DELETE（updated + deleted 涉及的主键），再 INSERT
             doomed = updated_keys + deleted_keys
@@ -922,7 +1045,13 @@ def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
                                        .select_from(s.outerjoin(t, row_match))
                                        .where(t.c[all_physical[0]].is_(None)))]
                 else:
-                    insert_rows = list(normalized)
+                    # 无主键 append/upsert：暂存内容即追加内容（无去重），
+                    # 按序号回扫（与来数顺序一致）
+                    insert_rows = [dict((k, v) for k, v in record.items()
+                                        if k != seq_col)
+                                   for record in conn.execute(
+                                       sa.select(stage)
+                                       .order_by(stage.c[seq_col])).mappings()]
                 for row in insert_rows:
                     sig = _physical_signature(row)
                     added_keys.append(sig)
@@ -952,7 +1081,10 @@ def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
                 "old_row": _logical_row(old_rows_by_key[key], mapping),
                 "new_row": None})
     finally:
-        stage.drop(bind=conn)
+        if stage is not None:
+            stage.drop(bind=conn)
+        if payload_stage is not None:
+            payload_stage.drop(bind=conn)
 
     # rowcount 由各分支的精确物理增删推导，不再全表 count(*)：
     # 有主键 = 基座 − 删除键 + 新增键（主键级精确）；无主键 overwrite =
@@ -960,7 +1092,7 @@ def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
     if pk_physical:
         rowcount = rows_before - len(deleted_keys) + len(added_keys)
     elif mode == "overwrite":
-        rowcount = len(normalized)
+        rowcount = total_rows
     else:
         rowcount = rows_before + len(insert_rows)
     return _publish_run(db, dataset, rowcount=rowcount, entries=entries,
@@ -968,9 +1100,10 @@ def _upsert_run_once(db, dataset, rows: list[dict], mode: str,
                         deleted=len(deleted_keys))
 
 
-def upsert_run(db, dataset, rows: list[dict], write_mode: str,
+def upsert_run(db, dataset, rows, write_mode: str,
                pk_cols: list[str], *, soft_delete_column: str = "",
                rows_before: int | None = None,
+               staged_input: tuple | None = None,
                ) -> tuple[DatasetVersion, DatasetChangeset]:
     """按入库方式把来数合并进物理湖表，发布新版本并记录行级变更集。
 
@@ -979,9 +1112,16 @@ def upsert_run(db, dataset, rows: list[dict], write_mode: str,
     版本号撞唯一约束时整体回滚重试（与 _create_version_locked 同策略）。
     soft_delete_column 仅对 upsert 生效：truthy 行打 __deleted__ 标记而非
     物理删除（词表与 write_modes._apply_soft_delete 一致）。
+    rows：list[dict] 或批次迭代器（Iterable[list[dict]]）——统一经 payload
+    暂存表分批灌入，Python 峰值内存与来数总量脱钩。
     rows_before：调用方在同一写锁/事务内已计数的基座行数（仅追加系与有主键
     分支使用；overwrite 重建或 None 时按需要在合并前一次性计数）。
+    staged_input：(payload_stage, 列并集, 总行数)——pipeline_run 流式管道
+    在闸门侧完成校验/软删除打标/文本化后的预灌形态；传入时 rows 忽略，
+    暂存表归本函数清理。
     """
+    if rows is None and staged_input is None:
+        raise LakeStoreError("upsert_run 需要 rows 或 staged_input 之一。")
     if not uses_lake_table(dataset):
         raise LakeStoreError(
             f"数据集 {getattr(dataset, 'id', None)} 不是成品数据集（kind='curated'），"
@@ -991,10 +1131,14 @@ def upsert_run(db, dataset, rows: list[dict], write_mode: str,
     for attempt in range(3):
         try:
             return _upsert_run_once(db, dataset, rows, mode, normalized_pk,
-                                    soft_delete_column, rows_before)
+                                    soft_delete_column, rows_before,
+                                    staged_input)
         except IntegrityError:
             db.rollback()
-            if attempt == 2:
+            # 回滚会销毁 TEMP 暂存表：非 list 形态（迭代器/预灌暂存）无法
+            # 安全重灌，直接抛出而不是重试出错误数据
+            if (attempt == 2 or staged_input is not None
+                    or not isinstance(rows, list)):
                 raise
         except Exception:
             # 与 _create_version_locked 的失败语义一致：入湖失败不残留任何

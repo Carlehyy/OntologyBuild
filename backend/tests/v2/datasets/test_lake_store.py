@@ -643,6 +643,65 @@ def test_no_pk_append_dedup_multiset_skip(db):
     assert v2.rowcount == 2
 
 
+def _as_batches(rows: list[dict], n: int):
+    return (rows[i:i + n] for i in range(0, len(rows), n))
+
+
+def _scrub_marker_ts(row: dict) -> dict:
+    return {k: ("<ts>" if k == "__deleted_at__" else v) for k, v in row.items()}
+
+
+@pytest.mark.parametrize("mode", ["overwrite", "append", "append_dedup", "upsert"])
+@pytest.mark.parametrize("pk", [None, "id"])
+def test_upsert_run_iterable_batches_match_list_path(db, mode, pk):
+    """批次迭代器形态与 list 形态同场景入湖：湖内容/变更集明细/rowcount 一致
+    （含跨批重复主键末现、批内全同首现、软删除打标与存量重评估、错误一致）。"""
+    import re
+    pk_cols = [pk] if pk else []
+    soft = "flag" if mode == "upsert" else ""
+    base = [
+        {"id": f"k{i:03d}", "v": f"旧{i % 5}",
+         "flag": "1" if i % 4 == 0 else "0"}
+        for i in range(37)]
+    incoming = (
+        [{"id": f"k{i:03d}", "v": "新", "flag": "0" if i % 2 else "是"}
+         for i in range(0, 37, 3)]
+        + [{"id": f"k{i:03d}", "v": "新2", "flag": "0"}
+           for i in range(0, 37, 3)]  # 同主键再现（末现为准）
+        + [{"id": f"n{j:02d}", "v": "x", "flag": "0"} for j in range(11)]
+    )
+
+    def _scrub_pk(row_pk: str) -> str:
+        # 无主键资产的 row_pk 是整行 JSON，内嵌打标时间戳须一并掩码
+        return re.sub(r'("__deleted_at__":")[^"]*(")', r"\1<TS>\2", row_pk)
+
+    outcomes = []
+    for payload in ([dict(r) for r in incoming],
+                    _as_batches([dict(r) for r in incoming], 5)):
+        ds = _make_dataset(db, pk=pk, columns=("id", "v", "flag"))
+        upsert_run(db, ds, [dict(r) for r in base], "overwrite", pk_cols)
+        try:
+            version, changeset = upsert_run(
+                db, ds, payload, mode, pk_cols, soft_delete_column=soft)
+        except Exception as exc:  # noqa: BLE001 — 等价性比较错误身份
+            outcomes.append(("error", type(exc).__name__,
+                             str(exc).replace(ds.name, "<ds>")))
+            continue
+        rows = sorted(
+            json.dumps(_scrub_marker_ts(r), sort_keys=True)
+            for batch in stream_rows(db, ds, batch_size=7) for r in batch)
+        entries = sorted(
+            json.dumps({"t": r.change_type, "pk": _scrub_pk(r.row_pk),
+                        "old": _scrub_marker_ts(r.old_row or {}),
+                        "new": _scrub_marker_ts(r.new_row or {})},
+                       sort_keys=True, default=str)
+            for r in _changeset_rows(db, changeset.id))
+        outcomes.append(("ok", int(version.rowcount), changeset.added_count,
+                         changeset.updated_count, changeset.deleted_count,
+                         rows, entries))
+    assert outcomes[0] == outcomes[1]
+
+
 # ── 遗留 blob 基座的懒引导 ──────────────────────────────────
 def test_upsert_without_bootstrap_on_legacy_history_is_rejected(db):
     """有 blob 历史而无物理表：直接入湖拒绝（防存量被当空湖丢失）。"""

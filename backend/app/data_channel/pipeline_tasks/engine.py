@@ -50,26 +50,29 @@ def _claim_task(db, task_id: str) -> tuple[object | None, str | None, str | None
 
 def _release_claim(db, task, token: str, *, status: str, error: str = "",
                    rows: int = 0, run_id: str | None = None,
-                   trigger_type: str | None = None) -> bool:
+                   trigger_type: str | None = None,
+                   extra_values: dict | None = None) -> bool:
     """仅当前租约持有者能落最终状态，防止过期旧执行覆盖恢复后的新执行。"""
     return _release_claim_by_id(
         db, task.id, token, status=status, error=error, rows=rows,
-        run_id=run_id, trigger_type=trigger_type,
+        run_id=run_id, trigger_type=trigger_type, extra_values=extra_values,
     )
 
 
 def _release_claim_by_id(db, task_id: str, token: str, *, status: str,
                          error: str = "", rows: int = 0,
                          run_id: str | None = None,
-                         trigger_type: str | None = None) -> bool:
-    """按稳定标量释放租约，供 ORM 对象可能失效的异常恢复路径使用。"""
+                         trigger_type: str | None = None,
+                         extra_values: dict | None = None) -> bool:
+    """按稳定标量释放租约，供 ORM 对象可能失效的异常恢复路径使用。
+
+    extra_values：随释放同一条件 UPDATE 原子落库的额外列（如增量游标水位
+    last_cursor_value）——与租约释放同 token 守卫，过期旧执行无法推进水位。
+    """
     from app.data_channel.pipeline_tasks.models import PipelineTask
 
     occurred_at = datetime.utcnow()
-    updated = db.query(PipelineTask).filter(
-        PipelineTask.id == task_id,
-        PipelineTask.execution_token == token,
-    ).update({
+    values = {
         PipelineTask.status: status,
         PipelineTask.execution_token: None,
         PipelineTask.lease_expires_at: None,
@@ -77,7 +80,13 @@ def _release_claim_by_id(db, task_id: str, token: str, *, status: str,
         PipelineTask.last_rows: rows,
         PipelineTask.last_error: error,
         PipelineTask.updated_at: occurred_at,
-    }, synchronize_session=False)
+    }
+    if extra_values:
+        values.update(extra_values)
+    updated = db.query(PipelineTask).filter(
+        PipelineTask.id == task_id,
+        PipelineTask.execution_token == token,
+    ).update(values, synchronize_session=False)
     inbox_event_id = None
     if updated and status in {"success", "failed"}:
         from app.inbox.service import enqueue_pipeline_task_result
@@ -191,8 +200,13 @@ def _recover_run_initialization_failure(
         retry_db.close()
 
 
-def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
-    """执行一条流水线调度任务。返回 {"status": "ok"|"error", ...}"""
+def execute_pipeline_task(task_id: str, trigger_type: str = "manual",
+                          full_refresh: bool = False) -> dict:
+    """执行一条流水线调度任务。返回 {"status": "ok"|"error", ...}
+
+    full_refresh：当次运行忽略增量游标水位（cursor_since=None，源端全量
+    拉取），成功后水位照常推进到当次产出最大值——漏数回填的唯一入口。
+    """
     from app.database import SessionLocal
     from app.data_channel.pipeline_tasks.models import PipelineTask
     from app.models.v2.pipeline import Pipeline, PipelineRun
@@ -231,6 +245,8 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
         # 先物化跨提交边界需要的标量。Session 默认 expire_on_commit=True，
         # 运行记录提交后继续读取 task/pipe ORM 会额外引入一次失败窗口。
         pipeline_id = task.pipeline_id
+        cursor_column = (task.cursor_column or "").strip()
+        cursor_since = "" if full_refresh else (task.last_cursor_value or "")
         write_opts = {
             "mode": task.write_mode or "overwrite",
             "primary_key": pipeline_pk,
@@ -247,10 +263,23 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
             "primary_key_source": "pipeline_contract",
             "soft_delete_column": task.soft_delete_column or "",
             "skip_empty": bool(task.skip_empty),
+            "cursor_column": cursor_column,
+            "full_refresh": bool(full_refresh),
             "schedule_type": task.schedule_type,
             "cron_expression": task.cron_expression or "",
             "interval_seconds": task.interval_seconds or 0,
         }
+        # 引擎运行参数：声明了增量游标的任务把水位注入运行记录，引擎侧
+        # （python prelude / n8n webhook payload）据此过滤源端只取新数据；
+        # 运行成功后由 runner 把当次产出的游标词法最大值写入
+        # stats["watermark_after"]，最终仅成功时回写任务行
+        run_params = None
+        if cursor_column:
+            run_params = {
+                "cursor_column": cursor_column,
+                "cursor_since": cursor_since,
+                "full_refresh": bool(full_refresh),
+            }
 
         # 预先生成 ID，使 commit 已落库但 refresh 失败时仍能精确标记该运行。
         run_id = str(uuid.uuid4())
@@ -268,6 +297,7 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
                     "triggered_by": f"task:{task.id}",
                     "trigger_type": trigger_type,
                     "config_snapshot": config_snapshot,
+                    **({"run_params": run_params} if run_params else {}),
                 },
             )
             db.add(run)
@@ -319,6 +349,15 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
         ok = bool(run and run.status == "success")
         if task:
             final_error = "" if ok else ((run.error_log if run else "") or "执行失败")
+            # 增量游标水位推进：仅运行成功且本次产出有新水位时，随租约释放
+            # 同一 token 守卫 UPDATE 原子落库（失败/空产出/被接管均不推进）
+            extra_values = None
+            if ok and run_params:
+                watermark_after = str(stats.get("watermark_after") or "").strip()
+                if watermark_after:
+                    extra_values = {
+                        PipelineTask.last_cursor_value: watermark_after,
+                    }
             released = _release_claim(
                 db, task, execution_token,
                 status="success" if ok else "failed",
@@ -326,6 +365,7 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual") -> dict:
                 rows=int(stats.get("lake_rows") or stats.get("rows_out") or 0),
                 run_id=run_id,
                 trigger_type=trigger_type,
+                extra_values=extra_values,
             )
             if not released:
                 logger.warning(

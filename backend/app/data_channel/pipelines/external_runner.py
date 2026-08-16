@@ -31,7 +31,9 @@ def run_external_pipeline(db, pl, run, write_opts: dict | None = None, *,
                           output_finalizer: Callable | None = None) -> None:
     """执行一次外部引擎流水线，负责把 run 写到终态。
 
-    collector(db, pipeline) -> (rows: list[dict], exec_meta: dict)，失败时抛异常。
+    collector(db, pipeline) -> (rows, exec_meta)，失败时抛异常。
+    rows 可以是全量 list[dict]，也可以是批次迭代器 Iterable[list[dict]]
+    （流式：行数由入湖段精确记账进 ctx.rows_in/rows_out）。
     contract_columns：引擎侧审批固化的期望列（供准入闸门做漂移检测）。
     """
     from app.services.v2.dataset_service import DatasetService
@@ -46,25 +48,31 @@ def run_external_pipeline(db, pl, run, write_opts: dict | None = None, *,
         rows, exec_meta = collector(db, pl)
 
         ctx = PipelineContext(dataset_id="", version_no=1, route="A", spec={})
-        ctx.rows_in = len(rows)
-        ctx.rows_out = len(rows)
+        ctx.rows_in = len(rows) if isinstance(rows, list) else 0
+        ctx.rows_out = ctx.rows_in
         ctx.meta[f"{engine_name}_execution"] = exec_meta
         source = {"dataset_id": None, "filename": pl.name, "route": "A", "kind": engine_name}
         svc = DatasetService(db)
         outputs = _save_curated_outputs(db, svc, pl, source, rows, ctx,
                                         multi_source=False, write_opts=write_opts,
-                                        contract_columns=contract_columns)
+                                        contract_columns=contract_columns,
+                                        run_params=(run.stats or {}).get("run_params"))
 
         curated_ids = [o["curated_dataset_id"] for o in outputs]
         dataset_version_id = next(
             (o.get("dataset_version_id") for o in outputs if o.get("dataset_version_id")), None)
         gate_warnings = [w for o in outputs for w in (o.get("gate_warnings") or [])]
+        # 增量游标：当次产出的水位词法最大值（空产出为 None，不推进水位）
+        watermark_after = next(
+            (o.get("watermark_after") for o in outputs
+             if o.get("watermark_after")), None)
         stats = {
             **(run.stats or {}),
             "engine": engine_name,
             f"{engine_name}_execution": exec_meta,
-            "rows_in": len(rows),
-            "rows_out": len(rows),
+            "rows_in": ctx.rows_in,
+            "rows_out": ctx.rows_out,
+            **({"watermark_after": watermark_after} if watermark_after else {}),
             "lake_rows": sum(o.get("lake_rows") or 0 for o in outputs),
             "write_mode": (write_opts or {}).get("mode"),
             "gate_warnings": gate_warnings or None,

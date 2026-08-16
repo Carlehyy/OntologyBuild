@@ -140,14 +140,17 @@ def dispatch_task(subject: str, payload: dict) -> None:
     _dispatch_sync(subject, payload, f"{subject}:{params}:{time.time_ns()}")
 
 
-def dispatch_pipeline_task(task_id: str, trigger_type: str) -> None:
+def dispatch_pipeline_task(task_id: str, trigger_type: str,
+                           full_refresh: bool = False) -> None:
     """同步派发入口：供 APScheduler 调度线程与 FastAPI 请求线程调用。
 
-    保持原有 subject 与 Msg-Id 格式不变，旧 durable 消费语义不受影响。
+    保持原有 subject 与 Msg-Id 格式不变，旧 durable 消费语义不受影响；
+    payload 新增 full_refresh 键为 additive（旧消费侧缺省视为 False）。
     """
     _dispatch_sync(
         PIPELINE_EXECUTE_SUBJECT,
-        {"task_id": task_id, "trigger_type": trigger_type},
+        {"task_id": task_id, "trigger_type": trigger_type,
+         "full_refresh": bool(full_refresh)},
         f"{task_id}:{trigger_type}:{time.time_ns()}",
     )
 

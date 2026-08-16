@@ -31,6 +31,18 @@ def _compute_quality_score(rows: list[dict], meta: dict) -> float:
     return round(retention * 0.4 + fill_rate * 0.6, 3)
 
 
+def _quality_from_counts(filled_cells: int, total_cells: int,
+                         row_count: int, meta: dict) -> float:
+    """_compute_quality_score 的计数形态：流式管道跨批累积供给，公式一致。"""
+    if not row_count:
+        return 0.0
+    rows_before = meta.get("rows_before", row_count) or row_count
+    rows_after = meta.get("rows_after", row_count) or row_count
+    retention = rows_after / rows_before if rows_before > 0 else 1.0
+    fill_rate = filled_cells / (total_cells or 1)
+    return round(retention * 0.4 + fill_rate * 0.6, 3)
+
+
 def _strip_content(rows: list[dict]) -> list[dict]:
     """去掉行数据里的原始文件 bytes 列——它从不入 CSV，也无法进 JSON 暂存。"""
     return [{k: v for k, v in r.items() if k != "content"} for r in rows]
@@ -227,13 +239,14 @@ def resolve_curated_target(db, pl, source: dict, multi_source: bool,
     return None, _disambiguated_curated_name(db, ds_name, pl.id, output_key)
 
 
-def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, multi_source: bool, table_name: str | None = None, write_opts: dict | None = None, contract_columns: list[str] | None = None) -> dict:
+def _save_curated_dataset(db, svc, pl, source: dict, data, ctx, multi_source: bool, table_name: str | None = None, write_opts: dict | None = None, contract_columns: list[str] | None = None, run_params: dict | None = None) -> dict:
     """入湖是物理湖表上的行级 upsert（lake_store），全程持数据集写锁。
 
     任务调度与手动运行并发落同一 curated 数据集时后到者等待；不锁则双方
     各自基于旧状态写入，先提交的增量被后提交者静默覆盖。锁键优先用已绑定
     数据集的 id（改名后名字会变、id 不变）；首建场景退回名字锁，
     get-or-create 也在锁内，同名数据集的创建竞争一并串行化。
+    data：全量 list[dict] 或批次迭代器 Iterable[list[dict]]（流式入湖）。
     """
     from app.data_channel.datasets.lock import dataset_write_lock
     from app.data_channel.pipeline_tasks.merge import normalize_write_mode
@@ -241,18 +254,6 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
     # 在任何空输出短路/目标创建之前验证，未知模式不能借 skip_empty 伪装成功。
     if write_opts is not None:
         write_opts = {**write_opts, "mode": normalize_write_mode(write_opts.get("mode"))}
-
-    # 单批来数超内存上限即拒绝执行（当前执行器是全量内存物化，超限会拖垮
-    # 进程）：让 pipeline_max_in_memory_rows 名副其实。
-    from app.config import settings
-    max_in_memory = int(getattr(settings, "pipeline_max_in_memory_rows", 0) or 0)
-    if max_in_memory > 0 and len(data) > max_in_memory:
-        from app.data_channel.datasets.lake_gate import LakeGateError
-        raise LakeGateError(
-            f"本次流水线输出 {len(data)} 行，超过平台单批内存处理上限 "
-            f"pipeline_max_in_memory_rows={max_in_memory}（环境变量 "
-            "PIPELINE_MAX_IN_MEMORY_ROWS）。为保护执行进程，本次运行已拒绝；"
-            "请在流水线中过滤/拆分来数，或联系管理员调大该配置。")
 
     bound_ds, ds_name = resolve_curated_target(db, pl, source, multi_source, table_name)
     # 已有资产与 DatasetService/人工维护共用 dataset::{id} 锁；首建尚无 id，
@@ -264,10 +265,11 @@ def _save_curated_dataset(db, svc, pl, source: dict, data: list[dict], ctx, mult
         return _save_curated_dataset_in_lock(
             db, svc, pl, source, data, ctx, multi_source, table_name,
             write_opts, contract_columns, ds_name,
-            bound_ds_id=(bound_ds.id if bound_ds is not None else None))
+            bound_ds_id=(bound_ds.id if bound_ds is not None else None),
+            run_params=run_params)
 
 
-def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], ctx, multi_source: bool, table_name: str | None, write_opts: dict | None, contract_columns: list[str] | None, ds_name: str, bound_ds_id: str | None = None) -> dict:
+def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data, ctx, multi_source: bool, table_name: str | None, write_opts: dict | None, contract_columns: list[str] | None, ds_name: str, bound_ds_id: str | None = None, run_params: dict | None = None) -> dict:
     # 复用既有 curated 数据集追加版本：同一管道反复运行不再无限增殖新数据集，
     # 下游 mapping 绑定的 curated id 保持稳定、能持续收到新版本。
     # 绑定关系按 id（resolve_curated_target），流水线改名不影响归属
@@ -307,20 +309,14 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
 
     # ── 资产湖准入闸门：行格式规范化 + 主键契约（声明仲裁/三校验）+ 列漂移检测。
     # 主键违规抛 LakeGateError → 运行失败，错误身份的数据不入湖。
+    # 流式管道：闸门按批校验（LakeGateStream），来数逐批灌入 payload 暂存表，
+    # Python 峰值内存只与一个批次块相关，与来数总量脱钩。
     from app.data_channel.datasets.lake_gate import (
-        gate_rows, persist_contract, split_pk, infer_columns_typed)
+        LakeGateStream, persist_contract, split_pk, infer_columns_typed)
     # 流水线字段契约（改名/非空/主键）仅适用于单产物运行：多源/拆分的
     # 契约粒度是「每个数据集一个」，流水线级契约对不上，跳过并在警告里说明
     contract_applicable = table_name is None and not multi_source
     column_defs = pl.column_definitions if contract_applicable else None
-    gate = gate_rows(curated_ds, data, write_opts,
-                     engine_contract_cols=contract_columns,
-                     column_definitions=column_defs)
-    if not contract_applicable and (pl.column_definitions or []):
-        gate["warnings"].append(
-            "该产物来自多源/多表拆分，流水线级字段契约未应用（契约仅适用于单产物流水线）")
-    data = gate["rows"]
-    effective_pk = gate["pk"]
 
     # 入库方式：任务触发时按 write_mode 与资产湖已有数据合并；
     # 手动运行不带 write_opts，保持原行为（本次输出即新版本 = 全量覆盖）。
@@ -331,16 +327,82 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
 
     merge_meta: dict = {}
     lake_impact: dict | None = None
-    lake_rowcount = len(data)
     mode = "overwrite"  # 手动/预览确认运行 = 全量覆盖（现行语义）
     soft_col = ""
     if write_opts is not None:
         mode = write_opts["mode"]  # 上游已 normalize_write_mode
         soft_col = str(write_opts.get("soft_delete_column") or "")
+
+    gate_stream = LakeGateStream(
+        curated_ds, write_opts, engine_contract_cols=contract_columns,
+        column_definitions=column_defs)
+    writer = lake_store.PayloadStageWriter(db)
+    row_count = 0
+    filled_cells = 0
+    total_cells = 0
+    sample_rows: list[dict] = []  # 前 50 行（output_sample 与类型推断共用）
+    # 增量游标水位：取当次产出游标列的词法最大值（湖内全 TEXT 存储口径，
+    # 经同一 snapshot_cell_text 文本化后比较）；空产出不推进
+    from app.data_channel.datasets.service import snapshot_cell_text
+    cursor_column = str((run_params or {}).get("cursor_column") or "").strip()
+    watermark_max: str | None = None
+    # 单批来数超上限即拒绝执行（流式后它是总量保险丝：累计超限即中断，
+    # 部分暂存随失败回滚清理）：让 pipeline_max_in_memory_rows 名副其实。
+    from app.config import settings
+    max_in_memory = int(getattr(settings, "pipeline_max_in_memory_rows", 0) or 0)
+    try:
+        batches = [data] if isinstance(data, list) else data
+        for batch in batches:
+            gated = gate_stream.accept_batch(batch)
+            # 软删除来数打标前置于契约固化（与现行链就地打标后再记账一致）；
+            # staged_input 形态下入湖侧不再重复应用
+            if mode == "upsert" and soft_col:
+                _apply_soft_delete(gated, soft_col)
+            for r in gated:
+                total_cells += len(r)
+                filled_cells += sum(1 for v in r.values()
+                                    if v is not None and str(v).strip() != "")
+            if len(sample_rows) < 50:
+                sample_rows.extend(gated[:50 - len(sample_rows)])
+            if cursor_column:
+                for r in gated:
+                    text = snapshot_cell_text(r.get(cursor_column))
+                    if text and (watermark_max is None or text > watermark_max):
+                        watermark_max = text
+            row_count += len(gated)
+            if max_in_memory > 0 and row_count > max_in_memory:
+                from app.data_channel.datasets.lake_gate import LakeGateError
+                raise LakeGateError(
+                    f"本次流水线输出超过平台单批内存处理上限 "
+                    f"pipeline_max_in_memory_rows={max_in_memory}（环境变量 "
+                    f"PIPELINE_MAX_IN_MEMORY_ROWS，已读取 {row_count} 行）。"
+                    "为保护执行进程，本次运行已拒绝；"
+                    "请在流水线中过滤/拆分来数，或联系管理员调大该配置。")
+            writer.write(gated)
+        gate_result = gate_stream.finish()
+    except Exception:
+        # 拒绝/失败不留锁内未提交状态（含首建的数据集行），对齐旧「锁前
+        # 拒绝」的零副作用语义；暂存表随回滚一并清理
+        writer.drop()
+        db.rollback()
+        raise
+    effective_pk = gate_result["pk"]
+    gate_warnings = list(gate_result["warnings"])
+    if not contract_applicable and (pl.column_definitions or []):
+        gate_warnings.append(
+            "该产物来自多源/多表拆分，流水线级字段契约未应用（契约仅适用于单产物流水线）")
     pk_cols = split_pk(effective_pk)
+    ctx.rows_in = row_count
+    ctx.rows_out = row_count
+    # 类型推断/输出列：软删除打标后的前 50 行样本 + 全量首现列并集
+    # （与旧 infer_columns_typed(全量行) 同口径：列序并集、类型只看前 50 行）
+    batch_typed = infer_columns_typed(
+        sample_rows + [{c: "" for c in writer.columns_union}]) if row_count else []
+
     if write_opts:
-        if not data and write_opts.get("skip_empty", True):
+        if not row_count and write_opts.get("skip_empty", True):
             # 空输出保护：本次流水线输出 0 行，跳过入库，避免误清空资产
+            writer.drop()
             return {
                 "source_dataset_id": source["dataset_id"],
                 "source_file": source["filename"],
@@ -360,18 +422,12 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
     # 「与上一版本内容的差异」，同样需要基座）
     svc.bootstrap_lake_base(curated_ds)
     lake_rows_before = lake_store.count_rows(db, curated_ds)
-    # 软删除来数打标前置于契约固化：output_sample / last_output_columns 与
-    # 现行链（merge_engine 就地打标后再记账）一致；upsert_run 内会按同一
-    # 函数再应用一次（幂等，仅刷新标记时间戳）
-    if mode == "upsert" and soft_col:
-        _apply_soft_delete(data, soft_col)
 
     schema_to_publish: dict | None = None
-    if data or (mode != "overwrite" and lake_rows_before):
+    if row_count or (mode != "overwrite" and lake_rows_before):
         # 契约字段与当前版本内容一起发布；任何错误都必须让整次入湖失败。
         # 湖中列预算与 lake_store 内部演化同一并集规则：overwrite = 本批输出
         # 列（资产重建）；增量 = 历史并集（既有列保留既有类型，新列按本批推断）
-        batch_typed = infer_columns_typed(data) if data else []
         if mode == "overwrite":
             lake_columns_typed = batch_typed
         else:
@@ -390,15 +446,20 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
                 for name in projected]
         schema_to_publish = persist_contract(
             curated_ds, pk=effective_pk,
-            pk_source=gate["pk_source"],
+            pk_source=gate_result["pk_source"],
             lake_columns_typed=lake_columns_typed,
-            output_rows=data,
+            output_columns=writer.columns_union,
             column_definitions=column_defs,
             allow_redeclare=(write_opts or {}).get("mode") in (None, "", "overwrite"))
+        # 质量分：非空来数按跨批累积的填充率精确计算（与旧全量口径一致）；
         # 空增量时质量分以湖中现状为样本（首页近似，避免物化全湖）
-        sample = data or lake_store.page_rows(db, curated_ds, 0, 1000)
-        schema_to_publish["quality_score"] = _compute_quality_score(
-            sample, ctx.meta)
+        if row_count:
+            schema_to_publish["quality_score"] = _quality_from_counts(
+                filled_cells, total_cells, row_count, ctx.meta)
+        else:
+            sample = lake_store.page_rows(db, curated_ds, 0, 1000)
+            schema_to_publish["quality_score"] = _compute_quality_score(
+                sample, ctx.meta)
         schema_to_publish["route"] = source["route"]
         schema_to_publish["source_dataset_id"] = source["dataset_id"]
         schema_to_publish["pipeline_id"] = pl.id
@@ -413,8 +474,9 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
         db.flush()
 
     ver, changeset = lake_store.upsert_run(
-        db, curated_ds, data, mode, pk_cols, soft_delete_column=soft_col,
-        rows_before=lake_rows_before)
+        db, curated_ds, None, mode, pk_cols, soft_delete_column=soft_col,
+        rows_before=lake_rows_before,
+        staged_input=(writer.stage, writer.columns_union, row_count))
     # 版本保留窗口（元数据 + 变更集；回放链完整性规则见 _prune_versions）：
     # 与 blob 路径的 _create_version_locked 尾部一致，机会式清理
     svc._prune_versions_best_effort(curated_ds.id)
@@ -423,14 +485,14 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
         merge_meta = {"mode": mode,
                       # legacy 口径：overwrite 的合并基座固定为空，rows_before 恒 0
                       "rows_before": (0 if mode == "overwrite" else lake_rows_before),
-                      "rows_new": len(data), "rows_after": lake_rowcount}
+                      "rows_new": row_count, "rows_after": lake_rowcount}
         lake_impact = _lake_impact_from_changeset(
             db, changeset, pk_cols, lake_rows_before, lake_rowcount)
 
     # 审计：本次流水线输出样本（入库前的产物），供执行记录追溯「流水线的输出是什么」
     from app.data_channel.pipeline_tasks.merge import _slim_row
-    output_columns = [c["name"] for c in infer_columns_typed(data)] if data else []
-    output_sample = [_slim_row(r) for r in data[:50]]
+    output_columns = [c["name"] for c in batch_typed]
+    output_sample = [_slim_row(r) for r in sample_rows]
 
     return {
         "source_dataset_id": source["dataset_id"],
@@ -442,30 +504,31 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data: list[dict], c
         "dataset_version_id": ver.id,
         "version_no": ver.version_no,
         "rows_in": ctx.rows_in,
-        "rows_out": len(data),
+        "rows_out": row_count,
         "lake_rows": lake_rowcount,
         "output_columns": output_columns,
         "output_sample": output_sample,
         "lake_impact": lake_impact,
         "merge": merge_meta or None,
         "primary_key": effective_pk or None,
-        "pk_source": gate["pk_source"] or None,
-        "schema_drift": gate["drift"],
-        "gate_warnings": gate["warnings"] or None,
+        "pk_source": gate_result["pk_source"] or None,
+        "schema_drift": gate_result["drift"],
+        "gate_warnings": gate_warnings or None,
+        "watermark_after": watermark_max,
         "meta": _slim_ctx_meta(ctx.meta),
     }
 
 
-def _save_curated_outputs(db, svc, pl, source: dict, data: list[dict], ctx, multi_source: bool, write_opts: dict | None = None, contract_columns: list[str] | None = None) -> list[dict]:
+def _save_curated_outputs(db, svc, pl, source: dict, data, ctx, multi_source: bool, write_opts: dict | None = None, contract_columns: list[str] | None = None, run_params: dict | None = None) -> list[dict]:
     split_tables = ctx.meta.get("split_tables")
     if isinstance(split_tables, dict) and split_tables:
         outputs = []
         for table_name, rows in split_tables.items():
             outputs.append(_save_curated_dataset(
-                db, svc, pl, source, rows or [], ctx, multi_source=True, table_name=str(table_name), write_opts=write_opts, contract_columns=contract_columns
+                db, svc, pl, source, rows or [], ctx, multi_source=True, table_name=str(table_name), write_opts=write_opts, contract_columns=contract_columns, run_params=run_params
             ))
         return outputs
-    return [_save_curated_dataset(db, svc, pl, source, data, ctx, multi_source, write_opts=write_opts, contract_columns=contract_columns)]
+    return [_save_curated_dataset(db, svc, pl, source, data, ctx, multi_source, write_opts=write_opts, contract_columns=contract_columns, run_params=run_params)]
 
 
 def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = None):

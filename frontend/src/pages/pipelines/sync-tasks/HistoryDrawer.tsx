@@ -329,6 +329,10 @@ function RunAuditView({ audit, run }: { audit: RunAudit; run: PipelineTaskRun })
         <KV label="触发方式" value={TRIGGER_LABEL[audit.trigger_type] || audit.trigger_type} />
         <KV label="流水线输入" value={`${audit.rows_in} 行`} />
         <KV label="流水线产物" value={`${audit.rows_out} 行`} />
+        {audit.run_params?.cursor_column && (
+          <KV label="增量水位" mono
+            value={`${audit.run_params.full_refresh ? '（全量回填）' : (audit.run_params.cursor_since || '（首次全量）')} → ${audit.watermark_after || '未推进'}`} />
+        )}
       </Section>
 
       {/* 调用的流水线 */}
@@ -347,6 +351,7 @@ function RunAuditView({ audit, run }: { audit: RunAudit; run: PipelineTaskRun })
           <KV label="入库方式" value={wmLabel(cfg.write_mode)} />
           {cfg.primary_key ? <KV label="主键" value={cfg.primary_key} mono /> : null}
           {cfg.soft_delete_column ? <KV label="软删除列" value={cfg.soft_delete_column} mono /> : null}
+          {cfg.cursor_column ? <KV label="增量游标" value={cfg.cursor_column + (cfg.full_refresh ? '（当次全量回填）' : '')} mono /> : null}
           <KV label="空输出保护" value={cfg.skip_empty ? '开启' : '关闭'} />
           <KV label="调度方式" value={
             cfg.schedule_type === 'MANUAL' ? '手动触发'

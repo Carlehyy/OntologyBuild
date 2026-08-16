@@ -336,7 +336,8 @@ def test_trigger_task_async_dispatches(monkeypatch, db):
 
     monkeypatch.setattr(
         "app.data_channel.pipeline_tasks.dispatch.dispatch_pipeline_task",
-        lambda task_id, trigger_type: dispatched.append((task_id, trigger_type)),
+        lambda task_id, trigger_type, **_kwargs: dispatched.append(
+            (task_id, trigger_type)),
     )
     monkeypatch.setattr(
         "app.data_channel.pipeline_tasks.engine.execute_pipeline_task",
@@ -352,7 +353,7 @@ def test_trigger_task_async_dispatches(monkeypatch, db):
 def test_trigger_task_async_dispatch_failure_returns_503(monkeypatch, db):
     task = _idle_task(db)
 
-    def failing_dispatch(_task_id, _trigger_type):
+    def failing_dispatch(_task_id, _trigger_type, **_kwargs):
         raise RuntimeError("未配置 NATS_URL")
 
     monkeypatch.setattr(
@@ -371,8 +372,8 @@ def test_trigger_task_sync_still_executes_inline(monkeypatch, db):
     task = _idle_task(db)
     executed = []
 
-    def fake_execute(task_id, trigger_type):
-        executed.append((task_id, trigger_type))
+    def fake_execute(task_id, trigger_type, full_refresh=False):
+        executed.append((task_id, trigger_type, full_refresh))
         return {"status": "ok", "task_id": task_id}
 
     def forbidden_dispatch(*_args, **_kwargs):  # pragma: no cover - 防御断言
@@ -390,7 +391,7 @@ def test_trigger_task_sync_still_executes_inline(monkeypatch, db):
     result = trigger_task(task.id, BackgroundTasks(), True, db)
 
     assert result["status"] == "ok"
-    assert executed == [(task.id, "manual")]
+    assert executed == [(task.id, "manual", False)]
 
 
 def test_scheduler_start_registers_reconcile_job(monkeypatch):

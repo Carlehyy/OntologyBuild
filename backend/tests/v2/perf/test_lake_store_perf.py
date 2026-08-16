@@ -61,6 +61,11 @@ def _measure(fn):
     return result, wall, peak
 
 
+def _iter_batches(rows: list[dict], n: int):
+    """把全量行切成 n 行的批次迭代器（L2 流式入湖形态）。"""
+    return (rows[i:i + n] for i in range(0, len(rows), n))
+
+
 def _record(scenario: str, wall: float, peak: int, note: str = "") -> dict:
     rec = {
         "scenario": scenario,
@@ -181,6 +186,19 @@ def test_benchmark_lake_store(lake_db):
     assert len(rows) == BASE_ROWS
     _record("rows_at_version_replay_one_step", wall, peak,
             note=f"回放到 v{target}：全表流式 + 撤销 1 个 overwrite 变更集")
+
+    # ── 同一 overwrite 以批次迭代器供给（L2 流式形态；置于回放基准
+    #    之后，避免多读一个变更集干扰回放口径）────────────────────
+    stream_rows_in = [_row(i, tag="s") for i in range(BASE_ROWS)]
+    (v_stream, cs_stream), wall, peak = _measure(
+        lambda: lake_store.upsert_run(
+            session, ds, _iter_batches(stream_rows_in, 5000),
+            "overwrite", ["id"]))
+    assert v_stream.rowcount == BASE_ROWS
+    assert cs_stream.updated_count == BASE_ROWS  # 全量取代（tag w→s）
+    _record(f"overwrite_{BASE_ROWS}_stream_batches_5000", wall, peak,
+            note="L2 流式：同一全量替换以 5000/批迭代器供给；"
+            "来数侧峰值应与分块大小而非总量相关")
 
     _write_report()
 

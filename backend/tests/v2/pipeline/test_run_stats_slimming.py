@@ -90,7 +90,7 @@ def test_pipeline_run_task_stats_exclude_dead_fields(db, monkeypatch):
     monkeypatch.setattr("app.database.SessionLocal", runtime_session)
     monkeypatch.setattr(
         "app.data_channel.pipelines.python_engine.runner.execute_script",
-        lambda script, *, timeout: ScriptExecution(
+        lambda script, *, timeout, params=None: ScriptExecution(
             rows=[{"order_id": "A-1", "amount": "10"}],
             stdout="",
             error=None,

@@ -320,6 +320,8 @@ def run_audit(
         "write_mode": stats.get("write_mode"),
         "lake_impact": stats.get("lake_impact"),
         "config_snapshot": stats.get("config_snapshot"),
+        "run_params": stats.get("run_params"),
+        "watermark_after": stats.get("watermark_after"),
         "pipeline": {
             "id": run.pipeline_id,
             "name": (

@@ -198,7 +198,7 @@ def test_execute_returns_script_error_payload(db, monkeypatch):
     monkeypatch.setattr(
         python_service,
         "execute_script",
-        lambda script, *, timeout, cancel_event=None: _execution(
+        lambda script, *, timeout, cancel_event=None, params=None: _execution(
             rows=[],
             error="脚本执行失败（NameError）：name 'result' is not defined",
             traceback="Traceback ...",
@@ -218,7 +218,7 @@ def test_execute_success_reports_rows_columns_and_format(db, monkeypatch):
     monkeypatch.setattr(
         python_service,
         "execute_script",
-        lambda script, *, timeout, cancel_event=None: _execution(),
+        lambda script, *, timeout, cancel_event=None, params=None: _execution(),
     )
     result = pipeline_router.execute_pipeline_script(
         pipeline.id, ScriptBody(script=SCRIPT), db)
@@ -308,7 +308,7 @@ def test_execute_flags_lake_gate_format_violation(db, monkeypatch):
     monkeypatch.setattr(
         python_service,
         "execute_script",
-        lambda script, *, timeout, cancel_event=None: _execution(rows=[{"blob": b"\x00\x01"}]),
+        lambda script, *, timeout, cancel_event=None, params=None: _execution(rows=[{"blob": b"\x00\x01"}]),
     )
     result = pipeline_router.execute_pipeline_script(
         pipeline.id, ScriptBody(script=SCRIPT), db)
@@ -342,7 +342,7 @@ def test_save_rejects_published_pipeline(db, monkeypatch):
     monkeypatch.setattr(
         python_service,
         "execute_script",
-        lambda script, *, timeout, cancel_event=None: called.append(script) or _execution(),
+        lambda script, *, timeout, cancel_event=None, params=None: called.append(script) or _execution(),
     )
     with pytest.raises(HTTPException) as exc_info:
         pipeline_router.save_pipeline_script(
@@ -356,7 +356,7 @@ def test_save_reexecutes_and_rejects_failed_or_invalid_output(db, monkeypatch):
     monkeypatch.setattr(
         python_service,
         "execute_script",
-        lambda script, *, timeout, cancel_event=None: _execution(rows=[], error="脚本执行失败（ValueError）：boom"),
+        lambda script, *, timeout, cancel_event=None, params=None: _execution(rows=[], error="脚本执行失败（ValueError）：boom"),
     )
     with pytest.raises(HTTPException, match="保存前校验执行失败"):
         pipeline_router.save_pipeline_script(
@@ -365,7 +365,7 @@ def test_save_reexecutes_and_rejects_failed_or_invalid_output(db, monkeypatch):
     monkeypatch.setattr(
         python_service,
         "execute_script",
-        lambda script, *, timeout, cancel_event=None: _execution(rows=[{"blob": b"\x00"}]),
+        lambda script, *, timeout, cancel_event=None, params=None: _execution(rows=[{"blob": b"\x00"}]),
     )
     with pytest.raises(HTTPException, match="保存前格式校验未通过"):
         pipeline_router.save_pipeline_script(
@@ -410,7 +410,7 @@ def test_dry_run_python_stages_single_output(db, monkeypatch):
     monkeypatch.setattr(
         python_client,
         "execute_script",
-        lambda script, *, timeout, cancel_event=None: _execution(),
+        lambda script, *, timeout, cancel_event=None, params=None: _execution(),
     )
 
     result = pipeline_router.dry_run_pipeline(pipeline.id, db, 100)
@@ -439,7 +439,7 @@ def test_dry_run_python_execution_failure_fails(db, monkeypatch):
     monkeypatch.setattr(
         python_client,
         "execute_script",
-        lambda script, *, timeout, cancel_event=None: _execution(rows=[], error="脚本执行失败（RuntimeError）：x"),
+        lambda script, *, timeout, cancel_event=None, params=None: _execution(rows=[], error="脚本执行失败（RuntimeError）：x"),
     )
     with pytest.raises(HTTPException, match="试运行失败"):
         pipeline_router.dry_run_pipeline(pipeline.id, db, 100)
@@ -595,7 +595,7 @@ def test_save_records_history_and_lists_newest_first(db, monkeypatch):
     monkeypatch.setattr(
         python_service,
         "execute_script",
-        lambda script, *, timeout, cancel_event=None: _execution(),
+        lambda script, *, timeout, cancel_event=None, params=None: _execution(),
     )
     pipeline_router.save_pipeline_script(
         pipeline.id, ScriptBody(script="result = [{'id': 'A-1'}]"), db)
@@ -617,7 +617,7 @@ def test_failed_or_rejected_save_records_no_history(db, monkeypatch):
     monkeypatch.setattr(
         python_service,
         "execute_script",
-        lambda script, *, timeout, cancel_event=None: _execution(rows=[], error="脚本执行失败（ValueError）：x"),
+        lambda script, *, timeout, cancel_event=None, params=None: _execution(rows=[], error="脚本执行失败（ValueError）：x"),
     )
     with pytest.raises(HTTPException):
         pipeline_router.save_pipeline_script(
@@ -627,7 +627,7 @@ def test_failed_or_rejected_save_records_no_history(db, monkeypatch):
     monkeypatch.setattr(
         python_service,
         "execute_script",
-        lambda script, *, timeout, cancel_event=None: _execution(),
+        lambda script, *, timeout, cancel_event=None, params=None: _execution(),
     )
     with pytest.raises(HTTPException):
         pipeline_router.save_pipeline_script(
@@ -643,7 +643,7 @@ def test_script_history_pruned_beyond_keep_limit(db, monkeypatch):
     monkeypatch.setattr(
         python_service,
         "execute_script",
-        lambda script, *, timeout, cancel_event=None: _execution(),
+        lambda script, *, timeout, cancel_event=None, params=None: _execution(),
     )
     for index in range(3):
         pipeline_router.save_pipeline_script(
@@ -673,7 +673,7 @@ def test_run_sync_dispatches_python_engine_into_lake(db, monkeypatch):
     monkeypatch.setattr("app.database.SessionLocal", runtime_sessions)
     monkeypatch.setattr(
         "app.data_channel.pipelines.python_engine.runner.execute_script",
-        lambda script, *, timeout, cancel_event=None: _execution(),
+        lambda script, *, timeout, cancel_event=None, params=None: _execution(),
     )
 
     result = pipeline_router.run_pipeline_sync(pipeline.id, db)

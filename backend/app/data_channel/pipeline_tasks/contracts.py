@@ -31,6 +31,7 @@ class PipelineTaskCreate(BaseModel):
     # 最终始终从流水线契约派生。
     primary_key: Optional[str] = ""
     soft_delete_column: Optional[str] = ""
+    cursor_column: Optional[str] = ""
     skip_empty: bool = True
     schedule_type: Literal["MANUAL", "CRON", "INTERVAL"] = "MANUAL"
     cron_expression: Optional[str] = ""
@@ -59,6 +60,7 @@ class PipelineTaskUpdate(BaseModel):
     ] = None
     primary_key: Optional[str] = None
     soft_delete_column: Optional[str] = None
+    cursor_column: Optional[str] = None
     skip_empty: Optional[bool] = None
     schedule_type: Optional[
         Literal["MANUAL", "CRON", "INTERVAL"]

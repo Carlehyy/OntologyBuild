@@ -17,6 +17,10 @@ export interface PipelineTask {
   primary_key: string
   soft_delete_column: string
   skip_empty: boolean
+  /** 源端增量游标列（空 = 每次全量） */
+  cursor_column?: string
+  /** 上次成功运行推进到的水位（词法序） */
+  last_cursor_value?: string
   schedule_type: PipelineTaskScheduleType
   cron_expression: string
   interval_seconds: number
@@ -48,6 +52,8 @@ export interface ConfigSnapshot {
   write_mode?: string
   primary_key?: string
   soft_delete_column?: string
+  cursor_column?: string
+  full_refresh?: boolean
   skip_empty?: boolean
   schedule_type?: string
   cron_expression?: string
@@ -151,6 +157,10 @@ export interface RunAudit {
   write_mode: string | null
   lake_impact: LakeImpact | null
   config_snapshot: ConfigSnapshot | null
+  /** 增量游标运行参数（声明游标的任务才有） */
+  run_params?: { cursor_column?: string; cursor_since?: string; full_refresh?: boolean } | null
+  /** 本次运行推进到的水位（空产出/失败为 null） */
+  watermark_after?: string | null
   pipeline: { id: string; name: string; version: number | null; status: string; domain: string | null }
   outputs: RunAuditOutput[]
   error_message: string
@@ -246,6 +256,7 @@ export interface PipelineTaskPayload {
   pipeline_id: string
   write_mode: WriteMode
   soft_delete_column?: string
+  cursor_column?: string
   skip_empty?: boolean
   schedule_type: PipelineTaskScheduleType
   cron_expression?: string
@@ -281,8 +292,8 @@ export const pipelineTasksApi = {
   toggle: (id: string, enabled: boolean): Promise<PipelineTask> =>
     apiClientV2.post(`/pipeline-tasks/${id}/toggle`, null, { params: { enabled } }),
 
-  trigger: (id: string, sync = false): Promise<Record<string, unknown>> =>
-    apiClientV2.post(`/pipeline-tasks/${id}/trigger`, null, { params: { sync } }),
+  trigger: (id: string, sync = false, fullRefresh = false): Promise<Record<string, unknown>> =>
+    apiClientV2.post(`/pipeline-tasks/${id}/trigger`, null, { params: { sync, full_refresh: fullRefresh } }),
 
   histories: (id: string, params: PipelineTaskHistoryParams = {}): Promise<PipelineTaskHistoryPage> =>
     apiClientV2.get(`/pipeline-tasks/${id}/histories`, {

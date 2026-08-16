@@ -6,7 +6,7 @@ import {
   Database, Clock, CheckCircle2, XCircle, Loader2, AlertCircle,
   Repeat, Timer, GitBranch, X, Search, ChevronLeft, ShieldCheck,
   RotateCw, Activity, Waves, ExternalLink, Workflow, ListChecks,
-  Boxes, Network, ArrowRight,
+  Boxes, Network, ArrowRight, DatabaseBackup,
 } from 'lucide-react'
 import { pipelineTasksApi, WRITE_MODE_META, type PipelineFilterOption, type PipelineTask, type PipelineTaskRecentRun, type PipelineTaskStats, type WriteMode, type LakeImpact } from '@/api/v2/pipeline-tasks'
 import TaskFormModal from './TaskFormModal'
@@ -311,6 +311,21 @@ export default function SyncTasksTab() {
       setTimeout(load, 1200)
     } catch (err: any) {
       setActionError(err?.detail || err?.message || '触发失败')
+    } finally {
+      setTriggeringIds(prev => { const n = new Set(prev); n.delete(task.id); return n })
+    }
+  }
+
+  // 全量回填：当次运行忽略增量游标水位全量拉取，成功后水位推进到最新
+  const handleFullRefresh = async (task: PipelineTask) => {
+    if (task.status === 'running') return
+    setTriggeringIds(prev => new Set(prev).add(task.id))
+    setActionError('')
+    try {
+      await pipelineTasksApi.trigger(task.id, false, true)
+      setTimeout(load, 1200)
+    } catch (err: any) {
+      setActionError(err?.detail || err?.message || '全量回填触发失败')
     } finally {
       setTriggeringIds(prev => { const n = new Set(prev); n.delete(task.id); return n })
     }
@@ -661,6 +676,11 @@ export default function SyncTasksTab() {
                                   <span data-write-mode={t.write_mode} className={`inline-flex rounded-md border px-2 py-1 text-[11px] font-medium ${WRITE_MODE_TONE[t.write_mode]}`} title={wm?.desc}>
                                     {wm?.label || t.write_mode}
                                   </span>
+                                  {t.cursor_column && (
+                                    <span data-testid="incremental-badge" className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] text-sky-700" title={`增量游标列：${t.cursor_column}；当前水位：${t.last_cursor_value || '（未建立，下次全量）'}`}>
+                                      <Waves size={10} />增量
+                                    </span>
+                                  )}
                                   <span className={`inline-flex items-center gap-1 text-[10px] ${t.skip_empty ? 'text-teal-600' : 'text-slate-400'}`}>
                                     <ShieldCheck size={10} />空输出保护：{t.skip_empty ? '开启' : '关闭'}
                                   </span>
@@ -679,6 +699,14 @@ export default function SyncTasksTab() {
                                     onClick={() => handleTrigger(t)} accent="teal">
                                     <RotateCw size={14} className={isTriggering ? 'animate-spin' : ''} />
                                   </IconBtn2>
+                                  {t.cursor_column && (
+                                    <IconBtn2 title="全量回填：忽略当前水位全量拉取一次，成功后水位推进到最新"
+                                      testId="full-refresh-btn"
+                                      disabled={t.status === 'running' || isTriggering || pipelineGone || !!pipelineUnpub || pipelineDisabled}
+                                      onClick={() => handleFullRefresh(t)} accent="sky">
+                                      <DatabaseBackup size={14} />
+                                    </IconBtn2>
+                                  )}
                                   <IconBtn2 title="执行记录" onClick={() => { setHistoryTask(t); setHistoryRunId(null) }}>
                                     <History size={14} />
                                   </IconBtn2>
@@ -893,13 +921,14 @@ function LegendRow({ color, label, value }: { color: string; label: string; valu
   )
 }
 
-function IconBtn2({ children, onClick, title, disabled, danger, accent = 'slate' }: {
+function IconBtn2({ children, onClick, title, disabled, danger, accent = 'slate', testId }: {
   children: ReactNode; onClick?: () => void; title?: string; disabled?: boolean
-  danger?: boolean; accent?: 'slate' | 'teal' | 'rose'
+  danger?: boolean; accent?: 'slate' | 'teal' | 'rose' | 'sky'; testId?: string
 }) {
   const hover = danger || accent === 'rose'
     ? 'hover:bg-rose-50 hover:text-rose-600'
     : accent === 'teal' ? 'hover:bg-teal-50 hover:text-teal-700'
+    : accent === 'sky' ? 'hover:bg-sky-50 hover:text-sky-700'
     : 'hover:bg-slate-100 hover:text-slate-700'
   return (
     <button
@@ -907,6 +936,7 @@ function IconBtn2({ children, onClick, title, disabled, danger, accent = 'slate'
       onClick={onClick}
       disabled={disabled}
       title={title}
+      data-testid={testId}
       className={`grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition ${hover} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 disabled:cursor-not-allowed disabled:opacity-35`}
     >
       {children}

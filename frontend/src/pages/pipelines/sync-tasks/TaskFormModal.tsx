@@ -41,6 +41,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
     pipeline_id: initialTask.pipeline_id,
     write_mode: initialTask.write_mode,
     soft_delete_column: initialTask.soft_delete_column,
+    cursor_column: initialTask.cursor_column ?? '',
     skip_empty: initialTask.skip_empty,
     schedule_type: initialTask.schedule_type,
     cron_expression: initialTask.cron_expression,
@@ -52,6 +53,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
     pipeline_id: initialPipelineId || '',
     write_mode: 'overwrite',
     soft_delete_column: '',
+    cursor_column: '',
     skip_empty: true,
     schedule_type: 'MANUAL',
     cron_expression: '',
@@ -164,9 +166,12 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
     const guard = form.skip_empty
       ? '若某次运行产出 0 行，将自动跳过入库、保护资产不被误清空。'
       : '未开启空输出保护：即使产出 0 行也会执行入库（可能清空资产），请谨慎。'
+    const cursor = form.cursor_column
+      ? `源端按游标列「${form.cursor_column}」每次只拉取上次水位之后的新数据（漏数可手动全量回填）。`
+      : ''
     const action = isEdit ? '保存后' : '创建后'
     const enable = form.enabled ? `${action}任务立即启用并纳入调度。` : `${action}任务处于停用状态，需手动启用后才会调度。`
-    return `任务将${sched}，运行流水线${pName}；每次把最终产物以【${modeLabel}】方式写入 ${targets}（${modeDetail}）。${guard}${enable}`
+    return `任务将${sched}，运行流水线${pName}；每次把最终产物以【${modeLabel}】方式写入 ${targets}（${modeDetail}）。${cursor}${guard}${enable}`
   }
 
   const show = (s: number) => step === s
@@ -357,6 +362,30 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                     )}
                   </Field>
                 )}
+
+                <Field label="增量游标列（可选）" hint="声明后每次运行只拉取游标之后的新数据（词法可比较列：ISO8601 时间戳/自增 ID）；平台在运行成功时自动推进水位">
+                  {contractColumns.length > 0 ? (
+                    <select data-testid="cursor-column-select" value={form.cursor_column ?? ''} onChange={e => update('cursor_column', e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:border-emerald-500">
+                      <option value="">— 每次全量 —</option>
+                      {contractColumns.map(c => <option key={c.name} value={c.name}>{c.field_name}（{c.name}）</option>)}
+                    </select>
+                  ) : (
+                    <input type="text" data-testid="cursor-column-input" value={form.cursor_column ?? ''} onChange={e => update('cursor_column', e.target.value)}
+                      placeholder="例如：updated_at"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:border-emerald-500" />
+                  )}
+                </Field>
+                {form.cursor_column && form.write_mode === 'overwrite' && (
+                  <div className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-2.5 leading-relaxed">
+                    注意：增量游标 + 全量覆盖意味着资产湖每次只保留当次拉取窗口的数据（滚动窗口语义）。如需累积历史，请改用「主键合并」或「去重追加」。
+                  </div>
+                )}
+                {form.cursor_column && (
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    漏数时可在任务列表使用「全量回填」：当次运行忽略水位全量拉取，成功后水位推进到最新。
+                  </p>
+                )}
               </div>
 
               <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
@@ -414,6 +443,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 <SummaryRow label="入库方式" value={WRITE_MODE_META[form.write_mode].label} />
                 <SummaryRow label="主键（流水线契约）" value={contractPk || '未声明（无主键模式）'} mono />
                 {form.write_mode === 'upsert' && form.soft_delete_column && <SummaryRow label="软删除列" value={form.soft_delete_column} mono />}
+                <SummaryRow label="增量游标" value={form.cursor_column ? `${form.cursor_column}（增量拉取）` : '未声明（每次全量）'} mono={!!form.cursor_column} />
                 <SummaryRow label="空输出保护" value={form.skip_empty ? '开启' : '关闭'} />
                 <SummaryRow label="调度" value={
                   form.schedule_type === 'MANUAL' ? '手动触发'
