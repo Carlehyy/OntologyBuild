@@ -469,6 +469,12 @@ def test_publish_creates_online_service_and_marks_project(
     assert detail["service_status"] == "online"
     assert detail["version_count"] == 1
 
+    # 列表接口同样携带 service_status（回归：曾因 schema 缺字段被静默丢弃，
+    # 列表徽标永远显示「草稿」）
+    r = client.get(f"{BASE}/projects", headers=auth_headers)
+    listed = [i for i in r.json()["data"]["items"] if i["id"] == project["id"]]
+    assert listed[0]["service_status"] == "online"
+
     r = client.get(f"{BASE}/projects/{project['id']}/service", headers=auth_headers)
     assert r.json()["data"]["id"] == svc["id"]
 
