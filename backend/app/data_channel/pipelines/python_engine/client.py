@@ -101,6 +101,39 @@ def tail_stdout(text: str) -> str:
     return text[-_STDOUT_TAIL_CHARS:]
 
 
+def visible_stdout(text: str) -> str:
+    """Remove the platform's private result-transfer block from user output.
+
+    The result payload can be very large and is already returned through the
+    normalized rows/sample fields.  Keeping it in ``stdout`` exposed internal
+    protocol markers in the editor and duplicated the payload over the wire.
+    Use the last marker pair, matching :func:`extract_payload`, so user logs
+    before the injected epilogue remain intact.
+    """
+    begin = text.rfind(_RESULT_BEGIN)
+    end = text.rfind(_RESULT_END)
+    if begin == -1 or end == -1 or end < begin:
+        return text
+
+    block_start = begin
+    # The injected epilogue prints one blank line before its BEGIN marker.
+    # Remove only that extra blank line; keep the user's final line break.
+    if text[max(0, begin - 2):begin] == "\n\n":
+        block_start -= 1
+    elif text[max(0, begin - 4):begin] == "\r\n\r\n":
+        block_start -= 2
+    elif begin == 1 and text[:begin] == "\n":
+        block_start = 0
+    elif begin == 2 and text[:begin] == "\r\n":
+        block_start = 0
+    block_end = end + len(_RESULT_END)
+    if text[block_end:block_end + 2] == "\r\n":
+        block_end += 2
+    elif text[block_end:block_end + 1] == "\n":
+        block_end += 1
+    return text[:block_start] + text[block_end:]
+
+
 def execute_script(script: str, *, timeout: int | None = None, cancel_event=None,
                    params: dict | None = None) -> ScriptExecution:
     """在 Jupyter Kernel Gateway 上执行脚本并提取 result 行数据。
@@ -130,7 +163,7 @@ def execute_script(script: str, *, timeout: int | None = None, cancel_event=None
             execution.rows = _extract_rows(execution.stdout)
         except PythonEngineError as exc:
             execution.error = str(exc)
-    execution.stdout = tail_stdout(execution.stdout)
+    execution.stdout = tail_stdout(visible_stdout(execution.stdout))
     return execution
 
 

@@ -189,3 +189,18 @@ test('创建会话失败时保留已选附件以维持原有重试语义', async
     name: element.files?.[0]?.name ?? '',
   }))).toEqual({ count: 1, name: 'retry.csv' })
 })
+
+test('建议指令只填入输入框，不会立即触发 AI 执行', async ({ page }) => {
+  await mockSteward(page)
+  let chatRequests = 0
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/v2/steward/chat') chatRequests += 1
+  })
+  await page.goto('/#/data/pipelines/steward', { waitUntil: 'domcontentloaded' })
+
+  await page.getByRole('button', { name: '帮我执行指定n8n流水线并展示结果' }).click()
+
+  await expect(page.getByTestId('steward-composer')).toHaveValue('帮我执行指定n8n流水线并展示结果')
+  await expect(page.getByTestId('steward-composer')).toBeFocused()
+  expect(chatRequests).toBe(0)
+})

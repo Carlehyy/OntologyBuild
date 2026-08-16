@@ -274,12 +274,14 @@ export default function ConversationTimeline({
         </p>
         <div className="mt-5 flex flex-wrap justify-center gap-2">
           {SUGGESTED.map(prompt => (
-            <button key={prompt} onClick={() => onSuggested(prompt)} disabled={busy}
-              className="rounded-full border bg-white px-3 py-1.5 text-xs text-gray-600 transition-all hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 disabled:opacity-50">
+            <button key={prompt} type="button" onClick={() => onSuggested(prompt)} disabled={busy}
+              title="填入输入框，确认后再发送"
+              className="min-h-9 rounded-full border bg-white px-3 text-xs text-gray-600 transition-all hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 disabled:opacity-50">
               {prompt}
             </button>
           ))}
         </div>
+        <p className="mt-2 text-[11px] text-slate-400">点击建议只会填入输入框，确认后再发送。</p>
       </div>
     )
   }

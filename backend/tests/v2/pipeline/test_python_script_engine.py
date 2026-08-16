@@ -138,6 +138,16 @@ def test_extract_rows_from_marked_stdout():
     assert python_client._extract_rows(stdout) == ROWS
 
 
+def test_visible_stdout_removes_platform_payload_and_preserves_user_logs():
+    stdout = (
+        "抓取开始\n抓取完成\n\n__OB_RESULT_BEGIN__\n"
+        + json.dumps(ROWS, ensure_ascii=False)
+        + "\n__OB_RESULT_END__\n"
+    )
+    assert python_client.visible_stdout(stdout) == "抓取开始\n抓取完成\n"
+    assert python_client.visible_stdout("普通日志\n") == "普通日志\n"
+
+
 def test_extract_rows_rejects_missing_markers_and_bad_json():
     with pytest.raises(PythonEngineError, match="输出标记"):
         python_client._extract_rows("no markers here")
@@ -759,4 +769,5 @@ def test_execute_script_extracts_rows_beyond_stdout_tail(monkeypatch):
     assert execution.error is None
     assert len(execution.rows) == 4000
     assert execution.rows[0] == {"id": 0, "text": "x" * 60}
-    assert len(execution.stdout) <= 200_000
+    assert execution.stdout == "prep log\n"
+    assert "__OB_RESULT_" not in execution.stdout

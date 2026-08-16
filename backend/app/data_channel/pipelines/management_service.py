@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.data_channel.pipelines.contracts import PipelineCreate, PipelineUpdate
@@ -191,8 +191,60 @@ def list_pipelines(
             "total": total,
             "page": page,
             "page_size": page_size,
+            "overview": pipeline_overview(db),
         }
     return results
+
+
+def pipeline_overview(db: Session) -> dict[str, int]:
+    """Return unfiltered catalog health counters for the list-page header.
+
+    The overview deliberately ignores the current table filters: it is the
+    user's stable system-health anchor while the paginated rows below it may be
+    narrowed to a subset.  ``latest_failed`` counts pipelines whose most recent
+    run failed, rather than every historical failed run.
+    """
+    active = Pipeline.status != "archived"
+    totals = (
+        db.query(
+            func.count(Pipeline.id).label("total"),
+            func.coalesce(func.sum(case(
+                (Pipeline.status == "published", 1), else_=0,
+            )), 0).label("published"),
+            func.coalesce(func.sum(case(
+                (Pipeline.enabled.is_(True), 1), else_=0,
+            )), 0).label("enabled"),
+        )
+        .filter(active)
+        .one()
+    )
+
+    latest_created = (
+        db.query(
+            PipelineRun.pipeline_id,
+            func.max(PipelineRun.created_at).label("mx"),
+        )
+        .group_by(PipelineRun.pipeline_id)
+        .subquery()
+    )
+    latest_failed = (
+        db.query(func.count(func.distinct(PipelineRun.pipeline_id)))
+        .join(
+            latest_created,
+            (PipelineRun.pipeline_id == latest_created.c.pipeline_id)
+            & (PipelineRun.created_at == latest_created.c.mx),
+        )
+        .join(Pipeline, Pipeline.id == PipelineRun.pipeline_id)
+        .filter(active, PipelineRun.status == "failed")
+        .scalar()
+        or 0
+    )
+    return {
+        "total": int(totals.total or 0),
+        "published": int(totals.published or 0),
+        "enabled": int(totals.enabled or 0),
+        "latest_failed": int(latest_failed),
+    }
 
 
 def get_pipeline(
