@@ -14,6 +14,7 @@ Create Date: 2026-08-16
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect as sa_inspect
 
 
 revision = "0071_world_model_services_menu_key"
@@ -69,9 +70,13 @@ def _remove_services_key(bind) -> None:
 
 def upgrade() -> None:
     bind = op.get_bind()
-    _backfill_services_key(bind)
+    # 治理迁移测试等场景会从最小库形态升级到 head（仅有部分表）：
+    # 与 0066 同一纪律，表不存在时跳过回填而不是失败
+    if "role_menu_permissions" in sa_inspect(bind).get_table_names():
+        _backfill_services_key(bind)
 
 
 def downgrade() -> None:
     bind = op.get_bind()
-    _remove_services_key(bind)
+    if "role_menu_permissions" in sa_inspect(bind).get_table_names():
+        _remove_services_key(bind)
