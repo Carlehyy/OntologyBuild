@@ -93,29 +93,36 @@ function FlowArrow() {
 }
 
 function FlowNode({
-  label, icon, active = false, onClick,
+  label, icon, active = false, onClick, unavailableReason,
 }: {
   label: string
   icon: ReactNode
   active?: boolean
   onClick?: () => void
+  unavailableReason?: string
 }) {
+  const unavailable = Boolean(unavailableReason)
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={!onClick}
+      aria-label={unavailableReason ? `${label}，${unavailableReason}` : label}
+      title={unavailableReason || label}
       className={`group inline-flex h-[clamp(2rem,2.7vw,2.25rem)] flex-none items-center justify-center gap-[clamp(0.25rem,0.4vw,0.375rem)] rounded-lg border px-[clamp(0.375rem,0.65vw,0.625rem)] text-[clamp(10px,0.8vw,11px)] font-semibold transition-colors ${
         active
           ? 'border-emerald-400 bg-emerald-50 text-emerald-800 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.12)]'
+          : unavailable
+            ? 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400 opacity-75'
           : 'border-teal-300 bg-teal-50/50 text-teal-800 hover:border-teal-400 hover:bg-teal-100/70'
       }`}
     >
-      <span className={`grid h-[clamp(1.125rem,1.5vw,1.25rem)] w-[clamp(1.125rem,1.5vw,1.25rem)] shrink-0 place-items-center rounded-md [&_svg]:h-[clamp(0.6875rem,1vw,0.875rem)] [&_svg]:w-[clamp(0.6875rem,1vw,0.875rem)] ${active ? 'bg-emerald-600 text-white' : 'bg-teal-100 text-teal-700'}`}>
+      <span className={`grid h-[clamp(1.125rem,1.5vw,1.25rem)] w-[clamp(1.125rem,1.5vw,1.25rem)] shrink-0 place-items-center rounded-md [&_svg]:h-[clamp(0.6875rem,1vw,0.875rem)] [&_svg]:w-[clamp(0.6875rem,1vw,0.875rem)] ${active ? 'bg-emerald-600 text-white' : unavailable ? 'bg-slate-200 text-slate-400' : 'bg-teal-100 text-teal-700'}`}>
         {icon}
       </span>
       <span className="whitespace-nowrap leading-none" title={label}>{label}</span>
       {active && <span className="ml-0.5 shrink-0 rounded bg-emerald-600 px-[clamp(0.25rem,0.4vw,0.375rem)] py-0.5 text-[clamp(8px,0.65vw,9px)] font-medium leading-none text-white">当前</span>}
+      {unavailable && <span className="ml-0.5 shrink-0 rounded bg-slate-200 px-1 py-0.5 text-[9px] font-medium leading-none text-slate-500">即将开放</span>}
     </button>
   )
 }
@@ -259,7 +266,7 @@ export default function StructuredDataPage() {
               <FlowArrow />
               <FlowNode label="数据资产湖" icon={<Database size={14} />} active />
               <FlowArrow />
-              <FlowNode label="本体数据映射" icon={<Boxes size={14} />} />
+              <FlowNode label="本体数据映射" icon={<Boxes size={14} />} unavailableReason="本体数据映射暂未开放" />
               <FlowArrow />
               <FlowNode label="本体网络图谱" icon={<Network size={14} />} onClick={() => navigate('/ontologies')} />
             </div>

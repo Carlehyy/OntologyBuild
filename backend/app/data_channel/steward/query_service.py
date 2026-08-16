@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.data_channel.steward import browser_sources, service, workspace
 from app.data_channel.steward.models import (
     N8nPipeline,
@@ -102,6 +103,13 @@ def steward_status(
         counts[publication_status] = counts.get(publication_status, 0) + 1
     return _ok({
         "n8n": n8n,
+        # Only expose whether the Python execution capability is configured;
+        # never return the gateway URL or authentication token to the browser.
+        "python": {
+            "configured": bool(
+                (settings.python_kernel_gateway_url or "").strip()
+            ),
+        },
         "llmReady": llm_ready,
         "pipelineCounts": counts,
     })

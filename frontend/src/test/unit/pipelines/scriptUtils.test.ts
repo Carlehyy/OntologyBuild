@@ -24,6 +24,8 @@ describe('inferValueType', () => {
     assert.equal(inferValueType(1.5), 'float')
     assert.equal(inferValueType(2), 'integer')
     assert.equal(inferValueType(true), 'boolean')
+    assert.equal(inferValueType({ nested: true }), 'json')
+    assert.equal(inferValueType(['a', 'b']), 'json')
   })
 
   it('空值归为 null 类型', () => {
@@ -59,6 +61,7 @@ describe('inferColumnTypes', () => {
   it('类型词表有中文标签', () => {
     assert.equal(TYPE_LABELS.integer, '整数')
     assert.equal(TYPE_LABELS.timestamp, '时间')
+    assert.equal(TYPE_LABELS.json, 'JSON')
   })
 })
 
