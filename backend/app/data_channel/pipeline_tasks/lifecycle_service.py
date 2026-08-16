@@ -8,6 +8,7 @@ import uuid
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.data_channel.pipeline_tasks import cache as _cache
 from app.data_channel.pipeline_tasks.models import PipelineTask
 from app.models.v2.pipeline import Pipeline
 
@@ -59,6 +60,7 @@ def create_task(
     db.commit()
     db.refresh(task)
     refresh_scheduler_fn(task.id)
+    _cache.invalidate_all()
     return with_pipeline_info_fn(db, [task])[0]
 
 
@@ -100,6 +102,7 @@ def update_task(
     db.commit()
     db.refresh(task)
     refresh_scheduler_fn(task.id)
+    _cache.invalidate_all()
     return with_pipeline_info_fn(db, [task])[0]
 
 
@@ -119,6 +122,7 @@ def delete_task(
     db.delete(task)
     db.commit()
     refresh_scheduler_fn(task_id)
+    _cache.invalidate_all()
     return {"status": "ok"}
 
 
@@ -155,4 +159,5 @@ def toggle_task(
     task.updated_at = datetime.utcnow()
     db.commit()
     refresh_scheduler_fn(task.id)
+    _cache.invalidate_all()
     return task.to_dict()
