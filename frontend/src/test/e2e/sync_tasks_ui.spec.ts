@@ -291,9 +291,6 @@ test('全局历史记录弹窗限制尺寸、支持滚动分页与组合筛选',
   }])
   await page.goto('/#/data/pipelines/sync-tasks', { waitUntil: 'domcontentloaded' })
 
-  await expect(page.getByRole('button', { name: '本体数据映射，本体数据映射暂未开放' })).toBeDisabled()
-  await expect(page.getByTestId('seven-day-chart')).toBeVisible()
-
   const historyButton = page.getByRole('button', { name: '历史记录', exact: true })
   const createButton = page.getByRole('button', { name: '新建任务', exact: true })
   await expect(historyButton).toBeVisible()

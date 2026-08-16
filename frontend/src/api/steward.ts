@@ -42,8 +42,6 @@ export interface StewardPipelineDetail extends StewardPipeline {
 
 export interface StewardStatus {
   n8n: { configured: boolean; enabled: boolean; api_url: string; reachable?: boolean; error?: string }
-  /** Python gateway status intentionally exposes no URL or credential details. */
-  python?: { configured: boolean }
   llmReady: boolean
   pipelineCounts: Record<string, number>
 }
