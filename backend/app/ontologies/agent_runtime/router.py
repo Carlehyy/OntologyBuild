@@ -511,6 +511,27 @@ def chat(ontology_id: str, body: S.ChatRequest,
     )
 
 
+@router.post("/{ontology_id}/agent/chat/cancel")
+def cancel_chat(ontology_id: str, body: S.ChatCancelRequest,
+                db: Session = Depends(get_db),
+                current_user=Depends(get_current_user)):
+    """取消本进程内正在流式执行的回合（协作式：步间/模型调用间生效）。"""
+    _require_ontology(db, ontology_id)
+    from app.ontologies.agent_runtime.chat_cancel import chat_cancel_registry
+
+    if not (body.run_id or "").strip():
+        raise HTTPException(422, "runId 不能为空")
+    cancelled = chat_cancel_registry.request_cancel(body.run_id)
+    return _ok({
+        "runId": body.run_id,
+        "cancelled": cancelled,
+        "note": (
+            "已发出取消请求，正在执行的回合将在下一个检查点停止。"
+            if cancelled
+            else "该回合不在本进程执行中（可能已结束或属于其他实例）。"),
+    })
+
+
 @router.get("/{ontology_id}/agent/conversations")
 def list_conversations(ontology_id: str, db: Session = Depends(get_db),
                        release_id: str | None = Query(default=None),

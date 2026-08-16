@@ -27,6 +27,7 @@ def run_sync(
             conversation_id=body.conversation_id,
             model_id=body.model_id,
             release_id=body.release_id,
+            run_id=body.run_id,
         )
     )
     answer = next(
@@ -53,6 +54,7 @@ def run_sync(
         "citations": (answer or {}).get("citations") or [],
         "proposals": (answer or {}).get("proposals") or [],
         "usage": (answer or {}).get("usage"),
+        "verification": (answer or {}).get("verification"),
         "error": (error or {}).get("message"),
     }
 
@@ -77,6 +79,7 @@ def stream_events(
             conversation_id=body.conversation_id,
             model_id=body.model_id,
             release_id=body.release_id,
+            run_id=body.run_id,
         ):
             yield (
                 "data: "
