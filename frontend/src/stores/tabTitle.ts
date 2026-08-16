@@ -25,6 +25,7 @@ export function menuKeyForPath(pathname: string): string | null {
   if (pathname.startsWith('/community/skills')) return 'community.skills'
   if (pathname.startsWith('/community/plugins')) return 'community.plugins'
   if (pathname.startsWith('/world-model/calls')) return 'world_model.calls'
+  if (pathname.startsWith('/world-model/services')) return 'world_model.services'
   if (pathname === '/world-model' || pathname.startsWith('/world-model/')) return 'world_model.models'
   if (pathname.startsWith('/ontologies')) return 'ontologies'
   if (pathname.startsWith('/agent')) return 'agent'

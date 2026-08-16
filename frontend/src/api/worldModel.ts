@@ -122,6 +122,42 @@ export interface ServicePublishBody {
   preconditions: ServicePrecondition[]
 }
 
+/** 推演服务注册表条目（跨项目列表） */
+export interface WorldModelServiceSummary {
+  id: string
+  project_id: string
+  project_name: string
+  version_id: string | null
+  version_no: number | null
+  name: string
+  description: string
+  status: 'online' | 'offline' | string
+  endpoint_path: string | null
+  applicable_object_types: {
+    ontology_id: string
+    object_type_ids: string[]
+  } | null
+  preconditions: ServicePrecondition[] | null
+  call_count: number
+  failed_count: number
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface ServiceListResponse {
+  items: WorldModelServiceSummary[]
+  total: number
+}
+
+/** 服务试调用结果（invoke 端点返回口径） */
+export interface ServiceInvokeResult {
+  ok: boolean
+  payload: unknown
+  error: string | null
+  duration_ms: number
+  call_id: string | null
+}
+
 /** 官方脚本模板（唯一事实源在后端，前端不复制脚本副本） */
 export interface WorldModelTemplate {
   key: string
@@ -189,6 +225,7 @@ export const worldModelApi = {
   listCalls: (params: {
     keyword?: string
     result?: 'all' | 'failed'
+    service_id?: string
     start?: string
     end?: string
     page?: number
@@ -218,6 +255,20 @@ export const worldModelApi = {
 
   setServiceStatus: (projectId: string, status: 'online' | 'offline') =>
     apiClientV2.post<WorldModelServiceInfo>(`/world-model/projects/${projectId}/service/status`, { status }),
+
+  invokeService: (serviceId: string, body: { context: Record<string, unknown>; actions: unknown[]; horizon: number }) =>
+    apiClientV2.post<ServiceInvokeResult>(`/world-model/services/${serviceId}/invoke`, body),
+
+  // ---------- 推演服务注册表（跨项目） ----------
+
+  listServices: (params: { keyword?: string; status?: string; page?: number; size?: number }) =>
+    apiClientV2.get<ServiceListResponse>('/world-model/services', { params }),
+
+  getServiceById: (serviceId: string) =>
+    apiClientV2.get<WorldModelServiceSummary>(`/world-model/services/${serviceId}`),
+
+  setServiceStatusById: (serviceId: string, status: 'online' | 'offline') =>
+    apiClientV2.post<WorldModelServiceSummary>(`/world-model/services/${serviceId}/status`, { status }),
 
   // ---------- 官方脚本模板 ----------
 
