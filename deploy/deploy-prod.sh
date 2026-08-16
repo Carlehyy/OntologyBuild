@@ -6,6 +6,12 @@ bash "$SCRIPT_DIR/../scripts/ci/validate-deploy-app-dir.sh" "$APP_DIR"
 BRANCH="${BRANCH:-nano-ontoprompt}"
 REPO_URL="${REPO_URL:-https://github.com/Carlehyy/OntologyBuild.git}"
 COMPOSE_FILE="docker-compose.prod.yml"
+# AgentLoop 观测接入（阿里云 AgentLoop）：服务器 .env 中配置了 ARMS_LICENSE_KEY 时
+# 自动叠加探针覆盖文件（agentloop/compose.agentloop.yml）。未配置时部署行为与
+# 之前完全一致；接入细节见 agentloop/README.md。
+if [ -f "$APP_DIR/.env" ] && grep -qE '^ARMS_LICENSE_KEY=[^[:space:]]+' "$APP_DIR/.env"; then
+  COMPOSE_FILE="${COMPOSE_FILE}:agentloop/compose.agentloop.yml"
+fi
 DEPENDENCY_CONFIG_FILE="${DEPENDENCY_CONFIG_FILE:-deploy/production.dependencies.env}"
 # Preserve explicit operator overrides, but defer defaults until the persistent
 # .env and the production dependency manifest have been merged. The dependency
@@ -98,10 +104,17 @@ compose_environment() {
     "$@"
 }
 compose() {
+  # COMPOSE_FILE 支持冒号分隔的多个 compose 文件（与 docker compose 的 COMPOSE_FILE
+  # 环境变量语义一致），逐个展开为 -f 参数。
+  local compose_args=() file
+  local IFS=':'
+  for file in $COMPOSE_FILE; do
+    compose_args+=(-f "$file")
+  done
   if compose_environment docker compose version >/dev/null 2>&1; then
-    compose_environment docker compose -f "$COMPOSE_FILE" "$@"
+    compose_environment docker compose "${compose_args[@]}" "$@"
   elif command -v docker-compose >/dev/null 2>&1; then
-    compose_environment docker-compose -f "$COMPOSE_FILE" "$@"
+    compose_environment docker-compose "${compose_args[@]}" "$@"
   else
     log "Docker Compose is not installed"
     return 1
