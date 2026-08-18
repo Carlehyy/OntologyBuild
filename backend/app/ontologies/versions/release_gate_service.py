@@ -161,6 +161,17 @@ def validate_production_mappings(
                     "latest_dataset_version_not_approved", "mapping",
                     f"Mapping「{label}」的最新数据版本 v{latest.version_no} 未获得当前 approved 审批",
                     item_id=mid, name=label, field="curatedDatasetId"))
+            if not (mapping.field_mapping or {}).get(
+                "__auto_apply_on_review__"
+            ):
+                # 断点2：数据更新默认流入本体。审批通过后自动对账是发布契约的
+                # 一部分；未订阅时发布门 fail-closed，提示一键订阅端点。
+                errors.append(gate_error(
+                    "mapping_curated_automation_not_subscribed", "mapping",
+                    f"Mapping「{label}」消费 curated 数据，发布前必须开启“审批通过后自动灌入”（"
+                    f"可用 /mappings/subscribe-automation 一键订阅）",
+                    item_id=mid, name=label,
+                    field="fieldMapping.__auto_apply_on_review__"))
         else:
             eligible, reason = manual_dataset_automation_eligibility(
                 dataset,

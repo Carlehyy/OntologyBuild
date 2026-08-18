@@ -163,7 +163,7 @@ export function DynamicSentinelDrawer({
             <span className="flex h-8 w-8 items-center justify-center rounded-md bg-teal-50 text-teal-700"><BellRing size={16} /></span>
             <div className="min-w-0">
               <h2 className="truncate text-sm font-semibold text-slate-900">{editing ? `编辑 · ${editing.displayName}` : '动态哨兵'}</h2>
-              <p className="truncate text-[11px] text-slate-500">仅管理智能助手后天创建的哨兵 · 发布内置哨兵不在此处</p>
+              <p className="truncate text-[11px] text-slate-500">仅管理智能助手后天创建的哨兵 · 公共哨兵不在此处</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="关闭"><X size={16} /></button>

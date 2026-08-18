@@ -43,9 +43,17 @@ class Settings(BaseSettings):
     pipeline_task_list_cache_ttl_seconds: int = Field(default=4, ge=1, le=60)
     pipeline_task_stats_cache_ttl_seconds: int = Field(default=5, ge=1, le=60)
     pipeline_task_options_cache_ttl_seconds: int = Field(default=30, ge=1, le=300)
+    # 本体详情页读接口缓存（fail-open 加速层，可整体关闭；与 Celery 无关，
+    # 键落 db 1）。TTL 均短于前端轮询/停留节奏，写路径 bump 版本立即失效；
+    # executor/外部灌数进程侧的数据推进无法事件失效，由短 TTL 兜底。
+    ontology_detail_cache_enabled: bool = True
+    ontology_detail_cache_ttl_seconds: int = Field(default=60, ge=1, le=300)
+    ontology_overview_cache_ttl_seconds: int = Field(default=20, ge=1, le=60)
+    ontology_pending_cache_ttl_seconds: int = Field(default=15, ge=1, le=60)
     # 数据资产湖读缓存（fail-open 加速层，可整体关闭；键落 db 1）。
     # 版本级数据键携带 version id 自然换键；总览用短 TTL + 写路径 bump 失效。
     dataset_cache_enabled: bool = True
+
     # NATS JetStream 消息队列：流水线任务派发通道（PR-3 接入执行器）
     nats_url: str = ""
     # 流水线 executor 进程内同时执行的任务数上限；每条任务在独立线程执行，
@@ -179,6 +187,12 @@ class Settings(BaseSettings):
     dataset_event_poll_seconds: int = 2
     dataset_event_claim_timeout_seconds: int = 3600
     dataset_event_batch_size: int = 20
+    # 版本事件处理执行模式：
+    #   async —— API 进程 drain 只派发 Celery 任务（重活在独立 worker 进程
+    #            完成映射对账/整图重建/哨兵屏障并确认 durable 事件），
+    #            Celery 派发失败时降级为内联执行（fail-open，自动化不中断）；
+    #   sync  —— 沿用 drain 线程内联执行（降级开关；测试环境默认）。
+    dataset_event_dispatch_mode: str = "async"
     # Trial materialization runs synchronously but persists its running claim
     # first.  Expired claims are terminalized and can no longer block retry or
     # deletion; late completion is fenced by the per-run claim token.

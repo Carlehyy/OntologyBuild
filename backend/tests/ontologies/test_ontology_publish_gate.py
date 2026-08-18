@@ -740,12 +740,25 @@ def test_production_publish_requires_current_approved_applied_mapping(
     db.commit()
     codes = {
         item["code"] for item in version_router._release_errors(db, oid)}
-    assert codes == {"latest_dataset_version_not_approved"}
+    assert codes == {
+        "latest_dataset_version_not_approved",
+        "mapping_curated_automation_not_subscribed",
+    }
 
     db.add(CuratedReview(
         id="review-v2", curated_dataset_id=dataset.id,
         dataset_version_id=version_2.id, status="approved",
     ))
+    db.commit()
+    codes = {
+        item["code"] for item in version_router._release_errors(db, oid)}
+    assert codes == {"mapping_curated_automation_not_subscribed"}
+
+    # 断点2：curated 映射发布前必须订阅“审批通过后自动灌入”
+    mapping.field_mapping = {
+        "__applied_dataset_version_id__": version_2.id,
+        "__auto_apply_on_review__": True,
+    }
     db.commit()
     assert version_router._release_errors(db, oid) == []
 

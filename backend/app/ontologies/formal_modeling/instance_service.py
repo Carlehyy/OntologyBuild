@@ -93,6 +93,10 @@ def _commit_graph_mutation(
     db.commit()
     if refresh is not None:
         db.refresh(refresh)
+    # SQL 事实已提交：详情页总览统计口径随之变化，立即失效总览缓存
+    # （fail-open，进程外写入由短 TTL 兜底）。
+    from app.ontologies import cache as ontology_cache
+    ontology_cache.invalidate_overview()
     try:
         rebuild_after_commit(db, ontology_id)
     except ProjectionRebuildError as exc:

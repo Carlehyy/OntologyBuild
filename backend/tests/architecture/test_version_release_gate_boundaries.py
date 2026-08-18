@@ -187,6 +187,7 @@ def test_release_gate_keeps_error_code_order():
         "mapping_dataset_version_unverifiable",
         "dataset_latest_pointer_stale",
         "latest_dataset_version_not_approved",
+        "mapping_curated_automation_not_subscribed",
         "mapping_manual_dataset_not_governed",
         "mapping_manual_automation_not_subscribed",
         "mapping_applied_version_stale",

@@ -48,6 +48,10 @@ def run_action_locked(
         actor_id=getattr(current_user, "id", None),
         expected_release_id=release.id,
     )
+    # 执行会产生新日志（可能进入待审批），立即失效详情页两条读缓存（fail-open）。
+    from app.ontologies import cache as ontology_cache
+    ontology_cache.invalidate_pending()
+    ontology_cache.invalidate_overview()
     return _ok(log)
 
 
@@ -58,6 +62,30 @@ def list_pending_actions(
     db: Session,
 ):
     """Return pending or resumable action approvals."""
+    # 详情页 Tab 角标轮询热点：短 TTL 缓存（fail-open），决策/执行时 bump
+    # 版本立即失效。jsonable_encoder 保证缓存命中与直查路径返回同一 JSON。
+    from fastapi.encoders import jsonable_encoder
+
+    from app.config import settings
+    from app.ontologies import cache as ontology_cache
+    return ontology_cache.cached_call(
+        ontology_cache.pending_cache_key(ontology_id, release_id),
+        settings.ontology_pending_cache_ttl_seconds,
+        lambda: jsonable_encoder(_list_pending_actions_uncached(
+            ontology_id,
+            release_id,
+            current_release_only,
+            db,
+        )),
+    )
+
+
+def _list_pending_actions_uncached(
+    ontology_id: str,
+    release_id: Optional[str],
+    current_release_only: bool,
+    db: Session,
+):
     project = _require_ontology(db, ontology_id)
     release_snapshot = None
     release_identifier = None
@@ -358,6 +386,10 @@ def decide_pending_action_locked(
             )
 
             reject_sentinel_match_claim(db, ontology_id, state_id)
+        # 拒绝同样改变待审批队列，立即失效两条读缓存（fail-open）。
+        from app.ontologies import cache as ontology_cache
+        ontology_cache.invalidate_pending()
+        ontology_cache.invalidate_overview()
         return _ok(
             S.ActionLogOut.model_validate(log).model_dump(by_alias=True),
         )
@@ -480,6 +512,10 @@ def decide_pending_action_locked(
                 ontology_id,
                 state_id,
             )
+    # 决策事实改变待审批队列与运行统计，立即失效两条读缓存（fail-open）。
+    from app.ontologies import cache as ontology_cache
+    ontology_cache.invalidate_pending()
+    ontology_cache.invalidate_overview()
     return _ok(
         {
             "pendingLog": S.ActionLogOut.model_validate(log).model_dump(

@@ -12,7 +12,7 @@ const operationLabel = {
 const completionText = {
   create: '创建完成；新哨兵默认停用，请在动态哨兵面板完成全量试跑后启用。',
   update: '更新完成；该哨兵已自动停用，需重新全量试跑后才能启用。',
-  enable: '启用完成；后续触发将进入与发布内置哨兵相同的执行引擎。',
+  enable: '启用完成；后续触发将进入与公共哨兵相同的执行引擎。',
   disable: '停用完成。',
   delete: '删除完成；既有执行审计记录仍会保留。',
 } as const

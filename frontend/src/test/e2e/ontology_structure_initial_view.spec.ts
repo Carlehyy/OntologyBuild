@@ -2,7 +2,8 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 
 const ontologyId = 'ontology-structure-initial-view'
 
-async function mockOntologyStructure(page: Page) {
+async function mockOntologyStructure(page: Page, options: { includeUxFixtures?: boolean } = {}) {
+  const includeUxFixtures = options.includeUxFixtures === true
   await page.addInitScript(() => {
     localStorage.setItem('token', 'structure-view-token')
     localStorage.setItem('auth-store', JSON.stringify({
@@ -63,16 +64,94 @@ async function mockOntologyStructure(page: Page) {
             type: 'string',
             required: true,
           }],
-        }],
-        linkTypes: [],
-        actions: [],
-        functions: [],
-        sentinels: [],
+        }, ...(includeUxFixtures ? [{
+          id: 'object-customer',
+          name: 'Customer',
+          displayName: '客户',
+          primaryKey: 'customer_no',
+          properties: [{
+            id: 'customer_no',
+            name: 'customer_no',
+            displayName: '客户编号',
+            type: 'string',
+            required: true,
+          }],
+        }] : [])],
+        linkTypes: includeUxFixtures ? [{
+          id: 'link-order-customer',
+          name: 'belongs_to_customer',
+          displayName: '订单归属客户',
+          sourceObjectTypeId: 'object-order',
+          targetObjectTypeId: 'object-customer',
+          cardinality: 'many-to-one',
+        }] : [],
+        actions: includeUxFixtures ? [{
+          id: 'action-create-order',
+          name: 'create_order',
+          displayName: '创建订单',
+          objectTypeId: 'object-order',
+          requiresApproval: false,
+        }] : [],
+        functions: includeUxFixtures ? [{
+          id: 'function-validate-order',
+          name: 'validate_order',
+          displayName: '校验订单',
+          functionType: 'validation',
+          language: 'python',
+          enabled: true,
+          targetObjectTypeId: 'object-order',
+        }] : [],
+        sentinels: includeUxFixtures ? [{
+          id: 'sentinel-public-order',
+          name: 'public_order_watch',
+          displayName: '公共订单监控',
+          description: '随发布版本固化的公共规则',
+          bindings: [{ alias: 'order', objectTypeId: 'object-order', filter: null }],
+          links: [],
+          condition: 'order.order_no != null',
+          conditionRows: [],
+          conditionLogic: 'and',
+          primaryAlias: 'order',
+          actionIds: ['action-create-order'],
+          actionParameters: {},
+          onChange: true,
+          onSchedule: false,
+          muted: false,
+          enabled: true,
+          origin: 'release_builtin',
+        }] : [],
         canvasLayout: {},
       })
     }
     if (path === `/api/v2/formal/ontologies/${ontologyId}/agent/dynamic-sentinels`) {
-      return ok(route, [])
+      return ok(route, includeUxFixtures ? [{
+        id: 'sentinel-dynamic-order',
+        ontologyId,
+        name: 'dynamic_order_watch',
+        displayName: '动态订单监控',
+        description: '由本体助手按对话创建的动态规则',
+        bindings: [{ alias: 'order', objectTypeId: 'object-order', filter: null }],
+        links: [],
+        condition: 'order.order_no != null',
+        conditionRows: [],
+        conditionLogic: 'and',
+        primaryAlias: 'order',
+        actionIds: ['action-create-order'],
+        actionParameters: {},
+        onChange: true,
+        onSchedule: false,
+        scanIntervalSeconds: 300,
+        triggerMode: 'on_enter',
+        muted: false,
+        origin: 'assistant_dynamic',
+        boundReleaseId: 'release-1',
+        definitionRevision: 1,
+        enabled: true,
+        status: 'active',
+        validationReport: { passed: true, errors: [] },
+        trialCurrent: true,
+        canEnable: true,
+      }] : [])
     }
     if (path === '/api/v2/inbox/summary') {
       return ok(route, { openAlertCount: 0, actionableCount: 0, unreadCount: 0, resolvedCount: 0 })
@@ -213,7 +292,7 @@ test('切换 L1/L2 视角时视口直接到位而不从角落滑入', async ({ p
     requestAnimationFrame(capture)
   })
 
-  await page.getByRole('button', { name: 'L2', exact: true }).click()
+  await page.getByRole('button', { name: 'L2 结构展开', exact: true }).click()
   await expect(page.getByTestId('structure-node-property')).toBeVisible()
   await page.waitForTimeout(950)
 
@@ -242,6 +321,71 @@ test('切换 L1/L2 视角时视口直接到位而不从角落滑入', async ({ p
   expect(Math.abs(graphBox!.centerX - (canvasBox!.x + canvasBox!.width / 2))).toBeLessThanOrEqual(2)
   expect(Math.abs(graphBox!.centerY - (canvasBox!.y + canvasBox!.height / 2))).toBeLessThanOrEqual(2)
 })
+
+test('结构工具栏使用友好层级名称、完整下拉文案并在输入时展示分类候选', async ({ page }) => {
+  await mockOntologyStructure(page, { includeUxFixtures: true })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/#/ontologies/' + ontologyId, { waitUntil: 'domcontentloaded' })
+  await page.getByRole('button', { name: '本体结构', exact: true }).click()
+  await expect(page.getByTestId('ontology-structure-graph')).toBeVisible()
+
+  const perspective = page.getByLabel('图谱视角')
+  const l1 = perspective.getByRole('button', { name: 'L1 结构概览', exact: true })
+  const l2 = perspective.getByRole('button', { name: 'L2 结构展开', exact: true })
+  await expect(l1).toHaveAttribute('aria-pressed', 'true')
+  await expect(l2).toHaveAttribute('aria-pressed', 'false')
+
+  const functionTrigger = page.getByLabel('查看激活函数使用关系')
+  const sentinelTrigger = page.getByLabel('查看哨兵规则覆盖范围')
+  await expect(functionTrigger).toContainText('激活函数 · 查看使用关系')
+  await expect(sentinelTrigger).toContainText('哨兵规则 · 查看覆盖范围')
+  await expect(functionTrigger).toHaveCSS('width', '224px')
+  await expect(sentinelTrigger).toHaveCSS('width', '224px')
+  for (const trigger of [functionTrigger, sentinelTrigger]) {
+    const labelFits = await trigger.locator('span.min-w-0.flex-1').evaluate(element => element.scrollWidth <= element.clientWidth)
+    expect(labelFits).toBeTruthy()
+  }
+
+  const search = page.getByLabel('搜索本体结构')
+  await search.fill('订')
+  const objectCandidate = page.getByTestId('structure-search-result-object-object-order')
+  await expect(objectCandidate).toBeVisible()
+  const candidateBox = await objectCandidate.boundingBox()
+  expect(candidateBox).toBeTruthy()
+  const hitCandidate = await page.evaluate(({ x, y }) =>
+    document.elementFromPoint(x, y)?.closest('[role="option"]')?.textContent,
+  { x: candidateBox!.x + candidateBox!.width / 2, y: candidateBox!.y + candidateBox!.height / 2 })
+  expect(hitCandidate).toContain('订单')
+
+  await search.fill('归属')
+  await expect(page.getByTestId('structure-search-result-relation-link:link-order-customer')).toBeVisible()
+
+  await l2.click()
+  await expect(l2).toHaveAttribute('aria-pressed', 'true')
+  await search.fill('订单号')
+  await expect(page.getByTestId('structure-search-result-property-property:object-order:order_no')).toBeVisible()
+  await search.fill('创建')
+  await expect(page.getByTestId('structure-search-result-action-action:action-create-order')).toBeVisible()
+  await search.fill('')
+
+  await sentinelTrigger.click()
+  const sentinelDialog = page.getByRole('dialog', { name: '选择哨兵规则' })
+  await expect(sentinelDialog).toBeVisible()
+  await expect(page.getByTestId('sentinel-dependency-source-counts')).toHaveText('· 公共哨兵 1 · 动态哨兵 1')
+  const options = sentinelDialog.getByRole('option')
+  await expect(options).toHaveCount(2)
+  await expect(options.nth(0)).toContainText('公共订单监控')
+  await expect(options.nth(0)).toContainText('公共哨兵')
+  await expect(options.nth(1)).toContainText('动态订单监控')
+  await expect(options.nth(1)).toContainText('动态哨兵')
+  const publicBadge = page.getByTestId('sentinel-dependency-source-sentinel-public-order')
+  const dynamicBadge = page.getByTestId('sentinel-dependency-source-sentinel-dynamic-order')
+  await expect(publicBadge).toHaveText(/●\s*公共哨兵/)
+  await expect(dynamicBadge).toHaveText(/✦\s*动态哨兵/)
+  expect(await publicBadge.evaluate(element => element.previousElementSibling?.textContent)).toBe('公共订单监控')
+  expect(await dynamicBadge.evaluate(element => element.previousElementSibling?.textContent)).toBe('动态订单监控')
+})
+
 test('拖拽节点后自动保存提示按 3→2→1 倒计时并复位', async ({ page }) => {
   const { layoutCalls } = await mockOntologyStructure(page)
   await page.setViewportSize({ width: 1440, height: 900 })
