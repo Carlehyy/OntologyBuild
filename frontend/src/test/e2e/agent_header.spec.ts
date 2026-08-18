@@ -404,8 +404,9 @@ test('动态哨兵抽屉只展示后天规则且试跑通过后才能启用', as
   await page.getByTestId('dynamic-sentinel-button').click()
   const dialog = page.getByRole('dialog', { name: '动态哨兵管理' })
   await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText('公共哨兵不在此处')
   await expect(dialog).toContainText('待处理订单提醒')
-  await expect(dialog.getByRole('heading', { name: '发布内置哨兵' })).toHaveCount(0)
+  await expect(dialog.getByRole('heading', { name: '公共哨兵' })).toHaveCount(0)
   await expect(dialog.getByRole('button', { name: '启用' })).toBeDisabled()
 
   await dialog.getByRole('button', { name: '全量试跑' }).click()

@@ -706,19 +706,19 @@ test('complete branch → real-data trial → reviewed release works in the brow
   expect((await l1LayoutSaved).ok()).toBeTruthy()
 
   // L2 追加属性和动作；函数/哨兵保持为分析选择器，不成为常驻节点。
-  await page.getByRole('button', { name: 'L2', exact: true }).click()
+  await page.getByRole('button', { name: 'L2 结构展开', exact: true }).click()
   await expect(page.getByTestId('structure-node-property')).toHaveCount(2)
   await expect(page.getByTestId('structure-node-action')).toHaveCount(1)
   await expect(page.getByLabel('搜索本体结构')).toHaveAttribute('placeholder', '搜索对象、关系、属性或动作')
 
   // 发布快照保持不可变，但结构分析选择器需额外合并当前发布版的动态哨兵。
-  await page.getByLabel('查看哨兵覆盖范围').click()
-  await expect(page.getByTestId('sentinel-dependency-source-counts')).toHaveText('· 发布内置 0 · 动态 1')
+  await page.getByLabel('查看哨兵规则覆盖范围').click()
+  await expect(page.getByTestId('sentinel-dependency-source-counts')).toHaveText('· 公共哨兵 0 · 动态哨兵 1')
   const dynamicOption = page.getByTestId(`sentinel-dependency-option-${dynamicSentinel.id}`)
   await expect(dynamicOption).toContainText('真机订单动态哨兵')
-  await expect(dynamicOption).toContainText('动态创建')
+  await expect(dynamicOption).toContainText('动态哨兵')
   await expect(dynamicOption).toContainText('待试跑 · 变更触发')
-  await expect(page.getByTestId(`sentinel-dependency-source-${dynamicSentinel.id}`)).toHaveText('动态创建')
+  await expect(page.getByTestId(`sentinel-dependency-source-${dynamicSentinel.id}`)).toHaveText('✦动态哨兵')
   await dynamicOption.click()
   await expect(page.locator(`.react-flow__node[data-id="${objectTypeId}"] > div`)).toHaveClass(/border-fuchsia-500/)
   await expect(page.locator(`.react-flow__node[data-id="property:${objectTypeId}:p-name"] > div`)).toHaveClass(/border-violet-500/)

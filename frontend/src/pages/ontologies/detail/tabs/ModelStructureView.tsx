@@ -249,7 +249,7 @@ function DependencyPicker({
       <button
         ref={triggerRef}
         type="button"
-        aria-label={isFunction ? '查看激活函数使用关系' : '查看哨兵覆盖范围'}
+        aria-label={isFunction ? '查看激活函数使用关系' : '查看哨兵规则覆盖范围'}
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => onOpenChange(!open)}
@@ -257,10 +257,10 @@ function DependencyPicker({
           if (event.key === 'Escape') onOpenChange(false)
           if (event.key === 'ArrowDown') onOpenChange(true)
         }}
-        className={`inline-flex h-9 w-[196px] items-center gap-2 rounded-lg border px-2.5 text-left text-xs outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-offset-1 ${open || selected ? tone.active : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 focus-visible:ring-teal-300'}`}
+        className={`inline-flex h-9 w-[224px] items-center gap-2 rounded-lg border px-2.5 text-left text-xs outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-offset-1 ${open || selected ? tone.active : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 focus-visible:ring-teal-300'}`}
       >
         <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ring-1 ${tone.icon}`}><Icon size={13} /></span>
-        <span className="min-w-0 flex-1 truncate">{selected?.label || (isFunction ? '激活函数 · 查看使用关系' : '哨兵 · 查看覆盖范围')}</span>
+        <span className="min-w-0 flex-1 truncate">{selected?.label || (isFunction ? '激活函数 · 查看使用关系' : '哨兵规则 · 查看覆盖范围')}</span>
         <ChevronDown size={13} className={`shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
       </button>
 
@@ -279,7 +279,7 @@ function DependencyPicker({
                 <span className="flex items-center gap-2 text-sm font-semibold text-slate-800">{title}<span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} /><span className="text-xs font-medium tabular-nums text-slate-400">{items.length}</span></span>
                 <span className="mt-0.5 block text-[11px] leading-4 text-slate-400">
                   {helper}
-                  {!isFunction && <span data-testid="sentinel-dependency-source-counts"> · 发布内置 {builtInCount} · 动态 {dynamicCount}</span>}
+                  {!isFunction && <span data-testid="sentinel-dependency-source-counts"> · 公共哨兵 {builtInCount} · 动态哨兵 {dynamicCount}</span>}
                 </span>
               </span>
               {selected && <button type="button" data-testid={`${kind}-dependency-clear`} onClick={() => { onChange(''); onOpenChange(false) }} className="mt-1 shrink-0 rounded-md px-2 py-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700">清除</button>}
@@ -287,6 +287,7 @@ function DependencyPicker({
             <div className="scrollbar-thin max-h-[360px] overflow-y-auto py-1.5">
               {items.length ? items.map(item => {
                 const active = item.id === value
+                const dynamicSource = item.source === 'assistant_dynamic'
                 return (
                   <button
                     key={item.id}
@@ -299,18 +300,19 @@ function DependencyPicker({
                   >
                     <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${active ? tone.selectedIcon : 'bg-slate-100 text-slate-500 group-hover:bg-white'}`}><Icon size={14} /></span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-slate-700">{item.label}</span>
-                      <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
-                        <span className="min-w-0 truncate font-mono text-[10px] text-slate-400">{item.technicalName}</span>
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="min-w-0 truncate text-sm font-medium text-slate-700">{item.label}</span>
                         {item.source && (
                           <span
                             data-testid={`${kind}-dependency-source-${item.id}`}
-                            className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold ${item.source === 'assistant_dynamic' ? 'border-teal-200 bg-teal-50 text-teal-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}
+                            className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-semibold ${dynamicSource ? 'border-teal-200 bg-teal-50 text-teal-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}
                           >
-                            {item.source === 'assistant_dynamic' ? '动态创建' : '发布内置'}
+                            <span aria-hidden="true">{dynamicSource ? '✦' : '●'}</span>
+                            {dynamicSource ? '动态哨兵' : '公共哨兵'}
                           </span>
                         )}
                       </span>
+                      <span className="mt-0.5 block min-w-0 truncate font-mono text-[10px] text-slate-400">{item.technicalName}</span>
                       {item.meta && <span className="mt-0.5 block truncate text-[10px] text-slate-400">{item.meta}</span>}
                       {item.description && <span className="mt-0.5 block truncate text-[10px] text-slate-400">{item.description}</span>}
                     </span>
@@ -462,6 +464,44 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
   const saveInFlight = useRef(false)
   const lastFittedGraph = useRef(builtGraph)
   const toolbarScrollRef = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const searchResultsRef = useRef<HTMLDivElement>(null)
+  const [searchPosition, setSearchPosition] = useState({ left: 0, top: 0, width: 320 })
+  const searchResultsVisible = searchOpen && Boolean(searchText.trim())
+
+  const updateSearchPosition = useCallback(() => {
+    const input = searchInputRef.current
+    if (!input) return
+    const rect = input.getBoundingClientRect()
+    const width = Math.min(320, window.innerWidth - 32)
+    setSearchPosition({
+      left: Math.max(16, Math.min(rect.left, window.innerWidth - width - 16)),
+      top: rect.bottom + 8,
+      width,
+    })
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!searchResultsVisible) return
+    updateSearchPosition()
+    window.addEventListener('resize', updateSearchPosition)
+    window.addEventListener('scroll', updateSearchPosition, true)
+    return () => {
+      window.removeEventListener('resize', updateSearchPosition)
+      window.removeEventListener('scroll', updateSearchPosition, true)
+    }
+  }, [searchResultsVisible, updateSearchPosition])
+
+  useEffect(() => {
+    if (!searchResultsVisible) return
+    const dismissSearch = (event: PointerEvent) => {
+      const target = event.target as Node | null
+      if (target && (searchInputRef.current?.contains(target) || searchResultsRef.current?.contains(target))) return
+      setSearchOpen(false)
+    }
+    document.addEventListener('pointerdown', dismissSearch)
+    return () => document.removeEventListener('pointerdown', dismissSearch)
+  }, [searchResultsVisible])
 
   useEffect(() => {
     setAllNodes(builtGraph.nodes)
@@ -646,23 +686,26 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     meta: `${item.functionType || 'function'} · ${item.language || 'unknown'}`,
   })), [workspace.functions])
 
-  const sentinelOptions = useMemo<DependencyOption[]>(() => workspace.sentinels.map(item => ({
-    id: item.id,
-    label: item.displayName || item.name,
-    technicalName: item.name,
-    description: item.description,
-    source: item.origin || 'release_builtin',
-    meta: [
-      item.origin === 'assistant_dynamic'
-        ? item.validationReport?.passed === false
-          ? '版本不兼容'
-          : item.trialCurrent === false
-            ? '待试跑'
-            : item.enabled === false ? '已停用' : '已启用'
-        : item.enabled === false ? '已停用' : null,
-      item.onSchedule ? '定时扫描' : item.onChange ? '变更触发' : '规则触发',
-    ].filter(Boolean).join(' · '),
-  })), [workspace.sentinels])
+  const sentinelOptions = useMemo<DependencyOption[]>(() => workspace.sentinels
+    .map(item => ({
+      id: item.id,
+      label: item.displayName || item.name,
+      technicalName: item.name,
+      description: item.description,
+      source: item.origin || 'release_builtin',
+      meta: [
+        item.origin === 'assistant_dynamic'
+          ? item.validationReport?.passed === false
+            ? '版本不兼容'
+            : item.trialCurrent === false
+              ? '待试跑'
+              : item.enabled === false ? '已停用' : '已启用'
+          : item.enabled === false ? '已停用' : null,
+        item.onSchedule ? '定时扫描' : item.onChange ? '变更触发' : '规则触发',
+      ].filter(Boolean).join(' · '),
+    }))
+    .sort((left, right) => Number(left.source === 'assistant_dynamic') - Number(right.source === 'assistant_dynamic')),
+  [workspace.sentinels])
 
   const chooseSearchResult = useCallback((result: SearchResult) => {
     setSearchText(result.label)
@@ -800,7 +843,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           <AnimatedSegmentedControl<Level>
           value={level}
           label="图谱视角"
-          items={[{ value: 1, label: 'L1' }, { value: 2, label: 'L2' }]}
+          items={[{ value: 1, label: 'L1 结构概览' }, { value: 2, label: 'L2 结构展开' }]}
           onChange={changeLevel}
         />
         <AnimatedSegmentedControl<'browse' | 'path'>
@@ -811,12 +854,13 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
         />
         <div className="relative w-[240px] min-w-[170px] shrink">
           <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input value={searchText} onChange={event => { setSearchText(event.target.value); setSearchOpen(true); setSearchFocus(null) }} onFocus={() => setSearchOpen(true)} onKeyDown={event => { if (event.key === 'Enter' && searchResults[0]) chooseSearchResult(searchResults[0]); if (event.key === 'Escape') setSearchOpen(false) }} placeholder={level === 1 ? '搜索对象实体或实体关系' : '搜索对象、关系、属性或动作'} aria-label="搜索本体结构" className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-8 text-xs text-slate-700 outline-none transition focus:border-teal-400 focus:bg-white focus:ring-2 focus:ring-teal-100" />
+          <input ref={searchInputRef} value={searchText} onChange={event => { setSearchText(event.target.value); setSearchOpen(true); setSearchFocus(null) }} onFocus={() => setSearchOpen(true)} onKeyDown={event => { if (event.key === 'Enter' && searchResults[0]) chooseSearchResult(searchResults[0]); if (event.key === 'Escape') setSearchOpen(false) }} placeholder={level === 1 ? '搜索对象实体或实体关系' : '搜索对象、关系、属性或动作'} aria-label="搜索本体结构" role="combobox" aria-autocomplete="list" aria-controls="structure-search-results" aria-expanded={searchResultsVisible} autoComplete="off" className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-8 text-xs text-slate-700 outline-none transition focus:border-teal-400 focus:bg-white focus:ring-2 focus:ring-teal-100" />
           {searchText && <button type="button" aria-label="清空搜索" onClick={() => { setSearchText(''); setSearchFocus(null); setSearchOpen(false) }} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-200"><X size={12} /></button>}
-          {searchOpen && searchText.trim() && (
-            <div className="absolute left-0 top-11 z-50 max-h-72 w-[320px] overflow-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
-              {searchResults.length ? searchResults.map(result => <button key={`${result.kind}:${result.id}`} type="button" onMouseDown={event => event.preventDefault()} onClick={() => chooseSearchResult(result)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-slate-50"><Pill tone={result.kind === 'relation' ? 'teal' : result.kind === 'property' ? 'violet' : result.kind === 'action' ? 'amber' : 'slate'}>{kindLabel[result.kind]}</Pill><span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium text-slate-700">{result.label}</span><span className="block truncate font-mono text-[10px] text-slate-400">{result.technicalName}{result.context ? ` · ${result.context}` : ''}</span></span><ChevronRight size={13} className="text-slate-300" /></button>) : <p className="px-3 py-5 text-center text-xs text-slate-400">当前 L{level} 视角没有匹配项</p>}
-            </div>
+          {searchResultsVisible && createPortal(
+            <div ref={searchResultsRef} id="structure-search-results" role="listbox" aria-label="本体结构搜索候选" className="fixed z-[80] max-h-72 overflow-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_18px_52px_rgba(15,23,42,0.16)]" style={searchPosition}>
+              {searchResults.length ? searchResults.map(result => <button key={`${result.kind}:${result.id}`} type="button" role="option" aria-selected="false" data-testid={`structure-search-result-${result.kind}-${result.id}`} onMouseDown={event => event.preventDefault()} onClick={() => chooseSearchResult(result)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-slate-50"><Pill tone={result.kind === 'relation' ? 'teal' : result.kind === 'property' ? 'violet' : result.kind === 'action' ? 'amber' : 'slate'}>{kindLabel[result.kind]}</Pill><span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium text-slate-700">{result.label}</span><span className="block truncate font-mono text-[10px] text-slate-400">{result.technicalName}{result.context ? ` · ${result.context}` : ''}</span></span><ChevronRight size={13} className="text-slate-300" /></button>) : <p aria-live="polite" className="px-3 py-5 text-center text-xs text-slate-400">当前 L{level} 视角没有匹配项</p>}
+            </div>,
+            document.body,
           )}
         </div>
         <div className="h-6 w-px shrink-0 bg-slate-200" />
