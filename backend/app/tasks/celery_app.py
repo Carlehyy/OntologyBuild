@@ -15,6 +15,7 @@ celery_app = Celery("ontoprompt",
                         "app.tasks.v2.pipeline_run",
                         "app.tasks.v2.mapping_apply",
                         "app.tasks.v2.connection_sync",
+                        "app.tasks.v2.dataset_event_processing",
                     ])
 
 # broker 不可用时快速失败 (默认会长时间重试, 导致 API 请求阻塞)

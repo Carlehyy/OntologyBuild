@@ -188,6 +188,8 @@ def test_release_gate_accepts_lake_version_metadata(db, admin_user):
         field_mapping={
             "__primary_key__": "id",
             "__applied_dataset_version_id__": v1.id,
+            # 断点2：curated 映射发布契约要求订阅审批后自动灌入
+            "__auto_apply_on_review__": True,
         },
     )
     db.add_all([ontology, mapping])

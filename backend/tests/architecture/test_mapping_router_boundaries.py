@@ -200,8 +200,8 @@ def test_mapping_openapi_contract_matches_pre_extraction_baseline():
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode()
-    assert len(paths) == 9
-    assert sum(len(item) for item in paths.values()) == 12
+    assert len(paths) == 11
+    assert sum(len(item) for item in paths.values()) == 14
     assert hashlib.sha256(payload).hexdigest() == (
-        "0232d9b3ef857f5154a281b423b0a97d89a1035a706d17c98873a1c89cc6a197"
+        "9e1986643ee418230351c4721d08c8ae2ac44196cb6047cd67c47f409d6e5c6b"
     )

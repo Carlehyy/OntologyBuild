@@ -239,7 +239,7 @@ def test_new_worker_reclaims_stale_namespaced_approval(db):
     ):
         result = drain_dataset_version_events(db, limit=1)
 
-    assert result == {"processed": 1, "retried": 0, "lost_claims": 0}
+    assert result == {"processed": 1, "dispatched": 0, "retried": 0, "lost_claims": 0}
     db.expire_all()
     stored = db.query(DatasetVersionEvent).filter_by(
         id=approval_event.id).one()
@@ -289,7 +289,7 @@ def test_new_worker_upgrades_legacy_pending_approval_without_migration(db):
     ):
         result = drain_dataset_version_events(db, limit=1)
 
-    assert result == {"processed": 1, "retried": 0, "lost_claims": 0}
+    assert result == {"processed": 1, "dispatched": 0, "retried": 0, "lost_claims": 0}
     db.expire_all()
     stored = db.query(DatasetVersionEvent).filter_by(
         id=approval_event.id).one()
@@ -393,7 +393,7 @@ def test_curated_approval_event_completes_only_after_sync_mapping_barrier(db):
     ) as dispatch:
         result = drain_dataset_version_events(db, limit=10)
 
-    assert result == {"processed": 2, "retried": 0, "lost_claims": 0}
+    assert result == {"processed": 2, "dispatched": 0, "retried": 0, "lost_claims": 0}
     dispatch.assert_called_once_with(review.id, synchronous=True)
     event = db.query(DatasetVersionEvent).filter_by(
         dataset_version_id=version.id,
@@ -453,7 +453,7 @@ def test_curated_approval_refreshes_stale_event_identity_before_routing(db):
                 isolated_session, limit=1)
 
         assert result == {
-            "processed": 1, "retried": 0, "lost_claims": 0}
+            "processed": 1, "dispatched": 0, "retried": 0, "lost_claims": 0}
         review_dispatch.assert_called_once_with(
             review.id, synchronous=True)
         version_dispatch.assert_not_called()
@@ -495,7 +495,7 @@ def test_curated_approval_rejects_version_handler_result_identity(db):
     ):
         result = drain_dataset_version_events(db, limit=1)
 
-    assert result == {"processed": 0, "retried": 1, "lost_claims": 0}
+    assert result == {"processed": 0, "dispatched": 0, "retried": 1, "lost_claims": 0}
     db.expire_all()
     event = db.query(DatasetVersionEvent).filter_by(
         dataset_version_id=version.id,
@@ -530,7 +530,7 @@ def test_curated_approval_mapping_failure_remains_retryable(db):
     ):
         result = drain_dataset_version_events(db, limit=1)
 
-    assert result == {"processed": 0, "retried": 1, "lost_claims": 0}
+    assert result == {"processed": 0, "dispatched": 0, "retried": 1, "lost_claims": 0}
     event = db.query(DatasetVersionEvent).filter_by(
         dataset_version_id=version.id,
         event_type=CURATED_REVIEW_APPROVED_EVENT,
@@ -560,7 +560,7 @@ def test_superseded_events_are_coalesced_to_latest_snapshot(db):
     ) as dispatch:
         result = drain_dataset_version_events(db, limit=10)
 
-    assert result == {"processed": 2, "retried": 0, "lost_claims": 0}
+    assert result == {"processed": 2, "dispatched": 0, "retried": 0, "lost_claims": 0}
     dispatch.assert_called_once_with(dataset.id, second.id)
     events = db.query(DatasetVersionEvent).order_by(
         DatasetVersionEvent.created_at, DatasetVersionEvent.id).all()
@@ -587,7 +587,7 @@ def test_dispatch_failure_is_persisted_for_retry(db):
     ):
         result = drain_dataset_version_events(db, limit=1)
 
-    assert result == {"processed": 0, "retried": 1, "lost_claims": 0}
+    assert result == {"processed": 0, "dispatched": 0, "retried": 1, "lost_claims": 0}
     event = db.query(DatasetVersionEvent).filter_by(
         dataset_version_id=version.id).one()
     assert event.status == "retry"
@@ -621,7 +621,7 @@ def test_stale_failure_owner_cannot_clobber_successor_claim(db):
     ):
         result = drain_dataset_version_events(db, limit=1)
 
-    assert result == {"processed": 0, "retried": 0, "lost_claims": 1}
+    assert result == {"processed": 0, "dispatched": 0, "retried": 0, "lost_claims": 1}
     db.expire_all()
     event = db.query(DatasetVersionEvent).filter_by(
         dataset_version_id=version.id,
@@ -893,3 +893,130 @@ def test_real_manual_version_to_sentinel_notification_closed_loop(
     assert firing.trigger_source == "change" and firing.entered
     assert notification.recipient == "admin"
     assert notification.status == "delivered"
+
+
+# ── 断点5：async 派发与 worker 侧确认 ───────────────────────────────
+
+def _curated_review_event(db):
+    """创建 curated 数据集 + 审批，返回 (dataset, version, review)。"""
+    service = DatasetService(db, storage=MemoryStorage())
+    dataset = service.create_dataset(
+        "成品订单", "curated",
+        schema_json={"primary_key": "id", "columns": ["id"]},
+    )
+    version = service.create_version(dataset.id, b"id\n1\n", rowcount=1)
+    review = ReviewService(db).start_review(dataset.id)
+    ReviewService(db).approve(review.id)
+    return dataset, version, review
+
+
+def test_async_dispatch_delegates_claimed_events_to_worker(db, monkeypatch):
+    """async 模式：drain 只派发 Celery，事件保持 claimed 由 worker 确认。"""
+    from app.tasks.celery_app import celery_app
+
+    monkeypatch.setattr(
+        "app.config.settings.dataset_event_dispatch_mode", "async")
+    dataset, version, _review = _curated_review_event(db)
+
+    with patch.object(
+        celery_app,
+        "send_task",
+        return_value=None,
+    ) as send:
+        result = drain_dataset_version_events(db, limit=10)
+
+    assert result == {
+        "processed": 0, "dispatched": 2, "retried": 0, "lost_claims": 0,
+    }
+    # 每条事件派发一次，携带 (event_id, claim_token)，事件保持 claimed
+    events = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id).order_by(
+            DatasetVersionEvent.created_at, DatasetVersionEvent.id).all()
+    assert len(events) == 2
+    task_names = {call.args[0] for call in send.call_args_list}
+    assert task_names == {
+        "app.tasks.v2.dataset_event_processing.process_dataset_version_event"}
+    dispatched_ids = [
+        call.kwargs["args"][0] if call.kwargs.get("args")
+        else call.args[1][0]
+        for call in send.call_args_list]
+    assert sorted(dispatched_ids) == sorted(item.id for item in events)
+    for event in events:
+        assert event.status in (
+            "processing", CURATED_REVIEW_PROCESSING_STATUS)
+        assert event.claim_token is not None
+        token = next(
+            (call.kwargs["args"][1] if call.kwargs.get("args")
+             else call.args[1][1])
+            for call in send.call_args_list
+            if (call.kwargs.get("args") or call.args[1:])[0] == event.id)
+        assert token == event.claim_token
+
+
+def test_async_dispatch_falls_back_to_sync_when_celery_unavailable(
+        db, monkeypatch):
+    """Celery 不可用时 fail-open：降级内联执行，事件仍按同步语义确认。"""
+    from app.tasks.celery_app import celery_app
+
+    monkeypatch.setattr(
+        "app.config.settings.dataset_event_dispatch_mode", "async")
+    _dataset, _version, review = _curated_review_event(db)
+
+    with patch.object(
+        celery_app,
+        "send_task",
+        side_effect=ConnectionError("redis down"),
+    ), patch.object(
+        IncrementalOrchestrator,
+        "on_review_approved",
+        return_value={
+            "dataset_id": _dataset.id,
+            "review_id": review.id,
+            "triggered_mappings": [],
+        },
+    ) as dispatch:
+        result = drain_dataset_version_events(db, limit=10)
+
+    assert result["processed"] == 2
+    assert result["dispatched"] == 0
+    dispatch.assert_called_once_with(review.id, synchronous=True)
+
+
+def test_run_claimed_event_completes_event_from_worker_entry(db):
+    """worker 入口 run_claimed_event 执行同步屏障并确认事件终态。"""
+    from app.data_channel.datasets.version_events import (
+        _claim_one,
+        _now,
+        run_claimed_event,
+    )
+
+    dataset, version, review = _curated_review_event(db)
+    event = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+        event_type=CURATED_REVIEW_APPROVED_EVENT,
+    ).one()
+    now = _now()
+    token = _claim_one(db, event.id, now, now)
+    assert token is not None
+
+    with patch.object(
+        IncrementalOrchestrator,
+        "on_review_approved",
+        return_value={
+            "dataset_id": dataset.id,
+            "review_id": review.id,
+            "triggered_mappings": [],
+        },
+    ) as dispatch:
+        result = run_claimed_event(event.id, token, db=db)
+
+    assert result["review_id"] == review.id
+    dispatch.assert_called_once_with(review.id, synchronous=True)
+    db.expire_all()
+    event = db.query(DatasetVersionEvent).filter_by(
+        dataset_version_id=version.id,
+        event_type=CURATED_REVIEW_APPROVED_EVENT,
+    ).one()
+    assert event.status == "completed"
+    assert event.claim_token is None
+    assert event.result_json["review_id"] == review.id

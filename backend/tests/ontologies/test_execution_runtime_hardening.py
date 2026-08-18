@@ -2950,6 +2950,7 @@ def test_celery_delayed_tasks_and_compose_workers_use_the_same_app():
     # 运行已迁至 NATS executor，audit 功能与 extraction 退休兼容任务已删除。
     assert registered_application_tasks == {
         "app.tasks.v2.connection_sync.sync_connection",
+        "app.tasks.v2.dataset_event_processing.process_dataset_version_event",
         "app.tasks.v2.mapping_apply.mapping_apply_task",
         "app.tasks.v2.pipeline_run.pipeline_run_task",
     }

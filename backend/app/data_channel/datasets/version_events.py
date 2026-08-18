@@ -401,11 +401,15 @@ def drain_dataset_version_events(
     db: Session | None = None, *, limit: int | None = None,
     strict_schema: bool = False,
 ) -> dict:
-    """Claim and synchronously dispatch a bounded event batch.
+    """Claim and dispatch a bounded event batch.
 
     Mapping is a full idempotent reconciliation.  The event is acknowledged
     only after it completes; a crash between projection commit and ack can
     replay safely, while sentinel edge state prevents duplicate notifications.
+
+    dispatch_mode=async 时本函数只负责 claim + 派发 Celery 任务：重活在
+    独立 worker 进程执行，worker 完成后确认事件；派发失败降级为内联执行
+    （fail-open）。sync 模式保留旧行为（内联执行后确认）。
     """
     from app.config import settings
     from app.database import SessionLocal
@@ -413,7 +417,11 @@ def drain_dataset_version_events(
     own_session = db is None
     session = db or SessionLocal()
     batch_size = max(1, int(limit or settings.dataset_event_batch_size or 20))
-    result = {"processed": 0, "retried": 0, "lost_claims": 0}
+    dispatch_mode = str(
+        settings.dataset_event_dispatch_mode or "async").strip().lower()
+    result = {
+        "processed": 0, "dispatched": 0, "retried": 0, "lost_claims": 0,
+    }
     try:
         now = _now()
         stale_before = now - timedelta(
@@ -440,6 +448,33 @@ def drain_dataset_version_events(
             if token is None:
                 result["lost_claims"] += 1
                 continue
+            if dispatch_mode != "sync":
+                # 按任务名派发（send_task），不 import 任务模块——worker 侧由
+                # celery_app include 注册，避免 version_events ↔ 任务模块的
+                # 静态依赖环（架构守卫约束）。
+                from app.tasks.celery_app import celery_app
+
+                try:
+                    async_result = celery_app.send_task(
+                        "app.tasks.v2.dataset_event_processing."
+                        "process_dataset_version_event",
+                        args=[event_id, token],
+                    )
+                    # 事件保持 claimed：worker 完成后经 claim CAS 确认；
+                    # worker 崩溃则超时后由下一轮 drain 重新派发（对账幂等）。
+                    result["dispatched"] += 1
+                    logger.info(
+                        "DatasetVersion event %s dispatched to worker: %s",
+                        event_id, getattr(async_result, "id", "unknown"),
+                    )
+                    continue
+                except Exception as dispatch_error:  # noqa: BLE001
+                    # Celery/Redis 不可用时 fail-open：降级为内联执行，
+                    # 保证自动化链路不断；worker 恢复后自动回到异步。
+                    logger.warning(
+                        "DatasetVersion event %s Celery 派发失败，降级内联: %s",
+                        event_id, dispatch_error,
+                    )
             dispatch_outcome = _process_claimed_event(
                 session, event_id, token)
             if not _finalize_success(
@@ -472,3 +507,37 @@ def drain_dataset_version_events(
     if own_session:
         session.close()
     return result
+
+
+def run_claimed_event(
+    event_id: str, claim_token: str, *, db: Session | None = None,
+    strict_schema: bool = False,
+) -> dict:
+    """Worker 进程入口：处理一个已被 claim 的事件并确认其终态。
+
+    等价于 sync 模式 drain 对单个事件的处理，但运行在 Celery worker 进程
+    （API 进程只派发）。成功经 _finalize_success 确认；失败经
+    _finalize_failure 回退重试队列；claim 已被接管时抛错（幂等重跑安全）。
+    测试可传入自有 Session；worker 进程默认使用 SessionLocal。
+    """
+    from app.database import SessionLocal
+
+    own_session = db is None
+    session = db or SessionLocal()
+    try:
+        outcome = _process_claimed_event(session, event_id, claim_token)
+        if not _finalize_success(session, event_id, claim_token, outcome):
+            raise RuntimeError(
+                f"DatasetVersion event claim lost before finalize: {event_id}")
+        return outcome.result
+    except Exception as exc:  # noqa: BLE001 - durable retry boundary
+        status = _finalize_failure(session, event_id, claim_token, exc)
+        if status != "retry":
+            logger.warning(
+                "DatasetVersion event %s 失败且 claim 已被接管: %s",
+                event_id, status,
+            )
+        raise
+    finally:
+        if own_session:
+            session.close()

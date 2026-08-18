@@ -187,6 +187,12 @@ class Settings(BaseSettings):
     dataset_event_poll_seconds: int = 2
     dataset_event_claim_timeout_seconds: int = 3600
     dataset_event_batch_size: int = 20
+    # 版本事件处理执行模式：
+    #   async —— API 进程 drain 只派发 Celery 任务（重活在独立 worker 进程
+    #            完成映射对账/整图重建/哨兵屏障并确认 durable 事件），
+    #            Celery 派发失败时降级为内联执行（fail-open，自动化不中断）；
+    #   sync  —— 沿用 drain 线程内联执行（降级开关；测试环境默认）。
+    dataset_event_dispatch_mode: str = "async"
     # Trial materialization runs synchronously but persists its running claim
     # first.  Expired claims are terminalized and can no longer block retry or
     # deletion; late completion is fenced by the per-run claim token.
