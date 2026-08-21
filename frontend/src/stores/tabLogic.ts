@@ -26,9 +26,14 @@ export const EMPTY_NAV_TAB_STATE: NavTabListState = {
   owner: null,
 }
 
+/** 顶栏最多展示的标签数：超出时从最右（最久未访问）开始淘汰。 */
+export const MAX_NAV_TABS = 10
+
 /**
- * 记录一次页面访问：owner 不一致（换账号）先清空；同 key 标签原位更新
- * 标题/路径/最近使用时间，否则按打开顺序追加；该标签成为激活标签。
+ * 记录一次页面访问：owner 不一致（换账号）先清空；标签按最近访问排序，
+ * 被访问的标签更新标题/路径/最近使用时间并移到最左（第一个即当前打开的
+ * 页面），最多保留 MAX_NAV_TABS 个，超出的最久未访问标签被淘汰；
+ * 该标签成为激活标签。
  */
 export function recordVisit(
   state: NavTabListState,
@@ -37,12 +42,8 @@ export function recordVisit(
   now: number,
 ): NavTabListState {
   const base = state.owner === username ? state : { ...EMPTY_NAV_TAB_STATE, owner: username }
-  const existing = base.tabs.find(t => t.key === tab.key)
-  const tabs = existing
-    ? base.tabs.map(t => (t.key === tab.key
-        ? { ...t, title: tab.title, path: tab.path, lastUsedAt: now }
-        : t))
-    : [...base.tabs, { ...tab, lastUsedAt: now }]
+  const visited = { ...tab, lastUsedAt: now }
+  const tabs = [visited, ...base.tabs.filter(t => t.key !== tab.key)].slice(0, MAX_NAV_TABS)
   return { tabs, activeKey: tab.key, owner: username }
 }
 
