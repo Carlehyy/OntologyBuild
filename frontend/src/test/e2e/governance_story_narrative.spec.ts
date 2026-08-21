@@ -118,6 +118,13 @@ async function mockGovernanceStory(page: Page) {
       return json(route, {
         objectTypes: [],
         linkTypes: [],
+        mappings: [{
+          id: 'map-1',
+          entity_class: '采购订单映射',
+          curated_dataset_id: 'ds-1',
+          target_object_type_id: 'ot-order',
+        }],
+        linkMappings: [],
         actions: [{
           id: 'act-mark-review',
           name: 'mark_risk_review',
@@ -134,6 +141,22 @@ async function mockGovernanceStory(page: Page) {
           }],
         }],
       })
+    }
+    if (path === '/api/v2/curated') {
+      return json(route, [{
+        id: 'ds-1', name: '订单 curated', status: 'approved',
+        row_count: 4, quality_score: 1, primary_key: 'order_id',
+        producer_pipeline_id: 'pipe-1', output_key: null, has_review_evidence: true,
+      }])
+    }
+    if (path === '/api/v2/datasets/overview') {
+      return json(route, { items: [] })
+    }
+    if (path === '/api/v2/pipelines') {
+      return json(route, [{
+        id: 'pipe-1', name: '订单管道', status: '已发布',
+        engine: 'n8n', enabled: true,
+      }])
     }
     if (path === `/api/v2/formal/ontologies/${ONTOLOGY_ID}/instance-browser/objects`) {
       return json(route, {
@@ -214,35 +237,43 @@ async function mockGovernanceStory(page: Page) {
   return { decisionBodies }
 }
 
-test('待审批可展开「起因 → 判定 → 后果」故事卡并在故事末尾完成批准', async ({ page }) => {
+test('链路全景呈现七段链路,待审批打开「起因 → 判定 → 后果」详情弹窗并完成批准', async ({ page }) => {
   const mock = await mockGovernanceStory(page)
   await page.goto(`/#/ontologies/${ONTOLOGY_ID}?tab=governance`, { waitUntil: 'domcontentloaded' })
 
   await expect(page.getByTestId('governance-kpi-strip')).toBeVisible()
-  await expect(page.getByTestId('governance-iso-flow')).toBeVisible()
+  await expect(page.getByTestId('governance-chain-panorama')).toBeVisible()
   await expect(page.getByTestId('governance-daily-spark')).toBeVisible()
 
-  // 展开故事卡
-  await page.getByRole('button', { name: /标记风险复核/ }).first().click()
+  // 链路全景:上游映射节点、待审批脉冲节点与链路导读均渲染
+  const panorama = page.getByTestId('governance-chain-panorama')
+  await expect(panorama.getByText('采购订单映射')).toBeVisible()
+  await expect(panorama.getByText('待裁决')).toBeVisible()
+  await expect(panorama.getByRole('button', { name: /采购订单 · O-1001 · 停滞于审批/ })).toBeVisible()
+
+  // 点击待审批条目 → 详情弹窗
+  await page.getByRole('button', { name: '查看待审批详情:标记风险复核' }).click()
+  const story = page.getByRole('dialog', { name: '待审批详情：标记风险复核' })
+  await expect(story).toBeVisible()
 
   // ① 起因
-  await expect(page.getByText('起因 · 哪个数据变了')).toBeVisible()
-  await expect(page.getByText('高风险订单复核标记').first()).toBeVisible()
-  await expect(page.getByText('risk_score=92', { exact: true })).toBeVisible()
-  await expect(page.getByText(/1 个新进入/)).toBeVisible()
+  await expect(story.getByText('起因 · 哪个数据变了')).toBeVisible()
+  await expect(story.getByText('高风险订单复核标记').first()).toBeVisible()
+  await expect(story.getByText('risk_score=92', { exact: true })).toBeVisible()
+  await expect(story.getByText(/1 个新进入/)).toBeVisible()
 
   // ② 判定
-  await expect(page.getByText('判定 · 哨兵为什么认为要动作')).toBeVisible()
-  await expect(page.getByText('监听 采购订单', { exact: false })).toBeVisible()
-  await expect(page.getByText('a.risk_score ≥ 80', { exact: true })).toBeVisible()
+  await expect(story.getByText('判定 · 哨兵为什么认为要动作')).toBeVisible()
+  await expect(story.getByText('监听 采购订单', { exact: false })).toBeVisible()
+  await expect(story.getByText('a.risk_score ≥ 80', { exact: true })).toBeVisible()
 
   // ③ 后果
-  await expect(page.getByText('后果 · 批准会发生什么')).toBeVisible()
-  await expect(page.getByText('高风险订单进入风险集合后，经人工批准将履约状态标记为待风险复核')).toBeVisible()
-  await expect(page.getByText('把 采购订单 · O-1001 的「status」更新为 "risk_review_pending"')).toBeVisible()
+  await expect(story.getByText('后果 · 批准会发生什么')).toBeVisible()
+  await expect(story.getByText('高风险订单进入风险集合后，经人工批准将履约状态标记为待风险复核')).toBeVisible()
+  await expect(story.getByText('把 采购订单 · O-1001 的「status」更新为 "risk_review_pending"')).toBeVisible()
 
-  // 故事末尾裁决(展开区与折叠行各有一个同名按钮,取展开区那个)
-  await page.getByRole('button', { name: '批准并执行' }).last().click()
+  // 弹窗底部裁决 → 既有确认弹窗接管
+  await story.getByRole('button', { name: '批准并执行' }).click()
   const dialog = page.getByRole('dialog', { name: '批准动作：标记风险复核' })
   await expect(dialog).toBeVisible()
   await dialog.getByRole('button', { name: '批准并执行' }).click()
