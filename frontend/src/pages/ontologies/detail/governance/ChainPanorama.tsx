@@ -1,16 +1,20 @@
 /* 治理链路全景画布(@xyflow/react):
-   七段链路(采集→资产湖→映射→实例→哨兵→待审批→动作)真实节点 + 连线;
-   点选节点高亮整条上下游、其余压暗,点画布空白复位;
+   七段链路(采集→资产湖→映射→实例→哨兵→待审批→动作)真实节点 + 流动粒子连线;
+   点选节点仅高亮整条上下游(其余压暗,点空白复位),不做页面跳转;
    待审批节点持续脉冲(当前瓶颈),点击直接打开审批详情弹窗;
-   底部「链路导读」一键定位典型链路。布局为固定列 + 列内纵排,fitView 自适应。 */
+   垂直间距宽松,画布高度按节点数自适应(内容多少就展示多少);
+   底部「链路导读」一键定位典型链路。 */
 import { useCallback, useMemo, useState } from 'react'
 import {
   Background,
+  BaseEdge,
   Controls,
+  getBezierPath,
   Handle,
   Position,
   ReactFlow,
   type Edge,
+  type EdgeProps,
   type Node,
   type NodeProps,
 } from '@xyflow/react'
@@ -28,15 +32,24 @@ import {
   type ChainNodeKind,
 } from './chainModel'
 
-const COLUMN_X = 250
-const NODE_W = 208
-const NODE_H = 64
-const NODE_GAP = 16
+const COLUMN_X = 300
+const NODE_W = 224
+const NODE_H = 72
+const NODE_GAP = 40
 const HEADER_Y = 0
-const FIRST_NODE_Y = 46
+const FIRST_NODE_Y = 52
+const MIN_CANVAS_H = 340
+const MAX_CANVAS_H = 660
 
 interface ChainFlowData extends Record<string, unknown> {
   chainNode: ChainNode
+  dimmed: boolean
+  highlighted: boolean
+}
+
+interface ChainEdgeData extends Record<string, unknown> {
+  stroke: string
+  dash?: string
   dimmed: boolean
   highlighted: boolean
 }
@@ -71,16 +84,16 @@ function ChainNodeCard({ data }: NodeProps<Node<ChainFlowData>>) {
       data-kind={chainNode.kind}
     >
       <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-slate-300" />
-      <div className="flex items-start gap-2">
+      <div className="flex items-start gap-2.5">
         <span className="chain-node-icon">
           <Icon size={14} />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[12px] font-semibold leading-4 text-slate-800" title={chainNode.title}>
+          <span className="block truncate text-[12.5px] font-semibold leading-4 text-slate-800" title={chainNode.title}>
             {chainNode.title}
           </span>
           {chainNode.sub && (
-            <span className="mt-0.5 block truncate text-[10.5px] leading-3.5 text-slate-500" title={chainNode.sub}>
+            <span className="mt-1 block truncate text-[10.5px] leading-4 text-slate-500" title={chainNode.sub}>
               {chainNode.sub}
             </span>
           )}
@@ -99,7 +112,7 @@ function ChainNodeCard({ data }: NodeProps<Node<ChainFlowData>>) {
 function ChainColumnHeader({ data }: NodeProps<Node<{ label: string; count: number } & Record<string, unknown>>>) {
   return (
     <div className="pointer-events-none flex items-center gap-1.5" style={{ width: NODE_W }}>
-      <span className="text-[10px] font-semibold tracking-wider text-slate-400">
+      <span className="text-[10.5px] font-semibold tracking-wider text-slate-400">
         {data.label}
       </span>
       <span className="rounded-full bg-slate-100 px-1.5 py-px text-[9.5px] tabular-nums text-slate-400">
@@ -109,7 +122,49 @@ function ChainColumnHeader({ data }: NodeProps<Node<{ label: string; count: numb
   )
 }
 
+/* 流动粒子连线:基线 + 两个沿线流动的光点(借鉴治理链路全景效果图的动态感),
+   高亮时流动加快,压暗时静止;prefers-reduced-motion 下粒子隐藏。 */
+function ChainFlowEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data }: EdgeProps<Edge<ChainEdgeData>>) {
+  const [path] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
+  const stroke = data?.stroke ?? '#0d9488'
+  const highlighted = Boolean(data?.highlighted)
+  const dimmed = Boolean(data?.dimmed)
+  const dur = highlighted ? '1.6s' : '2.8s'
+  const begin = highlighted ? '-0.8s' : '-1.4s'
+  return (
+    <>
+      <BaseEdge
+        id={id}
+        path={path}
+        style={{
+          stroke,
+          strokeWidth: highlighted ? 2.2 : 1.3,
+          strokeDasharray: data?.dash,
+          opacity: dimmed ? 0.15 : highlighted ? 0.95 : 0.55,
+        }}
+      />
+      {!dimmed && [0, 1].map(index => (
+        <circle
+          key={index}
+          className="chain-edge-particle"
+          r={highlighted ? 3 : 2.4}
+          fill={stroke}
+          opacity={highlighted ? 0.95 : 0.55}
+        >
+          <animateMotion
+            dur={dur}
+            begin={index === 0 ? '0s' : begin}
+            repeatCount="indefinite"
+            path={path}
+          />
+        </circle>
+      ))}
+    </>
+  )
+}
+
 const nodeTypes = { chainNode: ChainNodeCard, chainHeader: ChainColumnHeader }
+const edgeTypes = { chainFlow: ChainFlowEdge }
 
 const EDGE_STYLE: Record<ChainEdge['kind'], { stroke: string; dash?: string }> = {
   flow: { stroke: '#0d9488' },
@@ -123,26 +178,31 @@ export default function ChainPanorama({
   guides,
   isRefreshing,
   onOpenPending,
-  onOpenSentinels,
-  onOpenAutonomy,
-  onOpenGroup,
 }: {
   nodes: ChainNode[]
   edges: ChainEdge[]
   guides: ChainGuide[]
   isRefreshing: boolean
   onOpenPending: (logId: string) => void
-  onOpenSentinels: () => void
-  onOpenAutonomy: () => void
-  onOpenGroup: (group: 'data' | 'data-mapping') => void
 }) {
   const [highlightSet, setHighlightSet] = useState<Set<string> | null>(null)
 
-  const flowNodes = useMemo<Node[]>(() => {
-    const byColumn = new Map<number, ChainNode[]>()
+  const byColumn = useMemo(() => {
+    const grouped = new Map<number, ChainNode[]>()
     for (const node of nodes) {
-      byColumn.set(node.column, [...(byColumn.get(node.column) || []), node])
+      grouped.set(node.column, [...(grouped.get(node.column) || []), node])
     }
+    return grouped
+  }, [nodes])
+
+  // 画布高度按内容最多的列自适应:卡片实际内容多少,就展示多少
+  const canvasHeight = useMemo(() => {
+    const maxCount = Math.max(1, ...[...byColumn.values()].map(list => list.length))
+    const needed = FIRST_NODE_Y + maxCount * (NODE_H + NODE_GAP) + 28
+    return Math.min(MAX_CANVAS_H, Math.max(MIN_CANVAS_H, needed))
+  }, [byColumn])
+
+  const flowNodes = useMemo<Node[]>(() => {
     const result: Node[] = CHAIN_COLUMNS.map(col => ({
       id: `header:${col.column}`,
       type: 'chainHeader',
@@ -168,7 +228,7 @@ export default function ChainPanorama({
       })
     }
     return result
-  }, [nodes, highlightSet])
+  }, [byColumn, highlightSet])
 
   const flowEdges = useMemo<Edge[]>(() => edges.map(edge => {
     const highlighted = Boolean(highlightSet?.has(edge.from) && highlightSet?.has(edge.to))
@@ -178,14 +238,13 @@ export default function ChainPanorama({
       id: edge.id,
       source: edge.from,
       target: edge.to,
-      type: 'bezier',
-      animated: edge.kind === 'hit' && !dimmed,
-      style: {
+      type: 'chainFlow',
+      data: {
         stroke: tone.stroke,
-        strokeWidth: highlighted ? 2.2 : 1.3,
-        strokeDasharray: tone.dash,
-        opacity: dimmed ? 0.15 : highlighted ? 0.95 : 0.55,
-      },
+        dash: tone.dash,
+        dimmed,
+        highlighted,
+      } satisfies ChainEdgeData,
     }
   }), [edges, highlightSet])
 
@@ -198,12 +257,9 @@ export default function ChainPanorama({
     if (node.type !== 'chainNode') return
     const chainNode = (node.data as ChainFlowData).chainNode
     setHighlightSet(collectChainNeighborhood(chainNode.id, edges, aggregateIds))
+    // 点击节点只做链路高亮,不跳转其他页面;待审批节点额外打开详情弹窗
     if (chainNode.kind === 'pending' && chainNode.refId) onOpenPending(chainNode.refId)
-    else if (chainNode.kind === 'sentinel') onOpenSentinels()
-    else if (chainNode.kind === 'action') onOpenAutonomy()
-    else if (chainNode.kind === 'instanceHub') onOpenGroup('data')
-    else if (chainNode.kind === 'pipeline' || chainNode.kind === 'dataset' || chainNode.kind === 'mapping') onOpenGroup('data-mapping')
-  }, [edges, aggregateIds, onOpenPending, onOpenSentinels, onOpenAutonomy, onOpenGroup])
+  }, [edges, aggregateIds, onOpenPending])
 
   const handleGuideClick = useCallback((guide: ChainGuide) => {
     setHighlightSet(new Set(guide.nodeIds))
@@ -222,11 +278,15 @@ export default function ChainPanorama({
           </span>
         )}
       </div>
-      <div className="h-[380px] overflow-hidden rounded-lg border border-slate-100 bg-gradient-to-b from-slate-50/60 to-teal-50/30">
+      <div
+        className="overflow-hidden rounded-lg border border-slate-100 bg-gradient-to-b from-slate-50/60 to-teal-50/30"
+        style={{ height: canvasHeight }}
+      >
         <ReactFlow
           nodes={flowNodes}
           edges={flowEdges}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           fitView
           fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
           minZoom={0.3}

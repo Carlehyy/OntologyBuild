@@ -1,7 +1,7 @@
 /* 治理 Hero(参考数据任务池的简洁排版):
-   ⓪ KPI 极简统计条(小 label + 大数字 + 副标题,整格可点平滑滚动);
+   ⓪ KPI 总览区 —— 左侧四个小卡片(2×2),右侧近 7 日执行心电图;
    ⓪ 近 7 日执行心电图(命中/成功/失败迷你柱图,含零数据空态)。
-   执行链全景已升级为独立组件 ChainPanorama(@xyflow/react)。 */
+   执行链全景为独立组件 ChainPanorama(@xyflow/react)。 */
 import {
   HandMetal, Loader2, Rocket, ScrollText, ShieldAlert,
 } from 'lucide-react'
@@ -16,7 +16,7 @@ function StatCell({ icon: Icon, iconCls, label, value, detail, onClick }: {
     <button
       type="button"
       onClick={onClick}
-      className="group relative px-4 py-1.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 rounded-lg"
+      className="group relative rounded-xl border bg-white px-4 py-3 text-left transition hover:border-teal-200 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
     >
       <span className="flex items-center justify-between gap-2">
         <span className="text-xs text-gray-400">{label}</span>
@@ -82,21 +82,33 @@ function DailySpark({ data, isRefreshing }: { data: DailySparkDatum[]; isRefresh
   )
 }
 
-export function KpiStatBar({
+/** 治理顶部总览:左侧四个 KPI 小卡片(2×2:待审批·决策批准率 / 哨兵在线·自治动作),
+   右侧近 7 日执行心电图(与两行卡片等高),整体位于本体执行链上方。 */
+export function KpiOverviewGrid({
   kpis,
+  dailySpark,
+  isRefreshing,
   onNavigate,
 }: {
   kpis: GovernanceKpis
-  onNavigate: (section: 'pending' | 'autonomy' | 'sentinels' | 'facts') => void
+  dailySpark: DailySparkDatum[]
+  isRefreshing: boolean
+  onNavigate: (section: 'board') => void
 }) {
   const pct = (v: number | null) => (v === null ? '—' : `${Math.round(v * 100)}%`)
   return (
-    <div data-testid="governance-kpi-strip" className="rounded-xl border bg-white px-2 py-2">
-      <div className="grid grid-cols-2 divide-x divide-slate-100 lg:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+      <div data-testid="governance-kpi-strip" className="grid grid-cols-2 content-start gap-4">
         <StatCell icon={HandMetal} iconCls="text-blue-500" label="待审批"
           value={String(kpis.pendingCount)}
           detail={kpis.pendingCount > 0 ? '需要人工裁决' : '全部已处理'}
-          onClick={() => onNavigate('pending')} />
+          onClick={() => onNavigate('board')} />
+        <StatCell icon={ScrollText} iconCls="text-indigo-500" label="决策批准率"
+          value={kpis.approvalRate !== null ? pct(kpis.approvalRate) : '—'}
+          detail={kpis.decisionsTotal > 0
+            ? `累计 ${kpis.decisionsTotal} 次(批准 ${kpis.decisionsApproved} · 拒绝 ${kpis.decisionsRejected})`
+            : '暂无人工决策'}
+          onClick={() => onNavigate('board')} />
         <StatCell icon={ShieldAlert} iconCls="text-rose-500" label="哨兵在线"
           value={kpis.sentinelsTotal > 0 ? `${kpis.sentinelsOnline}/${kpis.sentinelsTotal}` : '—'}
           detail={kpis.sentinelsTotal === 0
@@ -104,35 +116,17 @@ export function KpiStatBar({
             : kpis.sentinelsMuted + kpis.sentinelsDisabled > 0
               ? `影子 ${kpis.sentinelsMuted} · 停用 ${kpis.sentinelsDisabled}`
               : '全部在线'}
-          onClick={() => onNavigate('sentinels')} />
+          onClick={() => onNavigate('board')} />
         <StatCell icon={Rocket} iconCls="text-amber-500" label="自治动作"
           value={kpis.actionsTotal > 0 ? String(kpis.actionsTotal) : '—'}
           detail={kpis.actionsTotal === 0
             ? '尚未配置动作'
             : `自动 ${kpis.levelCounts.L2} · 人审 ${kpis.levelCounts.L1} · 影子 ${kpis.levelCounts.L0}`}
-          onClick={() => onNavigate('autonomy')} />
-        <StatCell icon={ScrollText} iconCls="text-indigo-500" label="决策批准率"
-          value={kpis.approvalRate !== null ? pct(kpis.approvalRate) : '—'}
-          detail={kpis.decisionsTotal > 0
-            ? `累计 ${kpis.decisionsTotal} 次(批准 ${kpis.decisionsApproved} · 拒绝 ${kpis.decisionsRejected})`
-            : '暂无人工决策'}
-          onClick={() => onNavigate('autonomy')} />
+          onClick={() => onNavigate('board')} />
       </div>
-    </div>
-  )
-}
-
-/** 主舞台右侧情境卡:近 7 日执行心电图,随滚动吸附。 */
-export function DailySparkCard({
-  dailySpark,
-  isRefreshing,
-}: {
-  dailySpark: DailySparkDatum[]
-  isRefreshing: boolean
-}) {
-  return (
-    <div className="rounded-xl border bg-white p-4">
-      <DailySpark data={dailySpark} isRefreshing={isRefreshing} />
+      <div className="rounded-xl border bg-white p-4">
+        <DailySpark data={dailySpark} isRefreshing={isRefreshing} />
+      </div>
     </div>
   )
 }

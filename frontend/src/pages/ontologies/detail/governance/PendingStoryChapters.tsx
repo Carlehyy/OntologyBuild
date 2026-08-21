@@ -1,5 +1,6 @@
-/* 待审批「起因 → 判定 → 后果」三段式故事正文。
-   从原 StoryCard 就地展开区抽取,供详情弹窗复用;
+/* 待审批「起因 → 判定 → 后果」三幕故事板。
+   每幕 = 大字叙事标题 + 一句结论 + 精简化证据(实例卡/条件卡/效果清单),
+   幕间以连接线串成故事线——先看懂故事,再看到数据。
    数据查询(目标类型实例、目标实例最近事实)仅在 active 时发起。 */
 import {
   ArrowRight, Bolt, Database, Eye, Loader2, ShieldAlert, Sparkles,
@@ -14,7 +15,7 @@ import {
   buildBindingSentence, buildConditionSentence, buildEffectPreview,
   firingMatchedInstanceIds,
 } from './storyModel'
-import type { PendingLog } from './PendingStoryList'
+import type { PendingLog } from './storyModel'
 
 interface InstanceLite {
   id: string
@@ -43,19 +44,24 @@ const fmtVal = (v: unknown) => {
   return s.length > 30 ? `${s.slice(0, 30)}…` : s
 }
 
-function Chapter({ icon: Icon, tone, title, children }: {
+/** 一幕:序号图标 + 幕标题 + 叙事内容;幕间由连接线串成故事线。 */
+function Act({ icon: Icon, tone, step, title, children }: {
   icon: any
   tone: string
+  step: string
   title: string
   children: React.ReactNode
 }) {
   return (
-    <section className="gov-chapter relative pl-9" aria-label={title}>
-      <span className={`absolute left-0 top-0 flex h-6 w-6 items-center justify-center rounded-full border bg-white text-[10px] font-semibold ${tone}`}>
-        <Icon size={12} />
+    <section className="gov-chapter relative pl-12" aria-label={title}>
+      <span className={`absolute left-0 top-0 flex h-8 w-8 items-center justify-center rounded-full border-2 bg-white ${tone}`}>
+        <Icon size={14} />
       </span>
-      <p className="text-xs font-semibold text-gray-700">{title}</p>
-      <div className="mt-1.5 space-y-1.5 text-xs leading-5 text-gray-600">{children}</div>
+      <p className="flex items-baseline gap-2 pt-1">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-gray-300">{step}</span>
+        <span className="text-sm font-semibold text-gray-800">{title}</span>
+      </p>
+      <div className="mt-2 space-y-2 text-xs leading-5 text-gray-600">{children}</div>
     </section>
   )
 }
@@ -115,58 +121,63 @@ export default function PendingStoryChapters({
   const sentinelTriggered = Boolean(firing) || log.triggerSource === 'sentinel'
 
   return (
-    <div className="relative space-y-4 before:absolute before:bottom-2 before:left-[11px] before:top-2 before:w-px before:bg-slate-200">
-      <Chapter icon={Database} tone="border-sky-200 text-sky-600" title="起因 · 哪个数据变了">
-        {sentinelTriggered && firing ? (
-          <p>
-            {fmtTime(firing.createdAt)},哨兵「<span className="font-medium text-gray-800">{firing.sentinelName}</span>」侦测到数据变化:
-            本批扫描命中 <span className="font-semibold tabular-nums text-gray-800">{firing.matchCount}</span> 个实例
-            {matched.entered.length > 0 && (
-              <>,其中 <span className="font-semibold text-rose-600">{matched.entered.length} 个新进入</span>命中集合</>
-            )}
-            {matched.others.length > 0 && <>(另有 {matched.others.length} 个持续命中)</>}。
-          </p>
-        ) : log.triggerSource === 'manual' ? (
-          <p>由 {log.actorId || '用户'} 在 {fmtTime(log.executedAt)} 手动发起。</p>
-        ) : sentinelTriggered ? (
-          <p>由哨兵在 {fmtTime(log.executedAt)} 侦测到数据变化后发起。</p>
-        ) : (
-          <p>由系统在 {fmtTime(log.executedAt)} 发起。</p>
-        )}
+    <div className="relative space-y-5 before:absolute before:bottom-3 before:left-[15px] before:top-3 before:w-px before:bg-slate-200">
+      <Act icon={Database} tone="border-sky-200 text-sky-600" step="第一幕 · 起因" title="起因 · 哪个数据变了">
+        <p className="text-[13px] leading-6 text-gray-700">
+          {sentinelTriggered && firing ? (
+            <>
+              {fmtTime(firing.createdAt)},哨兵「<span className="font-semibold text-gray-900">{firing.sentinelName}</span>」侦测到数据变化:
+              本批扫描命中 <span className="font-semibold tabular-nums text-gray-900">{firing.matchCount}</span> 个实例
+              {matched.entered.length > 0 && (
+                <>,其中 <span className="font-semibold text-rose-600">{matched.entered.length} 个新进入</span>命中集合</>
+              )}
+              {matched.others.length > 0 && <>(另有 {matched.others.length} 个持续命中)</>}。
+            </>
+          ) : log.triggerSource === 'manual' ? (
+            <>由 {log.actorId || '用户'} 在 {fmtTime(log.executedAt)} 手动发起。</>
+          ) : sentinelTriggered ? (
+            <>由哨兵在 {fmtTime(log.executedAt)} 侦测到数据变化后发起。</>
+          ) : (
+            <>由系统在 {fmtTime(log.executedAt)} 发起。</>
+          )}
+        </p>
         {log.objectInstanceId && (
-          <p>
-            目标实例 <span className="font-medium text-gray-800">{readableTargetSummary(log)}</span>
+          <div className="rounded-lg border border-sky-100 bg-sky-50/50 px-3 py-2.5">
+            <p className="text-[13px] font-semibold text-gray-900">
+              {readableTargetSummary(log)}
+              {typeInstancesQuery.isLoading && <Loader2 size={11} className="ml-1 inline animate-spin text-slate-400" />}
+            </p>
             {objectValues && (
-              <>
+              <div className="mt-1.5 flex flex-wrap gap-x-5 gap-y-1">
                 {Object.entries(objectValues).slice(0, 4).map(([key, value]) => (
-                  <span key={key} className="ml-1.5 rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-slate-500">
+                  <span key={key} className="font-mono text-[11px] text-slate-600" title={`${key}=${String(fmtVal(value))}`}>
                     {key}={fmtVal(value)}
                   </span>
                 ))}
-              </>
+              </div>
             )}
-            {typeInstancesQuery.isLoading && <Loader2 size={11} className="ml-1 inline animate-spin text-slate-400" />}
-          </p>
+          </div>
         )}
         {targetFactsQuery.data && targetFactsQuery.data.length > 0 && (
-          <p className="text-gray-500">
-            最近变化:
+          <div className="space-y-1">
+            <p className="text-[11px] font-medium text-gray-400">最近变化</p>
             {targetFactsQuery.data.slice(0, 3).map(fact => (
-              <span key={fact.id} className="ml-1.5 inline-flex items-center gap-1 rounded bg-white px-1.5 py-0.5 text-[11px] text-slate-500 ring-1 ring-slate-200">
+              <p key={fact.id} className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                <span className="h-1 w-1 shrink-0 rounded-full bg-sky-300" />
                 <span className="font-mono">{fact.propertyName}</span>
                 <ArrowRight size={9} className="text-slate-300" />
-                <span>{fact.present === false ? '(已删除)' : fmtVal(fact.value)}</span>
+                <span className="font-medium text-slate-700">{fact.present === false ? '(已删除)' : fmtVal(fact.value)}</span>
                 <span className="text-slate-300">{fmtTime(fact.recordedAt)}</span>
-              </span>
+              </p>
             ))}
-          </p>
+          </div>
         )}
-      </Chapter>
+      </Act>
 
-      <Chapter icon={ShieldAlert} tone="border-rose-200 text-rose-600" title="判定 · 哨兵为什么认为要动作">
+      <Act icon={ShieldAlert} tone="border-rose-200 text-rose-600" step="第二幕 · 判定" title="判定 · 哨兵为什么认为要动作">
         {sentinel ? (
           <>
-            <p>
+            <p className="text-[13px] leading-6 text-gray-700">
               <span className={`mr-1.5 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ${
                 sentinel.muted
                   ? 'border-amber-200 bg-amber-50 text-amber-600'
@@ -175,15 +186,15 @@ export default function PendingStoryChapters({
                 {sentinel.muted ? <Eye size={10} /> : <Bolt size={10} />}
                 {sentinel.muted ? '影子(只记录不执行)' : '在线'}
               </span>
-              <span className="font-medium text-gray-800">{sentinel.displayName || sentinel.name}</span>
+              <span className="font-semibold text-gray-900">{sentinel.displayName || sentinel.name}</span>
               <span className="ml-1.5 text-gray-500">{buildBindingSentence(sentinel, objectTypeName)}</span>
             </p>
-            <p className="flex flex-wrap items-center gap-1.5">
-              命中条件
-              <span className="rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 font-mono text-[11px] text-rose-600">
+            <div className="rounded-lg border border-rose-100 bg-rose-50/60 px-3 py-2">
+              <p className="text-[11px] text-gray-400">命中条件</p>
+              <p className="mt-0.5 font-mono text-[12px] font-medium text-rose-600">
                 {conditionSentence}
-              </span>
-            </p>
+              </p>
+            </div>
             {firing && (
               <p className="text-gray-500">
                 本次评估:命中 <span className="font-semibold tabular-nums text-gray-700">{firing.matchCount}</span> 组
@@ -200,17 +211,17 @@ export default function PendingStoryChapters({
               : '未找到触发它的哨兵定义(可能已在后续版本中调整),请结合参数与目标评估。'}
           </p>
         )}
-      </Chapter>
+      </Act>
 
-      <Chapter icon={Sparkles} tone="border-amber-200 text-amber-600" title="后果 · 批准会发生什么">
-        <ul className="space-y-1">
+      <Act icon={Sparkles} tone="border-amber-200 text-amber-600" step="第三幕 · 后果" title="后果 · 批准会发生什么">
+        <ul className="space-y-1.5">
           {effectItems.map((item, index) => (
-            <li key={`${item.type}:${index}`} className="flex items-start gap-1.5">
-              <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
-              <span>
-                <span className="text-gray-700">{item.sentence}</span>
+            <li key={`${item.type}:${index}`} className="flex items-start gap-2">
+              <ArrowRight size={12} className="mt-1 shrink-0 text-amber-500" />
+              <span className="text-[13px] leading-5 text-gray-700">
+                {item.sentence}
                 {item.detail && (
-                  <span className="block break-all rounded-md border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] leading-4 text-slate-500 mt-1">
+                  <span className="mt-1 block break-all rounded-md border-l-2 border-amber-200 bg-amber-50/60 px-2.5 py-1.5 font-mono text-[11px] leading-4 text-slate-600">
                     {item.detail}
                   </span>
                 )}
@@ -219,7 +230,7 @@ export default function PendingStoryChapters({
           ))}
         </ul>
         <p className="text-[11px] text-gray-400">批准后立即执行;执行结果与本次决策都会写入事实流,可全程追溯。拒绝则只记录决策,不改动任何数据。</p>
-      </Chapter>
+      </Act>
     </div>
   )
 }

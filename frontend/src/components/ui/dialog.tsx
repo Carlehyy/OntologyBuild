@@ -1,7 +1,9 @@
 /* shadcn 风格的 Dialog 封装(radix primitives),作为全站引入 shadcn
    组件体系的试点。视觉沿用现有 Modal 语言:rounded-2xl、白底、
-   slate 边框与阴影、teal 焦点环;动效复用全局 animate-fade-in /
-   animate-slide-up。关闭按钮渲染在内容之后,保证正文首个可聚焦元素
+   slate 边框与阴影、teal 焦点环。入场动效用 animate-dialog-in
+   (opacity + 独立 scale 属性):slide-up 的 transform 关键帧会覆盖
+   居中定位的 translate,导致弹窗从错位位置滑入(验收反馈)。
+   关闭按钮渲染在内容之后,保证正文首个可聚焦元素
    (如文本域)优先获得焦点。 */
 import * as React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
@@ -38,7 +40,7 @@ function DialogContent({
       <DialogPrimitive.Content
         className={cn(
           'fixed left-1/2 top-1/2 z-[var(--z-modal,80)] w-[min(92vw,32rem)] -translate-x-1/2 -translate-y-1/2',
-          'animate-slide-up rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_24px_64px_rgba(15,23,42,0.18)]',
+          'animate-dialog-in rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_24px_64px_rgba(15,23,42,0.18)]',
           'focus:outline-none',
           className,
         )}

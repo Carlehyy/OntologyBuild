@@ -1,7 +1,7 @@
 /* 待审批详情弹窗(shadcn Dialog):
-   点击待审批条目或链路上的待审批节点打开,
-   完整呈现「起因 → 判定 → 后果」,底部直接裁决;
-   批准/拒绝仍走既有确认弹窗与决策协议,留痕不变。 */
+   点击待审批条目、工作台待审批单元格或链路上的待审批节点打开,
+   以三幕故事板完整呈现「起因 → 判定 → 后果」,底部直接裁决;
+   内容按实际高度自然展示(无卡片内滚条),批准/拒绝仍走既有确认弹窗与决策协议。 */
 import { HandMetal } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import {
@@ -9,10 +9,9 @@ import {
   DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import type {
-  FiringLike, SentinelLike, WorkspaceActionLike,
+  FiringLike, PendingLog, SentinelLike, WorkspaceActionLike,
 } from './storyModel'
 import PendingStoryChapters from './PendingStoryChapters'
-import type { PendingLog } from './PendingStoryList'
 
 export default function PendingStoryDialog({
   ontologyId,
@@ -41,7 +40,7 @@ export default function PendingStoryDialog({
 }) {
   return (
     <Dialog open={Boolean(target)} onOpenChange={open => { if (!open) onClose() }}>
-      <DialogContent className="flex max-h-[86vh] w-[min(94vw,46rem)] flex-col">
+      <DialogContent className="max-h-[92vh] w-[min(94vw,46rem)] overflow-y-auto">
         <DialogHeader>
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
             <HandMetal size={19} />
@@ -51,22 +50,20 @@ export default function PendingStoryDialog({
               {target ? `待审批详情：${target.actionName || target.actionId}` : '待审批详情'}
             </DialogTitle>
             <DialogDescription>
-              「起因 → 判定 → 后果」看明白再裁决;批准/拒绝都会写入事实流留痕。
+              三幕故事看懂这条动作的来龙去脉,看明白再裁决;批准/拒绝都会写入事实流留痕。
             </DialogDescription>
           </div>
         </DialogHeader>
         {target && (
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-slate-100 bg-slate-50/60 px-4 py-3.5">
-            <PendingStoryChapters
-              ontologyId={ontologyId}
-              log={target}
-              firing={firing}
-              sentinel={sentinel}
-              actionDef={actionDef}
-              objectTypeName={objectTypeName}
-              active={Boolean(target)}
-            />
-          </div>
+          <PendingStoryChapters
+            ontologyId={ontologyId}
+            log={target}
+            firing={firing}
+            sentinel={sentinel}
+            actionDef={actionDef}
+            objectTypeName={objectTypeName}
+            active={Boolean(target)}
+          />
         )}
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose} disabled={busy}>

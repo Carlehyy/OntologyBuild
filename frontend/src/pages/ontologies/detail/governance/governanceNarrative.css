@@ -1,25 +1,13 @@
 /* ════════════════════════════════════════════════════════════════
    治理推演 · 叙事动效(纯 CSS,零依赖)
-   - gov-stagger:区块错落入场
    - gov-pulse:哨兵在线雷达脉冲
    - chain-node:链路全景节点(七段色调/高亮/压暗/待审批脉冲)
-   - gov-spark:执行心电图描线
+   - chain-edge-particle:链路边流动光点
+   - gov-bar:执行心电图柱条生长
    - gov-dot-pop:自治履历点阵弹入
+   - gov-level-current:等级路径当前节点呼吸光晕
    全部动画尊重 prefers-reduced-motion。
    ════════════════════════════════════════════════════════════════ */
-
-/* 错落入场 */
-@keyframes govRise {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-.gov-stagger > * { animation: govRise 480ms cubic-bezier(.2,.8,.2,1) both; }
-.gov-stagger > *:nth-child(1) { animation-delay: 0ms; }
-.gov-stagger > *:nth-child(2) { animation-delay: 60ms; }
-.gov-stagger > *:nth-child(3) { animation-delay: 120ms; }
-.gov-stagger > *:nth-child(4) { animation-delay: 180ms; }
-.gov-stagger > *:nth-child(5) { animation-delay: 240ms; }
-.gov-stagger > *:nth-child(6) { animation-delay: 300ms; }
 
 /* 哨兵在线雷达脉冲:在线点外扩散的同心圆 */
 @keyframes govPulse {
@@ -37,7 +25,7 @@
   animation: govPulse 2.2s ease-out infinite;
 }
 
-/* 故事卡章节入场(详情弹窗内章节同样适用) */
+/* 故事板幕次入场(详情弹窗内适用) */
 @keyframes govChapterIn {
   from { opacity: 0; transform: translateX(-6px); }
   to { opacity: 1; transform: translateX(0); }
@@ -89,17 +77,6 @@
 .chain-node-pulse { animation: chainPulse 1.8s ease-in-out infinite; }
 .chain-node-pulse.chain-node-hot { animation: none; }
 
-/* 章节连接线的“流动”虚线 */
-@keyframes govFlowDash {
-  to { background-position-y: 16px; }
-}
-.gov-flowline {
-  background-image: linear-gradient(to bottom, currentColor 45%, transparent 45%);
-  background-size: 1px 16px;
-  background-repeat: repeat-y;
-  animation: govFlowDash 900ms linear infinite;
-}
-
 /* 执行心电图:柱条从底部生长 */
 @keyframes govBarGrow {
   from { transform: scaleY(0); }
@@ -126,9 +103,7 @@
 .gov-level-current { animation: govLevelGlow 2.4s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .gov-stagger > *,
   .gov-pulse::after,
-  .gov-flowline,
   .gov-bar,
   .gov-dot-pop,
   .gov-level-current,
@@ -139,5 +114,9 @@
   .chain-node,
   .chain-node:hover {
     transition: none !important;
+  }
+  /* SMIL 粒子不受 CSS animation 控制,直接隐藏 */
+  .chain-edge-particle {
+    display: none;
   }
 }

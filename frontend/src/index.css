@@ -66,6 +66,16 @@
   animation: slideUp 0.3s ease-out;
 }
 
+/* 弹窗居中入场:只用 opacity + 独立 scale 属性,
+   不触碰 transform,与 -translate-x/y-1/2 居中定位共存。 */
+@keyframes dialogIn {
+  0% { opacity: 0; scale: 0.97; }
+  100% { opacity: 1; scale: 1; }
+}
+.animate-dialog-in {
+  animation: dialogIn 0.22s ease-out;
+}
+
 .animate-slide-in-right {
   animation: slideInRight 0.35s ease-out;
 }

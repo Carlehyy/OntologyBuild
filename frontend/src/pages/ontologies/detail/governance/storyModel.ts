@@ -15,6 +15,12 @@ export interface PendingLogLike {
   triggerSource?: string | null
 }
 
+/** 待审批条目(治理页统一口径,原 PendingStoryList.PendingLog 迁入)。 */
+export interface PendingLog extends PendingLogLike {
+  objectTypeId?: string | null
+  status?: string | null
+}
+
 export interface FiringLike {
   id: string
   sentinelId: string
@@ -125,6 +131,64 @@ export function resolvePendingContext<
     : sentinels.find(item => (item.actionIds || []).includes(log.actionId)) || null
   const actionDef = actions.find(item => item.id === log.actionId) || null
   return { firing, sentinel, actionDef }
+}
+
+/* ═══ 治理工作台(待审批 + 自治等级 + 哨兵 一表汇总) ═══ */
+
+export interface OperationsAutonomyLike {
+  actionId: string
+  actionName: string
+  requiresApproval: boolean
+  level: AutonomyLevelKey
+  sentinels: { id: string; name: string; muted: boolean; enabled: boolean }[]
+  decisions: {
+    approved: number
+    rejected: number
+    total: number
+    recentCount: number
+    recentApprovalRate: number | null
+  }
+  autoRuns: { total: number; failed: number }
+  pending: number
+  recommendation: 'promote' | 'demote' | 'observe' | null
+  recommendationReason: string | null
+  thresholds: { promoteMinDecisions: number; promoteRate: number }
+}
+
+export interface OperationsSentinelView {
+  id: string
+  name: string
+  status: 'online' | 'muted' | 'disabled'
+  recentHits: number
+}
+
+export interface OperationsRow {
+  stat: OperationsAutonomyLike
+  pendings: PendingLog[]
+  sentinelViews: OperationsSentinelView[]
+}
+
+/** 工作台行组装:以动作为中心,并联该动作的待审批条目与绑定哨兵状态;
+   有待审批的动作排在前面(先处理要裁决的),其余保持原顺序。
+   哨兵「命中 N」口径:近期 firing 的 matchCount 求和(与命中实例数一致)。 */
+export function buildOperationsRows(input: {
+  autonomy: OperationsAutonomyLike[]
+  pending: PendingLog[]
+  firings: FiringLike[]
+}): OperationsRow[] {
+  const rows = input.autonomy.map(stat => ({
+    stat,
+    pendings: input.pending.filter(log => log.actionId === stat.actionId),
+    sentinelViews: stat.sentinels.map(sn => ({
+      id: sn.id,
+      name: sn.name,
+      status: (sn.muted ? 'muted' : sn.enabled === false ? 'disabled' : 'online') as OperationsSentinelView['status'],
+      recentHits: input.firings
+        .filter(firing => firing.sentinelId === sn.id)
+        .reduce((sum, firing) => sum + (firing.matchCount || 0), 0),
+    })),
+  }))
+  return rows.sort((a, b) => Number(b.pendings.length > 0) - Number(a.pendings.length > 0))
 }
 
 const OP_LABEL: Record<string, string> = {

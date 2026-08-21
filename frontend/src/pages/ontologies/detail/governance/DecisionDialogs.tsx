@@ -9,7 +9,7 @@ import {
   DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import { readableTargetSummary } from '../tabs/governanceFormat'
-import type { PendingLog } from './PendingStoryList'
+import type { PendingLog } from './storyModel'
 
 const fmtVal = (v: unknown) => {
   if (v === null || v === undefined) return '∅'

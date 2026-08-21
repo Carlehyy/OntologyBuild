@@ -8,9 +8,11 @@ import {
   buildDailySpark,
   buildEffectPreview,
   buildLevelSteps,
+  buildOperationsRows,
   findTriggerFiring,
   firingMatchedInstanceIds,
   renderMessageTemplate,
+  resolvePendingContext,
 } from '../../pages/ontologies/detail/governance/storyModel.ts'
 
 
@@ -182,5 +184,84 @@ describe('buildLevelSteps', () => {
       { key: 'L1', reached: true, current: true },
       { key: 'L2', reached: false, current: false },
     ])
+  })
+})
+
+describe('resolvePendingContext', () => {
+  const sentinels = [
+    { id: 's1', name: '哨兵A', actionIds: ['a1'] },
+    { id: 's2', name: '哨兵B', actionIds: ['a2'] },
+  ]
+  const actions = [{ id: 'a1' }, { id: 'a2' }]
+  it('优先经 firing 硬关联解析哨兵,其次按 actionIds 绑定兜底', () => {
+    const firings = [
+      { id: 'f1', sentinelId: 's2', sentinelName: '哨兵B', status: 'pending', matchCount: 1, actionResults: [{ logId: 'log-1' }] },
+    ]
+    const withFiring = resolvePendingContext({ id: 'log-1', actionId: 'a1' }, firings as any, sentinels as any, actions as any)
+    assert.equal(withFiring.firing?.id, 'f1')
+    assert.equal(withFiring.sentinel?.id, 's2')
+    assert.equal(withFiring.actionDef?.id, 'a1')
+    const fallback = resolvePendingContext({ id: 'log-2', actionId: 'a1' }, [], sentinels as any, actions as any)
+    assert.equal(fallback.firing, null)
+    assert.equal(fallback.sentinel?.id, 's1')
+  })
+})
+
+describe('buildOperationsRows', () => {
+  const autonomy = [
+    {
+      actionId: 'a1', actionName: '标记风险复核', requiresApproval: true, level: 'L1',
+      sentinels: [{ id: 's1', name: '复核标记', muted: false, enabled: true }],
+      decisions: { approved: 1, rejected: 1, total: 2, recentCount: 2, recentApprovalRate: 0.5 },
+      autoRuns: { total: 0, failed: 0 }, pending: 1,
+      recommendation: null, recommendationReason: null,
+      thresholds: { promoteMinDecisions: 10, promoteRate: 0.95 },
+    },
+    {
+      actionId: 'a2', actionName: '风险边沿通知', requiresApproval: false, level: 'L2',
+      sentinels: [{ id: 's2', name: '边沿监控', muted: true, enabled: true }],
+      decisions: { approved: 0, rejected: 0, total: 0, recentCount: 0, recentApprovalRate: null },
+      autoRuns: { total: 21, failed: 1 }, pending: 0,
+      recommendation: null, recommendationReason: null,
+      thresholds: { promoteMinDecisions: 10, promoteRate: 0.95 },
+    },
+  ]
+  const pending = [
+    { id: 'log-1', actionId: 'a1' },
+    { id: 'log-2', actionId: 'a1' },
+  ]
+  const firings = [
+    { id: 'f1', sentinelId: 's2', sentinelName: '边沿监控', status: 'fired', matchCount: 2 },
+    { id: 'f2', sentinelId: 's2', sentinelName: '边沿监控', status: 'fired', matchCount: 1 },
+  ]
+
+  it('按动作并联待审批与哨兵状态,有待审批的动作排前', () => {
+    const rows = buildOperationsRows({ autonomy: autonomy as any, pending: pending as any, firings: firings as any })
+    assert.equal(rows.length, 2)
+    assert.equal(rows[0].stat.actionId, 'a1')
+    assert.deepEqual(rows[0].pendings.map(log => log.id), ['log-1', 'log-2'])
+    assert.equal(rows[1].pendings.length, 0)
+  })
+
+  it('哨兵状态与最近命中数(matchCount 求和)正确推导', () => {
+    const rows = buildOperationsRows({ autonomy: autonomy as any, pending: [] as any, firings: firings as any })
+    const s1 = rows.find(row => row.stat.actionId === 'a1')?.sentinelViews[0]
+    assert.equal(s1?.status, 'online')
+    assert.equal(s1?.recentHits, 0)
+    const s2 = rows.find(row => row.stat.actionId === 'a2')?.sentinelViews[0]
+    assert.equal(s2?.status, 'muted')
+    assert.equal(s2?.recentHits, 3)
+  })
+
+  it('停用哨兵状态为 disabled', () => {
+    const rows = buildOperationsRows({
+      autonomy: [{
+        ...autonomy[0],
+        sentinels: [{ id: 's9', name: '停用哨兵', muted: false, enabled: false }],
+      }] as any,
+      pending: [] as any,
+      firings: [] as any,
+    })
+    assert.equal(rows[0].sentinelViews[0].status, 'disabled')
   })
 })
