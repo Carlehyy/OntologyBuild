@@ -107,8 +107,8 @@ export default function MappingFlowChart({
       },
       series: [{
         type: 'sankey',
-        left: 158,
-        right: 150,
+        left: 190,
+        right: 182,
         top: 14,
         bottom: 14,
         nodeWidth: 12,
@@ -120,6 +120,14 @@ export default function MappingFlowChart({
           fontSize: 11,
           formatter: (params: { data: { displayName?: string } }) => params.data.displayName ?? '',
         },
+        labelLayout: { hideOverlap: true },
+        // 流带直接标注实例产出数，免 hover 即可读出各链路量级（文案与 tooltip 一致）
+        edgeLabel: {
+          show: true,
+          color: labelColor,
+          fontSize: 10,
+          formatter: (params: { data: { realValue?: number } }) => `${(params.data.realValue ?? 0).toLocaleString()} 条`,
+        },
         lineStyle: { color: 'source', opacity: 0.32, curveness: 0.5 },
         data: model.nodes.map(node => ({
           name: node.id,
@@ -129,8 +137,8 @@ export default function MappingFlowChart({
           id: node.id,
           // 数据集标签放节点左侧、元素标签放右侧，避免长名称压在流上
           label: node.kind === 'dataset'
-            ? { position: 'left', overflow: 'truncate', width: 146 }
-            : { position: 'right', overflow: 'truncate', width: 138 },
+            ? { position: 'left', overflow: 'truncate', width: 178 }
+            : { position: 'right', overflow: 'truncate', width: 170 },
           itemStyle: {
             color: colorOf(node.kind),
             borderRadius: 3,

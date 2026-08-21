@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   AlertCircle, AlertTriangle, ArrowRight, Boxes, CheckCircle2, ChevronLeft,
@@ -23,10 +23,10 @@ import './mapping-overview.css'
 
 const MappingFlowChart = lazy(() => import('./MappingFlowChart'))
 
-/** KPI 数字滚动：挂载/变化时 600ms ease-out 过渡到目标值；reduced-motion 直出终值。 */
+/** KPI 数字：挂载直出终值（进页/从字段级映射页返回不再从 0 重放）；数据变化时 600ms ease-out 过渡；reduced-motion 直出终值。 */
 function useCountUp(target: number, duration = 600): number {
-  const [display, setDisplay] = useState(0)
-  const previous = useRef(0)
+  const [display, setDisplay] = useState(target)
+  const previous = useRef(target)
   useEffect(() => {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       previous.current = target
@@ -55,6 +55,29 @@ const PREVIEW_PAGE_SIZES = [10, 20, 50]
 
 type MappingRowStatus = 'ready' | 'no-data' | 'incomplete' | 'type-risk' | 'unmapped' | 'missing-source'
 type MappingFilter = 'all' | 'issue' | 'object' | 'relation'
+
+/** URL element 参数解析：与图谱页 focus 参数同 kind:id 约定；仅作新增可选参数，不改既有深链行为。 */
+function parseElementParam(raw: string | null): TargetSelection | null {
+  if (!raw) return null
+  const separator = raw.indexOf(':')
+  if (separator <= 0 || separator === raw.length - 1) return null
+  const kind = raw.slice(0, separator)
+  const id = raw.slice(separator + 1)
+  return kind === 'object' || kind === 'relation' ? { kind, id } : null
+}
+
+/** 筛选/搜索按本体隔离存 sessionStorage，从字段级映射页返回时不丢。 */
+const dmoFilterKey = (ontologyId: string) => `dmo:mapping-filter:${ontologyId}`
+const dmoSearchKey = (ontologyId: string) => `dmo:mapping-search:${ontologyId}`
+function readSessionFilter(ontologyId: string): MappingFilter {
+  try {
+    const value = window.sessionStorage.getItem(dmoFilterKey(ontologyId))
+    return value === 'issue' || value === 'object' || value === 'relation' ? value : 'all'
+  } catch { return 'all' }
+}
+function readSessionSearch(ontologyId: string): string {
+  try { return window.sessionStorage.getItem(dmoSearchKey(ontologyId)) ?? '' } catch { return '' }
+}
 
 interface FieldPair {
   source: string
@@ -272,9 +295,10 @@ function DatasetPreviewDialog({ dataset, onClose }: { dataset: MappingDataset; o
 export default function DataMappingOverview({ ontologyId }: { ontologyId: string }) {
   const navigate = useNavigate()
   const data = useMappingData(ontologyId, true)
-  const [selected, setSelected] = useState<TargetSelection | null>(null)
-  const [mappingSearch, setMappingSearch] = useState('')
-  const [mappingFilter, setMappingFilter] = useState<MappingFilter>('all')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [selected, setSelected] = useState<TargetSelection | null>(() => parseElementParam(searchParams.get('element')))
+  const [mappingSearch, setMappingSearch] = useState(() => readSessionSearch(ontologyId))
+  const [mappingFilter, setMappingFilter] = useState<MappingFilter>(() => readSessionFilter(ontologyId))
   const [previewDataset, setPreviewDataset] = useState<MappingDataset | null>(null)
   const [reconcileTarget, setReconcileTarget] = useState<MappingRow | null>(null)
   const [reconcilingMappingId, setReconcilingMappingId] = useState<string | null>(null)
@@ -282,6 +306,25 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
   const [rowHoverKey, setRowHoverKey] = useState<string | null>(null)
   const [chartHoverKey, setChartHoverKey] = useState<string | null>(null)
   const rowRefs = useRef(new Map<string, HTMLElement>())
+
+  // 选中行同步到 URL（replace 不写历史），从字段级映射页返回/刷新后保持对照上下文
+  useEffect(() => {
+    const next = selected ? `${selected.kind}:${selected.id}` : null
+    if (searchParams.get('element') === next) return
+    const params = new URLSearchParams(searchParams)
+    if (next) params.set('element', next)
+    else params.delete('element')
+    setSearchParams(params, { replace: true })
+  }, [selected, searchParams, setSearchParams])
+
+  // 筛选与搜索词存 sessionStorage：从字段级映射页返回后不丢
+  useEffect(() => {
+    try { window.sessionStorage.setItem(dmoFilterKey(ontologyId), mappingFilter) } catch { /* noop */ }
+  }, [mappingFilter, ontologyId])
+  useEffect(() => {
+    try { window.sessionStorage.setItem(dmoSearchKey(ontologyId), mappingSearch) } catch { /* noop */ }
+  }, [mappingSearch, ontologyId])
+
   const [reconcileFeedback, setReconcileFeedback] = useState<{
     mappingId: string
     tone: 'success' | 'error'
@@ -858,8 +901,10 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
                 )}
               </section>
 
-              {selectedRow.status !== 'ready' && selectedRow.status !== 'no-data' && (() => {
-                const nextStepCopy: Record<string, string> = {
+              {(() => {
+                const nextStepCopy: Record<MappingRowStatus, string> = {
+                  ready: '数据链路已连通并持续产出实例。如需调整字段连接或更换数据资产，需在草稿版本中修改。',
+                  'no-data': '映射已连通但尚未灌入数据，可直接灌入产出实例；如需调整映射配置，需在草稿版本中修改。',
                   unmapped: '该元素尚未连接数据资产。建立映射需在草稿版本中进行：前往图谱页，基于当前发布创建草稿后即可配置。',
                   incomplete: '仍有字段未连接数据列。可先查看字段级映射定位缺口；补齐需在草稿版本中进行。',
                   'type-risk': '部分来源字段与本体字段类型不一致，灌入后可能产生异常值。可查看字段级映射核对；修改需在草稿版本中进行。',
