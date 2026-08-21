@@ -155,6 +155,55 @@ test('顶栏多标签页：打开、切换、域内路径恢复、关闭与刷�
   await expect(page).toHaveURL(/\/#\/agent$/)
   await expect(tabList.getByRole('tab', { name: '本体助手' })).toHaveAttribute('aria-selected', 'true')
 })
+
+test('顶栏多标签页：按最近访问从左往右排序，最多保留 10 个', async ({ page }) => {
+  await mockNavTabs(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+
+  const tabList = page.getByRole('tablist', { name: '页面标签' })
+  const tabs = tabList.getByRole('tab')
+
+  // 依次访问 11 个不同页面
+  const visited = [
+    { path: '/agent', title: '本体助手' },
+    { path: '/explore', title: '业务探索' },
+    { path: '/ontologies', title: '本体管理' },
+    { path: '/world-model/models', title: '世界模型 · 推演模型' },
+    { path: '/world-model/services', title: '世界模型 · 推演服务' },
+    { path: '/world-model/calls', title: '世界模型 · 调用记录' },
+    { path: '/data/pipelines', title: '数据通道 · 数据流水线' },
+    { path: '/data/structured', title: '数据通道 · 数据资产湖' },
+    { path: '/events', title: '事件登记' },
+    { path: '/api-hub/history', title: '接口代理 · 调用历史' },
+    { path: '/models', title: '模型配置' },
+  ]
+  for (const item of visited) {
+    await page.goto(`/#${item.path}`)
+    await expect(tabList.getByRole('tab', { name: item.title })).toHaveAttribute('aria-selected', 'true')
+  }
+
+  // 最多 10 个：最早访问的“本体助手”被淘汰，最左为当前页面，依次为最近访问
+  await expect(tabs).toHaveCount(10)
+  const expectedOrder = visited.slice(1).reverse().map(item => item.title)
+  for (const [index, title] of expectedOrder.entries()) {
+    await expect(tabs.nth(index)).toHaveAttribute('title', title)
+  }
+  await expect(tabList.getByRole('tab', { name: '本体助手' })).toHaveCount(0)
+
+  // 刷新后顺序与淘汰结果从 localStorage 恢复
+  await page.reload()
+  await expect(tabs).toHaveCount(10)
+  for (const [index, title] of expectedOrder.entries()) {
+    await expect(tabs.nth(index)).toHaveAttribute('title', title)
+  }
+
+  // 再次访问中间的页面，该标签移到最左且不重复、不超限
+  await page.goto('/#/events')
+  await expect(tabs).toHaveCount(10)
+  await expect(tabs.nth(0)).toHaveAttribute('title', '事件登记')
+  await expect(tabs.nth(1)).toHaveAttribute('title', '模型配置')
+  await expect(tabList.getByRole('tab', { name: '事件登记' })).toHaveCount(1)
+})
 test('标签可见标题使用平台导航的一级/二级菜单标签，不使用页面级描述', async ({ page }) => {
   await mockNavTabs(page)
   await page.setViewportSize({ width: 1440, height: 900 })

@@ -7,6 +7,7 @@ import { canAccessPath, defaultLandingPath, navTabForPath } from '@/config/navig
 
 /**
  * 顶栏多标签页（tags-view）：按叶子菜单项粒度记录访问过的页面，
+ * 标签按最近访问从左往右排序（最左为当前页面），最多展示 10 个。
  * 点击标签切回该菜单域内最后访问的路径，不做 keep-alive（切换即重新挂载）。
  * 标签列表持久化在 localStorage（nav-tabs），刷新后恢复；仅 md 及以上屏幕显示。
  */

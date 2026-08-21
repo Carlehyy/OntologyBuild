@@ -5,6 +5,7 @@ import {
   closeTab,
   recordVisit,
   EMPTY_NAV_TAB_STATE,
+  MAX_NAV_TABS,
   type NavTabListState,
 } from '../../../stores/tabLogic.ts'
 
@@ -25,24 +26,48 @@ describe('recordVisit', () => {
     assert.equal(next.tabs[0].lastUsedAt, 1000)
   })
 
-  it('appends tabs in open order', () => {
+  it('prepends tabs in most-recently-visited order', () => {
     let state = recordVisit(EMPTY_NAV_TAB_STATE, 'admin', { key: 'agent', title: '本体助手', path: '/agent' }, 1000)
     state = recordVisit(state, 'admin', { key: 'ontologies', title: '本体管理', path: '/ontologies' }, 2000)
-    assert.deepEqual(state.tabs.map(t => t.key), ['agent', 'ontologies'])
+    assert.deepEqual(state.tabs.map(t => t.key), ['ontologies', 'agent'])
     assert.equal(state.activeKey, 'ontologies')
   })
 
-  it('reuses the same tab for in-domain navigation, updating title/path/lastUsedAt', () => {
+  it('reuses the same tab for in-domain navigation, updating title/path/lastUsedAt and moving it to the front', () => {
     let state = recordVisit(EMPTY_NAV_TAB_STATE, 'admin', { key: 'agent', title: '本体助手', path: '/agent' }, 1000)
     state = recordVisit(state, 'admin', { key: 'ontologies', title: '本体管理', path: '/ontologies' }, 2000)
-    state = recordVisit(state, 'admin', { key: 'ontologies', title: '本体管理 · 详情', path: '/ontologies/123' }, 3000)
+    state = recordVisit(state, 'admin', { key: 'agent', title: '本体助手', path: '/agent?ontology_id=1' }, 3000)
     assert.equal(state.tabs.length, 2)
     assert.deepEqual(state.tabs.map(t => t.key), ['agent', 'ontologies'])
-    const tab = state.tabs[1]
-    assert.equal(tab.title, '本体管理 · 详情')
-    assert.equal(tab.path, '/ontologies/123')
+    const tab = state.tabs[0]
+    assert.equal(tab.title, '本体助手')
+    assert.equal(tab.path, '/agent?ontology_id=1')
     assert.equal(tab.lastUsedAt, 3000)
-    assert.equal(state.activeKey, 'ontologies')
+    assert.equal(state.activeKey, 'agent')
+  })
+
+  it('keeps at most MAX_NAV_TABS tabs, evicting the least recently visited', () => {
+    let state = EMPTY_NAV_TAB_STATE
+    for (let i = 1; i <= MAX_NAV_TABS + 1; i += 1) {
+      state = recordVisit(state, 'admin', { key: `p${i}`, title: `页面${i}`, path: `/p${i}` }, i * 1000)
+    }
+    assert.equal(state.tabs.length, MAX_NAV_TABS)
+    assert.deepEqual(
+      state.tabs.map(t => t.key),
+      Array.from({ length: MAX_NAV_TABS }, (_, i) => `p${MAX_NAV_TABS + 1 - i}`),
+    )
+    assert.equal(state.activeKey, `p${MAX_NAV_TABS + 1}`)
+  })
+
+  it('revisiting a tab when full moves it to the front without evicting it', () => {
+    let state = EMPTY_NAV_TAB_STATE
+    for (let i = 1; i <= MAX_NAV_TABS; i += 1) {
+      state = recordVisit(state, 'admin', { key: `p${i}`, title: `页面${i}`, path: `/p${i}` }, i * 1000)
+    }
+    state = recordVisit(state, 'admin', { key: 'p1', title: '页面1', path: '/p1' }, 999000)
+    assert.equal(state.tabs.length, MAX_NAV_TABS)
+    assert.equal(state.tabs[0].key, 'p1')
+    assert.equal(state.activeKey, 'p1')
   })
 
   it('resets the tab list when the signed-in user changes', () => {
