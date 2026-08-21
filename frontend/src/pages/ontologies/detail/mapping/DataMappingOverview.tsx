@@ -18,10 +18,10 @@ import {
   mappingTargetId, matchAppliedVersion, typesCompatible, userFieldMapping,
   useMappingData, type DatasetReviewState, type MappingDataset,
 } from './mapping-data'
-import type { FlowChartRow } from './MappingFlowChart'
+import type { ChainFlowRow } from './MappingChainPanorama'
 import './mapping-overview.css'
 
-const MappingFlowChart = lazy(() => import('./MappingFlowChart'))
+const MappingChainPanorama = lazy(() => import('./MappingChainPanorama'))
 
 /** KPI 数字：挂载直出终值（进页/从字段级映射页返回不再从 0 重放）；数据变化时 600ms ease-out 过渡；reduced-motion 直出终值。 */
 function useCountUp(target: number, duration = 600): number {
@@ -292,6 +292,238 @@ function DatasetPreviewDialog({ dataset, onClose }: { dataset: MappingDataset; o
   )
 }
 
+/** 数据血缘详情弹窗：点击清单行或全景图元素节点打开；数据预览/灌入确认等上层弹窗叠在其上。 */
+function LineageDetailDialog({
+  row,
+  ontologyId,
+  datasetVersionLists,
+  reconcileFeedback,
+  reconcilingMappingId,
+  onClose,
+  onPreviewDataset,
+  onReconcile,
+  onOpenWorkspace,
+  onOpenInstances,
+  onCreateDraft,
+}: {
+  row: MappingRow
+  ontologyId: string
+  datasetVersionLists: ReturnType<typeof useMappingData>['datasetVersionLists']
+  reconcileFeedback: { mappingId: string; tone: 'success' | 'error'; message: string } | null
+  reconcilingMappingId: string | null
+  onClose: () => void
+  onPreviewDataset: (dataset: MappingDataset) => void
+  onReconcile: (row: MappingRow) => void
+  onOpenWorkspace: (selection: TargetSelection) => void
+  onOpenInstances: (row: MappingRow) => void
+  onCreateDraft: () => void
+}) {
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      // 上层还有数据预览或灌入确认弹窗时，Esc 交给上层处理
+      if (document.querySelector('.dmo-preview-backdrop, .dmo-reconcile-backdrop')) return
+      onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [onClose])
+
+  const qualityDatasets = row.datasets.filter(dataset => dataset.quality != null)
+  const averageQuality = qualityDatasets.length
+    ? Math.round(qualityDatasets.reduce((sum, dataset) => {
+      const quality = Number(dataset.quality)
+      return sum + (quality <= 1 ? quality * 100 : quality)
+    }, 0) / qualityDatasets.length)
+    : null
+  const nextStepCopy: Record<MappingRowStatus, string> = {
+    ready: '数据链路已连通并持续产出实例。如需调整字段连接或更换数据资产，需在草稿版本中修改。',
+    'no-data': '映射已连通但尚未灌入数据，可直接灌入产出实例；如需调整映射配置，需在草稿版本中修改。',
+    unmapped: '该元素尚未连接数据资产。建立映射需在草稿版本中进行：前往图谱页，基于当前发布创建草稿后即可配置。',
+    incomplete: '仍有字段未连接数据列。可先查看字段级映射定位缺口；补齐需在草稿版本中进行。',
+    'type-risk': '部分来源字段与本体字段类型不一致，灌入后可能产生异常值。可查看字段级映射核对；修改需在草稿版本中进行。',
+    'missing-source': '映射引用的数据资产当前不可见，可能被删除或已失效。需在草稿版本中重新绑定数据资产。',
+  }
+
+  return createPortal(
+    <div className="dmo-lineage-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+      <section className="dmo-lineage-dialog" role="dialog" aria-modal="true" aria-labelledby="dmo-lineage-title">
+        <header className="dmo-lineage-header">
+          <span className="dmo-lineage-icon">{row.kind === 'object' ? <Boxes size={17} /> : <GitBranch size={17} />}</span>
+          <div className="dmo-lineage-heading">
+            <div><h3 id="dmo-lineage-title">{row.name}</h3><em className="dmo-status" data-status={row.status}>{row.status === 'ready' && <CheckCircle2 size={12} />}{STATUS_COPY[row.status].label}</em></div>
+            <p>{row.kind === 'object' ? '对象实体' : '实体关系'} · {row.technicalName} · 数据血缘详情</p>
+          </div>
+          <button type="button" onClick={() => onOpenWorkspace(row.selection)} aria-label="查看该元素字段映射" title="在字段级映射视图中查看该元素"><Workflow size={15} /></button>
+          <button type="button" onClick={onClose} aria-label="关闭血缘详情"><X size={17} /></button>
+        </header>
+
+        <div className="dmo-lineage-body">
+          <section className="dmo-status-note" data-status={row.status}>
+            {row.status === 'ready' ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
+            <div>
+              <b>{STATUS_COPY[row.status].detail}</b>
+              <small>
+                {row.instanceCount > 0 ? (
+                  <a
+                    className="dmo-inline-link"
+                    href={`#/ontologies/${ontologyId}?tab=data&type=${row.kind === 'object' ? 'object' : 'link'}:${row.selection.id}`}
+                    title={`查看「${row.name}」的实例数据`}
+                    onClick={event => {
+                      event.preventDefault()
+                      onOpenInstances(row)
+                    }}
+                  >{row.instanceCount.toLocaleString()} 条实例</a>
+                ) : `${row.instanceCount.toLocaleString()} 条实例`}
+                可供实例查询、业务探索与治理规则使用
+              </small>
+            </div>
+          </section>
+
+          <section className="dmo-lineage">
+            <h3><Link2 size={14} />数据链路</h3>
+            <div className="dmo-lineage-route">
+              <span className="dmo-route-sources">
+                {row.datasets.length > 0
+                  ? row.datasets.map(dataset => <i key={dataset.id}><Database size={12} />{dataset.name}</i>)
+                  : <i data-empty="true"><Database size={12} />未连接数据资产</i>}
+              </span>
+              <ArrowRight size={15} />
+              <span className="dmo-route-target">{row.kind === 'object' ? <Boxes size={12} /> : <GitBranch size={12} />}{row.name}</span>
+            </div>
+          </section>
+
+          {row.datasets.length > 0 && (
+            <section className="dmo-source-detail">
+              <h3>来源数据资产</h3>
+              {row.datasets.map(dataset => {
+                const quality = dataset.quality == null ? null : Math.round(Number(dataset.quality) <= 1 ? Number(dataset.quality) * 100 : Number(dataset.quality))
+                const review = datasetReviewState(dataset)
+                const applied = matchAppliedVersion(
+                  datasetVersionLists[dataset.id] || [],
+                  row.appliedVersionByDataset[dataset.id] ?? null,
+                )
+                const appliedAt = applied ? formatShortDateTime(applied.processedAt) : ''
+                const previewBlocked = isReviewIssue(review)
+                return (
+                  <div className="dmo-source-item" key={dataset.id}>
+                    <div className="dmo-source-row">
+                      <span className={`dmo-source-icon dmo-source-icon--${dataset.source}`}><Table2 size={14} /></span>
+                      <span>
+                        <i className="dmo-source-name"><b title={dataset.name}>{dataset.name}</b><ReviewBadge state={review} /></i>
+                        <small title={applied ? `已灌入版本 v${applied.versionNo}，产出于 ${formatFullDateTime(applied.processedAt)}` : undefined}>
+                          {dataset.sourceLabel} · {dataset.rows == null ? '暂无行数' : `${dataset.rows.toLocaleString()} 行`}{quality == null ? '' : ` · 质量 ${quality}%`}{applied ? ` · 已灌入 v${applied.versionNo}${appliedAt ? ` · ${appliedAt}` : ''}` : ''}
+                        </small>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onPreviewDataset(dataset)}
+                        aria-label={`预览数据源 ${dataset.name}`}
+                        disabled={previewBlocked}
+                        title={isReviewIssue(review) ? REVIEW_BADGE_COPY[review].reason : `预览数据源 ${dataset.name}`}
+                      ><Eye size={14} />预览</button>
+                      <a
+                        className="dmo-source-open"
+                        href={`#/data/structured?dataset=${dataset.id}`}
+                        title={`在数据管理中查看 ${dataset.name}`}
+                        aria-label={`在数据管理中查看 ${dataset.name}`}
+                      ><ExternalLink size={13} /></a>
+                    </div>
+                    {review === 'rejected' && (
+                      <p className="dmo-source-warning" role="note">当前版本已被拒绝，仅保留审计追溯；不可预览与重新灌入。</p>
+                    )}
+                  </div>
+                )
+              })}
+              {averageQuality != null && <p>来源数据平均质量 <b>{averageQuality}%</b></p>}
+            </section>
+          )}
+
+          {row.kind === 'object' && row.mappingId && (() => {
+            const boundReview = worstReviewState(row.datasets)
+            const reviewBlocked = isReviewIssue(boundReview)
+            const busy = reconcilingMappingId === row.mappingId
+            return (
+              <section className="dmo-reconcile">
+                <div>
+                  <b>重新灌入已批准数据</b>
+                  <small>只读取当前映射绑定的最新已批准版本，按当前发布结构重写对象与关系实例，并触发一次哨兵评估。</small>
+                </div>
+                <button
+                  type="button"
+                  disabled={reconcilingMappingId !== null || reviewBlocked}
+                  aria-busy={busy}
+                  title={reviewBlocked ? '来源数据集已拒绝/待审核，不能灌入' : undefined}
+                  onClick={() => onReconcile(row)}
+                >
+                  {busy
+                    ? <Loader2 size={13} className="animate-spin" />
+                    : <RefreshCw size={13} />}
+                  {busy ? '正在灌入…' : '立即灌入'}
+                </button>
+                {reviewBlocked && (
+                  <p className="dmo-reconcile-note" data-tone="error" role="note">
+                    <AlertCircle size={13} /><span>来源数据集{isReviewIssue(boundReview) ? REVIEW_BADGE_COPY[boundReview].label : ''}，不能灌入；请先完成数据审核。</span>
+                  </p>
+                )}
+                {!reviewBlocked && reconcileFeedback?.mappingId === row.mappingId && (
+                  <p
+                    className="dmo-reconcile-note"
+                    role={reconcileFeedback.tone === 'error' ? 'alert' : 'status'}
+                    data-tone={reconcileFeedback.tone}
+                  >
+                    {reconcileFeedback.tone === 'success'
+                      ? <CheckCircle2 size={13} />
+                      : <AlertCircle size={13} />}
+                    <span>{reconcileFeedback.message}</span>
+                  </p>
+                )}
+              </section>
+            )
+          })()}
+
+          <section className="dmo-fields">
+            <h3><span>字段对照</span><em>{row.mappedFields} / {row.totalFields}</em></h3>
+            {row.fieldPairs.length > 0 ? (
+              <div className="dmo-field-pairs">
+                {row.fieldPairs.map((pair, index) => (
+                  <div key={`${pair.source}:${pair.target}:${index}`} data-risk={pair.compatible === false}>
+                    <span><b>{pair.source}</b><small>{pair.sourceType || '来源字段'}</small></span>
+                    <ArrowRight size={13} />
+                    <span><b>{pair.target}</b><small>{pair.targetType || '本体字段'}</small></span>
+                    {pair.compatible === false && <AlertTriangle size={13} />}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="dmo-field-empty">尚无字段连接</div>
+            )}
+            {row.missingFields.length > 0 && (
+              <div className="dmo-missing-fields"><b>待连接字段</b><span>{row.missingFields.map(field => <i key={field}>{field}</i>)}</span></div>
+            )}
+          </section>
+
+          <section className="dmo-next-step">
+            <div><b>下一步</b><small>{nextStepCopy[row.status]}</small></div>
+            <div className="dmo-next-step-actions">
+              {row.status !== 'unmapped' && (
+                <button type="button" onClick={() => onOpenWorkspace(row.selection)}>查看字段映射<ArrowRight size={13} /></button>
+              )}
+              <button type="button" className="dmo-next-step-draft" onClick={onCreateDraft}>前往图谱页创建草稿</button>
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>,
+    document.body,
+  )
+}
+
 export default function DataMappingOverview({ ontologyId }: { ontologyId: string }) {
   const navigate = useNavigate()
   const data = useMappingData(ontologyId, true)
@@ -457,9 +689,10 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
 
   const mappingRows = [...objectRows, ...relationRows]
   const issueRows = mappingRows.filter(row => row.status !== 'ready')
-  const selectedRow = mappingRows.find(row => row.kind === selected?.kind && row.selection.id === selected?.id)
-    || issueRows[0]
-    || mappingRows[0]
+  // 血缘详情改为弹窗：仅显式选中（含 URL element 参数深链）才打开，不再默认回退首行
+  const dialogRow = (selected
+    ? mappingRows.find(row => row.kind === selected.kind && row.selection.id === selected.id)
+    : null) ?? null
   const normalizedSearch = mappingSearch.trim().toLowerCase()
   const filteredRows = mappingRows.filter(row => {
     if (mappingFilter === 'issue' && row.status === 'ready') return false
@@ -483,12 +716,6 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
   const issueSummary = (['unmapped', 'missing-source', 'type-risk', 'incomplete', 'no-data'] as const)
     .map(status => ({ status, label: STATUS_COPY[status].label, count: mappingRows.filter(row => row.status === status).length }))
     .filter(item => item.count > 0)
-  const selectedQuality = selectedRow?.datasets.filter(dataset => dataset.quality != null).length
-    ? Math.round(selectedRow.datasets.filter(dataset => dataset.quality != null).reduce((sum, dataset) => {
-      const quality = Number(dataset.quality)
-      return sum + (quality <= 1 ? quality * 100 : quality)
-    }, 0) / selectedRow.datasets.filter(dataset => dataset.quality != null).length)
-    : null
   const openMappingWorkspace = (selection?: TargetSelection) => {
     const params = new URLSearchParams({ view: 'mapping' })
     if (selection) params.set('focus', `${selection.kind}:${selection.id}`)
@@ -533,12 +760,13 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
     setSelected(row.selection)
     rowRefs.current.get(key)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
-  const flowRows = useMemo<FlowChartRow[]>(() => mappingRows.map(row => ({
+  const flowRows = useMemo<ChainFlowRow[]>(() => mappingRows.map(row => ({
     key: row.key,
     kind: row.kind,
     name: row.name,
     mappingExists: row.mappingExists,
     instanceCount: row.instanceCount,
+    status: row.status,
     statusLabel: STATUS_COPY[row.status].label,
     mappedFields: row.mappedFields,
     totalFields: row.totalFields,
@@ -627,10 +855,10 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
           </div>
         ) : (
           <Suspense fallback={<div className="dmo-flow-skeleton" aria-label="正在加载供给全景图" />}>
-            <MappingFlowChart
+            <MappingChainPanorama
               rows={flowRows}
               hoverKey={rowHoverKey}
-              selectedKey={selectedRow?.key ?? null}
+              selectedKey={dialogRow?.key ?? null}
               onSelectElement={selectFromChart}
               onPreviewDataset={(datasetId) => {
                 const dataset = data.datasets.find(item => item.id === datasetId)
@@ -671,7 +899,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
           </div>
           <div className="dmo-row-list">
             {filteredRows.map(row => {
-              const active = selectedRow?.key === row.key
+              const active = dialogRow?.key === row.key
               const rowReview = worstReviewState(row.datasets)
               return (
                 <div
@@ -743,197 +971,30 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
             {filteredRows.length === 0 && mappingRows.length > 0 && <div className="dmo-list-empty"><Search size={20} /><span>没有符合条件的映射</span></div>}
           </div>
         </main>
-
-        <aside className="dmo-inspector" aria-label="选中映射的数据血缘详情">
-          <div className="dmo-inspector-head">
-            <div><b>数据血缘详情</b><small>数据如何进入当前本体元素</small></div>
-            <button type="button" onClick={() => selectedRow && openMappingWorkspace(selectedRow.selection)} aria-label="查看该元素字段映射" title="在字段级映射视图中查看该元素"><Workflow size={15} /></button>
-          </div>
-          {selectedRow ? (
-            <div className="dmo-inspector-body">
-              <section className="dmo-selection-title">
-                <span>{selectedRow.kind === 'object' ? <Boxes size={17} /> : <GitBranch size={17} />}</span>
-                <div><b>{selectedRow.name}</b><small>{selectedRow.kind === 'object' ? '对象实体' : '实体关系'} · {selectedRow.technicalName}</small></div>
-                <em className="dmo-status" data-status={selectedRow.status}>{STATUS_COPY[selectedRow.status].label}</em>
-              </section>
-
-              <section className="dmo-status-note" data-status={selectedRow.status}>
-                {selectedRow.status === 'ready' ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
-                <div>
-                  <b>{STATUS_COPY[selectedRow.status].detail}</b>
-                  <small>
-                    {selectedRow.instanceCount > 0 ? (
-                      <a
-                        className="dmo-inline-link"
-                        href={`#/ontologies/${ontologyId}?tab=data&type=${selectedRow.kind === 'object' ? 'object' : 'link'}:${selectedRow.selection.id}`}
-                        title={`查看「${selectedRow.name}」的实例数据`}
-                        onClick={event => {
-                          event.preventDefault()
-                          openInstances(selectedRow)
-                        }}
-                      >{selectedRow.instanceCount.toLocaleString()} 条实例</a>
-                    ) : `${selectedRow.instanceCount.toLocaleString()} 条实例`}
-                    可供实例查询、业务探索与治理规则使用
-                  </small>
-                </div>
-              </section>
-
-              <section className="dmo-lineage">
-                <h3><Link2 size={14} />数据链路</h3>
-                <div className="dmo-lineage-route">
-                  <span className="dmo-route-sources">
-                    {selectedRow.datasets.length > 0
-                      ? selectedRow.datasets.map(dataset => <i key={dataset.id}><Database size={12} />{dataset.name}</i>)
-                      : <i data-empty="true"><Database size={12} />未连接数据资产</i>}
-                  </span>
-                  <ArrowRight size={15} />
-                  <span className="dmo-route-target">{selectedRow.kind === 'object' ? <Boxes size={12} /> : <GitBranch size={12} />}{selectedRow.name}</span>
-                </div>
-              </section>
-
-              {selectedRow.datasets.length > 0 && (
-                <section className="dmo-source-detail">
-                  <h3>来源数据资产</h3>
-                  {selectedRow.datasets.map(dataset => {
-                    const quality = dataset.quality == null ? null : Math.round(Number(dataset.quality) <= 1 ? Number(dataset.quality) * 100 : Number(dataset.quality))
-                    const review = datasetReviewState(dataset)
-                    const applied = matchAppliedVersion(
-                      data.datasetVersionLists[dataset.id] || [],
-                      selectedRow.appliedVersionByDataset[dataset.id] ?? null,
-                    )
-                    const appliedAt = applied ? formatShortDateTime(applied.processedAt) : ''
-                    const previewBlocked = isReviewIssue(review)
-                    return (
-                      <div className="dmo-source-item" key={dataset.id}>
-                        <div className="dmo-source-row">
-                          <span className={`dmo-source-icon dmo-source-icon--${dataset.source}`}><Table2 size={14} /></span>
-                          <span>
-                            <i className="dmo-source-name"><b title={dataset.name}>{dataset.name}</b><ReviewBadge state={review} /></i>
-                            <small title={applied ? `已灌入版本 v${applied.versionNo}，产出于 ${formatFullDateTime(applied.processedAt)}` : undefined}>
-                              {dataset.sourceLabel} · {dataset.rows == null ? '暂无行数' : `${dataset.rows.toLocaleString()} 行`}{quality == null ? '' : ` · 质量 ${quality}%`}{applied ? ` · 已灌入 v${applied.versionNo}${appliedAt ? ` · ${appliedAt}` : ''}` : ''}
-                            </small>
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setPreviewDataset(dataset)}
-                            aria-label={`预览数据源 ${dataset.name}`}
-                            disabled={previewBlocked}
-                            title={isReviewIssue(review) ? REVIEW_BADGE_COPY[review].reason : `预览数据源 ${dataset.name}`}
-                          ><Eye size={14} />预览</button>
-                          <a
-                            className="dmo-source-open"
-                            href={`#/data/structured?dataset=${dataset.id}`}
-                            title={`在数据管理中查看 ${dataset.name}`}
-                            aria-label={`在数据管理中查看 ${dataset.name}`}
-                          ><ExternalLink size={13} /></a>
-                        </div>
-                        {review === 'rejected' && (
-                          <p className="dmo-source-warning" role="note">当前版本已被拒绝，仅保留审计追溯；不可预览与重新灌入。</p>
-                        )}
-                      </div>
-                    )
-                  })}
-                  {selectedQuality != null && <p>来源数据平均质量 <b>{selectedQuality}%</b></p>}
-                </section>
-              )}
-
-              {selectedRow.kind === 'object' && selectedRow.mappingId && (() => {
-                const boundReview = worstReviewState(selectedRow.datasets)
-                const reviewBlocked = isReviewIssue(boundReview)
-                const busy = reconcilingMappingId === selectedRow.mappingId
-                return (
-                  <section className="dmo-reconcile">
-                    <div>
-                      <b>重新灌入已批准数据</b>
-                      <small>只读取当前映射绑定的最新已批准版本，按当前发布结构重写对象与关系实例，并触发一次哨兵评估。</small>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={reconcilingMappingId !== null || reviewBlocked}
-                      aria-busy={busy}
-                      title={reviewBlocked ? '来源数据集已拒绝/待审核，不能灌入' : undefined}
-                      onClick={() => setReconcileTarget(selectedRow)}
-                    >
-                      {busy
-                        ? <Loader2 size={13} className="animate-spin" />
-                        : <RefreshCw size={13} />}
-                      {busy ? '正在灌入…' : '立即灌入'}
-                    </button>
-                    {reviewBlocked && (
-                      <p className="dmo-reconcile-note" data-tone="error" role="note">
-                        <AlertCircle size={13} /><span>来源数据集{isReviewIssue(boundReview) ? REVIEW_BADGE_COPY[boundReview].label : ''}，不能灌入；请先完成数据审核。</span>
-                    </p>
-                    )}
-                    {!reviewBlocked && reconcileFeedback?.mappingId === selectedRow.mappingId && (
-                      <p
-                        className="dmo-reconcile-note"
-                        role={reconcileFeedback.tone === 'error' ? 'alert' : 'status'}
-                        data-tone={reconcileFeedback.tone}
-                      >
-                        {reconcileFeedback.tone === 'success'
-                          ? <CheckCircle2 size={13} />
-                          : <AlertCircle size={13} />}
-                        <span>{reconcileFeedback.message}</span>
-                      </p>
-                    )}
-                  </section>
-                )
-              })()}
-
-              <section className="dmo-fields">
-                <h3><span>字段对照</span><em>{selectedRow.mappedFields} / {selectedRow.totalFields}</em></h3>
-                {selectedRow.fieldPairs.length > 0 ? (
-                  <div className="dmo-field-pairs">
-                    {selectedRow.fieldPairs.map((pair, index) => (
-                      <div key={`${pair.source}:${pair.target}:${index}`} data-risk={pair.compatible === false}>
-                        <span><b>{pair.source}</b><small>{pair.sourceType || '来源字段'}</small></span>
-                        <ArrowRight size={13} />
-                        <span><b>{pair.target}</b><small>{pair.targetType || '本体字段'}</small></span>
-                        {pair.compatible === false && <AlertTriangle size={13} />}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="dmo-field-empty">尚无字段连接</div>
-                )}
-                {selectedRow.missingFields.length > 0 && (
-                  <div className="dmo-missing-fields"><b>待连接字段</b><span>{selectedRow.missingFields.map(field => <i key={field}>{field}</i>)}</span></div>
-                )}
-              </section>
-
-              {(() => {
-                const nextStepCopy: Record<MappingRowStatus, string> = {
-                  ready: '数据链路已连通并持续产出实例。如需调整字段连接或更换数据资产，需在草稿版本中修改。',
-                  'no-data': '映射已连通但尚未灌入数据，可直接灌入产出实例；如需调整映射配置，需在草稿版本中修改。',
-                  unmapped: '该元素尚未连接数据资产。建立映射需在草稿版本中进行：前往图谱页，基于当前发布创建草稿后即可配置。',
-                  incomplete: '仍有字段未连接数据列。可先查看字段级映射定位缺口；补齐需在草稿版本中进行。',
-                  'type-risk': '部分来源字段与本体字段类型不一致，灌入后可能产生异常值。可查看字段级映射核对；修改需在草稿版本中进行。',
-                  'missing-source': '映射引用的数据资产当前不可见，可能被删除或已失效。需在草稿版本中重新绑定数据资产。',
-                }
-                return (
-                  <section className="dmo-next-step">
-                    <div><b>下一步</b><small>{nextStepCopy[selectedRow.status]}</small></div>
-                    <div className="dmo-next-step-actions">
-                      {selectedRow.status !== 'unmapped' && (
-                        <button type="button" onClick={() => openMappingWorkspace(selectedRow.selection)}>查看字段映射<ArrowRight size={13} /></button>
-                      )}
-                      <button type="button" className="dmo-next-step-draft" onClick={() => navigate(`/ontologies/${ontologyId}/graph`)}>前往图谱页创建草稿</button>
-                    </div>
-                  </section>
-                )
-              })()}
-            </div>
-          ) : (
-            <div className="dmo-inspector-empty"><Link2 size={24} /><b>暂无可检查的本体元素</b><span>请先在本体结构中创建对象实体或实体关系</span></div>
-          )}
-        </aside>
       </div>
+
+      {dialogRow && (
+        <LineageDetailDialog
+          row={dialogRow}
+          ontologyId={ontologyId}
+          datasetVersionLists={data.datasetVersionLists}
+          reconcileFeedback={reconcileFeedback}
+          reconcilingMappingId={reconcilingMappingId}
+          onClose={() => setSelected(null)}
+          onPreviewDataset={setPreviewDataset}
+          onReconcile={setReconcileTarget}
+          onOpenWorkspace={openMappingWorkspace}
+          onOpenInstances={openInstances}
+          onCreateDraft={() => navigate(`/ontologies/${ontologyId}/graph`)}
+        />
+      )}
       {previewDataset && <DatasetPreviewDialog key={previewDataset.id} dataset={previewDataset} onClose={() => setPreviewDataset(null)} />}
       <Modal
         open={reconcileTarget !== null}
         onClose={() => setReconcileTarget(null)}
         title="确认重新灌入数据"
         size="sm"
+        backdropClassName="dmo-reconcile-backdrop"
         footer={(
           <>
             <Button type="button" variant="outline" onClick={() => setReconcileTarget(null)}>取消</Button>
