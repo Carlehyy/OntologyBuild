@@ -1,22 +1,19 @@
-// 实例详情面板:与实例浏览器左右联动的常驻卡片,回答“这条实例的完整档案与
+// 实例详情抽屉:行点击后在表格右侧滑出,回答“这条实例的完整档案与
 // 来龙去脉”——完整属性值、来源/外部 ID、创建更新时间、属性级事实历史。
 // 只读;事实来自 /instances/{id}/facts( Fact 溯源层,时间倒序)。
-// 未选中实例时显示空态引导;大屏下可折叠成窄条给表格让出横向空间。
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { AlertCircle, Loader2, MousePointerClick, PanelRightClose, PanelRightOpen, RefreshCw, X } from 'lucide-react'
+import { AlertCircle, Loader2, RefreshCw, X } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 import type { DataColumn, InstanceFact, ObjectRow, ObjectTypeNode } from './instanceBrowserTypes'
 import { formatInstanceDateTime, instanceFactKindLabel, instanceSourceLabel } from './instanceValueDisplay'
 import { FullValue, SourceChip } from './InstanceValueText'
 
-interface InstanceDetailPanelProps {
+interface InstanceDetailDrawerProps {
   ontologyId: string
   objectType: ObjectTypeNode | null
   columns: DataColumn[]
-  row: ObjectRow | null
-  collapsed: boolean
-  onToggleCollapse: () => void
+  row: ObjectRow
   onClose: () => void
 }
 
@@ -48,114 +45,53 @@ function factValueText(value: unknown): string {
   return JSON.stringify(value)
 }
 
-export default function InstanceDetailPanel({
+export default function InstanceDetailDrawer({
   ontologyId,
   objectType,
   columns,
   row,
-  collapsed,
-  onToggleCollapse,
   onClose,
-}: InstanceDetailPanelProps) {
+}: InstanceDetailDrawerProps) {
   useEffect(() => {
-    if (!row) return
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
     }
     document.addEventListener('keydown', closeOnEscape)
     return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [row, onClose])
+  }, [onClose])
 
   const factsQuery = useQuery<InstanceFact[]>({
-    queryKey: ['instance-facts', ontologyId, row?.id],
-    enabled: Boolean(row),
-    queryFn: () => {
-      if (!row) throw new Error('请先选择实例')
-      return apiClientV2.get(`/formal/ontologies/${ontologyId}/instances/${row.id}/facts`, {
-        params: { limit: 50 },
-      })
-    },
+    queryKey: ['instance-facts', ontologyId, row.id],
+    queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/instances/${row.id}/facts`, {
+      params: { limit: 50 },
+    }),
   })
 
-  const label = row ? instanceLabel(row, objectType) : null
+  const label = instanceLabel(row, objectType)
   const typeName = objectType ? objectType.displayName || objectType.name : '对象实例'
-
-  // 折叠态:窄条只留展开入口与竖排标题,把横向空间还给表格。
-  if (collapsed) {
-    return (
-      <aside
-        data-testid="instance-detail-panel"
-        aria-label="实例详情（已折叠）"
-        className="flex shrink-0 items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 lg:w-11 lg:flex-col lg:self-start lg:px-0 lg:py-3"
-      >
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          aria-label="展开实例详情"
-          title="展开实例详情"
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-        >
-          <PanelRightOpen size={14} />
-        </button>
-        <span className="text-[11px] font-medium tracking-[0.2em] text-slate-400 lg:[writing-mode:vertical-lr]">
-          实例详情
-        </span>
-      </aside>
-    )
-  }
 
   return (
     <aside
-      data-testid="instance-detail-panel"
-      aria-label={label ? `实例 ${label} 详情` : '实例详情'}
-      className="flex w-full shrink-0 flex-col self-start rounded-xl border border-slate-200 bg-white lg:sticky lg:top-5 lg:max-h-[calc(100vh-2.5rem)] lg:w-[380px]"
+      data-testid="instance-detail-drawer"
+      role="dialog"
+      aria-label={`实例 ${label} 详情`}
+      className="onto-drawer-in fixed inset-y-0 right-0 z-40 flex w-[min(400px,92%)] flex-col border-l border-slate-200 bg-white shadow-[-16px_0_36px_rgba(15,23,42,0.10)]"
     >
-      <div className="flex shrink-0 items-start justify-between gap-2 border-b border-slate-100 px-4 py-3">
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
         <div className="min-w-0">
-          {label ? (
-            <>
-              <p className="truncate text-sm font-semibold text-slate-900" title={label}>{label}</p>
-              <p className="mt-0.5 text-[11px] text-slate-400">{typeName} · 实例详情</p>
-            </>
-          ) : (
-            <p className="text-sm font-semibold text-slate-900">实例详情</p>
-          )}
+          <p className="truncate text-sm font-semibold text-slate-900" title={label}>{label}</p>
+          <p className="mt-0.5 text-[11px] text-slate-400">{typeName} · 实例详情</p>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <button
-            type="button"
-            onClick={onToggleCollapse}
-            aria-label="折叠实例详情"
-            title="折叠实例详情"
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-          >
-            <PanelRightClose size={14} />
-          </button>
-          {row && (
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="关闭实例详情"
-              className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-            >
-              <X size={14} />
-            </button>
-          )}
-        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="关闭实例详情"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+        >
+          <X size={14} />
+        </button>
       </div>
 
-      {!row ? (
-        <div
-          data-testid="instance-detail-empty"
-          className="flex flex-col items-center justify-center px-6 py-10 text-center"
-        >
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-300">
-            <MousePointerClick size={20} />
-          </div>
-          <p className="mt-3 text-xs font-medium text-slate-500">点击左侧表格中的对象实例行</p>
-          <p className="mt-1 text-[11px] leading-5 text-slate-400">这里将展示该实例的基本信息、完整属性值与事实历史</p>
-        </div>
-      ) : (
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         <section aria-label="基本信息">
           <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-y-2 text-xs">
@@ -242,7 +178,6 @@ export default function InstanceDetailPanel({
           )}
         </section>
       </div>
-      )}
     </aside>
   )
 }
