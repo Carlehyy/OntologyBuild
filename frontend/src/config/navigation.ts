@@ -4,6 +4,7 @@ import {
   Bot,
   Blocks,
   BookOpenCheck,
+  Boxes,
   BrainCircuit,
   ClipboardList,
   Compass,
@@ -21,6 +22,7 @@ import {
   Repeat,
   Rocket,
   Settings,
+  Share2,
   Table2,
   Waypoints,
 } from 'lucide-react'
@@ -42,8 +44,10 @@ export interface PlatformNavItem {
 export const DEFAULT_NON_ADMIN_MENU_KEYS = [
   'overview',
   'super_assistant',
+  'ontology_model',
   'explore',
   'ontologies',
+  'ontology_model.network',
   'world_model',
   'world_model.models',
   'world_model.services',
@@ -66,8 +70,13 @@ export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
   { key: 'overview', to: '/overview', icon: LayoutDashboard, label: '平台概览', description: '平台运行与数据总览', hiddenFromNavigation: true },
   { key: 'super_assistant', to: '/super-assistant', icon: BrainCircuit, label: '超级助手', description: '通用智能协作入口', hiddenFromNavigation: true },
   { key: 'agent', to: '/agent', icon: Bot, label: '本体助手', description: '本体智能体与分析报告' },
-  { key: 'explore', to: '/explore', icon: Compass, label: '业务探索', description: '业务建模与需求探索' },
-  { key: 'ontologies', to: '/ontologies', icon: Network, label: '本体管理', description: '本体、图谱与对象建模' },
+  {
+    key: 'ontology_model', to: '/ontology-model', icon: Boxes, label: '本体模型', description: '本体建模、本体管理与本体网络', subItems: [
+      { key: 'explore', to: '/explore', icon: Compass, label: '本体建模', description: '对话式业务建模与需求探索' },
+      { key: 'ontologies', to: '/ontologies', icon: Network, label: '本体管理', description: '本体、图谱与对象建模' },
+      { key: 'ontology_model.network', to: '/ontology-model/network', icon: Share2, label: '本体网络', description: '跨本体关联与全局本体网络' },
+    ],
+  },
   {
     key: 'world_model', to: '/world-model', icon: Orbit, label: '世界模型', description: '演化层：推演模型、推演服务与调用记录', subItems: [
       { key: 'world_model.models', to: '/world-model/models', icon: FlaskConical, label: '推演模型', description: '推演模型项目开发、调试与版本' },

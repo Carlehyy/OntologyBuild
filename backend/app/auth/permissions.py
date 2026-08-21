@@ -8,8 +8,10 @@ from app.auth.models import RoleMenuPermission, User
 ALL_MENU_KEYS = (
     "overview",
     "super_assistant",
+    "ontology_model",
     "explore",
     "ontologies",
+    "ontology_model.network",
     "world_model",
     "world_model.models",
     "world_model.services",
@@ -43,6 +45,9 @@ DEFAULT_NON_ADMIN_MENU_KEYS = tuple(
 DEFAULT_CUSTOM_MENU_KEYS = ("overview",)
 
 PARENT_MENU_KEYS = {
+    "explore": "ontology_model",
+    "ontologies": "ontology_model",
+    "ontology_model.network": "ontology_model",
     "data.pipelines": "data",
     "data.sync_tasks": "data",
     "data.structured": "data",
@@ -56,6 +61,7 @@ PARENT_MENU_KEYS = {
     "world_model.calls": "world_model",
 }
 GROUP_MENU_KEYS = {
+    "ontology_model": ("explore", "ontologies", "ontology_model.network"),
     "world_model": ("world_model.models", "world_model.services", "world_model.calls"),
     "data": ("data.pipelines", "data.sync_tasks", "data.structured"),
     "api_hub": (

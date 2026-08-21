@@ -6,6 +6,8 @@ import { menuKeyForPath } from '../../../stores/tabTitle.ts'
 describe('menuKeyForPath', () => {
   it('分辨各菜单域与未知路径', () => {
     assert.equal(menuKeyForPath('/ontologies/123'), 'ontologies')
+    assert.equal(menuKeyForPath('/ontology-model/network'), 'ontology_model.network')
+    assert.equal(menuKeyForPath('/ontology-model'), 'ontology_model')
     assert.equal(menuKeyForPath('/settings/users'), 'system_settings')
     assert.equal(menuKeyForPath('/world-model/models/m1/develop'), 'world_model.models')
     assert.equal(menuKeyForPath('/world-model/services'), 'world_model.services')

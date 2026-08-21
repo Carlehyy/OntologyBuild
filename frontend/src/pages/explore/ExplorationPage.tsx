@@ -637,7 +637,7 @@ export default function ExplorationPage() {
               </div>
               <div className="min-w-0">
                 <h3 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
-                  {sessions.find(s => s.id === sid)?.title || '业务探索'}
+                  {sessions.find(s => s.id === sid)?.title || '本体建模'}
                 </h3>
                 <p className="truncate text-[11px] text-[var(--color-text-tertiary)]">通过对话澄清业务，从而生成本体模型</p>
               </div>

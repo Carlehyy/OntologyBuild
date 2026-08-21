@@ -106,18 +106,24 @@ test('顶栏多标签页：打开、切换、域内路径恢复、关闭与刷�
 
   const tabList = page.getByRole('tablist', { name: '页面标签' })
   const agentTab = tabList.getByRole('tab', { name: '本体助手' })
-  const ontologiesTab = tabList.getByRole('tab', { name: '本体管理' })
+  const ontologiesTab = tabList.getByRole('tab', { name: '本体模型 · 本体管理' })
 
   // 访问本体助手，出现第一个标签且为激活态
   await expect(agentTab).toBeVisible()
   await expect(agentTab).toHaveAttribute('aria-selected', 'true')
   await expect(ontologiesTab).toHaveCount(0)
 
-  // 侧边栏打开本体管理，出现第二个标签
+  // 侧边栏展开本体模型分组，经子项打开本体管理，出现第二个标签
+  await page.getByRole('navigation').getByRole('button', { name: '本体模型' }).click()
+  await expect(page).toHaveURL(/\/#\/explore$/)
   await page.getByRole('navigation').getByRole('link', { name: '本体管理' }).click()
   await expect(page).toHaveURL(/\/#\/ontologies$/)
   await expect(agentTab).toHaveAttribute('aria-selected', 'false')
   await expect(ontologiesTab).toHaveAttribute('aria-selected', 'true')
+
+  // 收起入口页产生的本体建模标签，聚焦本体助手与本体管理的双标签流转
+  await tabList.getByRole('tab', { name: '本体模型 · 本体建模' })
+    .getByRole('button', { name: '关闭 本体模型 · 本体建模' }).click()
 
   // 点击标签切回本体助手
   await agentTab.click()
@@ -145,7 +151,7 @@ test('顶栏多标签页：打开、切换、域内路径恢复、关闭与刷�
   await expect(ontologiesTab).toHaveAttribute('aria-selected', 'true')
 
   // 关闭最后一个标签，回到默认落地页并重新记录标签
-  await ontologiesTab.getByRole('button', { name: '关闭 本体管理' }).click()
+  await ontologiesTab.getByRole('button', { name: '关闭 本体模型 · 本体管理' }).click()
   await expect(page).toHaveURL(/\/#\/agent$/)
   await expect(tabList.getByRole('tab', { name: '本体助手' })).toHaveAttribute('aria-selected', 'true')
 
@@ -166,8 +172,8 @@ test('顶栏多标签页：按最近访问从左往右排序，最多保留 10 �
   // 依次访问 11 个不同页面
   const visited = [
     { path: '/agent', title: '本体助手' },
-    { path: '/explore', title: '业务探索' },
-    { path: '/ontologies', title: '本体管理' },
+    { path: '/explore', title: '本体模型 · 本体建模' },
+    { path: '/ontologies', title: '本体模型 · 本体管理' },
     { path: '/world-model/models', title: '世界模型 · 推演模型' },
     { path: '/world-model/services', title: '世界模型 · 推演服务' },
     { path: '/world-model/calls', title: '世界模型 · 调用记录' },
@@ -211,22 +217,24 @@ test('标签可见标题使用平台导航的一级/二级菜单标签，不使�
 
   const tabList = page.getByRole('tablist', { name: '页面标签' })
 
-  // 列表页：一级菜单名
+  // 列表页：一级 · 二级菜单标签
+  await page.getByRole('navigation').getByRole('button', { name: '本体模型' }).click()
+  await expect(page).toHaveURL(/\/#\/explore$/)
   await page.getByRole('navigation').getByRole('link', { name: '本体管理' }).click()
   await expect(page).toHaveURL(/\/#\/ontologies$/)
-  const ontologiesTab = tabList.getByRole('tab', { name: '本体管理' })
+  const ontologiesTab = tabList.getByRole('tab', { name: '本体模型 · 本体管理' })
   await expect(ontologiesTab).toBeVisible()
-  await expect(ontologiesTab).toHaveAttribute('title', '本体管理')
+  await expect(ontologiesTab).toHaveAttribute('title', '本体模型 · 本体管理')
 
-  // 详情页：标签仍为菜单标签“本体管理”，不显示“详情”
+  // 详情页：标签仍为菜单标签“本体模型 · 本体管理”，不显示“详情”
   await page.goto('/#/ontologies/ontology-1')
-  await expect(tabList.getByRole('tab', { name: '本体管理' })).toHaveAttribute('aria-selected', 'true')
-  await expect(tabList.getByRole('tab', { name: '本体管理' })).toHaveAttribute('title', '本体管理')
+  await expect(tabList.getByRole('tab', { name: '本体模型 · 本体管理' })).toHaveAttribute('aria-selected', 'true')
+  await expect(tabList.getByRole('tab', { name: '本体模型 · 本体管理' })).toHaveAttribute('title', '本体模型 · 本体管理')
   await expect(tabList.getByRole('tab', { name: '详情' })).toHaveCount(0)
 
   // 图谱页：同一菜单域复用标签
   await page.goto('/#/ontologies/ontology-1/graph')
-  await expect(tabList.getByRole('tab', { name: '本体管理' })).toBeVisible()
+  await expect(tabList.getByRole('tab', { name: '本体模型 · 本体管理' })).toBeVisible()
   await expect(tabList.getByRole('tab', { name: '图谱' })).toHaveCount(0)
 
   // 系统设置子页：一级 · 二级菜单标签

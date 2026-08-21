@@ -58,6 +58,18 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   const isActive = (to: string) => location.pathname === to || location.pathname.startsWith(to + '/')
   const isGroupActive = (item: PlatformNavItem) => isActive(item.to) || (item.subItems?.some(s => isActive(s.to)) ?? false)
+  // 点击 Logo 与“折叠起来”共用同一套开关：桌面端收起/展开侧边栏，移动端关闭抽屉
+  const toggleSidebar = () => {
+    if (window.innerWidth < 768) {
+      setMobileNavOpen(false)
+      return
+    }
+    setCollapsed(current => !current)
+  }
+  // 侧边栏宽度与文字标签的同步缓动（与 styles/animations.css 的 --ease-out-expo 一致）
+  const SIDEBAR_EASE = 'duration-300 ease-[var(--ease-out-expo)]'
+  const labelAnim = `overflow-hidden whitespace-nowrap transition-all ${SIDEBAR_EASE} ${collapsed ? 'max-w-0 opacity-0' : 'max-w-40 opacity-100'}`
+  const labelAnimWide = `overflow-hidden whitespace-nowrap transition-all ${SIDEBAR_EASE} ${collapsed ? 'max-w-0 opacity-0' : 'max-w-56 opacity-100'}`
   const isMappingWorkspace = /^\/ontologies\/[^/]+\/mapping-config$/.test(location.pathname)
   // 本体详情的顶部导航必须拥有稳定的布局上下文。若只在“本体结构”
   // 切换 overflow，页面滚动条的出现/消失会改变可用宽度，造成导航横移。
@@ -78,13 +90,22 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         />
       )}
       {/* Sidebar */}
-      <aside className={`${mobileNavOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-50 flex w-56 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-all duration-300 ease-out md:static md:z-auto md:translate-x-0 ${collapsed ? 'md:w-16' : 'md:w-56'}`}>
-        {/* Logo */}
-        <div className={`h-14 border-b border-[var(--color-border)] flex items-center gap-3 transition-all ${collapsed ? 'justify-center px-0' : 'px-4'}`}>
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--color-nav-bg)' }}>
-            <Network size={18} className="text-white" />
-          </div>
-          {!collapsed && <span className="font-semibold text-[var(--color-text-primary)] tracking-tight text-sm">OpenOntology</span>}
+      <aside className={`${mobileNavOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-50 flex w-56 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-all ${SIDEBAR_EASE} md:static md:z-auto md:translate-x-0 ${collapsed ? 'md:w-16' : 'md:w-56'}`}>
+        {/* Logo：点击同样收起/展开侧边栏 */}
+        <div className={`h-14 border-b border-[var(--color-border)] flex items-center transition-all ${SIDEBAR_EASE} ${collapsed ? 'justify-center px-0' : 'px-4'}`}>
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? '展开平台导航' : '折叠平台导航'}
+            title={collapsed ? '展开平台导航' : '折叠平台导航'}
+            className={`flex min-w-0 items-center rounded-lg transition-all ${SIDEBAR_EASE} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] ${collapsed ? 'gap-0' : 'gap-3'}`}
+          >
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--color-nav-bg)' }}>
+              <Network size={18} className="text-white" />
+            </div>
+            <span className={`font-semibold text-[var(--color-text-primary)] tracking-tight text-sm ${labelAnim}`}>OpenOntology</span>
+          </button>
           <button
             type="button"
             onClick={() => setMobileNavOpen(false)}
@@ -126,11 +147,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         ? 'text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'}`}
                     style={groupActive ? { background: 'var(--color-nav-bg)' } : {}}>
                     <Icon size={18} className="shrink-0" />
-                    {!collapsed && <span className="flex-1 text-left font-medium">{item.label}</span>}
-                    {!collapsed && <ChevronDown size={14} className={`transition-transform ${groupExpanded ? 'rotate-180' : ''}`} />}
+                    <span className={`flex-1 text-left font-medium ${labelAnimWide}`}>{item.label}</span>
+                    <ChevronDown size={14} className={`shrink-0 overflow-hidden transition-all ${SIDEBAR_EASE} ${groupExpanded ? 'rotate-180' : ''} ${collapsed ? 'w-0 opacity-0' : 'w-3.5 opacity-100'}`} />
                   </button>
-                  {groupExpanded && !collapsed && (
-                    <div className="ml-4 mt-1.5 space-y-1.5 border-l border-[var(--color-border)] pl-3 anim-fade-in-down">
+                  {groupExpanded && (
+                    <div className={`ml-4 space-y-1.5 border-l border-[var(--color-border)] pl-3 overflow-hidden transition-all ${SIDEBAR_EASE} anim-fade-in-down ${collapsed ? 'mt-0 max-h-0 opacity-0' : 'mt-1.5 max-h-96 opacity-100'}`}>
                       {item.subItems.map(sub => {
                         const SubIcon = sub.icon
                         // 精确匹配优先：当前路径精确命中某兄弟子项时只高亮它，避免父路径被前缀误激活
@@ -157,7 +178,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 style={isActive(item.to) ? { background: 'var(--color-nav-bg)' } : {}}
                 title={collapsed ? item.label : undefined}>
                 <Icon size={18} className="shrink-0" />
-                {!collapsed && <span className="font-medium">{item.label}</span>}
+                <span className={`font-medium ${labelAnim}`}>{item.label}</span>
               </Link>
             )
           })}
@@ -166,14 +187,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         {/* Footer */}
         <div className="border-t border-[var(--color-border)]">
           <button onClick={() => setCollapsed(!collapsed)}
-            className={`hidden md:flex items-center gap-2 px-4 h-9 text-sm text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors w-full ${collapsed ? 'justify-center' : ''}`}>
-            {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-            {!collapsed && <span>折叠起来</span>}
+            className={`hidden md:flex items-center px-4 h-9 text-sm text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-all ${SIDEBAR_EASE} w-full ${collapsed ? 'justify-center gap-0' : 'gap-2'}`}>
+            {collapsed ? <ChevronRight size={16} className="shrink-0" /> : <ChevronLeft size={16} className="shrink-0" />}
+            <span className={labelAnim}>折叠起来</span>
           </button>
           <button onClick={() => { logout(); navigate('/login') }}
-            className={`flex items-center gap-2 px-4 h-9 text-sm text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] hover:bg-[var(--color-bg-hover)] transition-colors w-full ${collapsed ? 'justify-center' : ''}`}>
-            <LogOut size={16} />
-            {!collapsed && <span>退出登录</span>}
+            className={`flex items-center px-4 h-9 text-sm text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] hover:bg-[var(--color-bg-hover)] transition-all ${SIDEBAR_EASE} w-full ${collapsed ? 'justify-center gap-0' : 'gap-2'}`}>
+            <LogOut size={16} className="shrink-0" />
+            <span className={labelAnim}>退出登录</span>
           </button>
         </div>
       </aside>

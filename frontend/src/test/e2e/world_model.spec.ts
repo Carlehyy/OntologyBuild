@@ -199,7 +199,7 @@ async function mockWorldModelServices(page: Page) {
   })
 }
 
-test('世界模型为一级导航分组，本体管理恢复单项链接', async ({ page }) => {
+test('世界模型与本体模型为一级导航分组，本体管理为本体模型子项', async ({ page }) => {
   await seedAuth(page)
   await mockPlatformShell(page)
   await mockWorldModel(page)
@@ -207,8 +207,15 @@ test('世界模型为一级导航分组，本体管理恢复单项链接', async
   await page.goto('/#/overview')
 
   const sidebar = page.locator('aside')
-  // 本体管理恢复为单项链接（不再是分组按钮）
+  // 本体模型是一级分组按钮，未展开时子项不可见；点击后自动导航到首个子项「本体建模」
+  const ontologyModelGroup = sidebar.getByRole('button', { name: '本体模型' })
+  await expect(ontologyModelGroup).toBeVisible()
+  await expect(sidebar.getByRole('link', { name: '本体管理', exact: true })).toHaveCount(0)
+  await ontologyModelGroup.click()
+  await expect(page).toHaveURL(/#\/explore$/)
+  await expect(sidebar.getByRole('link', { name: '本体建模', exact: true })).toBeVisible()
   await expect(sidebar.getByRole('link', { name: '本体管理', exact: true })).toBeVisible()
+  await expect(sidebar.getByRole('link', { name: '本体网络', exact: true })).toBeVisible()
   // 世界模型是一级分组按钮，展开后出现三个子项并自动导航到推演模型
   const worldModelGroup = sidebar.getByRole('button', { name: '世界模型' })
   await expect(worldModelGroup).toBeVisible()
