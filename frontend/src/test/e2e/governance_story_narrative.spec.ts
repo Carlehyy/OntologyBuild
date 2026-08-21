@@ -285,7 +285,7 @@ test('链路全景呈现七段链路,待审批打开「起因 → 判定 → 后
   })).toBeVisible()
 })
 
-test('放权旅程呈现等级路径与执行履历点阵', async ({ page }) => {
+test('治理工作台以动作为行汇总等级路径、批准率与执行履历点阵', async ({ page }) => {
   await mockGovernanceStory(page)
   await page.goto(`/#/ontologies/${ONTOLOGY_ID}?tab=governance`, { waitUntil: 'domcontentloaded' })
 
@@ -300,7 +300,7 @@ test('放权旅程呈现等级路径与执行履历点阵', async ({ page }) => 
   await expect(page.getByText(/晋升条件:近 10 次批准率 ≥ 95%/)).toBeVisible()
 })
 
-test('哨兵雷达在线脉冲、最近触发命中统计与事实流决策渲染', async ({ page }) => {
+test('治理工作台哨兵状态在线脉冲、最近命中统计与事实流决策渲染', async ({ page }) => {
   await mockGovernanceStory(page)
   await page.goto(`/#/ontologies/${ONTOLOGY_ID}?tab=governance`, { waitUntil: 'domcontentloaded' })
 

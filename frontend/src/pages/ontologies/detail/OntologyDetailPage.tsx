@@ -148,9 +148,13 @@ export default function OntologyDetailPage() {
   if (!ontology) return <div className="p-6 text-red-500">Ontology not found</div>
 
   return (
-    <div className="onto-glass-root onto-glass-root--flat flex h-full min-h-0 flex-col gap-4 overflow-hidden">
-      {/* ═══ 功能导航与低频操作 ═══ */}
-      <div data-testid="ontology-detail-header" className="onto-glass-header flex shrink-0 items-center justify-between gap-3 px-5 py-4">
+    <div className={`onto-glass-root onto-glass-root--flat flex h-full min-h-0 flex-col gap-4 ${
+      activeGroup === 'governance' ? 'overflow-y-auto' : 'overflow-hidden'
+    }`}>
+      {/* ═══ 功能导航与低频操作(治理页为自然文档流,头部吸附保持可达) ═══ */}
+      <div data-testid="ontology-detail-header" className={`onto-glass-header flex shrink-0 items-center justify-between gap-3 px-5 py-4 ${
+        activeGroup === 'governance' ? 'sticky top-0 z-30' : ''
+      }`}>
         <div className="relative min-w-0">
           {tabsMoreRight && (
             <div
@@ -274,7 +278,8 @@ export default function OntologyDetailPage() {
           <FormalInstancesView ontologyId={id!} onOpenVersions={() => setShowVersionModal(true)} />
         </div>
       ) : (
-        <div data-testid="ontology-detail-content" className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-auto p-4">
+        /* 治理推演:自然文档流,卡片按内容实际高度展示,页面级滚动 */
+        <div data-testid="ontology-detail-content" className="onto-glass-in px-4 pb-4">
           <GovernanceTab
             ontologyId={id!}
             currentReleaseId={ontology.current_release_id}

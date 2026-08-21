@@ -103,7 +103,20 @@ async function mockGovernance(
       return json(route, { id: ACTION_LOG_ID, status: 'rejected' })
     }
     if (path === `/api/v2/formal/ontologies/${ONTOLOGY_ID}/autonomy`) {
-      return json(route, [])
+      return json(route, [{
+        actionId: 'action-suspend-purchase',
+        actionName: '暂停高风险采购单',
+        requiresApproval: true,
+        level: 'L1',
+        shadow: false,
+        sentinels: [{ id: 'sent-1', name: '高风险采购哨兵', muted: false, enabled: true }],
+        decisions: { approved: 0, rejected: 0, total: 0, recentCount: 0, recentApprovalRate: null },
+        autoRuns: { total: 0, failed: 0 },
+        pending: 1,
+        recommendation: null,
+        recommendationReason: null,
+        thresholds: { promoteMinDecisions: 10, promoteRate: 0.95 },
+      }])
     }
     if (path === `/api/v2/formal/ontologies/${ONTOLOGY_ID}/facts/recent`) {
       return json(route, [])
@@ -136,7 +149,9 @@ test('HITL 拒绝弹窗不会重复展示相同的对象类型与实例标签', 
     waitUntil: 'domcontentloaded',
   })
 
-  await page.getByRole('button', { name: '拒绝', exact: true }).click()
+  await page.getByRole('button', { name: '查看待审批详情:暂停高风险采购单' }).click()
+  await page.getByRole('dialog', { name: '待审批详情：暂停高风险采购单' })
+    .getByRole('button', { name: '拒绝', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '拒绝动作：暂停高风险采购单' })
   await expect(dialog).toBeVisible()
   await expect(dialog).not.toContainText('采购订单 · 采购订单')
@@ -149,7 +164,9 @@ test('HITL 拒绝弹窗取消不提交，确认时携带原因并展示成功反
     waitUntil: 'domcontentloaded',
   })
 
-  await page.getByRole('button', { name: '拒绝', exact: true }).click()
+  await page.getByRole('button', { name: '查看待审批详情:暂停高风险采购单' }).click()
+  await page.getByRole('dialog', { name: '待审批详情：暂停高风险采购单' })
+    .getByRole('button', { name: '拒绝', exact: true }).click()
   let dialog = page.getByRole('dialog', { name: '拒绝动作：暂停高风险采购单' })
   await expect(dialog).toBeVisible()
   await expect(dialog).toContainText('只会写入人工拒绝的决策事实')
@@ -167,14 +184,18 @@ test('HITL 拒绝弹窗取消不提交，确认时携带原因并展示成功反
   await expect(dialog).toHaveCount(0)
   expect(mock.decisionBodies).toHaveLength(0)
 
-  await page.getByRole('button', { name: '拒绝', exact: true }).click()
+  await page.getByRole('button', { name: '查看待审批详情:暂停高风险采购单' }).click()
+  await page.getByRole('dialog', { name: '待审批详情：暂停高风险采购单' })
+    .getByRole('button', { name: '拒绝', exact: true }).click()
   dialog = page.getByRole('dialog', { name: '拒绝动作：暂停高风险采购单' })
   await dialog.getByLabel('拒绝原因').fill('风险证据不完整，请补充供应商审查记录')
   await dialog.getByRole('button', { name: '取消' }).click()
   await expect(dialog).toHaveCount(0)
   expect(mock.decisionBodies).toHaveLength(0)
 
-  await page.getByRole('button', { name: '拒绝', exact: true }).click()
+  await page.getByRole('button', { name: '查看待审批详情:暂停高风险采购单' }).click()
+  await page.getByRole('dialog', { name: '待审批详情：暂停高风险采购单' })
+    .getByRole('button', { name: '拒绝', exact: true }).click()
   dialog = page.getByRole('dialog', { name: '拒绝动作：暂停高风险采购单' })
   await dialog.getByLabel('拒绝原因').fill('风险证据不完整，请补充供应商审查记录')
   await dialog.getByRole('button', { name: '确认拒绝' }).click()
@@ -197,7 +218,9 @@ test('HITL 拒绝 API 失败时保留弹窗和输入，并恢复可重试状态'
     waitUntil: 'domcontentloaded',
   })
 
-  await page.getByRole('button', { name: '拒绝', exact: true }).click()
+  await page.getByRole('button', { name: '查看待审批详情:暂停高风险采购单' }).click()
+  await page.getByRole('dialog', { name: '待审批详情：暂停高风险采购单' })
+    .getByRole('button', { name: '拒绝', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '拒绝动作：暂停高风险采购单' })
   const reason = dialog.getByLabel('拒绝原因')
   const confirm = dialog.getByRole('button', { name: '确认拒绝' })

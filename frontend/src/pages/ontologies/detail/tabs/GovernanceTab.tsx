@@ -7,19 +7,18 @@ import pipelinesApi from '@/api/v2/pipelines'
 import { useAuthStore } from '@/stores/authStore'
 import { buildGovernanceKpis, readableTargetSummary } from './governanceFormat'
 import {
-  CheckCircle2, HandMetal, Rocket, ShieldAlert, ScrollText,
+  CheckCircle2, LayoutGrid, ScrollText,
   Loader2, RefreshCw,
 } from 'lucide-react'
-import { DailySparkCard, KpiStatBar } from '../governance/ExecutionHero'
+import { KpiOverviewGrid } from '../governance/ExecutionHero'
 import ChainPanorama from '../governance/ChainPanorama'
-import PendingStoryList, { type PendingLog } from '../governance/PendingStoryList'
+import OperationsBoard from '../governance/OperationsBoard'
 import PendingStoryDialog from '../governance/PendingStoryDialog'
-import AutonomyJourney from '../governance/AutonomyJourney'
-import SentinelRadar from '../governance/SentinelRadar'
 import FactStream, { type FactRow } from '../governance/FactStream'
 import { ApproveDialog, RejectDialog } from '../governance/DecisionDialogs'
 import {
-  buildAutonomyTimeline, buildDailySpark, resolvePendingContext,
+  buildAutonomyTimeline, buildDailySpark, buildOperationsRows, resolvePendingContext,
+  type OperationsAutonomyLike, type PendingLog, type TimelineDot,
 } from '../governance/storyModel'
 import {
   buildGovernanceChain,
@@ -30,24 +29,11 @@ import {
 } from '../governance/chainModel'
 import '../governance/governanceNarrative.css'
 
-/* 治理与推演驾驶舱 ——「链路全景」版:
-   ⓪ Hero      —— KPI + 七段链路全景画布(采集→资产湖→映射→实例→哨兵→待审批→动作)
-   ① 待审批    —— 紧凑列表,点击打开「起因 → 判定 → 后果」详情弹窗再裁决
-   ② 放权旅程  —— 等级路径 + 近期执行履历 + 批准率,放权靠履历来挣
-   ③ 哨兵      —— 值守雷达,平台正在替你盯什么、最近命中了什么
-   ④ 事实流    —— 每一个变化的出处与因果,全量留痕 */
-
-interface AutonomyStat {
-  actionId: string; actionName: string; requiresApproval: boolean
-  level: 'L0' | 'L1' | 'L2'; shadow: boolean
-  sentinels: { id: string; name: string; muted: boolean; enabled: boolean }[]
-  decisions: { approved: number; rejected: number; total: number; recentCount: number; recentApprovalRate: number | null }
-  autoRuns: { total: number; failed: number }
-  pending: number
-  recommendation: 'promote' | 'demote' | 'observe' | null
-  recommendationReason: string | null
-  thresholds: { promoteMinDecisions: number; promoteRate: number }
-}
+/* 治理与推演驾驶舱 ——「链路全景 + 工作台」版:
+   ⓪ 顶部总览  —— 左侧 KPI 四小卡(待审批·批准率/哨兵·自治),右侧执行心电图
+   ① 链路全景  —— 七段链路真实节点与流动连线,待审批即瓶颈,点开看前因后果
+   ② 治理工作台 —— 待审批/自治等级/哨兵以动作为行一表汇总,信息集中
+   ③ 事实流    —— 每一个变化的出处与因果,全量留痕(原样不动) */
 
 interface WorkspaceActionDef {
   id: string; name?: string; displayName?: string; description?: string | null
@@ -159,10 +145,7 @@ export default function GovernanceTab({
   const [remainingRefreshCycles, setRemainingRefreshCycles] = useState(
     BACKGROUND_REFRESH_MAX_CYCLES)
   const [manualRefreshPending, setManualRefreshPending] = useState(false)
-  const pendingRef = useRef<HTMLDivElement>(null)
-  const autonomyRef = useRef<HTMLDivElement>(null)
-  const sentinelsRef = useRef<HTMLDivElement>(null)
-  const factsRef = useRef<HTMLDivElement>(null)
+  const boardRef = useRef<HTMLDivElement>(null)
 
   const releaseParam = currentReleaseId
     ? `release_id=${encodeURIComponent(currentReleaseId)}`
@@ -174,7 +157,7 @@ export default function GovernanceTab({
       `/formal/ontologies/${ontologyId}/pending-actions?${releaseParam}`) as any,
     enabled: queryEnabled,
   })
-  const autonomyQuery = useQuery<AutonomyStat[]>({
+  const autonomyQuery = useQuery<OperationsAutonomyLike[]>({
     queryKey: ['gov-autonomy', ontologyId, currentReleaseId],
     queryFn: () => apiClientV2.get(
       `/formal/ontologies/${ontologyId}/autonomy?${releaseParam}`) as any,
@@ -334,14 +317,20 @@ export default function GovernanceTab({
     ? resolvePendingContext(storyTarget, firings, sentinels, workspaceActions)
     : { firing: null, sentinel: null, actionDef: null }
 
-  const scrollToSection = (ref: React.RefObject<HTMLDivElement | null>) => {
-    ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
-  const navigateHero = (section: 'pending' | 'autonomy' | 'sentinels' | 'facts') => {
-    const target = section === 'pending' ? pendingRef
-      : section === 'autonomy' ? autonomyRef
-      : section === 'sentinels' ? sentinelsRef : factsRef
-    scrollToSection(target)
+  // 治理工作台:以动作为行,并联待审批条目与绑定哨兵状态(有待审批的排前)。
+  const boardRows = useMemo(
+    () => buildOperationsRows({ autonomy, pending, firings }),
+    [autonomy, pending, firings],
+  )
+  const boardTimelines = useMemo<Record<string, TimelineDot[]>>(
+    () => Object.fromEntries(
+      autonomy.map(stat => [stat.actionId, buildAutonomyTimeline(releaseLogs, stat.actionId)]),
+    ),
+    [autonomy, releaseLogs],
+  )
+
+  const scrollToBoard = () => {
+    boardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
   const refreshAll = useCallback(() => Promise.all([
@@ -521,9 +510,14 @@ export default function GovernanceTab({
         }`}>{msg.text}</div>
       )}
 
-      <KpiStatBar kpis={kpis} onNavigate={navigateHero} />
+      <KpiOverviewGrid
+        kpis={kpis}
+        dailySpark={dailySpark}
+        isRefreshing={isRefreshing}
+        onNavigate={scrollToBoard}
+      />
 
-      {/* ⓪ 链路全景:七段链路真实节点,待审批即当前瓶颈,点开看前因后果 */}
+      {/* ① 链路全景:七段链路真实节点,待审批即当前瓶颈,点开看前因后果(点击不跳转) */}
       <ChainPanorama
         nodes={chain.nodes}
         edges={chain.edges}
@@ -533,98 +527,30 @@ export default function GovernanceTab({
           const log = pending.find(item => item.id === logId)
           if (log) setStoryTarget(log)
         }}
-        onOpenSentinels={() => scrollToSection(sentinelsRef)}
-        onOpenAutonomy={() => scrollToSection(autonomyRef)}
-        onOpenGroup={group => navigate(`/ontologies/${ontologyId}?tab=${group}`)}
       />
 
-      {/* ① 主舞台:待审批(62%) × 心电图情境栏(38%,吸附跟随)
-          用户来这一页是为了裁决,任务居左占主视觉;
-          点击条目打开详情弹窗,看明白「起因 → 判定 → 后果」再裁决。 */}
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(330px,1fr)]">
-        <div ref={pendingRef} className="rounded-xl border bg-white p-5">
-          <SectionHead icon={HandMetal} iconCls="text-blue-500" title="待审批"
-            badge={pending.length > 0 && (
-              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-700">
-                {pending.length} 项待处理
-              </span>
-            )}
-            sub="每条都是一段「起因 → 判定 → 后果」的故事 · 批准/拒绝都会留痕" />
-          {pending.length === 0 ? (
-            <div className="flex flex-col items-center gap-1.5 py-4 text-center">
-              <CheckCircle2 size={16} className="text-emerald-500" />
-              <p className="text-xs text-gray-400">没有等待审批的动作。开启动作的「需人工审批」后，真实执行会先在这里等你拍板。</p>
-            </div>
-          ) : (
-            <PendingStoryList
-              pending={pending}
-              canDecide={canDecide}
-              busyId={busy}
-              onOpenDetail={log => setStoryTarget(log)}
-              onApprove={log => {
-                setApproveError(null)
-                setApproveTarget(log)
-              }}
-              onReject={log => {
-                setRejectError(null)
-                setRejectTarget(log)
-              }}
-            />
+      {/* ② 治理工作台:待审批 / 自治等级 / 哨兵以动作为行一表汇总 */}
+      <div ref={boardRef} className="rounded-xl border bg-white p-5">
+        <SectionHead icon={LayoutGrid} iconCls="text-teal-600" title="治理工作台"
+          badge={pending.length > 0 && (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+              {pending.length} 项待裁决
+            </span>
           )}
-        </div>
-
-        <aside className="space-y-3 self-start xl:sticky xl:top-4">
-          <DailySparkCard
-            dailySpark={dailySpark}
-            isRefreshing={isRefreshing}
-          />
-        </aside>
+          sub="待审批 · 自治等级 · 哨兵以动作为中心一表汇总 · 点击待审批条目看前因后果"
+          extra={<button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
+            className="inline-flex items-center gap-1 text-xs text-teal-600 hover:underline">
+            在版本草稿中调整</button>} />
+        <OperationsBoard
+          rows={boardRows}
+          timelines={boardTimelines}
+          onOpenPending={log => setStoryTarget(log)}
+          onGoVersions={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
+        />
       </div>
 
-      {/* ②③ 放权旅程 × 值守雷达 左右对仗 */}
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <div ref={autonomyRef} className="rounded-xl border bg-white p-5">
-          <SectionHead icon={Rocket} iconCls="text-amber-500" title="自治等级"
-            sub="放权旅程:影子 → 人审 → 自动,自治是按历史执行效果挣来的" />
-          {autonomy.length === 0 ? (
-            <div className="py-3 text-center">
-              <p className="text-xs text-gray-400">还没有动作。请在版本草稿中创建动作并绑定哨兵，发布后再在这里管理放权等级。</p>
-              <button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
-                className="mt-2 inline-flex items-center gap-1 text-xs text-amber-600 hover:underline">
-                去版本草稿创建动作
-              </button>
-            </div>
-          ) : (
-            <div className="gov-stagger space-y-2.5">
-              {autonomy.map(stat => (
-                <AutonomyJourney
-                  key={stat.actionId}
-                  stat={stat}
-                  timeline={buildAutonomyTimeline(releaseLogs, stat.actionId)}
-                  onGoPending={() => scrollToSection(pendingRef)}
-                  onGoVersions={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div ref={sentinelsRef} className="rounded-xl border bg-white p-5">
-          <SectionHead icon={ShieldAlert} iconCls="text-rose-500" title="哨兵"
-            sub="值守雷达:平台正在替你盯什么"
-            extra={<button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
-              className="inline-flex items-center gap-1 text-xs text-rose-500 hover:underline">
-              在版本草稿中修改</button>} />
-          <SentinelRadar
-            sentinels={sentinels}
-            firings={firings}
-            onGoVersions={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
-          />
-        </div>
-      </div>
-
-      {/* ④ 事实流:全宽审计底 */}
-      <div ref={factsRef} className="rounded-xl border bg-white p-5">
+      {/* ③ 事实流:全宽审计底(原样不动) */}
+      <div className="rounded-xl border bg-white p-5">
         <SectionHead icon={ScrollText} iconCls="text-indigo-500" title="事实流"
           sub="追加不修改 · 每个变化都有出处与因果 · 最近 50 条" />
         <FactStream facts={facts} kindFilter={kindFilter} onKindFilterChange={setKindFilter} />
