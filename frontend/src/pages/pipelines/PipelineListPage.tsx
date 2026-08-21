@@ -294,6 +294,7 @@ export default function PipelineListPage() {
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const hasActiveFilters = Boolean(search || filterSource || filterStatus || filterEnabled)
   const resetFilters = () => {
     setSearch('')
     setFilterSource('')
@@ -346,7 +347,7 @@ export default function PipelineListPage() {
           <option value="enabled">已启用</option>
           <option value="disabled">未启用</option>
         </select>
-        {(search || filterSource || filterStatus || filterEnabled) && (
+        {hasActiveFilters && (
           <button
             onClick={resetFilters}
             className="shrink-0 px-2 py-1 text-xs text-gray-500 hover:text-black"
@@ -377,15 +378,49 @@ export default function PipelineListPage() {
       ) : pipelines.length === 0 ? (
         <div className="border-2 border-dashed rounded-xl p-12 text-center text-gray-400 space-y-2">
           <GitBranch size={32} className="mx-auto opacity-30" />
-          <p className="text-sm font-medium">{search || filterSource || filterStatus || filterEnabled ? '没有匹配的流水线' : '暂无流水线'}</p>
-          <p className="text-xs">新建 n8n 流水线后，可到数据管家完善编排，再通过编辑向导验证并发布</p>
+          {hasActiveFilters ? (
+            <>
+              <p className="text-sm font-medium">没有匹配的流水线</p>
+              <p className="text-xs">当前搜索与筛选条件下没有匹配结果，可调整条件或清除筛选后重试</p>
+              <div className="flex items-center justify-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="rounded-xl bg-teal-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-teal-800"
+                >
+                  清除筛选
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCreate(true)}
+                  className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-teal-300 hover:text-teal-700"
+                >
+                  <Plus size={15} /> 新建流水线
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-medium">暂无流水线</p>
+              <p className="text-xs">新建 n8n 流水线后，可到数据管家完善编排，再通过编辑向导验证并发布</p>
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCreate(true)}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-teal-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-teal-800"
+                >
+                  <Plus size={15} /> 新建流水线
+                </button>
+              </div>
+            </>
+          )}
         </div>
       ) : (
         <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)]">
           <table className="w-full min-w-[1080px] text-sm table-fixed">
             <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 backdrop-blur">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: '22%' }}>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: '18%' }}>
                   流水线信息
                 </th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '9%' }}>流水线类型</th>
@@ -394,7 +429,7 @@ export default function PipelineListPage() {
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '14%' }}>最近执行结果</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '11%' }}>产物</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '11%' }}>关联任务</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl" style={{ width: '14%' }}>操作</th>
+                <th className="text-center px-2 py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl" style={{ width: '18%' }}>操作</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -513,10 +548,11 @@ export default function PipelineListPage() {
                         <span className="text-xs text-gray-300">-</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                      <div className="flex gap-1 justify-center">
+                    <td className="px-2 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                      <div className="flex gap-0.5 justify-center">
                         {(n8n || python) && (
                           <button
+                            type="button"
                             onClick={() => {
                               if (n8n) {
                                 const wfId = (pl.definition as Record<string, unknown> | null)?.n8n as Record<string, unknown> | undefined
@@ -529,41 +565,55 @@ export default function PipelineListPage() {
                                 navigate(`/data/pipelines/script/${pl.id}`)
                               }
                             }}
-                            className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
+                            className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-gray-500 transition-colors hover:bg-gray-100 hover:text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
                             title={n8n ? '跳转 n8n 工作流' : '编辑 Python 脚本'}
+                            aria-label={n8n ? '编排：跳转 n8n 工作流' : '脚本：编辑 Python 脚本'}
                           >
                             <ExternalLink size={14} />
+                            <span className="text-[10px] leading-3">{n8n ? '编排' : '脚本'}</span>
                           </button>
                         )}
                         <button
+                          type="button"
                           onClick={() => setEditTarget(pl)}
-                          className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
+                          className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-gray-500 transition-colors hover:bg-gray-100 hover:text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
                           title={normStatus(pl.status) === 'published' ? '查看发布契约 / 编辑名称与描述' : '配置流水线：信息 / 执行预览 / 主键组 / 发布'}
+                          aria-label={normStatus(pl.status) === 'published' ? '编辑：查看发布契约 / 编辑名称与描述' : '编辑：配置流水线信息 / 执行预览 / 主键组 / 发布'}
                         >
                           <Pencil size={14} />
+                          <span className="text-[10px] leading-3">编辑</span>
                         </button>
                         <button
+                          type="button"
                           onClick={() => setPreviewTarget(pl)}
-                          className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
+                          className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-gray-500 transition-colors hover:bg-gray-100 hover:text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
                           title="试执行流水线并查看输出"
+                          aria-label="试运行：试执行流水线并查看输出"
                         >
                           <Play size={14} />
+                          <span className="text-[10px] leading-3">试运行</span>
                         </button>
                         {(n8n || python) && (
                           <button
+                            type="button"
                             onClick={() => setCloneTarget(pl)}
-                            className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-black transition-colors"
+                            className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-gray-500 transition-colors hover:bg-gray-100 hover:text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
                             title="克隆流水线结构为未发布草稿"
+                            aria-label="克隆：复制流水线结构为未发布草稿"
                           >
                             <Copy size={14} />
+                            <span className="text-[10px] leading-3">克隆</span>
                           </button>
                         )}
                         <button
+                          type="button"
                           onClick={() => setDeleteTarget(pl)}
-                          className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
+                          className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
                           title="归档流水线"
+                          aria-label="归档流水线"
                         >
                           <Trash2 size={14} />
+                          <span className="text-[10px] leading-3">归档</span>
                         </button>
                       </div>
                     </td>
