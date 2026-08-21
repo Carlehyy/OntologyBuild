@@ -41,7 +41,7 @@ import {
   type FilterValue,
 } from './instanceStatsFormat'
 import { FullValue, SourceChip } from './InstanceValueText'
-import InstanceDetailDrawer from './InstanceDetailDrawer'
+import InstanceDetailPanel from './InstanceDetailPanel'
 import InstanceSummaryBar from './InstanceSummaryBar'
 import InstanceOverviewSection from './InstanceOverviewSection'
 import InstanceTypeProfileSection from './InstanceTypeProfileSection'
@@ -127,7 +127,8 @@ export default function FormalInstancesView({
   const [pageSize, setPageSize] = useState(20)
   const [pageDraft, setPageDraft] = useState('1')
   const [showAdoptConfirm, setShowAdoptConfirm] = useState(false)
-  const [drawerRow, setDrawerRow] = useState<ObjectRow | null>(null)
+  const [selectedRow, setSelectedRow] = useState<ObjectRow | null>(null)
+  const [detailCollapsed, setDetailCollapsed] = useState(false)
   const tableScrollRef = useRef<HTMLDivElement>(null)
   const browserRef = useRef<HTMLDivElement>(null)
   const [scrollHint, setScrollHint] = useState({ left: false, right: false })
@@ -255,6 +256,18 @@ export default function FormalInstancesView({
     setPageDraft(String(page))
   }, [page])
 
+  // 详情卡联动安全网:翻页/搜索/过滤/切换类型后,若选中行已不在当前结果集
+  // (或当前是关系数据集,本就没有详情入口),自动清空,避免展示过期数据。
+  useEffect(() => {
+    if (!selectedRow) return
+    if (selection?.kind !== 'object') {
+      setSelectedRow(null)
+      return
+    }
+    if (!dataQuery.data) return
+    if (!rows.some(row => row.id === selectedRow.id)) setSelectedRow(null)
+  }, [selectedRow, selection?.kind, dataQuery.data, rows])
+
   const updateScrollHints = useCallback(() => {
     const element = tableScrollRef.current
     if (!element) return
@@ -281,7 +294,7 @@ export default function FormalInstancesView({
     setKeyword('')
     setFilters({})
     setSourceFilter(null)
-    setDrawerRow(null)
+    setSelectedRow(null)
   }
 
   // 关系端点跳转:用户看见的是端点业务标签,用修复后的值域搜索直接定位
@@ -294,7 +307,13 @@ export default function FormalInstancesView({
     setKeyword(endpoint.label)
     setFilters({})
     setSourceFilter(null)
-    setDrawerRow(null)
+    setSelectedRow(null)
+  }
+
+  // 点击对象行:右侧详情卡联动展示;若详情卡处于折叠态则自动展开。
+  const openInstanceDetail = (row: ObjectRow) => {
+    setSelectedRow(row)
+    setDetailCollapsed(false)
   }
 
   const scrollToBrowser = useCallback(() => {
@@ -421,12 +440,15 @@ export default function FormalInstancesView({
           />
         )}
 
-        {/* ② 实例浏览器：实体模型目录 + 实例表格（先选类型，再看数据）。
-            md 起用 2×2 共享网格行：左右头部同行（分割线恒对齐，过滤 chips 撑高时也不错位），
-            目录与表格同行（目录撑满行高、竖向分割线贯通到底）。移动端正文顺序即堆叠顺序。 */}
+        {/* ② 实例浏览器 + 实例详情:左右双卡联动(参考数据任务池)。左卡保留
+            原有 2×2 共享网格(目录树|表格);右卡常驻展示选中实例详情,任何
+            屏幕都不再使用抽屉/弹窗——窄屏时两卡纵向堆叠,均为完整卡片。
+            浏览器网格 md 起左右头部同行(分割线恒对齐,过滤 chips 撑高时也
+            不错位),目录与表格同行(目录撑满行高、竖向分割线贯通到底)。 */}
+        <div className="flex shrink-0 flex-col gap-3 lg:flex-row lg:items-start">
         <div
           ref={browserRef}
-          className="grid shrink-0 grid-cols-1 rounded-xl border border-slate-200 md:grid-cols-[minmax(230px,280px)_minmax(0,1fr)] md:grid-rows-[auto_minmax(0,1fr)]"
+          className="grid min-w-0 flex-1 grid-cols-1 rounded-xl border border-slate-200 md:grid-cols-[minmax(230px,280px)_minmax(0,1fr)] md:grid-rows-[auto_minmax(0,1fr)]"
         >
       <div className="flex items-center rounded-t-xl border-b border-slate-200 bg-slate-50/70 px-4 py-3.5 md:col-start-1 md:row-start-1 md:rounded-tr-none md:border-r">
         <div className="flex w-full items-center justify-between gap-2">
@@ -695,7 +717,8 @@ export default function FormalInstancesView({
                 columns={columns}
                 catalog={catalog}
                 linkType={activeLink}
-                onOpenInstance={setDrawerRow}
+                selectedRowId={selectedRow?.id || null}
+                onOpenInstance={openInstanceDetail}
                 onJumpEndpoint={jumpToEndpoint}
               />
             ) : null}
@@ -704,15 +727,6 @@ export default function FormalInstancesView({
             <div
               aria-hidden="true"
               className="pointer-events-none absolute inset-y-0 right-0 z-30 w-12 bg-gradient-to-l from-white via-white/75 to-transparent"
-            />
-          )}
-          {drawerRow && selection?.kind === 'object' && (
-            <InstanceDetailDrawer
-              ontologyId={ontologyId}
-              objectType={activeObject}
-              columns={columns}
-              row={drawerRow}
-              onClose={() => setDrawerRow(null)}
             />
           )}
         </div>
@@ -779,6 +793,17 @@ export default function FormalInstancesView({
           </div>
         </footer>
       </section>
+        </div>
+
+        <InstanceDetailPanel
+          ontologyId={ontologyId}
+          objectType={activeObject}
+          columns={columns}
+          row={selectedRow}
+          collapsed={detailCollapsed}
+          onToggleCollapse={() => setDetailCollapsed(current => !current)}
+          onClose={() => setSelectedRow(null)}
+        />
         </div>
 
         {/* ③ 类型数据画像：跟随浏览器选中类型，点击字段分布条可精确过滤上方表格 */}
@@ -1040,6 +1065,7 @@ function InstanceTable({
   columns,
   catalog,
   linkType,
+  selectedRowId,
   onOpenInstance,
   onJumpEndpoint,
 }: {
@@ -1048,6 +1074,7 @@ function InstanceTable({
   columns: DataColumn[]
   catalog?: InstanceCatalog
   linkType?: LinkTypeNode | null
+  selectedRowId?: string | null
   onOpenInstance: (row: ObjectRow) => void
   onJumpEndpoint: (endpoint: EndpointSummary) => void
 }) {
@@ -1112,7 +1139,15 @@ function InstanceTable({
       </thead>
       <tbody>
         {rows.map(row => kind === 'object'
-          ? <ObjectDataRow key={row.id} row={row as ObjectRow} columns={columns} onOpen={onOpenInstance} />
+          ? (
+            <ObjectDataRow
+              key={row.id}
+              row={row as ObjectRow}
+              columns={columns}
+              selected={row.id === selectedRowId}
+              onOpen={onOpenInstance}
+            />
+          )
           : (
             <LinkDataRow
               key={row.id}
@@ -1194,15 +1229,19 @@ function SystemHeaderCell({
 function ObjectDataRow({
   row,
   columns,
+  selected = false,
   onOpen,
 }: {
   row: ObjectRow
   columns: DataColumn[]
+  selected?: boolean
   onOpen: (row: ObjectRow) => void
 }) {
   return (
     <tr
-      className="group cursor-pointer align-top hover:bg-teal-50/30"
+      className={`group cursor-pointer align-top ${
+        selected ? 'bg-teal-50/60 hover:bg-teal-50/70' : 'hover:bg-teal-50/30'
+      }`}
       onClick={() => onOpen(row)}
       onKeyDown={event => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -1212,11 +1251,13 @@ function ObjectDataRow({
       }}
       tabIndex={0}
       aria-label="查看实例详情"
+      aria-selected={selected}
     >
       {columns.map((column, index) => (
         <DataCell
           key={`${column.computed ? 'computed' : 'stored'}:${column.name}:${index}`}
           sticky={index === 0}
+          selected={index === 0 && selected}
         >
           <FullValue type={column.type} value={column.computed
             ? row.computed?.[column.name] ?? row.properties?.[column.name]
@@ -1277,14 +1318,18 @@ function DataCell({
   children,
   sticky = false,
   narrow = false,
+  selected = false,
 }: {
   children: React.ReactNode
   sticky?: boolean
   narrow?: boolean
+  selected?: boolean
 }) {
   return (
     <td className={`max-w-[32rem] border-b border-r border-slate-100 px-4 py-3 align-top leading-5 text-slate-600 ${
-      sticky ? 'sticky left-0 z-10 min-w-60 bg-white group-hover:bg-[#f5fcfa]' : narrow ? 'min-w-24' : 'min-w-48'
+      sticky
+        ? `sticky left-0 z-10 min-w-60 ${selected ? 'bg-[#f0faf7] group-hover:bg-[#e8f7f3]' : 'bg-white group-hover:bg-[#f5fcfa]'}`
+        : narrow ? 'min-w-24' : 'min-w-48'
     }`}>
       {children}
     </td>

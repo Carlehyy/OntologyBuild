@@ -1,5 +1,5 @@
 // 实例数据页(instance-browser)共享类型。FormalInstancesView、
-// InstanceDetailDrawer、InstanceSummaryBar 共用,避免组件间循环引用。
+// InstanceDetailPanel、InstanceSummaryBar 共用,避免组件间循环引用。
 
 export interface ReleaseSummary {
   id: string

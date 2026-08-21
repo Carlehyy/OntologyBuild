@@ -125,10 +125,3 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 .onto-glass-in { animation: ontoGlassIn 320ms cubic-bezier(.2,.8,.2,1); }
-
-/* 实例详情抽屉进入动画（右侧滑入） */
-@keyframes ontoDrawerIn {
-  from { opacity: 0; transform: translateX(24px); }
-  to   { opacity: 1; transform: translateX(0); }
-}
-.onto-drawer-in { animation: ontoDrawerIn 200ms ease-out; }

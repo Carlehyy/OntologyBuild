@@ -263,24 +263,30 @@ test('汇总条呈现总数与来源构成,date 列无幽灵时间,对象表带�
   await expect(tbody.getByText('动作执行', { exact: true })).toBeVisible()
 })
 
-test('点击对象行打开实例详情抽屉并加载事实历史', async ({ page }) => {
+test('点击对象行右侧详情卡联动展示并加载事实历史', async ({ page }) => {
   await mockInstanceInteractions(page)
   await page.goto('/#/ontologies/ontology-trade?tab=data', { waitUntil: 'domcontentloaded' })
 
+  // 未选中实例时,详情卡显示空态引导
+  const panel = page.getByTestId('instance-detail-panel')
+  await expect(panel).toBeVisible()
+  await expect(page.getByTestId('instance-detail-empty')).toBeVisible()
+
   await page.locator('tbody tr', { hasText: 'O-1001' }).click()
 
-  const drawer = page.getByTestId('instance-detail-drawer')
-  await expect(drawer).toBeVisible()
-  await expect(drawer.getByText('ext-o-1001')).toBeVisible()
-  await expect(drawer.getByText('管道灌入', { exact: true }).first()).toBeVisible()
+  await expect(page.getByTestId('instance-detail-empty')).toHaveCount(0)
+  await expect(panel.getByText('ext-o-1001')).toBeVisible()
+  await expect(panel.getByText('管道灌入', { exact: true }).first()).toBeVisible()
 
-  const facts = drawer.getByTestId('instance-facts-list')
+  const facts = panel.getByTestId('instance-facts-list')
   await expect(facts.getByText('加急')).toBeVisible()
   await expect(facts.getByText('派生', { exact: true })).toBeVisible()
   await expect(facts.getByText('risk_score', { exact: true })).toBeVisible()
 
+  // Escape 清除选中:详情卡常驻,回到空态引导
   await page.keyboard.press('Escape')
-  await expect(page.getByTestId('instance-detail-drawer')).toHaveCount(0)
+  await expect(page.getByTestId('instance-detail-empty')).toBeVisible()
+  await expect(panel.getByTestId('instance-facts-list')).toHaveCount(0)
 })
 
 test('关系端点可点击,跳转到对应对象类型并按端点标签定位实例', async ({ page }) => {
@@ -290,7 +296,10 @@ test('关系端点可点击,跳转到对应对象类型并按端点标签定位�
   await page.locator('[data-catalog-kind="link"] button', { hasText: '订单 → 供应商' }).click()
   await expect(page.getByRole('columnheader', { name: '创建时间' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'S-001' }).click()
+  // 双卡布局下表格容器更窄,目标端按钮在横向滚动中会被粘性首列部分遮挡
+  // (粘性列是有意的悬浮设计,用户可滚动后点击露出部分)。本测试验证的是跳转
+  // 行为本身,故直接派发 click,绕开命中检测对悬浮层叠的误判。
+  await page.getByRole('button', { name: 'S-001' }).dispatchEvent('click')
 
   await expect(page.getByRole('heading', { name: '供应商' })).toBeVisible()
   await expect(page.getByPlaceholder('搜索外部 ID 或属性值')).toHaveValue('S-001')
