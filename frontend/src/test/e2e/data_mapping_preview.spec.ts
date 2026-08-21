@@ -166,7 +166,11 @@ test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
   await expect(page.getByText('映射结果清单')).toBeVisible()
-  await expect(page.getByText('数据血缘详情')).toBeVisible()
+  // 血缘详情不常驻页面：点击清单行后以弹窗展示
+  await expect(page.getByText('数据血缘详情')).toHaveCount(0)
+  await page.locator('.dmo-map-row').first().click()
+  const lineage = page.getByRole('dialog', { name: '订单', exact: true })
+  await expect(lineage).toBeVisible()
   await expect(page.getByText('把本体结构，接到真实数据上')).toHaveCount(0)
   // 供给全景图是懒加载图表，落地前会把清单头部向下推；先等其 y 连续两次
   // 采样不变，再在同一个 JS 任务内原子量测两个元素——分两次 await 读取会
@@ -200,7 +204,7 @@ test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async
   expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(page.viewportSize()!.height + 1)
   expect(await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight + 1)).toBeTruthy()
 
-  await page.getByRole('button', { name: '预览数据源 订单宽表' }).click()
+  await lineage.getByRole('button', { name: '预览数据源 订单宽表' }).click()
   const dialog = page.getByRole('dialog', { name: '订单宽表' })
   await expect(dialog).toBeVisible()
   await expect(dialog.getByText('1–20 / 45 行')).toBeVisible()
@@ -263,7 +267,11 @@ test('当前发布态可安全重放已批准数据：先确认，再明确反�
   const calls = await mockMappingPreview(page, { failFirstApply: true })
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
-  const reconcile = page.getByRole('button', { name: '立即灌入' })
+  // 立即灌入入口在血缘详情弹窗内：先点击清单行打开弹窗
+  await page.locator('.dmo-map-row').first().click()
+  const lineage = page.getByRole('dialog', { name: '订单', exact: true })
+  await expect(lineage).toBeVisible()
+  const reconcile = lineage.getByRole('button', { name: '立即灌入' })
   await expect(reconcile).toBeVisible()
   await expect(page.getByText('只读取当前映射绑定的最新已批准版本')).toBeVisible()
 
@@ -297,17 +305,20 @@ test('审核异常数据集前置可见：徽标、禁用预览与灌入、横�
 
   // 行全通但来源数据集被拒绝 → 横幅审核异常态
   await expect(page.getByText('数据链路已连通，但 1 个来源数据集审核状态异常')).toBeVisible()
-  // 行内与侧栏均有「已拒绝」徽标
+  // 行内带「已拒绝」徽标；血缘详情弹窗内资产卡同样展示
   await expect(page.locator('.dmo-dataset-cell .dmo-review-badge')).toHaveText('已拒绝')
-  await expect(page.locator('.dmo-source-item .dmo-review-badge')).toHaveText('已拒绝')
+  await page.locator('.dmo-map-row').first().click()
+  const lineage = page.getByRole('dialog', { name: '订单', exact: true })
+  await expect(lineage).toBeVisible()
+  await expect(lineage.locator('.dmo-source-item .dmo-review-badge')).toHaveText('已拒绝')
   // 已灌入版本新鲜度
-  await expect(page.locator('.dmo-source-item small')).toContainText('已灌入 v23')
+  await expect(lineage.locator('.dmo-source-item small')).toContainText('已灌入 v23')
   // 预览前置禁用并给出原因
-  const preview = page.getByRole('button', { name: '预览数据源 订单宽表' })
+  const preview = lineage.getByRole('button', { name: '预览数据源 订单宽表' })
   await expect(preview).toBeDisabled()
   await expect(preview).toHaveAttribute('title', '数据集已拒绝，仅保留审计，不可预览')
   // 灌入前置禁用并给出原因，且不出现确认弹窗
-  const reconcile = page.getByRole('button', { name: '立即灌入' })
+  const reconcile = lineage.getByRole('button', { name: '立即灌入' })
   await expect(reconcile).toBeDisabled()
   await expect(page.getByText('来源数据集已拒绝，不能灌入；请先完成数据审核。')).toBeVisible()
 })
@@ -333,24 +344,33 @@ test('侧栏齿轮携带元素上下文跳转字段级映射视图', async ({ pa
   await mockMappingPreview(page)
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
-  await page.getByRole('button', { name: '查看该元素字段映射' }).click()
+  await page.locator('.dmo-map-row').first().click()
+  const lineage = page.getByRole('dialog', { name: '订单', exact: true })
+  await expect(lineage).toBeVisible()
+  await lineage.getByRole('button', { name: '查看该元素字段映射' }).click()
   await expect(page).toHaveURL(/\/ontologies\/ontology-preview\/graph\?view=mapping&focus=object(%3A|:)object-order$/)
   await expect(page.getByTestId('mapping-workspace')).toBeVisible()
 })
 
-test('数据供给全景：桑基图渲染出数据流，行与图联动', async ({ page }) => {
+test('数据供给全景：节点卡链路渲染，图与清单、血缘弹窗联动', async ({ page }) => {
   await mockMappingPreview(page)
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
   await expect(page.getByText('数据供给全景')).toBeVisible()
-  const chart = page.getByTestId('mapping-flow-chart')
+  const chart = page.getByTestId('mapping-chain-panorama')
   await expect(chart).toBeVisible()
-  // 1 个数据集 + 1 个对象 + 1 条流 → SVG 渲染出矢量节点
+  // 1 个数据集 + 1 个对象 → 两张节点卡 + 一条连线
+  await expect(chart.getByText('订单宽表')).toBeVisible()
+  await expect(chart.getByText('订单', { exact: true })).toBeVisible()
   await expect.poll(async () => chart.locator('svg path').count()).toBeGreaterThan(0)
   // 全部元素已映射时不显示"未接入数据流"caption
   await expect(page.locator('.dmo-flow-caption')).toHaveCount(0)
-  // 行选中后图表保持渲染（selectedKey 联动不破坏画布）
-  await page.locator('.dmo-map-row').first().click()
+  // 点击元素节点卡 → 打开血缘详情弹窗；关闭后画布保持渲染
+  await chart.getByText('订单', { exact: true }).click()
+  const lineage = page.getByRole('dialog', { name: '订单', exact: true })
+  await expect(lineage).toBeVisible()
+  await lineage.getByRole('button', { name: '关闭血缘详情' }).click()
+  await expect(lineage).toHaveCount(0)
   await expect(chart).toBeVisible()
 })
 
@@ -359,7 +379,7 @@ test('无映射本体显示诚实空态而非空画布', async ({ page }) => {
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
   await expect(page.getByText('暂无数据流')).toBeVisible()
-  await expect(page.getByTestId('mapping-flow-chart')).toHaveCount(0)
+  await expect(page.getByTestId('mapping-chain-panorama')).toHaveCount(0)
   // 唯一的对象元素不在图中，caption 如实告知去向
   await expect(page.locator('.dmo-flow-caption')).toContainText('1 个本体元素未接入数据流')
 })
@@ -376,12 +396,12 @@ test('实例数链接跳转实例数据 Tab 并选中对应类型', async ({ pag
   await expect.poll(() => requests.objectsTypeId).toBe('object-order')
 })
 
-test('深色模式：页面与桑基图随主题渲染', async ({ page }) => {
+test('深色模式：页面与链路全景随主题渲染', async ({ page }) => {
   await mockMappingPreview(page, { darkTheme: true })
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
   await expect(page.locator('html')).toHaveClass(/dark/)
-  await expect(page.getByTestId('mapping-flow-chart')).toBeVisible()
+  await expect(page.getByTestId('mapping-chain-panorama')).toBeVisible()
   await expect.poll(async () => page.locator('.dmo-flow-canvas svg path').count()).toBeGreaterThan(0)
   await expect(page.locator('.dmo-card')).toHaveCSS('background-color', 'rgb(22, 28, 38)')
 })

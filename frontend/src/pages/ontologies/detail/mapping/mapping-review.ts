@@ -172,7 +172,7 @@ export type FlowNodeClick =
   | { type: 'select-element'; key: string }
   | null
 
-/** 桑基图节点点击路由：数据集节点 → 数据预览；本体元素节点 → 选中清单行。 */
+/** 链路全景节点点击路由：数据集节点 → 数据预览；本体元素节点 → 打开血缘详情。 */
 export function resolveFlowNodeClick(data: { id?: string; kind?: string } | undefined): FlowNodeClick {
   if (!data?.id || !data.kind) return null
   if (data.kind === 'dataset') return { type: 'preview-dataset', datasetId: data.id.replace(/^dataset:/, '') }

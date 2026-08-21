@@ -103,7 +103,7 @@
   border-radius: 18px;
   display: flex;
   flex-direction: column;
-  /* 滚动优先在 .dmo-row-list 与 .dmo-inspector-body 分栏独立进行，KPI 与供给全景常驻；
+  /* 滚动优先在 .dmo-row-list 内进行，KPI 与供给全景常驻；
      视口过矮、工作区触底 min-height 时，卡片自身作为兜底滚动容器 */
   overflow-x: hidden;
   overflow-y: auto;
@@ -113,7 +113,7 @@
   background: var(--dmo-surface);
   box-shadow: var(--dmo-shadow);
 }
-.dark .dmo-card, .dark .dmo-row-list, .dark .dmo-inspector-body, .dark .dmo-workspace { scrollbar-color: #2a3342 transparent; }
+.dark .dmo-card, .dark .dmo-row-list, .dark .dmo-workspace { scrollbar-color: #2a3342 transparent; }
 .dmo-card button, .dmo-card input, .dmo-preview-dialog button, .dmo-preview-dialog select { font: inherit; }
 .dmo-card button:focus-visible, .dmo-card a:focus-visible, .dmo-card [role="button"]:focus-visible { outline: 2px solid var(--dmo-focus-ring); outline-offset: 2px; }
 .dmo-loading { min-height: 360px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--dmo-muted); font-size: 13px; }
@@ -176,12 +176,12 @@
 .dmo-flow-empty b { color: var(--dmo-muted); font-size: 13px; }
 .dmo-flow-empty span { max-width: 460px; color: var(--dmo-faint); font-size: 12px; line-height: 1.6; }
 
-.dmo-workspace { min-height: 240px; flex: 1 1 0%; display: grid; grid-template-columns: minmax(640px,1.62fr) minmax(330px,.78fr); background: var(--dmo-workspace-bg); }
-.dmo-register { min-width: 0; min-height: 0; border-right: 1px solid var(--dmo-line); display: flex; flex-direction: column; background: var(--dmo-panel); }
+.dmo-workspace { min-height: 240px; flex: 1 1 0%; display: flex; background: var(--dmo-workspace-bg); }
+.dmo-register { min-width: 0; min-height: 0; flex: 1 1 0%; display: flex; flex-direction: column; background: var(--dmo-panel); }
 .dmo-register-head { min-height: 64px; padding: 12px 16px 9px; border-bottom: 1px solid var(--dmo-line-soft); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .dmo-register-title { min-width: 0; display: flex; flex: 1; flex-direction: column; }
-.dmo-register-head b, .dmo-inspector-head b { color: var(--dmo-ink); font-size: 13px; font-weight: 700; }
-.dmo-register-head small, .dmo-inspector-head small { margin-top: 3px; color: var(--dmo-subtle); font-size: 12px; }
+.dmo-register-head b { color: var(--dmo-ink); font-size: 13px; font-weight: 700; }
+.dmo-register-head small { margin-top: 3px; color: var(--dmo-subtle); font-size: 12px; }
 .dmo-register-actions { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .dmo-search { width: 240px; height: 34px; padding: 0 10px; border: 1px solid var(--dmo-line); border-radius: 8px; display: flex; align-items: center; gap: 7px; color: var(--dmo-faint); background: var(--dmo-workspace-bg); transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease; }
 .dmo-search:focus-within { border-color: var(--dmo-teal); background: var(--dmo-cell-bg); box-shadow: 0 0 0 3px rgba(11,143,131,.07); }
@@ -237,17 +237,7 @@
 .dmo-review-badge[data-state="rejected"] { color: var(--dmo-danger-ink); background: var(--dmo-danger-bg); }
 .dmo-review-badge[data-state="pending_review"] { color: var(--dmo-nodata-ink); background: var(--dmo-nodata-bg); }
 
-.dmo-inspector { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--dmo-workspace-bg); }
-.dmo-inspector-head { min-height: 64px; padding: 12px 15px; border-bottom: 1px solid var(--dmo-line-soft); display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--dmo-panel); }
-.dmo-inspector-head > div { display: flex; flex-direction: column; }
-.dmo-inspector-head > button { width: 31px; height: 31px; border: 1px solid var(--dmo-line); border-radius: 8px; display: grid; place-items: center; color: var(--dmo-muted); background: var(--dmo-cell-bg); cursor: pointer; transition: color .18s ease, border-color .18s ease, background-color .18s ease; }
-.dmo-inspector-head > button:hover { border-color: var(--dmo-teal-line); color: var(--dmo-teal-ink); background: var(--dmo-teal-bg); }
-.dmo-inspector-body { min-height: 0; padding: 14px; display: flex; flex: 1 1 0%; flex-direction: column; overflow-y: auto; scrollbar-color: #cbd5da transparent; scrollbar-width: thin; }
-.dmo-selection-title { display: grid; grid-template-columns: 38px minmax(0,1fr) auto; align-items: center; gap: 9px; }
-.dmo-selection-title > span { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; color: var(--dmo-icon-teal); background: var(--dmo-icon-teal-bg); }
-.dmo-selection-title > div { min-width: 0; display: flex; flex-direction: column; }
-.dmo-selection-title > div b { overflow: hidden; color: var(--dmo-ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.dmo-selection-title > div small { margin-top: 3px; overflow: hidden; color: var(--dmo-subtle); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.dmo-lineage-body h3 { margin: 0 0 8px; display: flex; align-items: center; gap: 6px; color: var(--dmo-muted); font-size: 12px; font-weight: 700; }
 .dmo-status-note { margin-top: 13px; padding: 10px 11px; border-left: 3px solid var(--dmo-note-warn-line); display: flex; align-items: flex-start; gap: 8px; color: var(--dmo-note-warn-ink); background: var(--dmo-note-warn-bg); }
 .dmo-status-note[data-status="ready"] { border-left-color: var(--dmo-ready-ink); color: var(--dmo-ready-ink); background: var(--dmo-ready-bg); }
 .dmo-status-note > svg { flex: none; margin-top: 1px; }
@@ -316,10 +306,6 @@
 .dmo-next-step-actions button:hover { background: var(--dmo-hover-bg); }
 .dmo-next-step-actions .dmo-next-step-draft { border-color: transparent; color: var(--dmo-muted); background: transparent; font-weight: 600; }
 .dmo-next-step-actions .dmo-next-step-draft:hover { color: var(--dmo-teal-ink); background: var(--dmo-teal-bg); }
-.dmo-inspector-empty { min-height: 240px; display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; color: var(--dmo-faint); text-align: center; }
-.dmo-inspector-empty svg { margin-bottom: 9px; }
-.dmo-inspector-empty b { color: var(--dmo-muted); font-size: 13px; }
-.dmo-inspector-empty span { margin-top: 4px; font-size: 11px; }
 
 .dmo-preview-backdrop { position: fixed; inset: 0; z-index: var(--z-modal); padding: 16px; display: flex; align-items: center; justify-content: center; background: rgba(15,23,42,.34); backdrop-filter: blur(2px); animation: dmoFadeIn .18s ease-out; }
 .dark .dmo-preview-backdrop { background: rgba(0,0,0,.55); }
@@ -369,10 +355,49 @@
 @keyframes dmoFadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes dmoSlideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
+/* ═══ 数据血缘详情弹窗（层级低于数据预览与灌入确认，Esc 与遮罩点击交由上层优先） ═══ */
+.dmo-lineage-backdrop { position: fixed; inset: 0; z-index: calc(var(--z-modal) - 1); padding: 16px; display: flex; align-items: center; justify-content: center; background: rgba(15,23,42,.34); backdrop-filter: blur(2px); animation: dmoFadeIn .18s ease-out; }
+.dark .dmo-lineage-backdrop { background: rgba(0,0,0,.55); }
+.dmo-lineage-dialog { width: min(94vw,860px); height: min(84dvh,720px); max-height: calc(100dvh - 32px); border: 1px solid var(--dmo-line); border-radius: 18px; display: flex; flex-direction: column; overflow: hidden; color: var(--dmo-ink); background: var(--dmo-panel); box-shadow: 0 28px 84px rgba(15,23,42,.24); animation: dmoSlideUp .2s ease-out; }
+.dmo-lineage-header { min-height: 70px; padding: 14px 18px; border-bottom: 1px solid var(--dmo-line-soft); display: flex; align-items: center; gap: 11px; }
+.dmo-lineage-icon { width: 38px; height: 38px; flex: none; border-radius: 10px; display: grid; place-items: center; color: var(--dmo-icon-teal); background: var(--dmo-icon-teal-bg); }
+.dmo-lineage-heading { min-width: 0; flex: 1; }
+.dmo-lineage-heading > div { display: flex; align-items: center; gap: 8px; }
+.dmo-lineage-heading h3 { margin: 0; overflow: hidden; color: var(--dmo-ink); font-size: 15px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.dmo-lineage-heading p { margin: 3px 0 0; overflow: hidden; color: var(--dmo-subtle); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.dmo-lineage-header > button { width: 32px; height: 32px; flex: none; border: 1px solid var(--dmo-line); border-radius: 8px; display: grid; place-items: center; color: var(--dmo-muted); background: var(--dmo-cell-bg); cursor: pointer; transition: color .18s ease, border-color .18s ease, background-color .18s ease; }
+.dmo-lineage-header > button:hover { border-color: var(--dmo-teal-line); color: var(--dmo-teal-ink); background: var(--dmo-teal-bg); }
+.dmo-lineage-body { min-height: 0; flex: 1; padding: 14px 18px; overflow-y: auto; scrollbar-color: #cbd5da transparent; scrollbar-width: thin; background: var(--dmo-workspace-bg); }
+.dmo-lineage-body > section:first-child { margin-top: 0; }
+.dark .dmo-lineage-body { scrollbar-color: #2a3342 transparent; }
+
+/* ═══ 数据供给全景节点卡（@xyflow/react 自定义节点，与治理链路全景同一设计语言） ═══ */
+.dmo-chain-canvas { border: 1px solid var(--dmo-line-soft); border-radius: 12px; overflow: hidden; background: var(--dmo-cell-bg); }
+.dmo-chain-node { border: 1px solid var(--dmo-line); border-radius: 12px; padding: 8px 10px; color: var(--dmo-text); background: var(--dmo-panel); box-shadow: 0 1px 3px rgba(15,23,42,.06); cursor: pointer; transition: opacity .22s ease, box-shadow .22s ease, border-color .22s ease; }
+.dmo-chain-node:hover { border-color: var(--dmo-teal-line); box-shadow: 0 4px 14px rgba(13,148,136,.12); }
+.dmo-chain-node-dim { opacity: .22; }
+.dmo-chain-node-hot { border-color: var(--dmo-teal); box-shadow: 0 0 0 2px var(--dmo-focus-ring), 0 6px 18px rgba(13,148,136,.14); }
+.dmo-chain-row { display: flex; align-items: flex-start; gap: 8px; }
+.dmo-chain-icon { width: 24px; height: 24px; flex: none; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+.dmo-chain-icon--dataset { color: var(--dmo-icon-teal); background: var(--dmo-icon-teal-bg); }
+.dmo-chain-icon--object { color: #4a63a8; background: #e8eefb; }
+.dmo-chain-icon--relation { color: #a66f19; background: #fdf2dc; }
+.dark .dmo-chain-icon--object { color: #7aa2f7; background: #1c2740; }
+.dark .dmo-chain-icon--relation { color: #e0af68; background: #33290f; }
+.dmo-chain-text { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.dmo-chain-text b { overflow: hidden; color: var(--dmo-ink); font-size: 12px; font-weight: 600; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.dmo-chain-text small { margin-top: 2px; overflow: hidden; color: var(--dmo-subtle); font-size: 10.5px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.dmo-chain-badge { flex: none; padding: 1px 6px; border-radius: 6px; font-size: 9.5px; font-style: normal; font-weight: 700; white-space: nowrap; }
+.dmo-chain-badge[data-tone="ok"] { color: var(--dmo-ready-ink); background: var(--dmo-ready-bg); }
+.dmo-chain-badge[data-tone="warn"] { color: var(--dmo-note-warn-ink); background: var(--dmo-note-warn-bg); }
+.dmo-chain-badge[data-tone="danger"] { color: var(--dmo-danger-ink); background: var(--dmo-danger-bg); }
+.dmo-chain-badge[data-tone="muted"] { color: var(--dmo-muted); background: var(--dmo-unmapped-bg); }
+.dmo-chain-colhead { display: flex; align-items: center; gap: 6px; color: var(--dmo-faint); font-size: 10px; font-weight: 700; letter-spacing: .04em; pointer-events: none; }
+.dmo-chain-colhead em { padding: 1px 6px; border-radius: 999px; color: var(--dmo-faint); background: var(--dmo-unmapped-bg); font-size: 9.5px; font-style: normal; font-variant-numeric: tabular-nums; }
+
 @media (max-width: 1280px) {
   .dmo-summary { grid-template-columns: minmax(250px,1fr) minmax(400px,1.55fr) auto; gap: 12px; }
   .dmo-kpis > div { padding: 0 9px; }
-  .dmo-workspace { grid-template-columns: minmax(570px,1.5fr) minmax(310px,.8fr); }
   .dmo-register-head { align-items: flex-start; flex-direction: column; }
   .dmo-register-actions { width: 100%; }
   .dmo-search { margin-left: auto; }
@@ -384,7 +409,7 @@
   .dmo-summary { min-height: 150px; }
   /* 窄屏纵向堆叠：回退为工作区整体单栏滚动，避免两个独立滚动区互相挤压截断 */
   .dmo-workspace { display: flex; flex-direction: column; overflow-y: auto; scrollbar-color: #cbd5da transparent; scrollbar-width: thin; }
-  .dmo-row-list, .dmo-inspector-body { flex: none; overflow: visible; }
+  .dmo-row-list { flex: none; overflow: visible; }
   .dmo-register { border-right: 0; border-bottom: 1px solid var(--dmo-line); }
 }
 @media (max-width: 700px) {
