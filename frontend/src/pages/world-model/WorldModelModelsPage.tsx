@@ -1,12 +1,16 @@
-import { useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useMemo, useState } from 'react'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
+  AlertTriangle,
   Boxes,
+  ChevronLeft,
+  ChevronRight,
   Code2,
   Orbit,
   Pencil,
   Plus,
+  Rocket,
   Search,
   Trash2,
   X,
@@ -22,6 +26,10 @@ import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { useToast } from '@/components/ui/Toast'
+import { useDebouncedValue } from '@/utils/useDebouncedValue'
+
+/** 列表走服务端分页：每页卡片数（含新建卡占位的网格为 4 列） */
+const PAGE_SIZE = 12
 
 export const ENGINE_TYPE_OPTIONS: { value: EngineType; label: string; hint: string }[] = [
   { value: 'statistical', label: '统计预测', hint: '基于历史数据的统计/机器学习方法' },
@@ -186,11 +194,13 @@ function ProjectCard({
   onDevelop,
   onEdit,
   onDelete,
+  onOpenService,
 }: {
   item: WorldModelProjectSummary
   onDevelop: () => void
   onEdit: () => void
   onDelete: () => void
+  onOpenService: () => void
 }) {
   return (
     <article className="flex min-h-[190px] flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm/50 transition-shadow hover:shadow-md">
@@ -215,6 +225,21 @@ function ProjectCard({
             }`}>
               {item.service_status === 'online' ? '在线' : item.service_status === 'offline' ? '已下线' : '草稿'}
             </span>
+            {item.service_name && (
+              <button
+                type="button"
+                onClick={onOpenService}
+                title={`推演服务${item.service_status === 'online' ? '（在线）' : '（已下线）'}`
+                  + `${item.service_endpoint ? `\n调用端点：${item.service_endpoint}` : ''}`
+                  + '\n点击进入「推演服务」页管理'}
+                className="inline-flex max-w-[11rem] items-center gap-1 rounded-md border border-teal-100 bg-teal-50/60 px-1.5 py-0.5 text-[11px] text-teal-700 transition-colors hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+              >
+                <Rocket size={11} className="shrink-0" />
+                <span className="truncate">
+                  {item.service_name}{item.service_version_no != null ? ` · v${item.service_version_no}` : ''}
+                </span>
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -258,6 +283,7 @@ function ProjectCard({
 export default function WorldModelModelsPage() {
   const [nameFilter, setNameFilter] = useState('')
   const [engineFilter, setEngineFilter] = useState('')
+  const [page, setPage] = useState(1)
   const [createOpen, setCreateOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<WorldModelProjectSummary | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<WorldModelProjectSummary | null>(null)
@@ -265,19 +291,32 @@ export default function WorldModelModelsPage() {
   const navigate = useNavigate()
   const { toast } = useToast()
 
+  // 输入防抖后再发服务端筛选请求，避免每次击键都查询
+  const keyword = useDebouncedValue(nameFilter.trim(), 300)
+
+  // 筛选条件变化回到第一页
+  useEffect(() => { setPage(1) }, [keyword, engineFilter])
+
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['world-model-projects'],
-    queryFn: () => worldModelApi.listProjects({ size: 500 }),
+    queryKey: ['world-model-projects', keyword, engineFilter, page],
+    queryFn: () => worldModelApi.listProjects({
+      keyword: keyword || undefined,
+      engine_type: engineFilter || undefined,
+      page,
+      size: PAGE_SIZE,
+    }),
+    // 翻页/筛选时保留上一页数据，避免网格闪烁
+    placeholderData: keepPreviousData,
   })
 
-  const allItems = useMemo(() => data?.items ?? [], [data?.items])
-  const filteredItems = useMemo(() => {
-    const keyword = nameFilter.trim().toLocaleLowerCase('zh-CN')
-    return allItems
-      .filter(item => !keyword
-        || `${item.name} ${item.description ?? ''}`.toLocaleLowerCase('zh-CN').includes(keyword))
-      .filter(item => !engineFilter || item.engine_type === engineFilter)
-  }, [allItems, engineFilter, nameFilter])
+  const items = useMemo(() => data?.items ?? [], [data?.items])
+  const total = data?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  // 删除末页最后一条等场景导致当前页变空时，回退一页
+  useEffect(() => {
+    if (page > 1 && data && data.items.length === 0) setPage(page - 1)
+  }, [data, page])
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['world-model-projects'] })
 
@@ -352,9 +391,7 @@ export default function WorldModelModelsPage() {
           </button>
         )}
         <span className="ml-auto hidden text-xs tabular-nums text-slate-400 sm:inline" aria-live="polite">
-          {nameFilter || engineFilter
-            ? `共 ${filteredItems.length} / ${allItems.length} 个模型`
-            : `共 ${allItems.length} 个模型`}
+          {keyword || engineFilter ? `符合条件 ${total} 个模型` : `共 ${total} 个模型`}
         </span>
         <button
           type="button"
@@ -383,24 +420,52 @@ export default function WorldModelModelsPage() {
               重新加载
             </button>
           </div>
-        ) : filteredItems.length === 0 ? (
+        ) : items.length === 0 ? (
           <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3">
             <Boxes size={28} className="text-slate-300" />
-            <p className="mt-3 text-sm font-medium text-slate-500">{nameFilter || engineFilter ? '没有符合条件的推演模型' : '还没有创建推演模型'}</p>
-            <p className="mt-1 text-xs text-slate-400">{nameFilter || engineFilter ? '请调整名称或引擎类型筛选条件' : '点击左侧卡片创建第一个推演模型'}</p>
+            <p className="mt-3 text-sm font-medium text-slate-500">{keyword || engineFilter ? '没有符合条件的推演模型' : '还没有创建推演模型'}</p>
+            <p className="mt-1 text-xs text-slate-400">{keyword || engineFilter ? '请调整名称或引擎类型筛选条件' : '点击左侧卡片创建第一个推演模型'}</p>
           </div>
         ) : (
-          filteredItems.map(item => (
+          items.map(item => (
             <ProjectCard
               key={item.id}
               item={item}
               onDevelop={() => navigate(`/world-model/models/${item.id}/develop`)}
               onEdit={() => setEditTarget(item)}
               onDelete={() => setDeleteTarget(item)}
+              onOpenService={() => navigate('/world-model/services')}
             />
           ))
         )}
       </div>
+
+      {!isLoading && !isError && totalPages > 1 && (
+        <div className="mt-4 flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-400 shadow-sm/50">
+          <span>共 {total} 条</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage(current => Math.max(1, current - 1))}
+              disabled={page <= 1}
+              aria-label="上一页"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 disabled:opacity-40"
+            >
+              <ChevronLeft size={14} />
+            </button>
+            <span className="tabular-nums">{page} / {totalPages}</span>
+            <button
+              type="button"
+              onClick={() => setPage(current => Math.min(totalPages, current + 1))}
+              disabled={page >= totalPages}
+              aria-label="下一页"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 disabled:opacity-40"
+            >
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {createOpen && (
         <ProjectFormModal
@@ -423,12 +488,41 @@ export default function WorldModelModelsPage() {
         />
       )}
 
+      {/* 在线模型删除保护：服务未下线时不开放删除，引导先去推演服务页下线 */}
+      <Modal
+        open={!!deleteTarget && deleteTarget.service_status === 'online'}
+        onClose={() => setDeleteTarget(null)}
+        title={deleteTarget ? `删除「${deleteTarget.name}」？` : '删除推演模型？'}
+        headerIcon={<AlertTriangle size={19} className="text-amber-600" />}
+        size="sm"
+        footer={(
+          <>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>取消</Button>
+            <Button
+              onClick={() => { setDeleteTarget(null); navigate('/world-model/services') }}
+              className="bg-teal-600 text-white hover:bg-teal-700"
+            >
+              前往推演服务
+            </Button>
+          </>
+        )}
+      >
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+          该模型的推演服务{deleteTarget?.service_name ? `「${deleteTarget.service_name}」` : ''}当前在线，
+          调用端点仍可被访问。删除会立即移除在线端点、服务与全部历史版本，
+          请先在「推演服务」页将服务下线，再删除模型。
+        </div>
+      </Modal>
+
+      {/* 草稿/已下线模型：常规永久删除确认 */}
       <ConfirmModal
-        open={!!deleteTarget}
+        open={!!deleteTarget && deleteTarget.service_status !== 'online'}
         onClose={() => { if (!deleteMutation.isPending) setDeleteTarget(null) }}
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
         title={deleteTarget ? `删除「${deleteTarget.name}」？` : '删除推演模型？'}
-        description="模型脚本与全部历史版本将被永久移除。此操作无法撤销，请确认你不再需要这些内容。"
+        description={deleteTarget?.service_name
+          ? `模型脚本、已下线的推演服务「${deleteTarget.service_name}」与全部历史版本将被永久移除。此操作无法撤销，请确认你不再需要这些内容。`
+          : '模型脚本与全部历史版本将被永久移除。此操作无法撤销，请确认你不再需要这些内容。'}
         confirmText="删除模型"
         variant="danger"
         loading={deleteMutation.isPending}

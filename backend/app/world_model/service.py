@@ -330,28 +330,40 @@ def list_projects(
         .group_by(WorldModelScriptVersion.project_id)
         .all()
     )
-    service_statuses = dict(
-        db.query(WorldModelService.project_id, WorldModelService.status)
+    # 页内项目的服务摘要（状态/名称/端点/冻结版本号），批量取数避免逐卡请求
+    service_rows = (
+        db.query(WorldModelService)
         .filter(WorldModelService.project_id.in_([row.id for row in rows]))
         .all()
-    ) if rows else {}
-    return schemas.ProjectListResponse(
-        items=[
-            schemas.ProjectSummary(
-                id=row.id,
-                name=row.name,
-                description=row.description or "",
-                engine_type=row.engine_type,
-                status=row.status,
-                version_count=int(version_counts.get(row.id, 0)),
-                service_status=service_statuses.get(row.id),
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-            )
-            for row in rows
-        ],
-        total=total,
-    )
+    ) if rows else []
+    services_by_project = {svc.project_id: svc for svc in service_rows}
+    version_ids = [svc.version_id for svc in service_rows if svc.version_id]
+    service_version_nos = dict(
+        db.query(WorldModelScriptVersion.id, WorldModelScriptVersion.version_no)
+        .filter(WorldModelScriptVersion.id.in_(version_ids))
+        .all()
+    ) if version_ids else {}
+    items = []
+    for row in rows:
+        svc = services_by_project.get(row.id)
+        items.append(schemas.ProjectSummary(
+            id=row.id,
+            name=row.name,
+            description=row.description or "",
+            engine_type=row.engine_type,
+            status=row.status,
+            version_count=int(version_counts.get(row.id, 0)),
+            service_status=svc.status if svc else None,
+            service_name=svc.name if svc else None,
+            service_endpoint=svc.endpoint_path if svc else None,
+            service_version_no=(
+                service_version_nos.get(svc.version_id)
+                if svc and svc.version_id else None
+            ),
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        ))
+    return schemas.ProjectListResponse(items=items, total=total)
 
 
 def create_project(
@@ -391,16 +403,30 @@ def update_project(
 
 
 def delete_project(db: Session, project_id: str) -> None:
-    """删除项目：显式清理子表（SQLite 默认不启用外键级联，与 PG 行为对齐）。
+    """删除项目：在线推演服务须先下线；显式清理子表（SQLite 默认不启用外键级联，与 PG 行为对齐）。
 
-    版本随项目删除；调用记录属于审计数据，保留但解除项目关联。
+    版本与推演服务随项目删除；调用记录属于审计数据，保留但解除项目/服务关联。
     """
     project = _load_project(db, project_id)
+    svc = (
+        db.query(WorldModelService)
+        .filter(WorldModelService.project_id == project.id)
+        .first()
+    )
+    if svc is not None and svc.status == SERVICE_STATUS_ONLINE:
+        raise HTTPException(
+            409,
+            f"该模型存在在线推演服务「{svc.name}」，"
+            "请先在「推演服务」页将服务下线后再删除。",
+        )
     db.query(WorldModelScriptVersion).filter(
         WorldModelScriptVersion.project_id == project.id).delete()
     db.query(WorldModelCallRecord).filter(
         WorldModelCallRecord.project_id == project.id).update(
-        {WorldModelCallRecord.project_id: None})
+        {WorldModelCallRecord.project_id: None,
+         WorldModelCallRecord.service_id: None})
+    if svc is not None:
+        db.delete(svc)
     db.delete(project)
     db.commit()
 
