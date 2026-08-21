@@ -1,28 +1,38 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { apiClientV2 } from '@/api/client'
 import { sentinelApi, type Sentinel, type SentinelFiring } from '@/api/sentinelApi'
+import pipelinesApi from '@/api/v2/pipelines'
 import { useAuthStore } from '@/stores/authStore'
-import { buildGovernanceKpis } from './governanceFormat'
+import { buildGovernanceKpis, readableTargetSummary } from './governanceFormat'
 import {
   CheckCircle2, HandMetal, Rocket, ShieldAlert, ScrollText,
   Loader2, RefreshCw,
 } from 'lucide-react'
-import { ExecutionContextRail, KpiStatBar, type HeroFlowCounts } from '../governance/ExecutionHero'
+import { DailySparkCard, KpiStatBar } from '../governance/ExecutionHero'
+import ChainPanorama from '../governance/ChainPanorama'
 import PendingStoryList, { type PendingLog } from '../governance/PendingStoryList'
+import PendingStoryDialog from '../governance/PendingStoryDialog'
 import AutonomyJourney from '../governance/AutonomyJourney'
 import SentinelRadar from '../governance/SentinelRadar'
 import FactStream, { type FactRow } from '../governance/FactStream'
 import { ApproveDialog, RejectDialog } from '../governance/DecisionDialogs'
 import {
-  buildAutonomyTimeline, buildDailySpark,
+  buildAutonomyTimeline, buildDailySpark, resolvePendingContext,
 } from '../governance/storyModel'
+import {
+  buildGovernanceChain,
+  type ChainDatasetLike,
+  type ChainLinkMappingLike,
+  type ChainMappingLike,
+  type ChainPipelineLike,
+} from '../governance/chainModel'
 import '../governance/governanceNarrative.css'
 
-/* 治理与推演驾驶舱 ——「执行故事线」版:
-   ⓪ Hero      —— KPI + 近 7 日执行心电图 + 2.5D 本体执行链
-   ① 待审批    —— 每条都是「起因 → 判定 → 后果」的故事,看明白再裁决
+/* 治理与推演驾驶舱 ——「链路全景」版:
+   ⓪ Hero      —— KPI + 七段链路全景画布(采集→资产湖→映射→实例→哨兵→待审批→动作)
+   ① 待审批    —— 紧凑列表,点击打开「起因 → 判定 → 后果」详情弹窗再裁决
    ② 放权旅程  —— 等级路径 + 近期执行履历 + 批准率,放权靠履历来挣
    ③ 哨兵      —— 值守雷达,平台正在替你盯什么、最近命中了什么
    ④ 事实流    —— 每一个变化的出处与因果,全量留痕 */
@@ -71,6 +81,26 @@ interface OverviewLite {
 
 interface InstanceCatalogLite {
   objectTypes: Array<{ id: string; name: string; displayName?: string }>
+}
+
+/** 发布快照(workspace)里链路全景需要的部分:动作定义 + 映射 + 关系映射。 */
+interface WorkspaceLite {
+  actions?: WorkspaceActionDef[]
+  mappings?: ChainMappingLike[]
+  linkMappings?: ChainLinkMappingLike[]
+}
+
+interface CuratedDatasetLite extends ChainDatasetLike {
+  status?: string | null
+}
+
+interface DatasetOverviewLite {
+  items?: Array<{
+    id: string
+    name?: string | null
+    source?: string | null
+    rowcount?: number | null
+  }>
 }
 
 interface GovernanceTabProps {
@@ -122,6 +152,7 @@ export default function GovernanceTab({
   const [rejectError, setRejectError] = useState<string | null>(null)
   const [approveTarget, setApproveTarget] = useState<PendingLog | null>(null)
   const [approveError, setApproveError] = useState<string | null>(null)
+  const [storyTarget, setStoryTarget] = useState<PendingLog | null>(null)
   const [kindFilter, setKindFilter] = useState('')
   const [isPageVisible, setIsPageVisible] = useState(() =>
     typeof document === 'undefined' || document.visibilityState === 'visible')
@@ -167,7 +198,8 @@ export default function GovernanceTab({
   })
   // 叙事新增:动作定义(rules/description)、执行履历(自治时间线)、
   // 发布快照类型名(绑定句)、总览(心电图与执行链计数)。全部只读。
-  const workspaceQuery = useQuery<{ actions?: WorkspaceActionDef[] }>({
+  // 链路全景复用同一快照的 mappings/linkMappings(上游三段)与 actions(动作段)。
+  const workspaceQuery = useQuery<WorkspaceLite>({
     queryKey: ['gov-workspace', ontologyId],
     queryFn: () => apiClientV2.get(`/ontologies/${ontologyId}/current-release/workspace`) as any,
     enabled: queryEnabled,
@@ -193,6 +225,32 @@ export default function GovernanceTab({
     staleTime: 30_000,
     retry: 1,
   })
+  // 链路全景上游三段:被映射引用的成品数据集/人工数据集及其产出管道。
+  // queryKey 与数据映射页共享,命中同一缓存;全部只读。
+  const curatedQuery = useQuery<CuratedDatasetLite[]>({
+    queryKey: ['curated-all'],
+    queryFn: async () => {
+      const data = await apiClientV2.get('/curated') as any
+      return Array.isArray(data) ? data : data?.items || []
+    },
+    enabled: queryEnabled,
+    staleTime: 60_000,
+    retry: 1,
+  })
+  const manualDatasetsQuery = useQuery<DatasetOverviewLite>({
+    queryKey: ['manual-datasets-overview'],
+    queryFn: () => apiClientV2.get('/datasets/overview') as any,
+    enabled: queryEnabled,
+    staleTime: 60_000,
+    retry: 1,
+  })
+  const pipelinesQuery = useQuery<ChainPipelineLike[]>({
+    queryKey: ['gov-pipelines'],
+    queryFn: () => pipelinesApi.list() as any,
+    enabled: queryEnabled,
+    staleTime: 60_000,
+    retry: 1,
+  })
 
   const pending = pendingQuery.data ?? []
   const autonomy = autonomyQuery.data ?? []
@@ -200,6 +258,8 @@ export default function GovernanceTab({
   const firings = firingsQuery.data ?? []
   const facts = factsQuery.data ?? []
   const workspaceActions = workspaceQuery.data?.actions ?? []
+  const workspaceMappings = workspaceQuery.data?.mappings ?? []
+  const workspaceLinkMappings = workspaceQuery.data?.linkMappings ?? []
   const releaseLogs = (logsQuery.data ?? []).filter(
     log => !currentReleaseId || !log.ontologyReleaseId || log.ontologyReleaseId === currentReleaseId,
   )
@@ -220,16 +280,59 @@ export default function GovernanceTab({
   }, [catalogQuery.data])
 
   const overview = overviewQuery.data
-  const flowCounts: HeroFlowCounts = {
-    datasetsBound: overview?.data?.mappings?.bound ?? 0,
-    instances: (overview?.data?.instances ?? 0) + (overview?.data?.linkInstances ?? 0),
-    sentinelsOnline: kpis.sentinelsOnline,
-    sentinelsTotal: kpis.sentinelsTotal,
-    pendingCount: kpis.pendingCount,
-    autoRuns: autonomy.reduce((sum, item) => sum + item.autoRuns.total, 0),
-    factsTotal: overview?.facts?.total ?? facts.length,
-  }
   const dailySpark = buildDailySpark(overview?.runtime?.daily7d)
+
+  // 七段链路全景:上游(管道→数据集→映射)+ 治理环路(实例→哨兵→待审批→动作)。
+  const chain = useMemo(() => {
+    const referencedIds = new Set<string>()
+    for (const mapping of workspaceMappings) {
+      const id = mapping.curated_dataset_id || mapping.curatedDatasetId
+      if (id) referencedIds.add(id)
+    }
+    for (const linkMapping of workspaceLinkMappings) {
+      for (const id of [linkMapping.src_dataset_id, linkMapping.tgt_dataset_id, linkMapping.edge_dataset_id]) {
+        if (id) referencedIds.add(id)
+      }
+    }
+    const curated = (curatedQuery.data ?? [])
+      .filter(item => referencedIds.has(item.id))
+    const manual = (manualDatasetsQuery.data?.items ?? [])
+      .filter(item => referencedIds.has(item.id))
+      .map(item => ({
+        id: item.id,
+        name: item.name ?? null,
+        row_count: item.rowcount ?? null,
+        quality_score: null,
+        producer_pipeline_id: null,
+      }))
+    const datasets: ChainDatasetLike[] = [...curated, ...manual]
+    const producerIds = new Set(
+      datasets.map(item => item.producer_pipeline_id).filter(Boolean) as string[],
+    )
+    const pipelines = (pipelinesQuery.data ?? []).filter(item => producerIds.has(item.id))
+    return buildGovernanceChain({
+      pending,
+      firings,
+      sentinels,
+      actions: workspaceActions,
+      autonomy,
+      mappings: workspaceMappings,
+      linkMappings: workspaceLinkMappings,
+      datasets,
+      pipelines,
+      instanceTotal: (overview?.data?.instances ?? 0) + (overview?.data?.linkInstances ?? 0),
+      targetLabel: log => readableTargetSummary(log),
+      objectTypeName,
+    })
+  }, [
+    workspaceMappings, workspaceLinkMappings, curatedQuery.data, manualDatasetsQuery.data,
+    pipelinesQuery.data, pending, firings, sentinels, workspaceActions, autonomy,
+    overview, objectTypeName,
+  ])
+
+  const storyContext = storyTarget
+    ? resolvePendingContext(storyTarget, firings, sentinels, workspaceActions)
+    : { firing: null, sentinel: null, actionDef: null }
 
   const scrollToSection = (ref: React.RefObject<HTMLDivElement | null>) => {
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -420,9 +523,24 @@ export default function GovernanceTab({
 
       <KpiStatBar kpis={kpis} onNavigate={navigateHero} />
 
-      {/* ①+⓪ 主舞台:待审批(62%) × 情境栏(38%,吸附跟随)
-          用户来这一页是为了裁决,任务居左占主视觉;执行链与心电图
-          以情境栏身份守在右侧,讲清“为什么会弹出这些故事”。 */}
+      {/* ⓪ 链路全景:七段链路真实节点,待审批即当前瓶颈,点开看前因后果 */}
+      <ChainPanorama
+        nodes={chain.nodes}
+        edges={chain.edges}
+        guides={chain.guides}
+        isRefreshing={isRefreshing}
+        onOpenPending={logId => {
+          const log = pending.find(item => item.id === logId)
+          if (log) setStoryTarget(log)
+        }}
+        onOpenSentinels={() => scrollToSection(sentinelsRef)}
+        onOpenAutonomy={() => scrollToSection(autonomyRef)}
+        onOpenGroup={group => navigate(`/ontologies/${ontologyId}?tab=${group}`)}
+      />
+
+      {/* ① 主舞台:待审批(62%) × 心电图情境栏(38%,吸附跟随)
+          用户来这一页是为了裁决,任务居左占主视觉;
+          点击条目打开详情弹窗,看明白「起因 → 判定 → 后果」再裁决。 */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(330px,1fr)]">
         <div ref={pendingRef} className="rounded-xl border bg-white p-5">
           <SectionHead icon={HandMetal} iconCls="text-blue-500" title="待审批"
@@ -439,14 +557,10 @@ export default function GovernanceTab({
             </div>
           ) : (
             <PendingStoryList
-              ontologyId={ontologyId}
               pending={pending}
-              firings={firings}
-              sentinels={sentinels}
-              actions={workspaceActions}
-              objectTypeName={objectTypeName}
               canDecide={canDecide}
               busyId={busy}
+              onOpenDetail={log => setStoryTarget(log)}
               onApprove={log => {
                 setApproveError(null)
                 setApproveTarget(log)
@@ -460,11 +574,9 @@ export default function GovernanceTab({
         </div>
 
         <aside className="space-y-3 self-start xl:sticky xl:top-4">
-          <ExecutionContextRail
+          <DailySparkCard
             dailySpark={dailySpark}
-            flowCounts={flowCounts}
             isRefreshing={isRefreshing}
-            onNavigate={navigateHero}
           />
         </aside>
       </div>
@@ -518,6 +630,27 @@ export default function GovernanceTab({
         <FactStream facts={facts} kindFilter={kindFilter} onKindFilterChange={setKindFilter} />
       </div>
 
+      <PendingStoryDialog
+        ontologyId={ontologyId}
+        target={storyTarget}
+        firing={storyContext.firing}
+        sentinel={storyContext.sentinel}
+        actionDef={storyContext.actionDef}
+        objectTypeName={objectTypeName}
+        canDecide={canDecide}
+        busy={Boolean(storyTarget && busy === storyTarget.id)}
+        onClose={() => setStoryTarget(null)}
+        onApprove={log => {
+          setStoryTarget(null)
+          setApproveError(null)
+          setApproveTarget(log)
+        }}
+        onReject={log => {
+          setStoryTarget(null)
+          setRejectError(null)
+          setRejectTarget(log)
+        }}
+      />
       <RejectDialog
         target={rejectTarget}
         busy={Boolean(rejectTarget && busy === rejectTarget.id)}

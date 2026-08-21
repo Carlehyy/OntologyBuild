@@ -109,6 +109,24 @@ export function firingMatchedInstanceIds(firing: FiringLike): {
   }
 }
 
+/** 待审批的叙事上下文:触发 firing(硬关联)、哨兵定义(firing 优先,actionIds 绑定兜底)、动作定义。 */
+export function resolvePendingContext<
+  S extends SentinelLike,
+  A extends WorkspaceActionLike,
+>(
+  log: PendingLogLike,
+  firings: FiringLike[],
+  sentinels: S[],
+  actions: A[],
+): { firing: FiringLike | null; sentinel: S | null; actionDef: A | null } {
+  const firing = findTriggerFiring(log, firings)
+  const sentinel = firing
+    ? sentinels.find(item => item.id === firing.sentinelId) || null
+    : sentinels.find(item => (item.actionIds || []).includes(log.actionId)) || null
+  const actionDef = actions.find(item => item.id === log.actionId) || null
+  return { firing, sentinel, actionDef }
+}
+
 const OP_LABEL: Record<string, string> = {
   '>=': '≥', '<=': '≤', '>': '>', '<': '<', '==': '=', '=': '=', '!=': '≠', '<>': '≠',
 }

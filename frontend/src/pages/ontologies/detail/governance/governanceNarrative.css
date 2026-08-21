@@ -2,10 +2,9 @@
    治理推演 · 叙事动效(纯 CSS,零依赖)
    - gov-stagger:区块错落入场
    - gov-pulse:哨兵在线雷达脉冲
-   - gov-iso:2.5D 等距流程图(数据→哨兵→动作→效果)
+   - chain-node:链路全景节点(七段色调/高亮/压暗/待审批脉冲)
    - gov-spark:执行心电图描线
    - gov-dot-pop:自治履历点阵弹入
-   - gov-expand:故事卡展开
    全部动画尊重 prefers-reduced-motion。
    ════════════════════════════════════════════════════════════════ */
 
@@ -38,24 +37,57 @@
   animation: govPulse 2.2s ease-out infinite;
 }
 
-/* 故事卡展开(高度自适应的 0fr→1fr 网格动画) */
-.gov-expand {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 320ms cubic-bezier(.2,.8,.2,1);
-}
-.gov-expand[data-open='true'] { grid-template-rows: 1fr; }
-.gov-expand > .gov-expand-inner {
-  overflow: hidden;
-  min-height: 0;
-}
+/* 故事卡章节入场(详情弹窗内章节同样适用) */
 @keyframes govChapterIn {
   from { opacity: 0; transform: translateX(-6px); }
   to { opacity: 1; transform: translateX(0); }
 }
-.gov-expand[data-open='true'] .gov-chapter { animation: govChapterIn 360ms cubic-bezier(.2,.8,.2,1) both; }
-.gov-expand[data-open='true'] .gov-chapter:nth-child(2) { animation-delay: 90ms; }
-.gov-expand[data-open='true'] .gov-chapter:nth-child(3) { animation-delay: 180ms; }
+
+/* ═══ 链路全景节点(@xyflow/react 自定义节点) ═══ */
+.chain-node {
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  padding: 8px 10px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .06);
+  cursor: pointer;
+  transition: opacity 220ms ease, box-shadow 220ms ease, border-color 220ms ease;
+}
+.chain-node:hover {
+  border-color: #99f6e4;
+  box-shadow: 0 4px 14px rgba(13, 148, 136, .12);
+}
+.chain-node-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  width: 24px;
+  flex: none;
+  border-radius: 8px;
+}
+.chain-tone-pipeline .chain-node-icon,
+.chain-tone-dataset .chain-node-icon { background: #e0f2fe; color: #0369a1; }
+.chain-tone-mapping .chain-node-icon { background: #d1fae5; color: #047857; }
+.chain-tone-instanceHub .chain-node-icon,
+.chain-tone-instance .chain-node-icon { background: #ede9fe; color: #6d28d9; }
+.chain-tone-sentinel .chain-node-icon { background: #ffe4e6; color: #be123c; }
+.chain-tone-pending .chain-node-icon { background: #fef3c7; color: #b45309; }
+.chain-tone-action .chain-node-icon { background: #ecfccb; color: #4d7c0f; }
+.chain-tone-instanceHub { border-style: dashed; background: #faf5ff; }
+.chain-tone-pending { border-color: #fcd34d; background: #fffdf5; }
+.chain-node-dim { opacity: .22; }
+.chain-node-hot {
+  border-color: #14b8a6;
+  box-shadow: 0 0 0 2px rgba(20, 184, 166, .25), 0 6px 18px rgba(13, 148, 136, .14);
+}
+/* 待审批节点持续脉冲:当前瓶颈的呼吸光晕 */
+@keyframes chainPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, .45); }
+  50% { box-shadow: 0 0 0 7px rgba(245, 158, 11, 0); }
+}
+.chain-node-pulse { animation: chainPulse 1.8s ease-in-out infinite; }
+.chain-node-pulse.chain-node-hot { animation: none; }
 
 /* 章节连接线的“流动”虚线 */
 @keyframes govFlowDash {
@@ -93,41 +125,19 @@
 }
 .gov-level-current { animation: govLevelGlow 2.4s ease-in-out infinite; }
 
-/* ═══ 执行链 SVG 等距图 ═══ */
-@keyframes isoFloatY {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
-}
-.gov-iso-float { animation: isoFloatY 4.5s ease-in-out infinite; }
-.gov-iso-float[data-order='2'] { animation-delay: .9s; }
-.gov-iso-float[data-order='3'] { animation-delay: 1.8s; }
-.gov-iso-float[data-order='4'] { animation-delay: 2.7s; }
-.gov-iso-float[data-order='5'] { animation-delay: 3.6s; }
-.gov-iso-float:focus-visible polygon:first-child {
-  stroke: #0d9488;
-  stroke-width: 2;
-}
-@keyframes isoFlowDash {
-  to { stroke-dashoffset: -18; }
-}
-.gov-iso-edge {
-  stroke-dasharray: 6 6;
-  animation: isoFlowDash 1.1s linear infinite;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .gov-stagger > *,
   .gov-pulse::after,
-  .gov-expand,
-  .gov-expand[data-open='true'] .gov-chapter,
   .gov-flowline,
   .gov-bar,
   .gov-dot-pop,
   .gov-level-current,
-  .gov-iso-float,
-  .gov-iso-edge {
+  .chain-node-pulse {
     animation: none !important;
     transition: none !important;
   }
-  .gov-expand { grid-template-rows: 1fr; }
+  .chain-node,
+  .chain-node:hover {
+    transition: none !important;
+  }
 }
