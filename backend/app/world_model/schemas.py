@@ -30,6 +30,10 @@ class ProjectSummary(BaseModel):
     version_count: int = 0
     # 推演服务状态（null=未发布）；列表徽标据此展示 草稿/在线/已下线
     service_status: str | None = None
+    # 已发布服务的摘要（null=未发布）：列表卡片的服务快捷入口与删除影响提示
+    service_name: str | None = None
+    service_endpoint: str | None = None
+    service_version_no: int | None = None
     created_at: datetime | None
     updated_at: datetime | None
 

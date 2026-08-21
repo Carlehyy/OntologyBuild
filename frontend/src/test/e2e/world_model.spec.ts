@@ -60,7 +60,17 @@ async function mockWorldModel(page: Page) {
     const request = route.request()
     const path = new URL(request.url()).pathname
     if (path === '/api/v2/world-model/projects' && request.method() === 'GET') {
-      return json(route, { items: [projectRow], total: 1, page: 1, size: 500 })
+      // 服务端分页/筛选口径：按 keyword / engine_type / page / size 过滤
+      const url = new URL(request.url())
+      const keywordParam = (url.searchParams.get('keyword') || '').toLowerCase()
+      const engineParam = url.searchParams.get('engine_type') || ''
+      const pageParam = Number(url.searchParams.get('page') || '1')
+      const sizeParam = Number(url.searchParams.get('size') || '12')
+      const matched = [projectRow].filter(row =>
+        (!keywordParam || `${row.name} ${row.description}`.toLowerCase().includes(keywordParam))
+        && (!engineParam || row.engine_type === engineParam))
+      const start = (pageParam - 1) * sizeParam
+      return json(route, { items: matched.slice(start, start + sizeParam), total: matched.length })
     }
     if (path === '/api/v2/world-model/projects' && request.method() === 'POST') {
       return json(route, { ...projectRow, id: 'wm-project-new', name: '新建推演模型' }, 201)
@@ -238,7 +248,7 @@ test('推演模型与调用记录为独立页面（无页内 Tab 与共享标题
   await expect(page.getByText('台区负荷短期推演')).toBeVisible()
   await expect(page.getByText('在线')).toBeVisible()
 
-  // 列表筛选（本地过滤）
+  // 列表筛选（服务端过滤：keyword 随请求发出，mock 按筛选口径返回空结果）
   await page.getByLabel('按模型名称或描述筛选').fill('不存在的模型')
   await expect(page.getByText('台区负荷短期推演')).toHaveCount(0)
   await page.getByLabel('按模型名称或描述筛选').fill('')
@@ -258,6 +268,110 @@ test('推演模型与调用记录为独立页面（无页内 Tab 与共享标题
   expect(callsRequests.length).toBeGreaterThan(0)
   expect(callsRequests[0]).not.toContain('start=')
   expect(callsRequests[0]).not.toContain('end=')
+})
+
+test('在线模型删除保护：服务快捷入口与先下线引导，离线模型可删除', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+
+  // 可变状态：在线模型（含服务摘要）+ 已下线模型各一
+  let rows = [
+    {
+      ...projectRow,
+      service_name: '台区负荷短期推演服务',
+      service_endpoint: '/api/v2/world-model/services/svc-1/invoke',
+      service_version_no: 1,
+    },
+    {
+      ...projectRow,
+      id: 'wm-project-2',
+      name: '潮流离线模型',
+      service_status: 'offline',
+      service_name: '潮流离线服务',
+      service_endpoint: '/api/v2/world-model/services/svc-2/invoke',
+      service_version_no: 3,
+    },
+  ]
+  const deleteRequests: string[] = []
+  await page.route('**/api/v2/world-model/**', route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (path === '/api/v2/world-model/projects' && request.method() === 'GET') {
+      return json(route, { items: rows, total: rows.length })
+    }
+    if (path === '/api/v2/world-model/projects/wm-project-2' && request.method() === 'DELETE') {
+      deleteRequests.push(path)
+      rows = rows.filter(row => row.id !== 'wm-project-2')
+      return json(route, { status: 'deleted', id: 'wm-project-2' })
+    }
+    return json(route, [])
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/#/world-model/models')
+
+  // 在线模型卡片：服务快捷入口展示名称/版本，点击进入推演服务页
+  const serviceChip = page.getByRole('button', { name: /台区负荷短期推演服务 · v1/ })
+  await expect(serviceChip).toBeVisible()
+  await serviceChip.click()
+  await expect(page).toHaveURL(/#\/world-model\/services$/)
+  await page.goto('/#/world-model/models')
+
+  // 在线模型删除：弹窗提示先下线，不开放删除按钮，可直达推演服务页
+  await page.getByRole('button', { name: '删除 台区负荷短期推演' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText(/当前在线/)).toBeVisible()
+  await expect(dialog.getByRole('button', { name: '删除模型' })).toHaveCount(0)
+  await dialog.getByRole('button', { name: '前往推演服务' }).click()
+  await expect(page).toHaveURL(/#\/world-model\/services$/)
+  expect(deleteRequests).toHaveLength(0)
+
+  // 已下线模型：确认弹窗提示服务一并移除，确认后真正发出删除请求
+  await page.goto('/#/world-model/models')
+  await page.getByRole('button', { name: '删除 潮流离线模型' }).click()
+  await expect(page.getByText(/已下线的推演服务「潮流离线服务」/)).toBeVisible()
+  await page.getByRole('button', { name: '删除模型' }).click()
+  await expect(page.getByText('潮流离线模型')).toHaveCount(0)
+  expect(deleteRequests).toHaveLength(1)
+})
+
+test('推演模型列表服务端分页：翻页请求携带页码', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+
+  const allRows = Array.from({ length: 13 }, (_, index) => ({
+    ...projectRow,
+    id: `wm-p-${index + 1}`,
+    name: `模型-${String(index + 1).padStart(2, '0')}`,
+    service_status: null,
+    service_name: null,
+    service_endpoint: null,
+    service_version_no: null,
+  }))
+  const requestedPages: number[] = []
+  await page.route('**/api/v2/world-model/**', route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (path === '/api/v2/world-model/projects' && request.method() === 'GET') {
+      const url = new URL(request.url())
+      const pageParam = Number(url.searchParams.get('page') || '1')
+      const sizeParam = Number(url.searchParams.get('size') || '12')
+      requestedPages.push(pageParam)
+      const start = (pageParam - 1) * sizeParam
+      return json(route, { items: allRows.slice(start, start + sizeParam), total: allRows.length })
+    }
+    return json(route, [])
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/#/world-model/models')
+
+  await expect(page.getByText('共 13 个模型')).toBeVisible()
+  await expect(page.getByText('1 / 2')).toBeVisible()
+  await expect(page.getByText('模型-13')).toHaveCount(0)
+
+  await page.getByRole('button', { name: '下一页' }).click()
+  await expect(page.getByText('2 / 2')).toBeVisible()
+  await expect(page.getByText('模型-13')).toBeVisible()
+  expect(requestedPages).toContain(2)
 })
 
 test('开发页：执行通过才可保存，版本恢复需二次确认', async ({ page }) => {

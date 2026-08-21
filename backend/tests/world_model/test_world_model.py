@@ -132,6 +132,40 @@ def test_project_crud_flow(client, auth_headers, project):
     assert r.status_code == 404
 
 
+def test_projects_pagination(client, auth_headers):
+    """列表走服务端分页：total 为筛选后总数，page/size 生效。"""
+    for index in range(3):
+        r = client.post(
+            f"{BASE}/projects",
+            json={"name": f"模型-{index}", "description": "",
+                  "engine_type": "statistical"},
+            headers=auth_headers,
+        )
+        assert r.status_code == 201, r.text
+
+    r = client.get(
+        f"{BASE}/projects", params={"page": 1, "size": 2}, headers=auth_headers)
+    data = r.json()["data"]
+    assert data["total"] == 3
+    assert len(data["items"]) == 2
+
+    r = client.get(
+        f"{BASE}/projects", params={"page": 2, "size": 2}, headers=auth_headers)
+    data = r.json()["data"]
+    assert data["total"] == 3
+    assert len(data["items"]) == 1
+
+    # keyword 收窄后 total 同步收窄（服务端全量筛选，不受单页 500 条上限影响）
+    r = client.get(
+        f"{BASE}/projects",
+        params={"keyword": "模型-2", "page": 1, "size": 2},
+        headers=auth_headers,
+    )
+    data = r.json()["data"]
+    assert data["total"] == 1
+    assert data["items"][0]["name"] == "模型-2"
+
+
 def test_projects_require_world_model_menu(client, custom_headers):
     r = client.get(f"{BASE}/projects", headers=custom_headers)
     assert r.status_code == 403
@@ -499,6 +533,86 @@ def test_republish_overwrites_same_service(
     assert second["id"] == first["id"]  # 同一项目覆盖更新，不产生第二个服务
     assert second["name"] == "负荷推演服务 v2"
     assert second["version_no"] == version_no_2
+
+
+def test_project_list_includes_service_summary(
+    client, auth_headers, project, monkeypatch,
+):
+    """列表条目携带已发布服务的名称/端点/冻结版本号（卡片服务快捷入口数据源）。"""
+    version_no = _save_version(client, auth_headers, project["id"], monkeypatch)
+    svc = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=auth_headers,
+    ).json()["data"]
+
+    r = client.get(f"{BASE}/projects", headers=auth_headers)
+    listed = [i for i in r.json()["data"]["items"] if i["id"] == project["id"]]
+    item = listed[0]
+    assert item["service_status"] == "online"
+    assert item["service_name"] == "负荷推演服务"
+    assert item["service_version_no"] == version_no
+    assert item["service_endpoint"].endswith(f"/services/{svc['id']}/invoke")
+
+
+def test_delete_project_blocked_while_service_online(
+    client, auth_headers, project, db, monkeypatch,
+):
+    """在线服务保护：在线时拒绝删除（409）；下线后可删，服务随项目清理。"""
+    from app.world_model.models import WorldModelService
+
+    _save_version(client, auth_headers, project["id"], monkeypatch)
+    client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=auth_headers,
+    )
+
+    r = client.delete(f"{BASE}/projects/{project['id']}", headers=auth_headers)
+    assert r.status_code == 409
+    assert "下线" in str(r.json()["detail"])
+    assert db.query(WorldModelService).count() == 1
+
+    r = client.post(
+        f"{BASE}/projects/{project['id']}/service/status",
+        json={"status": "offline"}, headers=auth_headers,
+    )
+    assert r.status_code == 200
+
+    r = client.delete(f"{BASE}/projects/{project['id']}", headers=auth_headers)
+    assert r.status_code == 200
+    db.expire_all()
+    # 服务显式随项目删除（不依赖 PG 外键级联，SQLite 行为一致）
+    assert db.query(WorldModelService).count() == 0
+    r = client.get(f"{BASE}/projects/{project['id']}", headers=auth_headers)
+    assert r.status_code == 404
+
+
+def test_delete_project_unlinks_call_records(
+    client, auth_headers, project, db, monkeypatch,
+):
+    """删除项目后调用记录保留审计但解除项目/服务关联。"""
+    _save_version(client, auth_headers, project["id"], monkeypatch)
+    svc = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=auth_headers,
+    ).json()["data"]
+    r = client.post(
+        f"{BASE}/services/{svc['id']}/invoke",
+        json={"context": {}, "actions": [], "horizon": 1},
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    client.post(
+        f"{BASE}/projects/{project['id']}/service/status",
+        json={"status": "offline"}, headers=auth_headers,
+    )
+
+    r = client.delete(f"{BASE}/projects/{project['id']}", headers=auth_headers)
+    assert r.status_code == 200
+    db.expire_all()
+    record = db.query(WorldModelCallRecord).one()
+    assert record.project_id is None
+    assert record.service_id is None
+    assert record.service_name == "负荷推演服务"  # 审计快照保留
 
 
 def test_service_offline_blocks_invoke(

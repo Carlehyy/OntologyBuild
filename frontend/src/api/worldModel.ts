@@ -19,6 +19,10 @@ export interface WorldModelProjectSummary {
   version_count: number
   /** 服务状态：null=未发布（草稿）；online=在线；offline=已下线 */
   service_status: 'online' | 'offline' | null
+  /** 已发布服务摘要（未发布或详情接口为 null/缺省）：卡片服务快捷入口与删除影响提示 */
+  service_name?: string | null
+  service_endpoint?: string | null
+  service_version_no?: number | null
   created_at: string | null
   updated_at: string | null
 }
