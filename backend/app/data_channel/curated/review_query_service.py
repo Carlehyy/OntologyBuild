@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.data_channel.curated.approved_version_reader import (
     apply_all_row_edits,
+    apply_row_edits_to_batch,
     encode_row_pk,
     review_matches_version,
 )
@@ -175,30 +176,107 @@ def build_review_diff(
     current_index = versions.index(current_version)
     previous_version = versions[current_index - 1] if current_index > 0 else None
 
-    def _load_rows_for_version(version) -> list[dict]:
-        """湖表版本经物理表 + 变更集回放；blob 版本走遗留解析（严格读）。"""
-        if lake_store.version_uses_lake(dataset, version):
-            return lake_store.rows_at_version(db, dataset, version.version_no)
-        return dataset_service.load_all_rows(dataset_id, version.version_no)
+    current_is_lake = lake_store.version_uses_lake(dataset, current_version)
+    pending_review_id = selected_review.id if selected_review else None
 
-    try:
-        current_rows = apply_all_row_edits(
+    def _overlay_batch(
+        rows: list[dict],
+        version,
+        *,
+        include_review_id: str | None,
+    ) -> list[dict]:
+        """按批叠加审核编辑（窗口语义）：编辑在保存时已校验存在性，且版本
+        内容不可变，因此窗口外不做全量未命中校验（与预览/导出同一口径）。"""
+        return apply_row_edits_to_batch(
             db,
             dataset_id,
-            _load_rows_for_version(current_version),
-            dataset_version_id=current_version.id,
-            include_review_id=selected_review.id if selected_review else None,
+            rows,
+            dataset_version_id=version.id,
+            include_review_id=include_review_id,
         )
-        previous_rows = (
-            apply_all_row_edits(
-                db,
-                dataset_id,
-                _load_rows_for_version(previous_version),
-                dataset_version_id=previous_version.id,
+
+    def _full_rows_with_overlay(
+        version,
+        *,
+        include_review_id: str | None,
+    ) -> list[dict]:
+        """旧路径整版读取（严格叠加，未命中硬失败）：仅 blob 版本与变更集
+        异常兜底使用，湖表正常路径不再为分页整版物化。"""
+        if lake_store.version_uses_lake(dataset, version):
+            raw = lake_store.rows_at_version(db, dataset, version.version_no)
+        else:
+            raw = dataset_service.load_all_rows(dataset_id, version.version_no)
+        return apply_all_row_edits(
+            db,
+            dataset_id,
+            raw,
+            dataset_version_id=version.id,
+            include_review_id=include_review_id,
+        )
+
+    def _build_paged_view(
+        version,
+        *,
+        is_latest: bool,
+        include_review_id: str | None,
+    ) -> tuple[int, list[dict]]:
+        """返回 (total, 当前窗口行)。湖表版本真分页只物化窗口；blob 版本
+        整版读取后切片（保持遗留行为）。"""
+        if not lake_store.version_uses_lake(dataset, version):
+            full = _full_rows_with_overlay(
+                version, include_review_id=include_review_id)
+            return len(full), full[offset : offset + limit]
+        if is_latest:
+            # 最新湖表版本的当前态即物理表：SQL 真分页，O(page)
+            total = lake_store.count_rows(db, dataset)
+            page = lake_store.page_rows(db, dataset, offset, limit)
+        else:
+            page, total = lake_store.page_rows_at_version(
+                db, dataset, version.version_no, offset, limit)
+        page = _overlay_batch(
+            page, version, include_review_id=include_review_id)
+        return total, page
+
+    try:
+        current_total, current_page = _build_paged_view(
+            current_version,
+            is_latest=(latest_version.id == current_version.id),
+            include_review_id=pending_review_id,
+        )
+        if previous_version is None:
+            previous_total, previous_page = 0, []
+        else:
+            previous_total, previous_page = _build_paged_view(
+                previous_version,
+                is_latest=False,
+                include_review_id=None,
             )
-            if previous_version
-            else []
-        )
+
+        # 湖表版本的 delta 直接取该版本的变更集（版本间真实差异，O(变化行)）；
+        # blob 版本或变更集异常缺失时回退内存对拍，并让全量结果直接充当分页
+        # 视图（与旧行为逐字段一致）
+        delta = None
+        if current_is_lake:
+            delta = _delta_from_changeset(
+                db, current_version, primary_key_columns)
+        if delta is None:
+            current_rows = _full_rows_with_overlay(
+                current_version, include_review_id=pending_review_id)
+            previous_rows = (
+                _full_rows_with_overlay(previous_version, include_review_id=None)
+                if previous_version
+                else []
+            )
+            delta = compute_lake_impact(
+                previous_rows,
+                current_rows,
+                primary_key_columns,
+                sample_limit=200,
+            )
+            current_total = len(current_rows)
+            current_page = current_rows[offset : offset + limit]
+            previous_total = len(previous_rows)
+            previous_page = previous_rows[offset : offset + limit]
     except DatasetReadError as exc:
         raise HTTPException(422, f"版本数据读取失败：{exc}") from exc
     except lake_store.LakeStoreError as exc:
@@ -211,21 +289,6 @@ def build_review_diff(
                 "message": str(exc),
             },
         ) from exc
-
-    # 湖表版本的 delta 直接取该版本的变更集（版本间真实差异）；blob 版本保持
-    # 内存计算（叠加编辑后的三视图 diff，与历史行为逐字段一致）
-    delta = None
-    if lake_store.version_uses_lake(dataset, current_version):
-        delta = _delta_from_changeset(
-            db, current_version, primary_key_columns)
-    if delta is None:
-        delta = compute_lake_impact(
-            previous_rows,
-            current_rows,
-            primary_key_columns,
-            sample_limit=200,
-        )
-    current_page = current_rows[offset : offset + limit]
     current_row_primary_keys: list[str | None] = []
     if primary_key_columns:
         for row in current_page:
@@ -253,21 +316,21 @@ def build_review_diff(
         "current": {
             "version_no": current_version.version_no,
             "dataset_version_id": current_version.id,
-            "total": len(current_rows),
+            "total": current_total,
             "rows": current_page,
             "offset": offset,
             "limit": limit,
-            "has_more": offset + limit < len(current_rows),
+            "has_more": offset + limit < current_total,
         },
         "previous": {
             "version_no": (
                 previous_version.version_no if previous_version else None
             ),
-            "total": len(previous_rows),
-            "rows": previous_rows[offset : offset + limit],
+            "total": previous_total,
+            "rows": previous_page,
             "offset": offset,
             "limit": limit,
-            "has_more": offset + limit < len(previous_rows),
+            "has_more": offset + limit < previous_total,
         },
         "delta": delta,
         "review": (
