@@ -92,7 +92,7 @@ function TimelineDots({ timeline }: { timeline: TimelineDot[] }) {
   )
 }
 
-const GRID_COLS = 'xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1.5fr)_minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.05fr)_minmax(0,1.2fr)]'
+const GRID_COLS = 'xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1.4fr)_minmax(0,1.1fr)_minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1.15fr)]'
 
 function CellLabel({ children }: { children: React.ReactNode }) {
   return <p className="mb-1 text-[10px] font-medium text-gray-400 xl:hidden">{children}</p>
