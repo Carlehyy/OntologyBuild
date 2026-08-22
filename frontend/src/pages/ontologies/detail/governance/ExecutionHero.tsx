@@ -57,18 +57,19 @@ function DailySpark({ data, isRefreshing }: { data: DailySparkDatum[]; isRefresh
         </span>
       )}
       <p className="text-[11px] text-gray-400">近 7 日执行心电图</p>
-      {totalEvents === 0 ? (
-        <div className="flex flex-1 items-center justify-center text-[11px] text-gray-300">
-          近 7 日暂无哨兵命中或动作执行记录
-        </div>
-      ) : (
+      <div className="relative">
         <ReactECharts
           option={option}
           style={{ width: '100%', height: 176 }}
           opts={{ renderer: 'canvas' }}
           notMerge
         />
-      )}
+        {totalEvents === 0 && (
+          <span className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 text-center text-[11px] text-gray-300">
+            近 7 日暂无哨兵命中或动作执行记录
+          </span>
+        )}
+      </div>
     </div>
   )
 }
