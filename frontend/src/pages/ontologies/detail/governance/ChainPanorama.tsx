@@ -32,8 +32,8 @@ import {
   type ChainNodeKind,
 } from './chainModel'
 
-const COLUMN_X = 300
-const NODE_W = 224
+const COLUMN_X = 264
+const NODE_W = 204
 const NODE_H = 72
 const NODE_GAP = 40
 const HEADER_Y = 0
@@ -89,17 +89,17 @@ function ChainNodeCard({ data }: NodeProps<Node<ChainFlowData>>) {
           <Icon size={14} />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[12.5px] font-semibold leading-4 text-slate-800" title={chainNode.title}>
+          <span className="block truncate text-[14px] font-semibold leading-[18px] text-slate-800" title={chainNode.title}>
             {chainNode.title}
           </span>
           {chainNode.sub && (
-            <span className="mt-1 block truncate text-[10.5px] leading-4 text-slate-500" title={chainNode.sub}>
+            <span className="mt-1 block truncate text-[11.5px] leading-4 text-slate-500" title={chainNode.sub}>
               {chainNode.sub}
             </span>
           )}
         </span>
         {chainNode.badge && (
-          <span className={`shrink-0 rounded border px-1 py-px text-[9.5px] font-medium ${BADGE_CLS[chainNode.badge.tone]}`}>
+          <span className={`shrink-0 rounded border px-1 py-px text-[10.5px] font-medium ${BADGE_CLS[chainNode.badge.tone]}`}>
             {chainNode.badge.text}
           </span>
         )}
@@ -112,10 +112,10 @@ function ChainNodeCard({ data }: NodeProps<Node<ChainFlowData>>) {
 function ChainColumnHeader({ data }: NodeProps<Node<{ label: string; count: number } & Record<string, unknown>>>) {
   return (
     <div className="pointer-events-none flex items-center justify-center gap-1.5 text-center" style={{ width: NODE_W }}>
-      <span className="text-[13px] font-semibold tracking-wide text-slate-500">
+      <span className="text-[15px] font-semibold tracking-wide text-slate-500">
         {data.label}
       </span>
-      <span className="rounded-full bg-slate-100 px-1.5 py-px text-[10px] tabular-nums text-slate-400">
+      <span className="rounded-full bg-slate-100 px-1.5 py-px text-[11px] tabular-nums text-slate-400">
         {data.count}
       </span>
     </div>
@@ -279,7 +279,7 @@ export default function ChainPanorama({
         )}
       </div>
       <div
-        className="overflow-hidden rounded-lg border border-slate-100 bg-gradient-to-b from-slate-50/60 to-teal-50/30"
+        className="chain-canvas overflow-hidden rounded-lg border border-slate-100"
         style={{ height: canvasHeight }}
       >
         <ReactFlow
@@ -289,7 +289,7 @@ export default function ChainPanorama({
           edgeTypes={edgeTypes}
           fitView
           fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
-          minZoom={0.3}
+          minZoom={0.5}
           nodesConnectable={false}
           elementsSelectable
           zoomOnScroll={false}

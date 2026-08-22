@@ -31,11 +31,71 @@
   to { opacity: 1; transform: translateX(0); }
 }
 
+/* ═══ 主题感知表面变量(浅色默认,深色由 html.dark 覆盖) ═══
+   治理页新组件大量使用硬编码浅色表面;dark-fallback.css 只覆盖中性色工具类,
+   彩色浅底(sky/rose/amber)与 CSS 内的 #fff 不在其列 —— 这里统一改为变量驱动,
+   浅色取值与原硬编码一致(浅色模式视觉不变),深色映射到 tokens 深色阶梯。 */
+:root {
+  --chain-node-bg: #ffffff;
+  --chain-node-border: #e2e8f0;
+  --chain-hub-tint: #faf5ff;
+  --chain-pending-tint: #fffdf5;
+  --chain-surface-from: rgba(248, 250, 252, .6);
+  --chain-surface-to: rgba(240, 253, 250, .3);
+  --evi-meta: #475569;
+  --evi-sky-bg: rgba(240, 249, 255, .55);
+  --evi-sky-border: #e0f2fe;
+  --evi-rose-bg: rgba(255, 241, 242, .65);
+  --evi-rose-border: #ffe4e6;
+  --quote-amber-bg: rgba(255, 251, 235, .65);
+  --quote-amber-border: #fcd34d;
+  --row-pending-bg: rgba(255, 251, 235, .5);
+}
+.dark {
+  --chain-node-bg: #161c26;
+  --chain-node-border: #333d4d;
+  --chain-hub-tint: rgba(167, 139, 250, .10);
+  --chain-pending-tint: rgba(245, 158, 11, .10);
+  --chain-surface-from: rgba(18, 24, 32, .6);
+  --chain-surface-to: rgba(19, 42, 41, .35);
+  --evi-meta: #98a2b1;
+  --evi-sky-bg: rgba(56, 189, 248, .08);
+  --evi-sky-border: rgba(56, 189, 248, .32);
+  --evi-rose-bg: rgba(244, 63, 94, .09);
+  --evi-rose-border: rgba(244, 63, 94, .30);
+  --quote-amber-bg: rgba(245, 158, 11, .08);
+  --quote-amber-border: rgba(245, 158, 11, .45);
+  --row-pending-bg: rgba(245, 158, 11, .07);
+}
+/* 链路画布表面:替代 tailwind 渐变停靠点类(from-/to-)——渐变停靠点
+   不是 bg-* 工具类,dark-fallback 覆盖不到,会残留亮色块。 */
+.chain-canvas {
+  background-image: linear-gradient(to bottom, var(--chain-surface-from), var(--chain-surface-to));
+}
+/* 深色模式下画布定位点网格调暗(Background 组件颜色是写死的 SVG 属性) */
+.dark [data-testid="governance-chain-panorama"] .react-flow__background pattern circle {
+  fill: #2b3547;
+}
+
+/* 证据卡(故事弹窗实例卡/条件卡):彩色浅底在深色下改半透明色调 */
+.gov-evidence { border: 1px solid var(--evi-border, transparent); background-color: var(--evi-bg, transparent); }
+.gov-evidence-sky   { --evi-bg: var(--evi-sky-bg);   --evi-border: var(--evi-sky-border); }
+.gov-evidence-rose  { --evi-bg: var(--evi-rose-bg);  --evi-border: var(--evi-rose-border); }
+.gov-evidence-meta { color: var(--evi-meta); }
+/* 效果预览引用块(左侧琥珀竖线) */
+.gov-quote {
+  border-left: 2px solid var(--quote-amber-border);
+  background-color: var(--quote-amber-bg);
+  color: var(--evi-meta);
+}
+/* 工作台待审批行高亮(琥珀底) */
+.gov-row-pending { background-color: var(--row-pending-bg); }
+
 /* ═══ 链路全景节点(@xyflow/react 自定义节点) ═══ */
 .chain-node {
   border-radius: 12px;
-  border: 1px solid #e2e8f0;
-  background: #fff;
+  border: 1px solid var(--chain-node-border);
+  background: var(--chain-node-bg);
   padding: 8px 10px;
   box-shadow: 0 1px 3px rgba(15, 23, 42, .06);
   cursor: pointer;
@@ -62,8 +122,8 @@
 .chain-tone-sentinel .chain-node-icon { background: #ffe4e6; color: #be123c; }
 .chain-tone-pending .chain-node-icon { background: #fef3c7; color: #b45309; }
 .chain-tone-action .chain-node-icon { background: #ecfccb; color: #4d7c0f; }
-.chain-tone-instanceHub { border-style: dashed; background: #faf5ff; }
-.chain-tone-pending { border-color: #fcd34d; background: #fffdf5; }
+.chain-tone-instanceHub { border-style: dashed; background: var(--chain-hub-tint); }
+.chain-tone-pending { border-color: #fcd34d; background: var(--chain-pending-tint); }
 .chain-node-dim { opacity: .22; }
 .chain-node-hot {
   border-color: #14b8a6;

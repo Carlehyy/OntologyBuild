@@ -142,7 +142,7 @@ export default function PendingStoryChapters({
           )}
         </p>
         {log.objectInstanceId && (
-          <div className="rounded-lg border border-sky-100 bg-sky-50/50 px-3 py-2.5">
+          <div className="gov-evidence gov-evidence-sky rounded-lg px-3 py-2.5">
             <p className="text-[13px] font-semibold text-gray-900">
               {readableTargetSummary(log)}
               {typeInstancesQuery.isLoading && <Loader2 size={11} className="ml-1 inline animate-spin text-slate-400" />}
@@ -150,7 +150,7 @@ export default function PendingStoryChapters({
             {objectValues && (
               <div className="mt-1.5 flex flex-wrap gap-x-5 gap-y-1">
                 {Object.entries(objectValues).slice(0, 4).map(([key, value]) => (
-                  <span key={key} className="font-mono text-[11px] text-slate-600" title={`${key}=${String(fmtVal(value))}`}>
+                  <span key={key} className="gov-evidence-meta font-mono text-[11px]" title={`${key}=${String(fmtVal(value))}`}>
                     {key}={fmtVal(value)}
                   </span>
                 ))}
@@ -189,7 +189,7 @@ export default function PendingStoryChapters({
               <span className="font-semibold text-gray-900">{sentinel.displayName || sentinel.name}</span>
               <span className="ml-1.5 text-gray-500">{buildBindingSentence(sentinel, objectTypeName)}</span>
             </p>
-            <div className="rounded-lg border border-rose-100 bg-rose-50/60 px-3 py-2">
+            <div className="gov-evidence gov-evidence-rose rounded-lg px-3 py-2">
               <p className="text-[11px] text-gray-400">命中条件</p>
               <p className="mt-0.5 font-mono text-[12px] font-medium text-rose-600">
                 {conditionSentence}
@@ -221,7 +221,7 @@ export default function PendingStoryChapters({
               <span className="text-[13px] leading-5 text-gray-700">
                 {item.sentence}
                 {item.detail && (
-                  <span className="mt-1 block break-all rounded-md border-l-2 border-amber-200 bg-amber-50/60 px-2.5 py-1.5 font-mono text-[11px] leading-4 text-slate-600">
+                  <span className="gov-quote mt-1 block break-all rounded-md px-2.5 py-1.5 font-mono text-[11px] leading-4">
                     {item.detail}
                   </span>
                 )}
