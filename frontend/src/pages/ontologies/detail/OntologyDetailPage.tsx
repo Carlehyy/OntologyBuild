@@ -153,7 +153,7 @@ export default function OntologyDetailPage() {
     }`}>
       {/* ═══ 功能导航与低频操作(治理页为自然文档流,头部吸附保持可达) ═══ */}
       <div data-testid="ontology-detail-header" className={`onto-glass-header flex shrink-0 items-center justify-between gap-3 px-5 py-4 ${
-        activeGroup === 'governance' ? 'sticky top-0 z-30' : ''
+        activeGroup === 'governance' ? 'onto-glass-header--sticky sticky top-0 z-30' : ''
       }`}>
         <div className="relative min-w-0">
           {tabsMoreRight && (

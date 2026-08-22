@@ -245,6 +245,10 @@ test('链路全景呈现七段链路,待审批打开「起因 → 判定 → 后
   await expect(page.getByTestId('governance-chain-panorama')).toBeVisible()
   await expect(page.getByTestId('governance-daily-spark')).toBeVisible()
 
+  // 四个 KPI 卡各带一张近 7 日迷你图,心电图为 echarts 组合图
+  await expect(page.getByTestId('governance-kpi-strip').locator('canvas')).toHaveCount(4)
+  await expect(page.getByTestId('governance-daily-spark').locator('canvas')).toHaveCount(1)
+
   // 链路全景:上游映射节点、待审批脉冲节点与链路导读均渲染
   const panorama = page.getByTestId('governance-chain-panorama')
   await expect(panorama.getByText('采购订单映射')).toBeVisible()
