@@ -206,6 +206,8 @@ async function mockLinkedListPage(page: Page) {
 
 test.describe('数据流水线列表页·运行概况与列内预览', () => {
   test('头部展示运行概况统计卡与近 7 日执行趋势', async ({ page }) => {
+    // 趋势卡位于内容区右侧栏（≥2xl 展示，行为对齐数据任务池侧栏）
+    await page.setViewportSize({ width: 1600, height: 900 })
     await mockLinkedListPage(page)
     await page.goto('/#/data/pipelines')
 
@@ -213,6 +215,7 @@ test.describe('数据流水线列表页·运行概况与列内预览', () => {
     await expect(page.getByText('已发布', { exact: true }).first()).toBeVisible()
     await expect(page.getByText('已启用', { exact: true }).first()).toBeVisible()
     await expect(page.getByText('最近执行失败')).toBeVisible()
+    await expect(page.getByText('近7日执行', { exact: true })).toBeVisible()
     await expect(page.getByTestId('pipeline-trend-card')).toBeVisible()
     await expect(page.getByText('近 7 日执行')).toBeVisible()
   })
