@@ -203,9 +203,14 @@ async function mockWorldModelServices(page: Page) {
       return json(route, { ...serviceRow, status: serviceStatus })
     }
     if (path === '/api/v2/world-model/services/svc-registry-1/invoke' && request.method() === 'POST') {
+      // horizon >= 3 视为有效预测；小 horizon 模拟脚本边界拒绝（调用成功但轨迹为空）
+      const body = request.postDataJSON() as { horizon?: number }
+      const validPrediction = (body.horizon ?? 0) >= 3
       return json(route, {
         ok: true,
-        payload: { trajectory: [100, 101, 102] },
+        payload: validPrediction
+          ? { trajectory: [100, 101, 102] }
+          : { trajectory: [], confidence: 0, boundary: 'context.series 必须是长度 >= 12 的数值列表。' },
         error: null,
         duration_ms: 18,
         call_id: 'call-registry-1',
@@ -654,10 +659,22 @@ test('推演服务页：注册表、状态切换、试调用与详情', async ({
   await page.getByRole('button', { name: '试调用 台区负荷短期推演服务' }).click()
   const invokeDialog = page.getByRole('dialog')
   await expect(invokeDialog.getByText('试调用推演服务')).toBeVisible()
+  // curl 外部调用示例：完整 URL（协议+主机）与鉴权头，可直接粘贴执行
+  await expect(invokeDialog.getByText(/curl -X POST "http:\/\//)).toBeVisible()
+  await expect(invokeDialog.getByText(/Authorization: Bearer/)).toBeVisible()
+  await expect(invokeDialog.getByRole('button', { name: '复制 curl 示例' })).toBeVisible()
+  // 非法 JSON：输入即时校验并提示语法错误，无需提交才发现
+  await invokeDialog.getByLabel('试调用测试入参 JSON').fill('{"context": broken}')
+  await expect(invokeDialog.getByText(/JSON 语法错误/)).toBeVisible()
   await invokeDialog.getByLabel('试调用测试入参 JSON').fill('{"context": {"current_value": 100}, "actions": [], "horizon": 3}')
   await invokeDialog.getByRole('button', { name: '调用' }).click()
   await expect(invokeDialog.getByText('调用成功 · 18 ms')).toBeVisible()
   await expect(invokeDialog.getByText('trajectory')).toBeVisible()
+  // 空轨迹（被边界拒绝）：调用成功但明确警示并给出边界说明，不再显示为纯绿色成功
+  await invokeDialog.getByLabel('试调用测试入参 JSON').fill('{"context": {"series": [1]}, "actions": [], "horizon": 1}')
+  await invokeDialog.getByRole('button', { name: '调用' }).click()
+  await expect(invokeDialog.getByText(/未产生预测输出/)).toBeVisible()
+  await expect(invokeDialog.getByText(/边界说明：context\.series 必须是长度 >= 12 的数值列表。/)).toBeVisible()
   await invokeDialog.getByRole('button', { name: '关闭', exact: true }).click()
 
   // 详情抽屉：语义注册 + 该服务调用记录 + 端点完整展示（可复制）
@@ -667,8 +684,10 @@ test('推演服务页：注册表、状态切换、试调用与详情', async ({
   await expect(detailDialog.getByText('线路 ≥ 12')).toBeVisible()
   await expect(detailDialog.getByText('最近调用（共 1 条）')).toBeVisible()
   await expect(detailDialog.getByRole('button', { name: '复制调用端点' })).toBeVisible()
-  await detailDialog.getByRole('button', { name: '关闭详情' }).click()
-  await expect(detailDialog).toHaveCount(0)
+  // 下钻：一键进入按本服务过滤的调用记录页
+  await detailDialog.getByRole('button', { name: '查看全部' }).click()
+  await expect(page).toHaveURL(/#\/world-model\/calls\?service_id=svc-registry-1/)
+  await expect(page.getByText('服务：台区负荷短期推演服务')).toBeVisible()
 })
 
 test('无 world_model 菜单权限的用户不可见且直达被拒', async ({ page }) => {

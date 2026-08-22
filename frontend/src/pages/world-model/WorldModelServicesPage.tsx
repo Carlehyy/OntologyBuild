@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Activity,
+  AlertTriangle,
   Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Copy,
+  ExternalLink,
   Eye,
   Gauge,
   Play,
@@ -14,6 +17,7 @@ import {
   Rocket,
   Route,
   Search,
+  Terminal,
   X,
   XCircle,
 } from 'lucide-react'
@@ -31,11 +35,29 @@ import { Button } from '@/components/ui/Button'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
 import { writeTextToClipboard } from '@/utils/clipboard'
+import { validateJsonObject, type JsonParseIssue } from '@/utils/jsonInput'
 import StatCard from './StatCard'
 import { formatDurationMs, formatSuccessRate } from './statsFormat'
 
 const PAGE_SIZE = 20
 const DEFAULT_INVOKE_INPUT = JSON.stringify({ context: {}, actions: [], horizon: 3 }, null, 2)
+
+/** 端点路径（/api/v2/...）拼成当前部署下可直接调用的完整地址 */
+function fullEndpointUrl(endpointPath: string): string {
+  if (/^https?:\/\//i.test(endpointPath)) return endpointPath
+  return window.location.origin + endpointPath
+}
+
+/** 外部集成用 curl 示例：完整 URL + 鉴权头 + 当前入参压缩为单行 */
+function buildCurlExample(url: string, inputText: string): string {
+  const compact = inputText.replace(/\s+/g, ' ').trim() || '{}'
+  return [
+    `curl -X POST "${url}" \\`,
+    `  -H "Authorization: Bearer <访问令牌>" \\`,
+    `  -H "Content-Type: application/json" \\`,
+    `  -d '${compact}'`,
+  ].join('\n')
+}
 
 type StatusFilter = '' | 'online' | 'offline'
 
@@ -58,6 +80,7 @@ function statusBadge(status: string) {
 
 export default function WorldModelServicesPage() {
   const { toast } = useToast()
+  const navigate = useNavigate()
   const [items, setItems] = useState<WorldModelServiceSummary[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -73,6 +96,11 @@ export default function WorldModelServicesPage() {
   const [invokeInput, setInvokeInput] = useState(DEFAULT_INVOKE_INPUT)
   const [invoking, setInvoking] = useState(false)
   const [invokeResult, setInvokeResult] = useState<ServiceInvokeResult | null>(null)
+  // 入参 JSON 即时校验：输入时定位语法错误，提交前再拦一次
+  const [jsonIssue, setJsonIssue] = useState<JsonParseIssue | null>(null)
+  // 发布版本自带的调试入参作为试调用示例，避免首次试调用必然空转
+  const [exampleInput, setExampleInput] = useState<string | null>(null)
+  const [copiedCurl, setCopiedCurl] = useState(false)
 
   const [detailTarget, setDetailTarget] = useState<WorldModelServiceSummary | null>(null)
   const [ontologyName, setOntologyName] = useState('')
@@ -85,12 +113,17 @@ export default function WorldModelServicesPage() {
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [offlineTarget, setOfflineTarget] = useState<WorldModelServiceSummary | null>(null)
   const [overview, setOverview] = useState<WorldModelServiceOverview | null>(null)
+  // 概览接口失败与「真的是 0」必须区分：失败时显示占位与重试，而不是误导性的 0
+  const [overviewError, setOverviewError] = useState(false)
+  const exampleRequestSeq = useRef(0)
 
   const loadOverview = useCallback(async () => {
     try {
       setOverview(await worldModelApi.servicesOverview())
+      setOverviewError(false)
     } catch {
       setOverview(null)
+      setOverviewError(true)
     }
   }, [])
 
@@ -165,7 +198,8 @@ export default function WorldModelServicesPage() {
 
   const copyEndpoint = (item: WorldModelServiceSummary) => {
     if (!item.endpoint_path) return
-    writeTextToClipboard(item.endpoint_path).then(() => {
+    // 复制完整可调用地址（协议+主机+路径），拿到后无需再自行拼接部署地址
+    writeTextToClipboard(fullEndpointUrl(item.endpoint_path)).then(() => {
       setCopiedId(item.id)
       window.setTimeout(() => setCopiedId(null), 1400)
     }).catch(() => {
@@ -174,29 +208,57 @@ export default function WorldModelServicesPage() {
     })
   }
 
+  const copyCurlExample = (curl: string) => {
+    writeTextToClipboard(curl).then(() => {
+      setCopiedCurl(true)
+      window.setTimeout(() => setCopiedCurl(false), 1400)
+    }).catch(() => {
+      toast({ tone: 'error', title: '未能写入剪贴板', description: '请手动选中示例文本后复制。' })
+    })
+  }
+
   const openInvoke = (item: WorldModelServiceSummary) => {
     setInvokeTarget(item)
     setInvokeInput(DEFAULT_INVOKE_INPUT)
     setInvokeResult(null)
+    setJsonIssue(null)
+    setExampleInput(null)
+    setCopiedCurl(false)
+    // 带入该服务发布版本的调试入参作为示例；用户已改输入时不覆盖。
+    // seq 守卫：连续打开不同服务时只采纳最后一次请求的结果
+    const seq = ++exampleRequestSeq.current
+    if (!item.version_id) return
+    worldModelApi.getVersion(item.project_id, item.version_id)
+      .then(version => {
+        if (seq !== exampleRequestSeq.current) return
+        const testInput = version?.test_input
+        if (!testInput || Object.keys(testInput).length === 0) return
+        const text = JSON.stringify(testInput, null, 2)
+        setExampleInput(text)
+        setInvokeInput(current => (current === DEFAULT_INVOKE_INPUT ? text : current))
+      })
+      .catch(() => undefined)
+  }
+
+  const handleInvokeInputChange = (text: string) => {
+    setInvokeInput(text)
+    setJsonIssue(text.trim() ? validateJsonObject(text).issue : null)
   }
 
   const submitInvoke = async () => {
     if (!invokeTarget) return
-    let body: { context: Record<string, unknown>; actions: unknown[]; horizon: number }
-    try {
-      const parsed = JSON.parse(invokeInput || '{}')
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        toast({ tone: 'error', title: '测试入参必须是 JSON 对象' })
-        return
-      }
-      body = {
-        context: parsed.context ?? {},
-        actions: parsed.actions ?? [],
-        horizon: parsed.horizon ?? 1,
-      }
-    } catch {
-      toast({ tone: 'error', title: '测试入参不是有效 JSON' })
+    const validated = validateJsonObject(invokeInput)
+    if (validated.issue) {
+      setJsonIssue(validated.issue)
+      toast({ tone: 'error', title: '测试入参不是有效 JSON', description: '错误位置见输入框下方提示。' })
       return
+    }
+    setJsonIssue(null)
+    const parsed = validated.value
+    const body = {
+      context: (parsed.context ?? {}) as Record<string, unknown>,
+      actions: (parsed.actions ?? []) as unknown[],
+      horizon: typeof parsed.horizon === 'number' ? parsed.horizon : Number(parsed.horizon ?? 1) || 1,
     }
     setInvoking(true)
     setInvokeResult(null)
@@ -204,7 +266,17 @@ export default function WorldModelServicesPage() {
       const result = await worldModelApi.invokeService(invokeTarget.id, body)
       setInvokeResult(result)
       if (result.ok) {
-        toast({ tone: 'success', title: '调用成功', description: '耗时 ' + result.duration_ms + ' ms' })
+        // 脚本正常执行但返回空轨迹（如被边界拒绝）时如实提示，避免误读为有效预测
+        const payload = result.payload as { trajectory?: unknown; boundary?: unknown } | null
+        const emptyTrajectory = !!payload && Array.isArray(payload.trajectory) && payload.trajectory.length === 0
+        const boundaryNote = typeof payload?.boundary === 'string' ? payload.boundary : ''
+        toast({
+          tone: 'success',
+          title: '调用成功',
+          description: emptyTrajectory
+            ? `耗时 ${result.duration_ms} ms · 注意：未产生预测输出${boundaryNote ? `（${boundaryNote}）` : ''}`
+            : '耗时 ' + result.duration_ms + ' ms',
+        })
         setItems(current => current.map(row => row.id === invokeTarget.id
           ? { ...row, call_count: row.call_count + 1 }
           : row))
@@ -255,42 +327,60 @@ export default function WorldModelServicesPage() {
 
   return (
     <div className="space-y-4">
-      {/* 概览统计条：全局聚合，直读服务规模与调用健康度 */}
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5" aria-label="推演服务概览">
-        <StatCard
-          icon={<Rocket size={17} />}
-          label="服务总数"
-          value={String(overview?.total ?? 0)}
-          sub={`已下线 ${overview?.offline ?? 0}`}
-        />
-        <StatCard
-          icon={<Power size={17} />}
-          label="在线服务"
-          value={String(overview?.online ?? 0)}
-          sub="端点可对外调用"
-        />
-        <StatCard
-          icon={<Route size={17} />}
-          label="总调用次数"
-          value={String(overview?.call_total ?? 0)}
-          sub={`失败 ${overview?.call_failed ?? 0}`}
-        />
-        <StatCard
-          icon={<CheckCircle2 size={17} />}
-          label="全局成功率"
-          value={formatSuccessRate(
-            (overview?.call_total ?? 0) - (overview?.call_failed ?? 0),
-            overview?.call_total ?? 0,
-          )}
-          tone={(overview?.call_failed ?? 0) > 0 ? 'danger' : 'default'}
-        />
-        <StatCard
-          icon={<Gauge size={17} />}
-          label="平均耗时"
-          value={formatDurationMs(overview?.avg_duration_ms ?? 0)}
-          sub="按全部调用记录计算"
-        />
-      </section>
+      {/* 概览统计条：全局聚合，直读服务规模与调用健康度；接口失败时占位+重试，绝不显示误导性的 0 */}
+      {overviewError ? (
+        <section
+          className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700"
+          aria-label="推演服务概览"
+          role="alert"
+        >
+          <AlertTriangle size={15} className="shrink-0" />
+          <span>概览统计暂时不可用（加载失败），不代表服务规模或调用健康度。</span>
+          <button
+            type="button"
+            onClick={() => void loadOverview()}
+            className="ml-auto inline-flex h-7 items-center gap-1 rounded-lg border border-amber-300 bg-white px-2.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100"
+          >
+            <RefreshCw size={12} /> 重试
+          </button>
+        </section>
+      ) : (
+        <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5" aria-label="推演服务概览">
+          <StatCard
+            icon={<Rocket size={17} />}
+            label="服务总数"
+            value={String(overview?.total ?? 0)}
+            sub={`已下线 ${overview?.offline ?? 0}`}
+          />
+          <StatCard
+            icon={<Power size={17} />}
+            label="在线服务"
+            value={String(overview?.online ?? 0)}
+            sub="端点可对外调用"
+          />
+          <StatCard
+            icon={<Route size={17} />}
+            label="总调用次数"
+            value={String(overview?.call_total ?? 0)}
+            sub={`失败 ${overview?.call_failed ?? 0}`}
+          />
+          <StatCard
+            icon={<CheckCircle2 size={17} />}
+            label="全局成功率"
+            value={formatSuccessRate(
+              (overview?.call_total ?? 0) - (overview?.call_failed ?? 0),
+              overview?.call_total ?? 0,
+            )}
+            tone={(overview?.call_failed ?? 0) > 0 ? 'danger' : 'default'}
+          />
+          <StatCard
+            icon={<Gauge size={17} />}
+            label="平均耗时"
+            value={formatDurationMs(overview?.avg_duration_ms ?? 0)}
+            sub="按全部调用记录计算"
+          />
+        </section>
+      )}
 
       {/* 筛选栏 */}
       <section className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50" aria-label="推演服务筛选">
@@ -444,7 +534,7 @@ export default function WorldModelServicesPage() {
                           type="button"
                           onClick={() => copyEndpoint(item)}
                           aria-label={'复制 ' + item.name + ' 调用端点'}
-                          title="复制调用端点"
+                          title="复制完整调用地址（含协议、主机与路径）"
                           className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition-colors hover:bg-slate-50"
                         >
                           {copiedId === item.id ? <Check size={13} className="text-teal-600" /> : <Copy size={13} />}
@@ -488,7 +578,7 @@ export default function WorldModelServicesPage() {
         open={!!invokeTarget}
         onClose={() => !invoking && setInvokeTarget(null)}
         title="试调用推演服务"
-        description={invokeTarget ? 'POST ' + (invokeTarget.endpoint_path ?? '') : ''}
+        description={invokeTarget?.endpoint_path ? 'POST ' + fullEndpointUrl(invokeTarget.endpoint_path) : ''}
         headerIcon={<Play size={17} />}
         size="lg"
         footer={(
@@ -507,28 +597,68 @@ export default function WorldModelServicesPage() {
       >
         <div className="space-y-4">
           <div>
-            <p className="mb-1.5 text-sm font-medium text-slate-700">测试入参（context / actions / horizon）</p>
+            <p className="mb-1.5 flex items-center justify-between gap-2 text-sm font-medium text-slate-700">
+              <span>测试入参（context / actions / horizon）</span>
+              {exampleInput && (
+                <button
+                  type="button"
+                  onClick={() => { setInvokeInput(exampleInput); setJsonIssue(null) }}
+                  className="rounded-md border border-slate-200 px-2 py-0.5 text-[11px] font-normal text-teal-700 hover:bg-teal-50"
+                >
+                  填入示例
+                </button>
+              )}
+            </p>
+            <p className="mb-1.5 text-[11px] leading-5 text-slate-400">
+              context 为观测数据（如时序服务需传 series 数值列表，长度不足会被边界拒绝）、actions 为干预动作、horizon 为预测步数；
+              示例取自该服务发布版本保存时的调试入参。
+            </p>
             <textarea
               value={invokeInput}
-              onChange={event => setInvokeInput(event.target.value)}
+              onChange={event => handleInvokeInputChange(event.target.value)}
               spellCheck={false}
               rows={8}
               className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs leading-5 text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30"
               aria-label="试调用测试入参 JSON"
+              aria-invalid={!!jsonIssue}
             />
+            {jsonIssue && (
+              <p className="mt-1 text-[11px] text-red-600" role="alert">
+                JSON 语法错误
+                {jsonIssue.line !== null && jsonIssue.column !== null
+                  ? `（第 ${jsonIssue.line} 行第 ${jsonIssue.column} 列附近）`
+                  : ''}：{jsonIssue.message}
+              </p>
+            )}
           </div>
           {invokeResult && (
             <div aria-live="polite">
-              {invokeResult.ok ? (
-                <div>
-                  <p className="mb-1 flex items-center gap-1 text-[11px] font-medium text-teal-600">
-                    <CheckCircle2 size={12} /> 调用成功 · {invokeResult.duration_ms} ms
-                  </p>
-                  <pre className="max-h-64 overflow-auto rounded-lg bg-slate-50 p-2.5 text-xs leading-5 text-slate-700">
-                    {JSON.stringify(invokeResult.payload, null, 2)}
-                  </pre>
-                </div>
-              ) : (
+              {invokeResult.ok ? (() => {
+                const payload = invokeResult.payload as { trajectory?: unknown; boundary?: unknown } | null
+                const emptyTrajectory = !!payload && Array.isArray(payload.trajectory) && payload.trajectory.length === 0
+                const boundaryNote = typeof payload?.boundary === 'string' ? payload.boundary : ''
+                return (
+                  <div>
+                    {emptyTrajectory ? (
+                      <div className="mb-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5">
+                        <p className="flex items-center gap-1 text-[11px] font-medium text-amber-700">
+                          <AlertTriangle size={12} /> 调用成功 · {invokeResult.duration_ms} ms · 未产生预测输出
+                        </p>
+                        {boundaryNote && (
+                          <p className="mt-0.5 text-[11px] leading-4 text-amber-600">边界说明：{boundaryNote}</p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="mb-1 flex items-center gap-1 text-[11px] font-medium text-teal-600">
+                        <CheckCircle2 size={12} /> 调用成功 · {invokeResult.duration_ms} ms
+                      </p>
+                    )}
+                    <pre className="max-h-64 overflow-auto rounded-lg bg-slate-50 p-2.5 text-xs leading-5 text-slate-700">
+                      {JSON.stringify(invokeResult.payload, null, 2)}
+                    </pre>
+                  </div>
+                )
+              })() : (
                 <div>
                   <p className="mb-1 flex items-center gap-1 text-[11px] font-medium text-red-600">
                     <XCircle size={12} /> 调用失败
@@ -536,6 +666,28 @@ export default function WorldModelServicesPage() {
                   <p className="text-xs text-red-600">{invokeResult.error}</p>
                 </div>
               )}
+            </div>
+          )}
+          {invokeTarget?.endpoint_path && (
+            <div>
+              <p className="mb-1.5 flex items-center justify-between text-sm font-medium text-slate-700">
+                <span className="flex items-center gap-1"><Terminal size={14} /> 外部调用示例（curl）</span>
+                <button
+                  type="button"
+                  onClick={() => copyCurlExample(buildCurlExample(fullEndpointUrl(invokeTarget.endpoint_path!), invokeInput))}
+                  aria-label="复制 curl 示例"
+                  title="复制 curl 调用示例"
+                  className="inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 px-2 text-[11px] font-normal text-slate-600 hover:bg-slate-50"
+                >
+                  {copiedCurl ? <Check size={12} className="text-teal-600" /> : <Copy size={12} />} 复制
+                </button>
+              </p>
+              <pre className="overflow-x-auto rounded-lg bg-slate-50 p-2.5 font-mono text-[11px] leading-5 text-slate-600">
+                {buildCurlExample(fullEndpointUrl(invokeTarget.endpoint_path), invokeInput)}
+              </pre>
+              <p className="mt-1 text-[11px] leading-4 text-slate-400">
+                「访问令牌」为平台登录账号的 JWT，可通过 POST /api/v1/auth/login 获取（与页面登录同源）；未带令牌或令牌失效将返回 401/403。
+              </p>
             </div>
           )}
         </div>
@@ -581,7 +733,7 @@ export default function WorldModelServicesPage() {
                             type="button"
                             onClick={() => copyEndpoint(detailTarget)}
                             aria-label="复制调用端点"
-                            title="复制调用端点"
+                            title="复制完整调用地址（含协议、主机与路径）"
                             className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-200/70 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                           >
                             {copiedId === detailTarget.id ? <Check size={12} className="text-teal-600" /> : <Copy size={12} />}
@@ -623,6 +775,20 @@ export default function WorldModelServicesPage() {
                 <section>
                   <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-800">
                     <Activity size={13} /> 最近调用（共 {serviceCallsTotal} 条）
+                    {serviceCallsTotal > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const target = detailTarget
+                          setDetailTarget(null)
+                          navigate(`/world-model/calls?service_id=${target.id}&service_name=${encodeURIComponent(target.name)}`)
+                        }}
+                        className="ml-auto inline-flex items-center gap-1 text-[11px] font-normal text-teal-700 underline-offset-2 hover:underline"
+                        title="进入调用记录页并按本服务过滤"
+                      >
+                        查看全部 <ExternalLink size={11} />
+                      </button>
+                    )}
                   </p>
                   {serviceCallsLoading ? (
                     <p className="py-6 text-center text-xs text-slate-400">加载调用记录…</p>

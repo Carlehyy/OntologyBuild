@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   AlertCircle,
   CheckCircle2,
@@ -54,6 +55,7 @@ function formatDateTime(iso?: string | null): string {
 }
 
 export default function WorldModelCallsPage() {
+  const [searchParams] = useSearchParams()
   const [items, setItems] = useState<CallRecordItem[]>([])
   const [overview, setOverview] = useState<CallRecordOverview | null>(null)
   const [total, setTotal] = useState(0)
@@ -63,6 +65,9 @@ export default function WorldModelCallsPage() {
   const [draftEnd, setDraftEnd] = useState('')
   const [draftResult, setDraftResult] = useState<ResultFilter>('all')
   const [filters, setFilters] = useState<AppliedFilters>(EMPTY_FILTERS)
+  // 服务下钻筛选：从推演服务页「查看全部」跳转时经 URL 带入，刷新后仍生效
+  const [serviceIdFilter, setServiceIdFilter] = useState(() => searchParams.get('service_id') ?? '')
+  const [serviceNameFilter, setServiceNameFilter] = useState(() => searchParams.get('service_name') ?? '')
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState('')
   const [selected, setSelected] = useState<CallRecordItem | null>(null)
@@ -79,6 +84,7 @@ export default function WorldModelCallsPage() {
         page,
         size: PAGE_SIZE,
         keyword: filters.keyword,
+        service_id: serviceIdFilter,
         start: filters.start ? new Date(`${filters.start}T00:00:00`).toISOString() : '',
         end: filters.end ? new Date(`${filters.end}T23:59:59.999`).toISOString() : '',
         result: filters.result,
@@ -90,7 +96,7 @@ export default function WorldModelCallsPage() {
     } finally {
       if (!silent) setHistoryLoading(false)
     }
-  }, [filters, page])
+  }, [filters, page, serviceIdFilter])
 
   const loadOverview = useCallback(async () => {
     try {
@@ -134,7 +140,15 @@ export default function WorldModelCallsPage() {
     setDraftEnd('')
     setDraftResult('all')
     setPage(1)
+    setServiceIdFilter('')
+    setServiceNameFilter('')
     setFilters(EMPTY_FILTERS)
+  }
+
+  const clearServiceFilter = () => {
+    setServiceIdFilter('')
+    setServiceNameFilter('')
+    setPage(1)
   }
 
   const openDetail = async (item: CallRecordItem) => {
@@ -186,6 +200,22 @@ export default function WorldModelCallsPage() {
 
       {/* 筛选栏 */}
       <section className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50" aria-label="调用记录筛选">
+        {serviceIdFilter && (
+          <span
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-teal-50 px-3 text-xs text-teal-700"
+            title="仅列表按该服务过滤；上方统计卡与趋势图为全局数据"
+          >
+            服务：{serviceNameFilter || serviceIdFilter}
+            <button
+              type="button"
+              onClick={clearServiceFilter}
+              aria-label={'清除服务筛选 ' + (serviceNameFilter || serviceIdFilter)}
+              className="inline-flex h-4 w-4 items-center justify-center rounded text-teal-500 hover:bg-teal-100 hover:text-teal-700"
+            >
+              <X size={12} />
+            </button>
+          </span>
+        )}
         <div className="relative w-full sm:w-64">
           <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
