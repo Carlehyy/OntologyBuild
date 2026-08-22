@@ -51,6 +51,24 @@ export interface PipelinePage {
   total: number
   page: number
   page_size: number
+  /** 列表头部统计：全量口径、不受当前筛选影响；trend_7d 由新版后端提供，旧后端缺省 */
+  overview?: PipelineOverview
+}
+
+export interface PipelineOverview {
+  total: number
+  published: number
+  enabled: number
+  /** 最近一次运行失败的流水线数（按各流水线最新一次 run 口径） */
+  latest_failed: number
+  /** 近 7 个上海自然日的真实运行次数（手动 + 任务触发），旧后端可能不返回 */
+  trend_7d?: PipelineOverviewTrendItem[]
+}
+
+export interface PipelineOverviewTrendItem {
+  date: string   // YYYY-MM-DD（上海自然日）
+  runs: number
+  errors: number
 }
 
 /** 字段契约——流水线产出列的入湖元数据（发布后封版） */

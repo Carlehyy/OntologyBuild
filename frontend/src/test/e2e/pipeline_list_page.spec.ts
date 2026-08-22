@@ -121,3 +121,139 @@ test.describe('数据流水线列表页', () => {
     await expect(page.getByText('配置流水线「订单取数脚本」')).toHaveCount(0)
   })
 })
+
+const LINKED_PIPELINE = {
+  id: 'py-pipe-2',
+  name: '供应链风险采集',
+  description: '采集供应链风险数据',
+  domain: '通用',
+  status: 'published',
+  enabled: true,
+  column_definitions: [],
+  target_curated_ids: ['curated-1'],
+  task_count: 2,
+  last_run_status: 'failed',
+  last_run_at: '2026-08-20T01:00:00Z',
+  last_run_error: '连接超时',
+  definition: { engine: 'python', nodes: [], edges: [], python: { script: 'result = []' } },
+  created_at: '2026-08-11T09:00:00Z',
+  updated_at: '2026-08-11T09:00:00Z',
+}
+
+const OVERVIEW = {
+  total: 3,
+  published: 1,
+  enabled: 2,
+  latest_failed: 1,
+  trend_7d: [
+    { date: '2026-08-15', runs: 1, errors: 0 },
+    { date: '2026-08-16', runs: 0, errors: 0 },
+    { date: '2026-08-17', runs: 2, errors: 1 },
+    { date: '2026-08-18', runs: 0, errors: 0 },
+    { date: '2026-08-19', runs: 1, errors: 0 },
+    { date: '2026-08-20', runs: 3, errors: 1 },
+    { date: '2026-08-21', runs: 1, errors: 0 },
+  ],
+}
+
+const RUN_ITEMS = [
+  { id: 'run-1', status: 'failed', started_at: '2026-08-20T01:00:00Z', finished_at: '2026-08-20T01:01:00Z' },
+  { id: 'run-2', status: 'success', started_at: '2026-08-19T01:00:00Z', finished_at: '2026-08-19T01:00:40Z' },
+]
+
+const TASK_ITEMS = [
+  { id: 'task-1', name: '每日订单同步', status: 'success' },
+  { id: 'task-2', name: '风险周报推送', status: 'failed' },
+]
+
+async function mockLinkedListPage(page: Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'e2e-token')
+    localStorage.setItem('auth-store', JSON.stringify({
+      state: { token: 'e2e-token', user: { id: 'u1', username: 'tester', role: 'admin' } },
+      version: 0,
+    }))
+  })
+  await page.route('**/api/**', async (route: Route) => {
+    const url = new URL(route.request().url())
+    if (!url.pathname.startsWith('/api/')) return route.continue()
+    const ok = (data: unknown, status = 200) => route.fulfill({
+      status,
+      contentType: 'application/json',
+      body: JSON.stringify(data),
+    })
+    if (url.pathname === '/api/v2/pipelines' && url.searchParams.get('paginated') === 'true') {
+      return ok({ items: [LINKED_PIPELINE], total: 1, page: 1, page_size: 10, overview: OVERVIEW })
+    }
+    if (url.pathname === `/api/v2/pipelines/${LINKED_PIPELINE.id}/runs`) {
+      return ok(RUN_ITEMS)
+    }
+    if (url.pathname === '/api/v2/pipelines/runs/run-1') {
+      return ok({ id: 'run-1', status: 'failed', stats: null, error_log: '详细错误：字段缺失', started_at: RUN_ITEMS[0].started_at, finished_at: RUN_ITEMS[0].finished_at })
+    }
+    if (url.pathname === '/api/v2/curated/curated-1') {
+      return ok({ id: 'curated-1', name: '供应链风险数据集', status: 'active' })
+    }
+    if (url.pathname === '/api/v2/pipeline-tasks') {
+      return ok({ total: 2, items: TASK_ITEMS })
+    }
+    if (url.pathname === '/api/v2/steward/status') {
+      return ok({ n8n: { configured: false, enabled: false, api_url: '', reachable: false } })
+    }
+    return ok({})
+  })
+}
+
+test.describe('数据流水线列表页·运行概况与列内预览', () => {
+  test('头部展示运行概况统计卡与近 7 日执行趋势', async ({ page }) => {
+    await mockLinkedListPage(page)
+    await page.goto('/#/data/pipelines')
+
+    await expect(page.getByText('流水线总数')).toBeVisible()
+    await expect(page.getByText('已发布', { exact: true }).first()).toBeVisible()
+    await expect(page.getByText('已启用', { exact: true }).first()).toBeVisible()
+    await expect(page.getByText('最近执行失败')).toBeVisible()
+    await expect(page.getByTestId('pipeline-trend-card')).toBeVisible()
+    await expect(page.getByText('近 7 日执行')).toBeVisible()
+  })
+
+  test('最近执行结果列打开历史执行记录抽屉，失败记录可展开错误日志', async ({ page }) => {
+    await mockLinkedListPage(page)
+    await page.goto('/#/data/pipelines')
+
+    await page.getByTitle('点击查看历史执行记录').click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog.getByText('执行历史')).toBeVisible()
+    await expect(dialog.getByText('「供应链风险采集」最近 50 次运行记录')).toBeVisible()
+    await expect(dialog.getByText('成功')).toBeVisible()
+
+    await dialog.getByRole('button', { name: /失败/ }).click()
+    await expect(dialog.getByText('详细错误：字段缺失')).toBeVisible()
+  })
+
+  test('产物列先列内预览数据集，再选择性跳转数据资产湖', async ({ page }) => {
+    await mockLinkedListPage(page)
+    await page.goto('/#/data/pipelines')
+
+    await page.getByRole('button', { name: '1 个数据集' }).click()
+    await expect(page.getByText('产物数据集')).toBeVisible()
+    await expect(page.getByText('供应链风险数据集')).toBeVisible()
+    await expect(page).toHaveURL(/#\/data\/pipelines$/)
+
+    await page.getByRole('button', { name: '前往数据资产湖' }).click()
+    await expect(page).toHaveURL(/#\/data\/structured\?pipeline=/)
+  })
+
+  test('关联任务列先列内预览任务，再选择性跳转数据任务池', async ({ page }) => {
+    await mockLinkedListPage(page)
+    await page.goto('/#/data/pipelines')
+
+    await page.getByRole('button', { name: '2 个任务' }).click()
+    await expect(page.getByText('关联数据任务')).toBeVisible()
+    await expect(page.getByText('每日订单同步')).toBeVisible()
+    await expect(page.getByText('风险周报推送')).toBeVisible()
+
+    await page.getByRole('button', { name: '前往数据任务池' }).click()
+    await expect(page).toHaveURL(/#\/data\/pipelines\/sync-tasks\?pipeline_id=py-pipe-2/)
+  })
+})
