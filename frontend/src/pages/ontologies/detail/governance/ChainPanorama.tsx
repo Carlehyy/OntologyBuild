@@ -111,11 +111,11 @@ function ChainNodeCard({ data }: NodeProps<Node<ChainFlowData>>) {
 
 function ChainColumnHeader({ data }: NodeProps<Node<{ label: string; count: number } & Record<string, unknown>>>) {
   return (
-    <div className="pointer-events-none flex items-center gap-1.5" style={{ width: NODE_W }}>
-      <span className="text-[10.5px] font-semibold tracking-wider text-slate-400">
+    <div className="pointer-events-none flex items-center justify-center gap-1.5 text-center" style={{ width: NODE_W }}>
+      <span className="text-[13px] font-semibold tracking-wide text-slate-500">
         {data.label}
       </span>
-      <span className="rounded-full bg-slate-100 px-1.5 py-px text-[9.5px] tabular-nums text-slate-400">
+      <span className="rounded-full bg-slate-100 px-1.5 py-px text-[10px] tabular-nums text-slate-400">
         {data.count}
       </span>
     </div>

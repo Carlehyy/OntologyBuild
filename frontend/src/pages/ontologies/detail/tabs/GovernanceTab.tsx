@@ -27,6 +27,7 @@ import {
   type ChainMappingLike,
   type ChainPipelineLike,
 } from '../governance/chainModel'
+import { buildKpiSparkSeries } from '../governance/charts'
 import '../governance/governanceNarrative.css'
 
 /* 治理与推演驾驶舱 ——「链路全景 + 工作台」版:
@@ -264,6 +265,11 @@ export default function GovernanceTab({
 
   const overview = overviewQuery.data
   const dailySpark = buildDailySpark(overview?.runtime?.daily7d)
+  // 四个 KPI 卡的近 7 日迷你图序列(决策/批准率从执行日志按日归桶)。
+  const kpiSparks = useMemo(
+    () => buildKpiSparkSeries({ daily7d: dailySpark, logs: releaseLogs }),
+    [dailySpark, releaseLogs],
+  )
 
   // 七段链路全景:上游(管道→数据集→映射)+ 治理环路(实例→哨兵→待审批→动作)。
   const chain = useMemo(() => {
@@ -513,6 +519,7 @@ export default function GovernanceTab({
       <KpiOverviewGrid
         kpis={kpis}
         dailySpark={dailySpark}
+        sparks={kpiSparks}
         isRefreshing={isRefreshing}
         onNavigate={scrollToBoard}
       />

@@ -1,5 +1,6 @@
 /* 数据供给全景画布(@xyflow/react):
    「来源数据资产 → 本体元素」两列链路节点卡,与治理推演页链路全景同一设计语言;
+   连线流动动画;节点卡可拖拽调整布局,位置按本体持久化到 localStorage;
    点选节点高亮整条直接上下游、其余压暗,点画布空白复位;
    数据资产节点点击打开数据预览,本体元素节点点击打开血缘详情弹窗。 */
 import { useCallback, useMemo, useState } from 'react'
@@ -41,6 +42,21 @@ interface MappingChainPanoramaProps {
   onSelectElement: (key: string) => void
   onPreviewDataset: (datasetId: string) => void
   onHoverNode: (key: string | null) => void
+  /** 节点拖拽位置按本体持久化（localStorage 新增 key，不改既有存储契约）。 */
+  ontologyId: string
+}
+
+const chainPositionsKey = (ontologyId: string) => `dmo:chain-positions:${ontologyId}`
+function readChainPositions(ontologyId: string): Record<string, { x: number; y: number }> {
+  try {
+    const raw = window.localStorage.getItem(chainPositionsKey(ontologyId))
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as Record<string, { x: number; y: number }>
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch { return {} }
+}
+function writeChainPositions(ontologyId: string, positions: Record<string, { x: number; y: number }>) {
+  try { window.localStorage.setItem(chainPositionsKey(ontologyId), JSON.stringify(positions)) } catch { /* noop */ }
 }
 
 const COLUMN_X = 300
@@ -122,9 +138,12 @@ export default function MappingChainPanorama({
   onSelectElement,
   onPreviewDataset,
   onHoverNode,
+  ontologyId,
 }: MappingChainPanoramaProps) {
   const model = useMemo(() => buildFlowModel(rows), [rows])
   const [highlightSet, setHighlightSet] = useState<Set<string> | null>(null)
+  // 节点拖拽位置按本体持久化：重进/刷新后保持手动调整的布局
+  const [dragPositions, setDragPositions] = useState<Record<string, { x: number; y: number }>>(() => readChainPositions(ontologyId))
 
   const datasetCards = useMemo(() => {
     const cards = new Map<string, { title: string; sub: string; badge: ChainCardData['badge'] }>()
@@ -160,9 +179,8 @@ export default function MappingChainPanorama({
       result.push({
         id: nodeId,
         type: 'mappingChainNode',
-        position: { x: column * COLUMN_X, y: FIRST_NODE_Y + index * (NODE_H + NODE_GAP) },
+        position: dragPositions[nodeId] ?? { x: column * COLUMN_X, y: FIRST_NODE_Y + index * (NODE_H + NODE_GAP) },
         data: { ...card, highlighted, dimmed: highlightSet ? !highlightSet.has(nodeId) : false } satisfies ChainCardData,
-        draggable: false,
       })
     }
     datasets.forEach((node, index) => {
@@ -184,7 +202,7 @@ export default function MappingChainPanorama({
       })
     })
     return result
-  }, [model, rows, datasetCards, highlightSet, hoverKey, selectedKey])
+  }, [model, rows, datasetCards, highlightSet, hoverKey, selectedKey, dragPositions])
 
   const flowEdges = useMemo<Edge[]>(() => model.links.map((link, index) => {
     const highlighted = Boolean(highlightSet?.has(link.source) && highlightSet?.has(link.target))
@@ -194,6 +212,7 @@ export default function MappingChainPanorama({
       source: link.source,
       target: link.target,
       type: 'bezier',
+      animated: !dimmed,
       style: {
         stroke: 'var(--dmo-teal)',
         strokeWidth: highlighted ? 2.2 : 1.3,
@@ -229,12 +248,20 @@ export default function MappingChainPanorama({
         elementsSelectable
         zoomOnScroll={false}
         panOnScroll={false}
-        // 左键按下会触发面板拖拽(panOnDrag=true 的副作用),吞掉节点 click;
-        // 平移交给中/右键与 Controls,左键专用于节点点选
-        panOnDrag={[1, 2]}
+        // 节点可拖拽后恢复左键全景交互：拖节点=调整布局，拖空白=平移画布；
+        // 静止点按不会被识别为拖拽，节点 click 不受影响
+        panOnDrag
         zoomOnPinch
         preventScrolling={false}
         onNodeClick={handleNodeClick}
+        onNodeDragStop={(_, node) => {
+          if (node.type !== 'mappingChainNode') return
+          setDragPositions(prev => {
+            const next = { ...prev, [node.id]: { x: node.position.x, y: node.position.y } }
+            writeChainPositions(ontologyId, next)
+            return next
+          })
+        }}
         onPaneClick={() => setHighlightSet(null)}
         onNodeMouseEnter={(_, node) => { if (node.type === 'mappingChainNode') onHoverNode(node.id) }}
         onNodeMouseLeave={() => onHoverNode(null)}

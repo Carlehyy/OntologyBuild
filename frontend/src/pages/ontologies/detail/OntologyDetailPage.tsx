@@ -148,12 +148,16 @@ export default function OntologyDetailPage() {
   if (!ontology) return <div className="p-6 text-red-500">Ontology not found</div>
 
   return (
-    <div className={`onto-glass-root onto-glass-root--flat flex h-full min-h-0 flex-col gap-4 ${
-      activeGroup === 'governance' ? 'overflow-y-auto' : 'overflow-hidden'
+    <div className={`onto-glass-root onto-glass-root--flat flex flex-col gap-4 ${
+      // 「实例数据」tab 回归自然文档流：内容撑多高就展示多高,由外层容器滚动;
+      // 治理/映射页为页内自然文档流(头部吸附保持可达);其余 tab 固定视口+内容区内滚。
+      activeGroup === 'data'
+        ? 'min-h-full'
+        : `h-full min-h-0 ${activeGroup === 'governance' || activeGroup === 'data-mapping' ? 'overflow-y-auto' : 'overflow-hidden'}`
     }`}>
       {/* ═══ 功能导航与低频操作(治理页为自然文档流,头部吸附保持可达) ═══ */}
       <div data-testid="ontology-detail-header" className={`onto-glass-header flex shrink-0 items-center justify-between gap-3 px-5 py-4 ${
-        activeGroup === 'governance' ? 'sticky top-0 z-30' : ''
+        activeGroup === 'governance' ? 'onto-glass-header--sticky sticky top-0 z-30' : ''
       }`}>
         <div className="relative min-w-0">
           {tabsMoreRight && (
@@ -270,11 +274,12 @@ export default function OntologyDetailPage() {
           <ModelStructureView ontologyId={id!} />
         </div>
       ) : activeGroup === 'data-mapping' ? (
-        <div data-testid="ontology-detail-content" className="onto-glass-in min-h-0 flex-1 overflow-hidden">
+        /* 数据映射:同治理页自然文档流,内容多高页面就多高,页面级滚动 */
+        <div data-testid="ontology-detail-content" className="onto-glass-in pb-4">
           <DataMappingOverview ontologyId={id!} />
         </div>
       ) : activeGroup === 'data' ? (
-        <div data-testid="ontology-detail-content" className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-auto">
+        <div data-testid="ontology-detail-content" className="onto-glass-card onto-glass-in">
           <FormalInstancesView ontologyId={id!} onOpenVersions={() => setShowVersionModal(true)} />
         </div>
       ) : (

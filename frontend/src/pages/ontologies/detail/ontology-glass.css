@@ -95,8 +95,7 @@
 /* 五个详情页签共用同一平面层级，避免切页时导航或内容外壳突然浮起。 */
 .onto-glass-root--flat > .onto-glass-header,
 .onto-glass-root--flat > .onto-glass-card,
-.onto-glass-root--flat > .onto-glass-card:hover {
-  box-shadow: none;
+.onto-glass-root--flat > .onto-glass-card:hover {  box-shadow: none;
 }
 
 .onto-glass-root--flat > .onto-glass-card:hover {
@@ -132,3 +131,8 @@
   to   { opacity: 1; transform: translateX(0); }
 }
 .onto-drawer-in { animation: ontoDrawerIn 200ms ease-out; }
+
+/* 治理页自然文档流的吸附头部:提高不透明度,避免滚动内容透出 */
+.onto-glass-header--sticky {
+  background: rgba(255, 255, 255, 0.94);
+}

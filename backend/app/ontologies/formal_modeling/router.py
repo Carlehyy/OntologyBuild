@@ -308,6 +308,7 @@ def update_instance(ontology_id: str, instance_id: str, body: S.ObjectInstanceUp
 @router.get("/{ontology_id}/instances/{instance_id}/facts")
 def list_instance_facts(ontology_id: str, instance_id: str,
                         property_name: Optional[str] = None, limit: int = 200,
+                        offset: int = 0,
                         db: Session = Depends(get_db), _=Depends(get_current_user)):
     """实例的属性级变更历史（Fact 溯源层），按时间倒序。"""
     return instance_service.list_instance_facts(
@@ -315,6 +316,7 @@ def list_instance_facts(ontology_id: str, instance_id: str,
         instance_id,
         property_name,
         limit,
+        offset,
         db,
     )
 
