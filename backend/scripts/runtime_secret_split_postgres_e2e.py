@@ -37,7 +37,7 @@ REPO_ROOT = BACKEND_DIR.parent
 # Direct ``python scripts/...`` execution makes ``backend/scripts`` sys.path[0].
 # Add the backend package root explicitly before the late application imports.
 sys.path.insert(0, str(BACKEND_DIR))
-POSTGRES_LOCATION_COUNT = 10
+POSTGRES_LOCATION_COUNT = 9
 SQLITE_LOCATION_COUNT = 1
 TOTAL_LOCATION_COUNT = POSTGRES_LOCATION_COUNT + SQLITE_LOCATION_COUNT
 SYNTHETIC_MANIFEST_CREDENTIALS = {
@@ -262,7 +262,6 @@ def _legacy_fixture_values() -> tuple[dict[str, str], dict[str, str], str]:
             separators=(",", ":"),
         ),
         "workflow_config.api_key_encrypted": "synthetic-n8n-api-key",
-        "agent_config.password_encrypted": "synthetic-agent-password",
         "super_assistant_mcp_servers.headers_encrypted": json.dumps(
             {"Authorization": "Bearer synthetic-mcp-token"}, separators=(",", ":")
         ),
@@ -307,10 +306,6 @@ def _insert_postgres_fixtures(conn, ciphertexts: dict[str, str]) -> None:
           (id,enabled,api_url,api_key_encrypted,timeout_seconds,created_at,updated_at)
           VALUES ('cipher-workflow',true,'https://synthetic-n8n.invalid',:cipher,30,:now,:now)""",
          {"cipher": ciphertexts["workflow_config.api_key_encrypted"], "now": now}),
-        ("""INSERT INTO agent_config
-          (id,base_url,auth_enabled,username,password_encrypted,token,target_agent_id,target_agent_name,created_at,updated_at)
-          VALUES ('cipher-agent','https://synthetic-agent.invalid',true,'synthetic',:cipher,'','','',:now,:now)""",
-         {"cipher": ciphertexts["agent_config.password_encrypted"], "now": now}),
         ("""INSERT INTO super_assistant_mcp_servers
           (id,owner_id,name,transport,url,headers_encrypted,header_names,args,env_encrypted,env_names,enabled,require_confirmation,tool_manifest,created_at,updated_at)
           VALUES ('cipher-mcp','synthetic-user','Cipher E2E','streamable_http','https://synthetic-mcp.invalid',:headers,CAST('[\"Authorization\"]' AS json),CAST('[]' AS json),:env,CAST('[\"MCP_SECRET\"]' AS json),true,true,CAST('[]' AS json),:now,:now)""",
@@ -337,7 +332,6 @@ def _postgres_queries() -> dict[str, str]:
         "model_configs.api_key_encrypted": "SELECT api_key_encrypted FROM model_configs WHERE id='cipher-model'",
         "v2_connections.config._encrypted": "SELECT config->>'_encrypted' FROM v2_connections WHERE id='cipher-connection'",
         "workflow_config.api_key_encrypted": "SELECT api_key_encrypted FROM workflow_config WHERE id='cipher-workflow'",
-        "agent_config.password_encrypted": "SELECT password_encrypted FROM agent_config WHERE id='cipher-agent'",
         "super_assistant_mcp_servers.headers_encrypted": "SELECT headers_encrypted FROM super_assistant_mcp_servers WHERE id='cipher-mcp'",
         "super_assistant_mcp_servers.env_encrypted": "SELECT env_encrypted FROM super_assistant_mcp_servers WHERE id='cipher-mcp'",
         "v2_steward_browser_sources.endpoint_url_encrypted": "SELECT endpoint_url_encrypted FROM v2_steward_browser_sources WHERE id='cipher-browser'",

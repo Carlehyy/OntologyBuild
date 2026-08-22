@@ -41,7 +41,6 @@ MODEL_MODULES = (
     "app.ontologies.sentinels.models",
     "app.ontologies.versions.models",
     "app.platform.observability.models",
-    "app.settings.agents.models",
     "app.settings.domains.models",
     "app.settings.object_storage.models",
     "app.settings.workflows.models",

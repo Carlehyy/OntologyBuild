@@ -101,28 +101,6 @@ export const modelApi = {
   }) => apiClient.get<ModelCallLogPage>(`/models/${id}/calls`, { params }),
 }
 
-export const settingsApi = {
-  // Agent config
-  getAgentConfig: () => apiClient.get<{
-    base_url: string; auth_enabled: boolean; username: string;
-    has_password: boolean; target_agent_id: string; target_agent_name: string;
-  }>('/settings/agent-config'),
-  updateAgentConfig: (body: {
-    base_url: string; auth_enabled: boolean; username: string; password: string;
-    target_agent_id: string; target_agent_name: string;
-  }) => apiClient.put('/settings/agent-config', body),
-  testAgentConnection: (body: {
-    base_url: string; auth_enabled: boolean; username: string; password: string;
-  }) => apiClient.post<{ ok: boolean; message: string; has_auth: boolean; token_valid: boolean }>(
-    '/settings/agent-config/test', body,
-  ),
-  fetchAgents: (body: {
-    base_url: string; auth_enabled: boolean; username: string; password: string;
-  }) => apiClient.post<{ agents: { id: string; name: string; description: string }[] }>(
-    '/settings/agent-config/agents', body,
-  ),
-}
-
 export const domainApi = {
   list: (search?: string) => apiClient.get<{ id: string; name: string; description: string; created_by: string; created_at: string; updated_at: string }[]>(
     '/domains', { params: search ? { search } : {} },
