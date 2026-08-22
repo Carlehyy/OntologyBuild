@@ -25,6 +25,7 @@ import CanvasPanel from './CanvasPanel'
 import DocumentsDrawer from './DocumentsDrawer'
 import DraftReviewDrawer from './DraftReviewDrawer'
 import FileWorkspaceDrawer from './FileWorkspaceDrawer'
+import { SplitHandle, useSplitLayout } from '@/hooks/useSplitLayout'
 import type { ModelConfig } from '@/types/ontology'
 
 interface ChatMsg {
@@ -51,57 +52,7 @@ const TEXTAREA_LINE_HEIGHT = 20
 const TEXTAREA_MAX_LINES = 10
 const TEXTAREA_MIN_HEIGHT = 28
 const TEXTAREA_MAX_HEIGHT = TEXTAREA_LINE_HEIGHT * TEXTAREA_MAX_LINES + 8
-const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
-
-function useExplorationLayout() {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [sizes, setSizes] = useState<[number, number]>([68, 32])
-
-  const startResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    event.preventDefault()
-    const rect = containerRef.current?.getBoundingClientRect()
-    if (!rect) return
-
-    const startX = event.clientX
-    const start = sizes
-    const min: [number, number] = [48, 24]
-    const pairTotal = start[0] + start[1]
-    const previousCursor = document.body.style.cursor
-    const previousUserSelect = document.body.style.userSelect
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-
-    const onMove = (moveEvent: PointerEvent) => {
-      const delta = ((moveEvent.clientX - startX) / rect.width) * 100
-      const left = clamp(start[0] + delta, min[0], pairTotal - min[1])
-      setSizes([left, pairTotal - left])
-    }
-    const onUp = () => {
-      document.body.style.cursor = previousCursor
-      document.body.style.userSelect = previousUserSelect
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-  }, [sizes])
-
-  return { containerRef, sizes, startResize }
-}
-
-function ExplorationSplitHandle({ onPointerDown }: { onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void }) {
-  return (
-    <div
-      role="separator"
-      aria-label="调整探索对话与业务场景宽度"
-      aria-orientation="vertical"
-      onPointerDown={onPointerDown}
-      className="group flex cursor-col-resize items-center justify-center"
-    >
-      <div className="h-16 w-1 rounded-full bg-[var(--color-border)] transition-all group-hover:h-24 group-hover:bg-teal-500/70" />
-    </div>
-  )
-}
+// 可拖拽分栏布局抽到 @/hooks/useSplitLayout，与本体网络页共用同一实现。
 
 const formatSize = (n: number) =>
   n < 1024 ? `${n} B`
@@ -229,7 +180,7 @@ function QuickReplies({ questions, disabled, onAnswer, onCustom }: {
 }
 
 export default function ExplorationPage() {
-  const { containerRef, sizes, startResize } = useExplorationLayout()
+  const { containerRef, sizes, startResize } = useSplitLayout()
   const { toast } = useToast()
   // -- 会话 --
   const { data: sessions = [], refetch: refetchSessions } = useQuery({
@@ -1036,7 +987,7 @@ export default function ExplorationPage() {
         </div>
       </section>
 
-      <ExplorationSplitHandle onPointerDown={startResize} />
+      <SplitHandle onPointerDown={startResize} label="调整探索对话与业务场景宽度" />
 
       {/* 业务场景 */}
       <aside className={`${panelClass} workspace-topology-surface flex flex-col`}>
