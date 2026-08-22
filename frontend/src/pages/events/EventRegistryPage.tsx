@@ -3,7 +3,7 @@ import ReactECharts from 'echarts-for-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { eventsApi } from '../../api/events'
 import type { EventItem, EventStats } from '../../api/events'
-import { Search, Plus, RefreshCcw, Activity, Code2, AlertOctagon, ChevronLeft, ChevronRight, Filter, PlusCircle, ArrowUpRight, Archive, ArchiveRestore, Paperclip, Pencil, Trash2 } from 'lucide-react'
+import { Search, Plus, RefreshCcw, Activity, Code2, AlertOctagon, ChevronLeft, ChevronRight, Filter, PlusCircle, ArrowUpRight, Archive, ArchiveRestore, Paperclip, Pencil, Trash2, Download, Loader2 } from 'lucide-react'
 import { ConfirmModal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
 import { useAuthStore } from '@/stores/authStore'
@@ -80,6 +80,24 @@ export default function EventRegistryPage() {
 
   const totalPages = Math.max(1, Math.ceil((listQ.data?.total ?? 0) / PAGE_SIZE))
   const refresh = () => { statsQ.refetch(); listQ.refetch() }
+
+  const [exporting, setExporting] = useState(false)
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      await eventsApi.exportCsv({
+        q: debouncedSearch.trim() || undefined,
+        sourceType: sourceType || undefined,
+        severity: severity || undefined,
+        status: status || 'active',
+      })
+      toast({ tone: 'success', title: '导出成功', description: '已按当前筛选条件导出 CSV 文件' })
+    } catch (cause: any) {
+      toast({ tone: 'error', title: '导出失败', description: cause?.detail || cause?.message || '请稍后重试' })
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const statusMutation = useMutation({
     mutationFn: ({ id, status: nextStatus }: { id: string; status: 'active' | 'archived' }) =>
@@ -194,6 +212,9 @@ export default function EventRegistryPage() {
       },
       yAxis: {
         type: 'value',
+        // 事件计数是整数：minInterval=1 避免低数据量下出现 0.2/0.4 小数刻度。
+        min: 0,
+        minInterval: 1,
         axisLine: { show: false }, axisTick: { show: false },
         splitLine: { lineStyle: { color: 'rgba(148,163,184,0.12)', type: 'dashed' } },
         axisLabel: { color: '#94A3B8', fontSize: 11 },
@@ -262,7 +283,10 @@ export default function EventRegistryPage() {
 
         {/* 级别分布环：大屏下收紧卡片，为趋势图让出更多横向空间。 */}
         <div className={`${PANEL} flex min-h-[156px] flex-col overflow-hidden px-4 py-3 lg:col-span-4 xl:col-span-3 2xl:col-span-2`}>
-          <div className="mb-1 shrink-0 text-sm font-medium text-slate-700">事件级别分布</div>
+          <div className="mb-1 flex shrink-0 items-center justify-between gap-2">
+            <span className="text-sm font-medium text-slate-700">事件级别分布</span>
+            <span className="text-xs text-slate-400" title="统计全部事件（含归档），与事件总数同口径">含归档</span>
+          </div>
           <div className="flex min-h-0 flex-1 items-center gap-3">
             <div className="relative h-[88px] w-[88px] shrink-0 lg:h-[96px] lg:w-[96px] 2xl:h-[84px] 2xl:w-[84px]">
               <div className="w-full h-full overflow-hidden rounded-full">
@@ -295,7 +319,7 @@ export default function EventRegistryPage() {
             <div className="flex items-center justify-between mb-1 shrink-0">
               <div className="flex items-center gap-1.5">
                 <span className="text-sm font-medium text-slate-700">近 7 日事件趋势</span>
-                <span className="text-xs text-slate-400">按级别堆叠</span>
+                <span className="text-xs text-slate-400">按级别堆叠 · 含归档</span>
               </div>
               <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <LegendDot color={PALETTE.blue} label="信息" />
@@ -326,6 +350,11 @@ export default function EventRegistryPage() {
           ]} />
           <div className="ml-auto flex items-center gap-1">
             <span className="mr-1 text-sm text-slate-400">共 <span className="font-semibold tabular-nums text-slate-700">{listQ.data?.total ?? 0}</span> 条</span>
+            <button type="button" onClick={handleExport} disabled={exporting}
+              className="rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40"
+              title="按当前筛选条件导出 CSV" aria-label="导出事件 CSV">
+              {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            </button>
             <button type="button" onClick={refresh}
               className="rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800" title="刷新" aria-label="刷新事件列表">
               <RefreshCcw className={`h-4 w-4 ${statsQ.isFetching || listQ.isFetching ? 'animate-spin' : ''}`} />

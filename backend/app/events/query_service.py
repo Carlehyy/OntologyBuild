@@ -54,7 +54,7 @@ def require_event(db: Session, event_id: str) -> RegisteredEvent:
     return event
 
 
-def list_events(
+def filtered_event_query(
     db: Session,
     *,
     q: Optional[str],
@@ -65,9 +65,11 @@ def list_events(
     ontology_id: Optional[str],
     start: Optional[datetime],
     end: Optional[datetime],
-    page: int,
-    page_size: int,
-) -> dict:
+):
+    """列表与导出共用的筛选构造。
+
+    status 语义：缺省仅 active；"all" 不限状态；其余按指定状态精确过滤。
+    """
     query = db.query(RegisteredEvent)
     if not status:
         query = query.filter(RegisteredEvent.status == m.STATUS_ACTIVE)
@@ -92,6 +94,34 @@ def list_events(
             | RegisteredEvent.description.ilike(like)
             | RegisteredEvent.event_no.ilike(like)
         )
+    return query
+
+
+def list_events(
+    db: Session,
+    *,
+    q: Optional[str],
+    source_type: Optional[str],
+    event_type: Optional[str],
+    severity: Optional[str],
+    status: Optional[str],
+    ontology_id: Optional[str],
+    start: Optional[datetime],
+    end: Optional[datetime],
+    page: int,
+    page_size: int,
+) -> dict:
+    query = filtered_event_query(
+        db,
+        q=q,
+        source_type=source_type,
+        event_type=event_type,
+        severity=severity,
+        status=status,
+        ontology_id=ontology_id,
+        start=start,
+        end=end,
+    )
 
     total = query.count()
     rows = (
@@ -126,6 +156,42 @@ def list_events(
         "page": page,
         "pageSize": page_size,
     }
+
+
+# 单次导出上限：审计导出不支持无限拉全表，超限时明确截断并提示缩小范围。
+EXPORT_MAX_ROWS = 10_000
+
+
+def export_rows(
+    db: Session,
+    *,
+    q: Optional[str],
+    source_type: Optional[str],
+    event_type: Optional[str],
+    severity: Optional[str],
+    status: Optional[str],
+    ontology_id: Optional[str],
+    start: Optional[datetime],
+    end: Optional[datetime],
+) -> tuple[list, bool]:
+    """按列表同款筛选取导出行，返回 (rows, 是否被截断)。"""
+    query = filtered_event_query(
+        db,
+        q=q,
+        source_type=source_type,
+        event_type=event_type,
+        severity=severity,
+        status=status,
+        ontology_id=ontology_id,
+        start=start,
+        end=end,
+    ).order_by(
+        RegisteredEvent.recorded_at.desc(),
+        RegisteredEvent.created_at.desc(),
+    )
+    rows = query.limit(EXPORT_MAX_ROWS + 1).all()
+    truncated = len(rows) > EXPORT_MAX_ROWS
+    return rows[:EXPORT_MAX_ROWS], truncated
 
 
 def stats_summary(db: Session, *, now_utc: datetime) -> dict:
@@ -174,11 +240,10 @@ def stats_summary(db: Session, *, now_utc: datetime) -> dict:
             RegisteredEvent.recorded_at >= today_start,
             RegisteredEvent.recorded_at < tomorrow_start,
         ),
+        # 口径统一：级别分布与 7 日趋势均统计全部事件（含归档），
+        # 与 total/active/archived 卡片同口径，避免同屏数字互相矛盾（MYW-42）。
         "bySeverity": {
-            severity: count(
-                RegisteredEvent.severity == severity,
-                RegisteredEvent.status == m.STATUS_ACTIVE,
-            )
+            severity: count(RegisteredEvent.severity == severity)
             for severity in m.SEVERITIES
         },
         "trend7d": [

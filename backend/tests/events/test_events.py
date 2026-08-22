@@ -1,3 +1,4 @@
+import csv
 import hashlib
 import io
 import tempfile
@@ -51,6 +52,126 @@ def test_event_stats_returns_real_seven_day_shanghai_trend(
     assert by_day["2026-07-19"]["bySeverity"]["info"] == 1
     assert by_day["2026-07-18"]["bySeverity"]["medium"] == 1
     assert sum(item["total"] for item in stats["trend7d"]) == 2
+
+
+def test_event_list_binds_snake_case_filters_and_page_size(
+    client, auth_headers, db,
+):
+    """回归（MYW-42）：前端曾误发 camelCase 查询参数，导致来源筛选失效、
+    分页大小退化为后端默认值。此用例锁定 /api/v2/events 的参数契约。"""
+    def event_with_source(no: str, source_type: str, at: datetime) -> RegisteredEvent:
+        return RegisteredEvent(
+            event_no=no, title=no, severity="info", recorded_at=at,
+            source_type=source_type, status=event_models.STATUS_ACTIVE,
+        )
+
+    db.add_all([
+        event_with_source("EVT-A-PLAT", event_models.SOURCE_PLATFORM, datetime(2026, 7, 18, 1, 0)),
+        event_with_source("EVT-B-API", event_models.SOURCE_API, datetime(2026, 7, 18, 2, 0)),
+        event_with_source("EVT-C-API", event_models.SOURCE_API, datetime(2026, 7, 18, 3, 0)),
+    ])
+    db.commit()
+
+    filtered = client.get(
+        "/api/v2/events",
+        params={"source_type": "api"},
+        headers=auth_headers,
+    )
+    assert filtered.status_code == 200
+    assert [item["eventNo"] for item in filtered.json()["data"]["items"]] == [
+        "EVT-C-API", "EVT-B-API",
+    ]
+
+    second_page = client.get(
+        "/api/v2/events",
+        params={"page": 2, "page_size": 1},
+        headers=auth_headers,
+    )
+    assert second_page.status_code == 200
+    page_data = second_page.json()["data"]
+    assert page_data["pageSize"] == 1
+    assert [item["eventNo"] for item in page_data["items"]] == ["EVT-B-API"]
+
+
+def test_stats_severity_distribution_and_trend_cover_all_statuses(
+    client, auth_headers, db, monkeypatch,
+):
+    """回归（MYW-42）：级别分布与 7 日趋势须与总数卡同口径（含归档），
+    避免同屏“合计 4 vs 总数 6”的矛盾。"""
+    monkeypatch.setattr(
+        "app.events.router._now_utc",
+        lambda: datetime(2026, 7, 19, 3, 0, tzinfo=timezone.utc),
+    )
+    archived = _event("EVT-ARCHIVED-HIGH", "high", datetime(2026, 7, 18, 8, 0))
+    archived.status = event_models.STATUS_ARCHIVED
+    db.add_all([
+        _event("EVT-ACTIVE-INFO", "info", datetime(2026, 7, 18, 9, 0)),
+        archived,
+    ])
+    db.commit()
+
+    stats = client.get("/api/v2/events/stats/summary", headers=auth_headers).json()["data"]
+
+    assert stats["total"] == 2
+    assert stats["active"] == 1
+    assert stats["archived"] == 1
+    assert sum(stats["bySeverity"].values()) == 2
+    assert stats["bySeverity"]["high"] == 1
+    assert stats["bySeverity"]["info"] == 1
+    trend_total = sum(item["total"] for item in stats["trend7d"])
+    assert trend_total == 2
+    by_day = {item["date"]: item for item in stats["trend7d"]}
+    assert by_day["2026-07-18"]["bySeverity"]["high"] == 1
+
+
+def test_export_csv_filters_escapes_and_marks_bom(
+    client, auth_headers, db,
+):
+    """导出端点：默认仅活跃、status=all 含归档、UTF-8 BOM、防公式注入。"""
+    formula = _event("=EVT-FORMULA", "critical", datetime(2026, 7, 18, 5, 0))
+    formula.title = "=1+1 危险标题"
+    archived = _event("EVT-EXPORT-ARCHIVED", "low", datetime(2026, 7, 18, 6, 0))
+    archived.status = event_models.STATUS_ARCHIVED
+    db.add_all([formula, archived])
+    db.commit()
+
+    default_export = client.get("/api/v2/events/export", headers=auth_headers)
+    assert default_export.status_code == 200
+    assert default_export.headers["content-type"].startswith("text/csv")
+    assert "attachment" in default_export.headers["content-disposition"]
+    # BOM：Excel 依赖它识别 UTF-8 中文表头
+    assert default_export.content.startswith(b"\xef\xbb\xbf")
+
+    rows = list(csv.reader(io.StringIO(default_export.content.decode("utf-8-sig"))))
+    assert rows[0][:5] == ["事件编号", "标题", "事件类型", "级别", "状态"]
+    assert len(rows) == 2  # 表头 + 仅 1 条活跃事件
+    assert rows[1][0] == "'=EVT-FORMULA"  # 编号同样受公式注入防护
+    assert rows[1][1] == "'=1+1 危险标题"
+    assert rows[1][3] == "严重"
+    assert rows[1][4] == "活跃"
+
+    all_export = client.get(
+        "/api/v2/events/export",
+        params={"status": "all"},
+        headers=auth_headers,
+    )
+    assert all_export.status_code == 200
+    all_rows = list(csv.reader(io.StringIO(all_export.content.decode("utf-8-sig"))))
+    assert len(all_rows) == 3
+    # 按 recorded_at 倒序：后登记的归档事件在前
+    assert all_rows[1][0] == "EVT-EXPORT-ARCHIVED"
+    assert all_rows[1][4] == "归档"
+    assert all_rows[2][0] == "'=EVT-FORMULA"
+
+    archived_only = client.get(
+        "/api/v2/events/export",
+        params={"status": "archived"},
+        headers=auth_headers,
+    )
+    archived_rows = list(
+        csv.reader(io.StringIO(archived_only.content.decode("utf-8-sig")))
+    )
+    assert [row[0] for row in archived_rows[1:]] == ["EVT-EXPORT-ARCHIVED"]
 
 
 def test_ingest_keys_support_server_side_pagination_and_filters(client, auth_headers):

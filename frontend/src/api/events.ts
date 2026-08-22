@@ -148,9 +148,29 @@ function saveBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url)
 }
 
+// 后端 FastAPI 查询参数为 snake_case；此前直传 camelCase 会让来源筛选
+// 被静默忽略、page_size 退化为后端默认值（MYW-42 回归）。
+function listQuery(params: EventListParams = {}) {
+  return {
+    q: params.q,
+    source_type: params.sourceType,
+    event_type: params.eventType,
+    severity: params.severity,
+    status: params.status,
+    page: params.page,
+    page_size: params.pageSize,
+  }
+}
+
+function exportTimestamp(): string {
+  const now = new Date()
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`
+}
+
 export const eventsApi = {
   list: (params: EventListParams = {}): Promise<EventListResp> =>
-    apiClientV2.get('/events', { params }),
+    apiClientV2.get('/events', { params: listQuery(params) }),
 
   get: (id: string): Promise<EventItem> =>
     apiClientV2.get(`/events/${id}`),
@@ -172,6 +192,12 @@ export const eventsApi = {
 
   stats: (): Promise<EventStats> =>
     apiClientV2.get('/events/stats/summary'),
+
+  // 按当前筛选条件导出 CSV（后端默认仅活跃，与列表口径一致）
+  exportCsv: (params: EventListParams = {}): Promise<void> =>
+    apiClientV2
+      .get('/events/export', { params: listQuery({ ...params, page: undefined, pageSize: undefined }), responseType: 'blob' })
+      .then((blob: Blob) => saveBlob(blob, `事件导出-${exportTimestamp()}.csv`)),
 
   uploadAttachment: (id: string, file: File): Promise<Attachment> => {
     const fd = new FormData()

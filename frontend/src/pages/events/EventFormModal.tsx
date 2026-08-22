@@ -111,10 +111,13 @@ export default function EventFormModal({
 
   const mutation = useMutation({
     mutationFn: async () => {
-      if (!title.trim()) throw new Error('请填写事件标题')
-      if (!eventType.trim()) throw new Error('请选择或填写事件类型')
-      if (!severity.trim()) throw new Error('请选择严重程度')
-      if (!description.trim()) throw new Error('请填写详细描述')
+      // 一次报齐全部缺失必填项，避免用户多次试错（MYW-42 优化点4）
+      const missing: string[] = []
+      if (!title.trim()) missing.push('事件标题')
+      if (!eventType.trim()) missing.push('事件类型')
+      if (!severity.trim()) missing.push('严重程度')
+      if (!description.trim()) missing.push('详细描述')
+      if (missing.length) throw new Error(`请完善必填项：${missing.join('、')}`)
       const oversized = files.find(file => file.size > MAX_ATTACHMENT_BYTES)
       if (oversized) throw new Error(`附件“${oversized.name}”超过单文件 ${MAX_ATTACHMENT_MB}MB 限制`)
       const body: EventCreateBody = {
