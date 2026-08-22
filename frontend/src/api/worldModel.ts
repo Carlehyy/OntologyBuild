@@ -177,6 +177,34 @@ export interface CallRecordOverview {
   avg_duration_ms: number
 }
 
+/** 按日分桶的调用统计（调用记录页趋势图数据源，缺失日期后端补零） */
+export interface CallRecordDailyBucket {
+  date: string
+  total: number
+  failed: number
+  avg_duration_ms: number
+}
+
+/** 推演模型页概览统计（全局聚合，与分页/筛选无关） */
+export interface WorldModelProjectOverview {
+  total: number
+  online_services: number
+  offline_services: number
+  draft_projects: number
+  version_total: number
+  engine_distribution: Record<string, number>
+}
+
+/** 推演服务页概览统计（全局聚合，与分页/筛选无关） */
+export interface WorldModelServiceOverview {
+  total: number
+  online: number
+  offline: number
+  call_total: number
+  call_failed: number
+  avg_duration_ms: number
+}
+
 export function apiError(error: unknown): string {
   if (!error || typeof error !== 'object') return '请求失败，请稍后重试'
   const candidate = error as { detail?: unknown; message?: unknown }
@@ -245,6 +273,15 @@ export const worldModelApi = {
 
   callsOverview: () =>
     apiClientV2.get<CallRecordOverview>('/world-model/calls/overview'),
+
+  callsDaily: (days = 14) =>
+    apiClientV2.get<CallRecordDailyBucket[]>('/world-model/calls/daily', { params: { days } }),
+
+  projectsOverview: () =>
+    apiClientV2.get<WorldModelProjectOverview>('/world-model/projects/overview'),
+
+  servicesOverview: () =>
+    apiClientV2.get<WorldModelServiceOverview>('/world-model/services/overview'),
 
   getCall: (id: string) =>
     apiClientV2.get<CallRecordDetail>(`/world-model/calls/${id}`),

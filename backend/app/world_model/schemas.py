@@ -113,6 +113,35 @@ class CallRecordOverview(BaseModel):
     avg_duration_ms: int = 0
 
 
+class CallRecordDailyBucket(BaseModel):
+    """按日分桶的调用统计（调用记录页趋势图数据源，缺失日期补零）。"""
+    date: str  # YYYY-MM-DD（UTC 日）
+    total: int = 0
+    failed: int = 0
+    avg_duration_ms: int = 0
+
+
+class ProjectOverview(BaseModel):
+    """推演模型页概览统计（全局聚合，与分页/筛选条件无关）。"""
+    total: int = 0
+    online_services: int = 0
+    offline_services: int = 0
+    # 草稿 = 项目总数 - 在线/已下线服务数（每个项目至多一个服务，与列表徽标口径一致）
+    draft_projects: int = 0
+    version_total: int = 0
+    engine_distribution: dict[str, int] = Field(default_factory=dict)
+
+
+class ServiceOverview(BaseModel):
+    """推演服务页概览统计（全局聚合，与分页/筛选条件无关）。"""
+    total: int = 0
+    online: int = 0
+    offline: int = 0
+    call_total: int = 0
+    call_failed: int = 0
+    avg_duration_ms: int = 0
+
+
 # ---------- 推演服务（发布 / 状态 / 调用） ----------
 
 

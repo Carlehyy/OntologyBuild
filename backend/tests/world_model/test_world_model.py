@@ -873,3 +873,139 @@ def test_service_registry_requires_menu(client, custom_headers):
         json={"status": "online"}, headers=custom_headers,
     )
     assert r.status_code == 403
+
+
+# ──────────────────────────── 概览统计与按日分桶（页面统计条/趋势图） ────────────────────────────
+
+
+def test_projects_overview_aggregates_globally(
+    client, auth_headers, project, monkeypatch,
+):
+    # 一个带版本并发布的项目（statistical）+ 一个纯草稿项目（mechanistic）
+    _save_version(client, auth_headers, project["id"], monkeypatch)
+    client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=auth_headers,
+    )
+    r = client.post(
+        f"{BASE}/projects",
+        json={"name": "机理草稿", "description": "", "engine_type": "mechanistic"},
+        headers=auth_headers,
+    )
+    assert r.status_code == 201, r.text
+
+    r = client.get(f"{BASE}/projects/overview", headers=auth_headers)
+    assert r.status_code == 200
+    overview = r.json()["data"]
+    assert overview == {
+        "total": 2,
+        "online_services": 1,
+        "offline_services": 0,
+        "draft_projects": 1,
+        "version_total": 1,
+        "engine_distribution": {"statistical": 1, "mechanistic": 1},
+    }
+
+    # 下线后：online 转 offline，草稿数不变
+    client.post(
+        f"{BASE}/projects/{project['id']}/service/status",
+        json={"status": "offline"}, headers=auth_headers,
+    )
+    overview = client.get(
+        f"{BASE}/projects/overview", headers=auth_headers).json()["data"]
+    assert overview["online_services"] == 0
+    assert overview["offline_services"] == 1
+    assert overview["draft_projects"] == 1
+
+
+def test_services_overview_aggregates_status_and_calls(
+    client, auth_headers, project, monkeypatch,
+):
+    _save_version(client, auth_headers, project["id"], monkeypatch)
+    svc = client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        json=_PUBLISH_BODY, headers=auth_headers,
+    ).json()["data"]
+    client.post(
+        f"{BASE}/services/{svc['id']}/invoke",
+        json={"context": {}, "actions": [], "horizon": 1},
+        headers=auth_headers,
+    )
+
+    r = client.get(f"{BASE}/services/overview", headers=auth_headers)
+    assert r.status_code == 200
+    overview = r.json()["data"]
+    assert overview["total"] == 1
+    assert overview["online"] == 1
+    assert overview["offline"] == 0
+    assert overview["call_total"] == 1
+    assert overview["call_failed"] == 0
+    assert overview["avg_duration_ms"] >= 0
+
+    # 下线后状态计数翻转；调用统计不受状态切换影响
+    client.post(
+        f"{BASE}/services/{svc['id']}/status",
+        json={"status": "offline"}, headers=auth_headers,
+    )
+    overview = client.get(
+        f"{BASE}/services/overview", headers=auth_headers).json()["data"]
+    assert overview["online"] == 0
+    assert overview["offline"] == 1
+    assert overview["call_total"] == 1
+
+
+def test_call_records_daily_fills_missing_days(client, auth_headers, db):
+    from datetime import datetime, time, timedelta, timezone
+
+    today = datetime.now(timezone.utc).date()
+    day_before = today - timedelta(days=2)
+
+    def at(day, **kwargs):
+        return WorldModelCallRecord(
+            service_name="负荷推演", caller="agent",
+            created_at=datetime.combine(day, time(hour=8), tzinfo=timezone.utc),
+            **kwargs,
+        )
+
+    db.add_all([
+        at(day_before, ok=True, duration_ms=200),
+        at(today, ok=True, duration_ms=100),
+        at(today, ok=False, duration_ms=300, error="超时"),
+    ])
+    db.commit()
+
+    r = client.get(
+        f"{BASE}/calls/daily", params={"days": 3}, headers=auth_headers)
+    assert r.status_code == 200
+    buckets = r.json()["data"]
+    assert [bucket["date"] for bucket in buckets] == [
+        (today - timedelta(days=2)).isoformat(),
+        (today - timedelta(days=1)).isoformat(),
+        today.isoformat(),
+    ]
+    assert buckets[0] == {
+        "date": day_before.isoformat(),
+        "total": 1, "failed": 0, "avg_duration_ms": 200,
+    }
+    # 无调用的日期补零
+    assert buckets[1] == {
+        "date": (today - timedelta(days=1)).isoformat(),
+        "total": 0, "failed": 0, "avg_duration_ms": 0,
+    }
+    assert buckets[2] == {
+        "date": today.isoformat(),
+        "total": 2, "failed": 1, "avg_duration_ms": 200,
+    }
+
+    # 窗口外（更早）的记录不进入分桶
+    r = client.get(f"{BASE}/calls/daily", params={"days": 1}, headers=auth_headers)
+    assert r.json()["data"] == [buckets[2]]
+
+
+def test_overview_endpoints_require_menu(client, custom_headers):
+    assert client.get(
+        f"{BASE}/projects/overview", headers=custom_headers).status_code == 403
+    assert client.get(
+        f"{BASE}/services/overview", headers=custom_headers).status_code == 403
+    assert client.get(
+        f"{BASE}/calls/daily", headers=custom_headers).status_code == 403

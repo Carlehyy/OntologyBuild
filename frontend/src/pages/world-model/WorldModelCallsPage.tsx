@@ -16,13 +16,19 @@ import {
 import {
   apiError,
   worldModelApi,
+  type CallRecordDailyBucket,
   type CallRecordDetail,
   type CallRecordItem,
   type CallRecordOverview,
 } from '@/api/worldModel'
 import { Button } from '@/components/ui/Button'
+import CallsTrendChart from './CallsTrendChart'
+import StatCard from './StatCard'
+import { formatDurationMs, formatSuccessRate } from './statsFormat'
 
 const PAGE_SIZE = 20
+/** 趋势图窗口：近 N 天按日分桶 */
+const TREND_DAYS = 14
 
 type ResultFilter = 'all' | 'failed'
 type DetailTab = 'request' | 'response'
@@ -45,25 +51,6 @@ function formatDateTime(iso?: string | null): string {
   } catch {
     return iso
   }
-}
-
-function OverviewCard({ icon, label, value, tone }: {
-  icon: React.ReactNode
-  label: string
-  value: string
-  tone?: 'default' | 'danger'
-}) {
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50">
-      <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${tone === 'danger' ? 'bg-red-50 text-red-500' : 'bg-teal-50 text-teal-600'}`}>
-        {icon}
-      </span>
-      <div>
-        <p className="text-[11px] text-slate-400">{label}</p>
-        <p className="text-base font-semibold tabular-nums text-slate-700">{value}</p>
-      </div>
-    </div>
-  )
 }
 
 export default function WorldModelCallsPage() {
@@ -113,13 +100,24 @@ export default function WorldModelCallsPage() {
     }
   }, [])
 
+  const [daily, setDaily] = useState<CallRecordDailyBucket[]>([])
+
+  const loadDaily = useCallback(async () => {
+    try {
+      setDaily(await worldModelApi.callsDaily(TREND_DAYS))
+    } catch {
+      setDaily([])
+    }
+  }, [])
+
   useEffect(() => { void loadHistory() }, [loadHistory])
   useEffect(() => { void loadOverview() }, [loadOverview])
+  useEffect(() => { void loadDaily() }, [loadDaily])
 
   const refreshAll = async () => {
     setRefreshing(true)
     try {
-      await Promise.all([loadHistory(true), loadOverview()])
+      await Promise.all([loadHistory(true), loadOverview(), loadDaily()])
     } finally {
       setRefreshing(false)
     }
@@ -159,17 +157,32 @@ export default function WorldModelCallsPage() {
     <div className="space-y-4">
       {/* 概览统计 */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <OverviewCard icon={<Route size={17} />} label="总调用次数" value={String(overview?.total ?? 0)} />
-        <OverviewCard icon={<AlertCircle size={17} />} label="失败次数" value={String(overview?.failed ?? 0)} tone="danger" />
-        <OverviewCard icon={<Gauge size={17} />} label="平均耗时" value={`${overview?.avg_duration_ms ?? 0} ms`} />
-        <OverviewCard
+        <StatCard icon={<Route size={17} />} label="总调用次数" value={String(overview?.total ?? 0)} />
+        <StatCard icon={<AlertCircle size={17} />} label="失败次数" value={String(overview?.failed ?? 0)} tone="danger" />
+        <StatCard icon={<Gauge size={17} />} label="平均耗时" value={formatDurationMs(overview?.avg_duration_ms ?? 0)} />
+        <StatCard
           icon={<CheckCircle2 size={17} />}
           label="成功率"
-          value={overview && overview.total > 0
-            ? `${(((overview.total - overview.failed) / overview.total) * 100).toFixed(1).replace(/\.0$/, '')}%`
-            : '—'}
+          value={formatSuccessRate((overview?.total ?? 0) - (overview?.failed ?? 0), overview?.total ?? 0)}
         />
       </div>
+
+      {/* 调用趋势：总量 + 失败 + 耗时的按日节奏，定位异常日期后再用筛选下钻 */}
+      <section className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50" aria-label="调用趋势">
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs font-medium text-slate-600">近 {TREND_DAYS} 天调用趋势</p>
+          <span className="text-[11px] text-slate-400">按日统计成功 / 失败调用量与平均耗时</span>
+        </div>
+        <div className="h-56">
+          {daily.some(day => day.total > 0)
+            ? <CallsTrendChart days={daily} />
+            : (
+              <p className="flex h-full items-center justify-center text-xs text-slate-300">
+                近 {TREND_DAYS} 天暂无调用，产生调用记录后在此展示趋势
+              </p>
+            )}
+        </div>
+      </section>
 
       {/* 筛选栏 */}
       <section className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50" aria-label="调用记录筛选">

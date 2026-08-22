@@ -7,10 +7,12 @@ import {
   ChevronRight,
   Copy,
   Eye,
+  Gauge,
   Play,
   Power,
   RefreshCw,
   Rocket,
+  Route,
   Search,
   X,
   XCircle,
@@ -22,12 +24,15 @@ import {
   worldModelApi,
   type CallRecordItem,
   type ServiceInvokeResult,
+  type WorldModelServiceOverview,
   type WorldModelServiceSummary,
 } from '@/api/worldModel'
 import { Button } from '@/components/ui/Button'
-import { Modal } from '@/components/ui/Modal'
+import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
 import { writeTextToClipboard } from '@/utils/clipboard'
+import StatCard from './StatCard'
+import { formatDurationMs, formatSuccessRate } from './statsFormat'
 
 const PAGE_SIZE = 20
 const DEFAULT_INVOKE_INPUT = JSON.stringify({ context: {}, actions: [], horizon: 3 }, null, 2)
@@ -78,6 +83,18 @@ export default function WorldModelServicesPage() {
 
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [offlineTarget, setOfflineTarget] = useState<WorldModelServiceSummary | null>(null)
+  const [overview, setOverview] = useState<WorldModelServiceOverview | null>(null)
+
+  const loadOverview = useCallback(async () => {
+    try {
+      setOverview(await worldModelApi.servicesOverview())
+    } catch {
+      setOverview(null)
+    }
+  }, [])
+
+  useEffect(() => { void loadOverview() }, [loadOverview])
 
   const loadServices = useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
@@ -114,7 +131,7 @@ export default function WorldModelServicesPage() {
   const refreshAll = async () => {
     setRefreshing(true)
     try {
-      await loadServices(true)
+      await Promise.all([loadServices(true), loadOverview()])
     } finally {
       setRefreshing(false)
     }
@@ -128,10 +145,21 @@ export default function WorldModelServicesPage() {
       const updated = await worldModelApi.setServiceStatusById(item.id, next)
       setItems(current => current.map(row => row.id === updated.id ? { ...row, ...updated } : row))
       toast({ tone: 'success', title: next === 'online' ? '服务已上线' : '服务已下线' })
+      setOfflineTarget(null)
+      void loadOverview()
     } catch (err) {
       toast({ tone: 'error', title: '状态切换失败', description: apiError(err) })
     } finally {
       setTogglingId(null)
+    }
+  }
+
+  // 下线会影响正在集成的调用方，先经确认弹窗；上线保持轻量直接执行
+  const requestToggleStatus = (item: WorldModelServiceSummary) => {
+    if (item.status === 'online') {
+      setOfflineTarget(item)
+    } else {
+      void toggleStatus(item)
     }
   }
 
@@ -140,7 +168,10 @@ export default function WorldModelServicesPage() {
     writeTextToClipboard(item.endpoint_path).then(() => {
       setCopiedId(item.id)
       window.setTimeout(() => setCopiedId(null), 1400)
-    }).catch(() => undefined)
+    }).catch(() => {
+      // 剪贴板写入可能被浏览器拒绝（HTTP 部署/未聚焦）：如实提示手动路径
+      toast({ tone: 'error', title: '未能写入剪贴板', description: '请手动选中端点文本后复制。' })
+    })
   }
 
   const openInvoke = (item: WorldModelServiceSummary) => {
@@ -177,6 +208,7 @@ export default function WorldModelServicesPage() {
         setItems(current => current.map(row => row.id === invokeTarget.id
           ? { ...row, call_count: row.call_count + 1 }
           : row))
+        void loadOverview()
       }
     } catch (err) {
       setInvokeResult({ ok: false, payload: null, error: apiError(err), duration_ms: 0, call_id: null })
@@ -223,6 +255,43 @@ export default function WorldModelServicesPage() {
 
   return (
     <div className="space-y-4">
+      {/* 概览统计条：全局聚合，直读服务规模与调用健康度 */}
+      <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5" aria-label="推演服务概览">
+        <StatCard
+          icon={<Rocket size={17} />}
+          label="服务总数"
+          value={String(overview?.total ?? 0)}
+          sub={`已下线 ${overview?.offline ?? 0}`}
+        />
+        <StatCard
+          icon={<Power size={17} />}
+          label="在线服务"
+          value={String(overview?.online ?? 0)}
+          sub="端点可对外调用"
+        />
+        <StatCard
+          icon={<Route size={17} />}
+          label="总调用次数"
+          value={String(overview?.call_total ?? 0)}
+          sub={`失败 ${overview?.call_failed ?? 0}`}
+        />
+        <StatCard
+          icon={<CheckCircle2 size={17} />}
+          label="全局成功率"
+          value={formatSuccessRate(
+            (overview?.call_total ?? 0) - (overview?.call_failed ?? 0),
+            overview?.call_total ?? 0,
+          )}
+          tone={(overview?.call_failed ?? 0) > 0 ? 'danger' : 'default'}
+        />
+        <StatCard
+          icon={<Gauge size={17} />}
+          label="平均耗时"
+          value={formatDurationMs(overview?.avg_duration_ms ?? 0)}
+          sub="按全部调用记录计算"
+        />
+      </section>
+
       {/* 筛选栏 */}
       <section className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50" aria-label="推演服务筛选">
         <div className="relative w-full sm:w-72">
@@ -332,6 +401,12 @@ export default function WorldModelServicesPage() {
                       </span>
                       <span className="text-slate-300"> / </span>
                       {item.call_count}
+                      <span
+                        className={`ml-1.5 text-[11px] ${item.failed_count > 0 ? 'text-red-500' : 'text-slate-400'}`}
+                        title={`成功率 ${formatSuccessRate(item.call_count - item.failed_count, item.call_count)}`}
+                      >
+                        {formatSuccessRate(item.call_count - item.failed_count, item.call_count)}
+                      </span>
                     </td>
                     <td className="px-4 py-2.5 tabular-nums text-slate-500">{formatDateTime(item.updated_at)}</td>
                     <td className="px-4 py-2.5">
@@ -357,7 +432,7 @@ export default function WorldModelServicesPage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => void toggleStatus(item)}
+                          onClick={() => requestToggleStatus(item)}
                           disabled={togglingId === item.id}
                           aria-label={item.status === 'online' ? '下线 ' + item.name : '上线 ' + item.name}
                           title={item.status === 'online' ? '下线' : '上线'}
@@ -495,9 +570,27 @@ export default function WorldModelServicesPage() {
                     <span>基本状态</span>{statusBadge(detailTarget.status)}
                   </p>
                   <dl className="space-y-1.5 rounded-lg border border-slate-100 bg-slate-50/50 p-3">
-                    <div className="flex justify-between"><dt className="text-slate-400">调用端点</dt><dd className="max-w-[320px] truncate font-mono text-[11px] text-slate-700">{detailTarget.endpoint_path ?? '—'}</dd></div>
+                    <div className="flex items-start justify-between gap-2">
+                      <dt className="shrink-0 text-slate-400">调用端点</dt>
+                      <dd className="flex min-w-0 items-start justify-end gap-1.5">
+                        <span className="break-all text-right font-mono text-[11px] leading-5 text-slate-700">
+                          {detailTarget.endpoint_path ?? '—'}
+                        </span>
+                        {detailTarget.endpoint_path && (
+                          <button
+                            type="button"
+                            onClick={() => copyEndpoint(detailTarget)}
+                            aria-label="复制调用端点"
+                            title="复制调用端点"
+                            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-200/70 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                          >
+                            {copiedId === detailTarget.id ? <Check size={12} className="text-teal-600" /> : <Copy size={12} />}
+                          </button>
+                        )}
+                      </dd>
+                    </div>
                     <div className="flex justify-between"><dt className="text-slate-400">服务描述</dt><dd className="max-w-[320px] text-right text-slate-700">{detailTarget.description || '—'}</dd></div>
-                    <div className="flex justify-between"><dt className="text-slate-400">调用统计</dt><dd className="tabular-nums text-slate-700">成功 {detailTarget.call_count - detailTarget.failed_count} / 共 {detailTarget.call_count}</dd></div>
+                    <div className="flex justify-between"><dt className="text-slate-400">调用统计</dt><dd className="tabular-nums text-slate-700">成功 {detailTarget.call_count - detailTarget.failed_count} / 共 {detailTarget.call_count}（成功率 {formatSuccessRate(detailTarget.call_count - detailTarget.failed_count, detailTarget.call_count)}）</dd></div>
                   </dl>
                 </section>
 
@@ -569,6 +662,18 @@ export default function WorldModelServicesPage() {
           </aside>
         </div>
       )}
+
+      {/* 下线二次确认：端点将立即不可访问，误触可在确认层拦截；上线不打扰 */}
+      <ConfirmModal
+        open={!!offlineTarget}
+        onClose={() => { if (!togglingId) setOfflineTarget(null) }}
+        onConfirm={() => offlineTarget && void toggleStatus(offlineTarget)}
+        title={offlineTarget ? `下线「${offlineTarget.name}」？` : '下线推演服务？'}
+        description="下线后该服务的调用端点将立即不可访问，正在集成的调用方会调用失败。此操作不影响已保存的模型与版本，可随时重新上线。"
+        confirmText="确认下线"
+        variant="danger"
+        loading={!!togglingId}
+      />
     </div>
   )
 }

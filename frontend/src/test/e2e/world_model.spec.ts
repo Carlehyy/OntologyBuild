@@ -98,6 +98,22 @@ async function mockWorldModel(page: Page) {
     if (path === '/api/v2/world-model/calls/overview') {
       return json(route, { total: 1, failed: 0, avg_duration_ms: 120 })
     }
+    if (path === '/api/v2/world-model/projects/overview') {
+      return json(route, {
+        total: 1,
+        online_services: 1,
+        offline_services: 0,
+        draft_projects: 0,
+        version_total: 1,
+        engine_distribution: { statistical: 1 },
+      })
+    }
+    if (path === '/api/v2/world-model/calls/daily') {
+      return json(route, [
+        { date: '2026-08-12', total: 0, failed: 0, avg_duration_ms: 0 },
+        { date: '2026-08-13', total: 1, failed: 0, avg_duration_ms: 120 },
+      ])
+    }
     if (path === '/api/v2/world-model/calls' && request.method() === 'GET') {
       return json(route, {
         items: [{
@@ -179,6 +195,16 @@ async function mockWorldModelServices(page: Page) {
         total: matched ? 1 : 0,
       })
     }
+    if (path === '/api/v2/world-model/services/overview') {
+      return json(route, {
+        total: 1,
+        online: serviceStatus === 'online' ? 1 : 0,
+        offline: serviceStatus === 'offline' ? 1 : 0,
+        call_total: 3,
+        call_failed: 0,
+        avg_duration_ms: 18,
+      })
+    }
     if (path === '/api/v2/world-model/services/svc-registry-1' && request.method() === 'GET') {
       return json(route, { ...serviceRow, status: serviceStatus })
     }
@@ -253,7 +279,12 @@ test('推演模型与调用记录为独立页面（无页内 Tab 与共享标题
   // 列表页内容正常；已发布服务徽标必须显示「在线」（回归：schema 缺字段
   // 导致 service_status 被静默丢弃、徽标永远显示「草稿」）
   await expect(page.getByText('台区负荷短期推演')).toBeVisible()
-  await expect(page.getByText('在线')).toBeVisible()
+  // 概览统计条新增「在线服务」等指标名，徽标断言用精确匹配避免歧义
+  await expect(page.getByText('在线', { exact: true })).toBeVisible()
+  // 概览统计条：模型总数/在线服务等全局指标第一屏直读
+  await expect(page.getByText('模型总数')).toBeVisible()
+  await expect(page.getByText('在线服务', { exact: true })).toBeVisible()
+  await expect(page.getByText('引擎类型分布')).toBeVisible()
 
   // 列表筛选（服务端过滤：keyword 随请求发出，mock 按筛选口径返回空结果）
   await page.getByLabel('按模型名称或描述筛选').fill('不存在的模型')
@@ -618,10 +649,17 @@ test('推演服务页：注册表、状态切换、试调用与详情', async ({
   await expect(table.getByText('v1')).toBeVisible()
   await expect(table.getByText('在线')).toBeVisible()
   await expect(page.getByText('共 1 个推演服务')).toBeVisible()
+  // 概览统计条：服务总数/在线/总调用/成功率/平均耗时
+  await expect(page.getByText('服务总数')).toBeVisible()
+  await expect(page.getByText('全局成功率')).toBeVisible()
+  await expect(page.getByText('平均耗时')).toBeVisible()
 
-  // 下线切换：状态徽标随之更新，试调用按钮禁用
+  // 下线切换：先弹二次确认（端点立即不可访问的提示），确认后状态徽标随之更新，试调用按钮禁用
   const powerButton = page.getByRole('button', { name: '下线 台区负荷短期推演服务' })
   await powerButton.click()
+  const offlineDialog = page.getByRole('dialog')
+  await expect(offlineDialog.getByText(/调用端点将立即不可访问/)).toBeVisible()
+  await offlineDialog.getByRole('button', { name: '确认下线' }).click()
   await expect(table.getByText('已下线')).toBeVisible()
   await expect(page.getByRole('button', { name: '试调用 台区负荷短期推演服务' })).toBeDisabled()
 
@@ -637,12 +675,13 @@ test('推演服务页：注册表、状态切换、试调用与详情', async ({
   await expect(invokeDialog.getByText('trajectory')).toBeVisible()
   await invokeDialog.getByRole('button', { name: '关闭', exact: true }).click()
 
-  // 详情抽屉：语义注册 + 该服务调用记录
+  // 详情抽屉：语义注册 + 该服务调用记录 + 端点完整展示（可复制）
   await page.getByRole('button', { name: '查看 台区负荷短期推演服务 详情' }).click()
   const detailDialog = page.getByRole('dialog', { name: '推演服务详情' })
   await expect(detailDialog.getByText('本体语义注册')).toBeVisible()
   await expect(detailDialog.getByText('线路 ≥ 12')).toBeVisible()
   await expect(detailDialog.getByText('最近调用（共 1 条）')).toBeVisible()
+  await expect(detailDialog.getByRole('button', { name: '复制调用端点' })).toBeVisible()
   await detailDialog.getByRole('button', { name: '关闭详情' }).click()
   await expect(detailDialog).toHaveCount(0)
 })

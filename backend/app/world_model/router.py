@@ -3,6 +3,7 @@
 
   项目管理：
   GET    /projects                      列表（keyword / engine_type / 分页）
+  GET    /projects/overview             概览统计（模型/服务状态/版本/引擎分布）
   POST   /projects                      新建（脚本初始化为平台契约模板）
   GET    /projects/{id}                 详情（含脚本）
   PATCH  /projects/{id}                 编辑基本信息
@@ -22,6 +23,7 @@
 
   推演服务注册表（跨项目，推演服务页数据源）：
   GET    /services                      列表（keyword / status / 分页，含调用统计）
+  GET    /services/overview             概览统计（服务状态计数 + 全局调用统计）
   GET    /services/{id}                 详情（注册表条目口径）
   POST   /services/{id}/status          上线 / 下线（服务侧入口）
 
@@ -31,6 +33,7 @@
   调用记录（只读；由 invoke 写入）：
   GET    /calls                         列表（keyword / result / service_id / 时间范围 / 分页）
   GET    /calls/overview                概览统计
+  GET    /calls/daily                   近 N 天按日分桶序列（趋势图）
   GET    /calls/{id}                    详情（含请求/响应快照）
 """
 from __future__ import annotations
@@ -115,6 +118,15 @@ def list_projects(
     result = service.list_projects(
         db, keyword=keyword, engine_type=engine_type, page=page, size=size)
     return _ok(result.model_dump())
+
+
+# 声明顺序敏感：/projects/overview 必须先于 /projects/{project_id} 注册
+@router.get("/projects/overview")
+def projects_overview(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    return _ok(service.projects_overview(db).model_dump())
 
 
 @router.post("/projects", status_code=201)
@@ -271,6 +283,15 @@ def list_services(
     return _ok(result_page.model_dump())
 
 
+# 声明顺序敏感：/services/overview 必须先于 /services/{service_id} 注册
+@router.get("/services/overview")
+def services_overview(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    return _ok(service.services_overview(db).model_dump())
+
+
 @router.get("/services/{service_id}")
 def get_service(
     service_id: str,
@@ -319,6 +340,16 @@ def calls_overview(
     current_user=Depends(get_current_user),
 ):
     return _ok(service.call_records_overview(db).model_dump())
+
+
+# 声明顺序敏感：/calls/daily 必须先于 /calls/{record_id} 注册
+@router.get("/calls/daily")
+def calls_daily(
+    days: int = Query(default=14, ge=1, le=90),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    return _ok([item.model_dump() for item in service.call_records_daily(db, days=days)])
 
 
 @router.get("/calls/{record_id}")

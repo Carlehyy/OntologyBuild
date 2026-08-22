@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import logging
 
+from datetime import datetime, time, timedelta, timezone
+
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -366,6 +368,35 @@ def list_projects(
     return schemas.ProjectListResponse(items=items, total=total)
 
 
+def projects_overview(db: Session) -> schemas.ProjectOverview:
+    """推演模型页概览：全局聚合（模型/服务状态/版本/引擎分布），与分页筛选无关。"""
+    total = db.query(func.count(WorldModelProject.id)).scalar() or 0
+    engine_rows = (
+        db.query(WorldModelProject.engine_type, func.count(WorldModelProject.id))
+        .group_by(WorldModelProject.engine_type)
+        .all()
+    )
+    version_total = db.query(func.count(WorldModelScriptVersion.id)).scalar() or 0
+    status_rows = dict(
+        db.query(WorldModelService.status, func.count(WorldModelService.id))
+        .group_by(WorldModelService.status)
+        .all()
+    )
+    online = int(status_rows.get(SERVICE_STATUS_ONLINE, 0))
+    offline = int(status_rows.get(SERVICE_STATUS_OFFLINE, 0))
+    return schemas.ProjectOverview(
+        total=int(total),
+        online_services=online,
+        offline_services=offline,
+        # 每个项目至多一个服务；未发布或服务未处于 online/offline 的项目即列表「草稿」徽标口径
+        draft_projects=int(total) - online - offline,
+        version_total=int(version_total),
+        engine_distribution={
+            engine: int(count) for engine, count in engine_rows
+        },
+    )
+
+
 def create_project(
     db: Session, body: schemas.ProjectCreate, current_user,
 ) -> WorldModelProject:
@@ -663,6 +694,39 @@ def call_records_overview(db: Session) -> schemas.CallRecordOverview:
     )
 
 
+def call_records_daily(
+    db: Session, *, days: int = 14,
+) -> list[schemas.CallRecordDailyBucket]:
+    """近 N 天按日分桶的调用统计：缺失日期补零，按日期升序返回。"""
+    today = datetime.now(timezone.utc).date()
+    start_day = today - timedelta(days=days - 1)
+    range_start = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
+    day_expr = func.date(WorldModelCallRecord.created_at)
+    rows = (
+        db.query(
+            day_expr,
+            func.count(WorldModelCallRecord.id),
+            func.count(WorldModelCallRecord.id)
+            .filter(WorldModelCallRecord.ok.is_(False)),
+            func.coalesce(func.avg(WorldModelCallRecord.duration_ms), 0),
+        )
+        .filter(WorldModelCallRecord.created_at >= range_start)
+        .group_by(day_expr)
+        .all()
+    )
+    by_day = {
+        str(day): (int(total), int(failed), int(avg))
+        for day, total, failed, avg in rows
+    }
+    buckets: list[schemas.CallRecordDailyBucket] = []
+    for offset in range(days):
+        day = (start_day + timedelta(days=offset)).isoformat()
+        total, failed, avg = by_day.get(day, (0, 0, 0))
+        buckets.append(schemas.CallRecordDailyBucket(
+            date=day, total=total, failed=failed, avg_duration_ms=avg))
+    return buckets
+
+
 # ──────────────────────────── 推演服务（发布 / 状态 / 调用） ────────────────────────────
 
 
@@ -923,6 +987,24 @@ def list_services(
             for service in services
         ],
         total=total,
+    )
+
+
+def services_overview(db: Session) -> schemas.ServiceOverview:
+    """推演服务页概览：服务状态计数 + 全局调用统计，与分页筛选无关。"""
+    status_rows = dict(
+        db.query(WorldModelService.status, func.count(WorldModelService.id))
+        .group_by(WorldModelService.status)
+        .all()
+    )
+    calls = call_records_overview(db)
+    return schemas.ServiceOverview(
+        total=sum(int(count) for count in status_rows.values()),
+        online=int(status_rows.get(SERVICE_STATUS_ONLINE, 0)),
+        offline=int(status_rows.get(SERVICE_STATUS_OFFLINE, 0)),
+        call_total=calls.total,
+        call_failed=calls.failed,
+        avg_duration_ms=calls.avg_duration_ms,
     )
 
 

@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Code2,
+  History,
   Orbit,
   Pencil,
   Plus,
@@ -27,6 +28,9 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { useToast } from '@/components/ui/Toast'
 import { useDebouncedValue } from '@/utils/useDebouncedValue'
+import StatCard from './StatCard'
+import EngineDistributionChart from './EngineDistributionChart'
+import { WM_ENGINE_COLORS } from './worldModelChartTheme'
 
 /** 列表走服务端分页：每页卡片数（含新建卡占位的网格为 4 列） */
 const PAGE_SIZE = 12
@@ -309,6 +313,24 @@ export default function WorldModelModelsPage() {
     placeholderData: keepPreviousData,
   })
 
+  // 全局概览（统计条 + 引擎分布图）：与分页/筛选无关，
+  // queryKey 前缀与列表一致，refresh() 会一并失效刷新
+  const { data: overview } = useQuery({
+    queryKey: ['world-model-projects-overview'],
+    queryFn: () => worldModelApi.projectsOverview(),
+  })
+
+  const engineSlices = useMemo(
+    () => ENGINE_TYPE_OPTIONS
+      .map(item => ({
+        name: item.label,
+        value: overview?.engine_distribution?.[item.value] ?? 0,
+        color: WM_ENGINE_COLORS[item.value] ?? '#94A3B8',
+      }))
+      .filter(slice => slice.value > 0),
+    [overview?.engine_distribution],
+  )
+
   const items = useMemo(() => data?.items ?? [], [data?.items])
   const total = data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
@@ -402,8 +424,55 @@ export default function WorldModelModelsPage() {
         </button>
       </section>
 
+      {/* 概览统计条：全局聚合，进入页面第一屏即可直读世界模型规模 */}
+      <section className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="推演模型概览">
+        <StatCard
+          icon={<Boxes size={17} />}
+          label="模型总数"
+          value={String(overview?.total ?? 0)}
+          sub={`版本总数 ${overview?.version_total ?? 0}`}
+        />
+        <StatCard
+          icon={<Pencil size={17} />}
+          label="草稿模型"
+          value={String(overview?.draft_projects ?? 0)}
+          sub="未发布在线服务"
+        />
+        <StatCard
+          icon={<Rocket size={17} />}
+          label="在线服务"
+          value={String(overview?.online_services ?? 0)}
+          sub={`已下线 ${overview?.offline_services ?? 0}`}
+        />
+        <StatCard
+          icon={<History size={17} />}
+          label="版本总数"
+          value={String(overview?.version_total ?? 0)}
+          sub="保存即冻结历史版本"
+        />
+      </section>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         <CreateProjectCard onCreate={() => setCreateOpen(true)} />
+
+        {/* 引擎类型分布：占据网格一个卡片位，填补列表区空白 */}
+        {!isLoading && !isError && items.length > 0 && engineSlices.length > 0 && (
+          <article className="flex min-h-[190px] flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm/50" aria-label="引擎类型分布">
+            <p className="text-[11px] text-slate-400">引擎类型分布</p>
+            <div className="min-h-[92px] flex-1">
+              <EngineDistributionChart slices={engineSlices} />
+            </div>
+            <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-1" aria-label="引擎类型图例">
+              {engineSlices.map(slice => (
+                <li key={slice.name} className="inline-flex items-center gap-1 text-[11px] text-slate-500">
+                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: slice.color }} />
+                  {slice.name}
+                  <span className="tabular-nums text-slate-400">{slice.value}</span>
+                </li>
+              ))}
+            </ul>
+          </article>
+        )}
 
         {isLoading ? (
           <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-slate-200 bg-white sm:col-span-1 lg:col-span-2 xl:col-span-3">
@@ -421,11 +490,46 @@ export default function WorldModelModelsPage() {
             </button>
           </div>
         ) : items.length === 0 ? (
-          <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3">
-            <Boxes size={28} className="text-slate-300" />
-            <p className="mt-3 text-sm font-medium text-slate-500">{keyword || engineFilter ? '没有符合条件的推演模型' : '还没有创建推演模型'}</p>
-            <p className="mt-1 text-xs text-slate-400">{keyword || engineFilter ? '请调整名称或引擎类型筛选条件' : '点击左侧卡片创建第一个推演模型'}</p>
-          </div>
+          keyword || engineFilter ? (
+            <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3">
+              <Boxes size={28} className="text-slate-300" />
+              <p className="mt-3 text-sm font-medium text-slate-500">没有符合条件的推演模型</p>
+              <p className="mt-1 text-xs text-slate-400">请调整名称或引擎类型筛选条件</p>
+            </div>
+          ) : (
+            /* 无数据的空态：用三步引导替代一句话提示，消除大段空白 */
+            <div className="flex min-h-[300px] flex-col items-center justify-center gap-7 rounded-2xl border border-slate-200 bg-white px-8 py-10 sm:col-span-1 lg:col-span-2 xl:col-span-3">
+              <div className="text-center">
+                <p className="text-sm font-semibold text-slate-600">从第一个推演模型开始</p>
+                <p className="mt-1 text-xs text-slate-400">以代码承载演化规律，三步即可对外提供在线推演服务</p>
+              </div>
+              <ol className="grid w-full max-w-3xl grid-cols-1 gap-3 sm:grid-cols-3" aria-label="创建流程指引">
+                {[
+                  { icon: <Plus size={16} />, title: '创建模型', desc: '选择引擎类型，定义推演的业务对象与时域' },
+                  { icon: <Code2 size={16} />, title: '开发调试', desc: '在开发页编写 simulate 脚本，用测试入参试跑验证' },
+                  { icon: <Rocket size={16} />, title: '保存发布', desc: '保存即冻结版本，一键发布为在线推演服务' },
+                ].map((step, index) => (
+                  <li key={step.title} className="relative flex flex-col items-center gap-2 rounded-xl border border-slate-100 bg-slate-50/60 px-4 pb-4 pt-5 text-center">
+                    <span className="absolute left-3 top-3 flex h-5 w-5 items-center justify-center rounded-full bg-teal-600/10 text-[11px] font-semibold text-teal-700">
+                      {index + 1}
+                    </span>
+                    <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-50 text-teal-600">
+                      {step.icon}
+                    </span>
+                    <p className="text-sm font-medium text-slate-700">{step.title}</p>
+                    <p className="text-[11px] leading-5 text-slate-400">{step.desc}</p>
+                  </li>
+                ))}
+              </ol>
+              <button
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-teal-600 px-5 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-teal-700 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+              >
+                <Plus size={15} /> 立即创建第一个模型
+              </button>
+            </div>
+          )
         ) : (
           items.map(item => (
             <ProjectCard
