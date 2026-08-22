@@ -368,35 +368,6 @@ def list_projects(
     return schemas.ProjectListResponse(items=items, total=total)
 
 
-def projects_overview(db: Session) -> schemas.ProjectOverview:
-    """推演模型页概览：全局聚合（模型/服务状态/版本/引擎分布），与分页筛选无关。"""
-    total = db.query(func.count(WorldModelProject.id)).scalar() or 0
-    engine_rows = (
-        db.query(WorldModelProject.engine_type, func.count(WorldModelProject.id))
-        .group_by(WorldModelProject.engine_type)
-        .all()
-    )
-    version_total = db.query(func.count(WorldModelScriptVersion.id)).scalar() or 0
-    status_rows = dict(
-        db.query(WorldModelService.status, func.count(WorldModelService.id))
-        .group_by(WorldModelService.status)
-        .all()
-    )
-    online = int(status_rows.get(SERVICE_STATUS_ONLINE, 0))
-    offline = int(status_rows.get(SERVICE_STATUS_OFFLINE, 0))
-    return schemas.ProjectOverview(
-        total=int(total),
-        online_services=online,
-        offline_services=offline,
-        # 每个项目至多一个服务；未发布或服务未处于 online/offline 的项目即列表「草稿」徽标口径
-        draft_projects=int(total) - online - offline,
-        version_total=int(version_total),
-        engine_distribution={
-            engine: int(count) for engine, count in engine_rows
-        },
-    )
-
-
 def create_project(
     db: Session, body: schemas.ProjectCreate, current_user,
 ) -> WorldModelProject:

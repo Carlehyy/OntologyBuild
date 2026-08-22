@@ -878,46 +878,6 @@ def test_service_registry_requires_menu(client, custom_headers):
 # ──────────────────────────── 概览统计与按日分桶（页面统计条/趋势图） ────────────────────────────
 
 
-def test_projects_overview_aggregates_globally(
-    client, auth_headers, project, monkeypatch,
-):
-    # 一个带版本并发布的项目（statistical）+ 一个纯草稿项目（mechanistic）
-    _save_version(client, auth_headers, project["id"], monkeypatch)
-    client.post(
-        f"{BASE}/projects/{project['id']}/publish",
-        json=_PUBLISH_BODY, headers=auth_headers,
-    )
-    r = client.post(
-        f"{BASE}/projects",
-        json={"name": "机理草稿", "description": "", "engine_type": "mechanistic"},
-        headers=auth_headers,
-    )
-    assert r.status_code == 201, r.text
-
-    r = client.get(f"{BASE}/projects/overview", headers=auth_headers)
-    assert r.status_code == 200
-    overview = r.json()["data"]
-    assert overview == {
-        "total": 2,
-        "online_services": 1,
-        "offline_services": 0,
-        "draft_projects": 1,
-        "version_total": 1,
-        "engine_distribution": {"statistical": 1, "mechanistic": 1},
-    }
-
-    # 下线后：online 转 offline，草稿数不变
-    client.post(
-        f"{BASE}/projects/{project['id']}/service/status",
-        json={"status": "offline"}, headers=auth_headers,
-    )
-    overview = client.get(
-        f"{BASE}/projects/overview", headers=auth_headers).json()["data"]
-    assert overview["online_services"] == 0
-    assert overview["offline_services"] == 1
-    assert overview["draft_projects"] == 1
-
-
 def test_services_overview_aggregates_status_and_calls(
     client, auth_headers, project, monkeypatch,
 ):
@@ -1003,8 +963,6 @@ def test_call_records_daily_fills_missing_days(client, auth_headers, db):
 
 
 def test_overview_endpoints_require_menu(client, custom_headers):
-    assert client.get(
-        f"{BASE}/projects/overview", headers=custom_headers).status_code == 403
     assert client.get(
         f"{BASE}/services/overview", headers=custom_headers).status_code == 403
     assert client.get(

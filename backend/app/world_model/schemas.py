@@ -121,17 +121,6 @@ class CallRecordDailyBucket(BaseModel):
     avg_duration_ms: int = 0
 
 
-class ProjectOverview(BaseModel):
-    """推演模型页概览统计（全局聚合，与分页/筛选条件无关）。"""
-    total: int = 0
-    online_services: int = 0
-    offline_services: int = 0
-    # 草稿 = 项目总数 - 在线/已下线服务数（每个项目至多一个服务，与列表徽标口径一致）
-    draft_projects: int = 0
-    version_total: int = 0
-    engine_distribution: dict[str, int] = Field(default_factory=dict)
-
-
 class ServiceOverview(BaseModel):
     """推演服务页概览统计（全局聚合，与分页/筛选条件无关）。"""
     total: int = 0

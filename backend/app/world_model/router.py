@@ -3,7 +3,6 @@
 
   项目管理：
   GET    /projects                      列表（keyword / engine_type / 分页）
-  GET    /projects/overview             概览统计（模型/服务状态/版本/引擎分布）
   POST   /projects                      新建（脚本初始化为平台契约模板）
   GET    /projects/{id}                 详情（含脚本）
   PATCH  /projects/{id}                 编辑基本信息
@@ -118,15 +117,6 @@ def list_projects(
     result = service.list_projects(
         db, keyword=keyword, engine_type=engine_type, page=page, size=size)
     return _ok(result.model_dump())
-
-
-# 声明顺序敏感：/projects/overview 必须先于 /projects/{project_id} 注册
-@router.get("/projects/overview")
-def projects_overview(
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    return _ok(service.projects_overview(db).model_dump())
 
 
 @router.post("/projects", status_code=201)

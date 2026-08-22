@@ -185,16 +185,6 @@ export interface CallRecordDailyBucket {
   avg_duration_ms: number
 }
 
-/** 推演模型页概览统计（全局聚合，与分页/筛选无关） */
-export interface WorldModelProjectOverview {
-  total: number
-  online_services: number
-  offline_services: number
-  draft_projects: number
-  version_total: number
-  engine_distribution: Record<string, number>
-}
-
 /** 推演服务页概览统计（全局聚合，与分页/筛选无关） */
 export interface WorldModelServiceOverview {
   total: number
@@ -276,9 +266,6 @@ export const worldModelApi = {
 
   callsDaily: (days = 14) =>
     apiClientV2.get<CallRecordDailyBucket[]>('/world-model/calls/daily', { params: { days } }),
-
-  projectsOverview: () =>
-    apiClientV2.get<WorldModelProjectOverview>('/world-model/projects/overview'),
 
   servicesOverview: () =>
     apiClientV2.get<WorldModelServiceOverview>('/world-model/services/overview'),

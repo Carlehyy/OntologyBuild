@@ -5,20 +5,10 @@ import type { EChartsOption } from 'echarts'
 export const WM_CHART_TEAL = '#0D9488'
 export const WM_CHART_RED = '#F43F5E'
 export const WM_CHART_BLUE = '#3B82F6'
-export const WM_CHART_AMBER = '#F59E0B'
-export const WM_CHART_VIOLET = '#8B5CF6'
 export const WM_CHART_TEXT = '#64748B'
 export const WM_CHART_TEXT_STRONG = '#334155'
 export const WM_CHART_AXIS = '#CBD5E1'
 export const WM_CHART_SPLIT = '#F1F5F9'
-
-/** 引擎类型配色（与 ENGINE_TYPE_OPTIONS 一一对应） */
-export const WM_ENGINE_COLORS: Record<string, string> = {
-  statistical: WM_CHART_TEAL,
-  mechanistic: WM_CHART_BLUE,
-  state_machine: WM_CHART_AMBER,
-  learned: WM_CHART_VIOLET,
-}
 
 /** 图表共用的动效、字体与浮层基调 */
 export function baseWorldModelChartOption(): EChartsOption {

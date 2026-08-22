@@ -98,16 +98,6 @@ async function mockWorldModel(page: Page) {
     if (path === '/api/v2/world-model/calls/overview') {
       return json(route, { total: 1, failed: 0, avg_duration_ms: 120 })
     }
-    if (path === '/api/v2/world-model/projects/overview') {
-      return json(route, {
-        total: 1,
-        online_services: 1,
-        offline_services: 0,
-        draft_projects: 0,
-        version_total: 1,
-        engine_distribution: { statistical: 1 },
-      })
-    }
     if (path === '/api/v2/world-model/calls/daily') {
       return json(route, [
         { date: '2026-08-12', total: 0, failed: 0, avg_duration_ms: 0 },
@@ -279,12 +269,7 @@ test('推演模型与调用记录为独立页面（无页内 Tab 与共享标题
   // 列表页内容正常；已发布服务徽标必须显示「在线」（回归：schema 缺字段
   // 导致 service_status 被静默丢弃、徽标永远显示「草稿」）
   await expect(page.getByText('台区负荷短期推演')).toBeVisible()
-  // 概览统计条新增「在线服务」等指标名，徽标断言用精确匹配避免歧义
   await expect(page.getByText('在线', { exact: true })).toBeVisible()
-  // 概览统计条：模型总数/在线服务等全局指标第一屏直读
-  await expect(page.getByText('模型总数')).toBeVisible()
-  await expect(page.getByText('在线服务', { exact: true })).toBeVisible()
-  await expect(page.getByText('引擎类型分布')).toBeVisible()
 
   // 列表筛选（服务端过滤：keyword 随请求发出，mock 按筛选口径返回空结果）
   await page.getByLabel('按模型名称或描述筛选').fill('不存在的模型')
