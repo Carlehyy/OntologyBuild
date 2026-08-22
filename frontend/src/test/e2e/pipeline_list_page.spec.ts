@@ -205,8 +205,8 @@ async function mockLinkedListPage(page: Page) {
 }
 
 test.describe('数据流水线列表页·运行概况与列内预览', () => {
-  test('头部展示运行概况统计卡与近 7 日执行趋势', async ({ page }) => {
-    // 趋势卡位于内容区右侧栏（≥2xl 展示，行为对齐数据任务池侧栏）
+  test('头部展示运行概况统计卡（所有视口统一单行布局，无右侧栏）', async ({ page }) => {
+    // 用超过 2xl(1536px) 的视口断言：宽屏下也不出现右侧栏趋势图、表格保持全宽
     await page.setViewportSize({ width: 1600, height: 900 })
     await mockLinkedListPage(page)
     await page.goto('/#/data/pipelines')
@@ -216,8 +216,10 @@ test.describe('数据流水线列表页·运行概况与列内预览', () => {
     await expect(page.getByText('已启用', { exact: true }).first()).toBeVisible()
     await expect(page.getByText('最近执行失败')).toBeVisible()
     await expect(page.getByText('近7日执行', { exact: true })).toBeVisible()
-    await expect(page.getByTestId('pipeline-trend-card')).toBeVisible()
-    await expect(page.getByText('近 7 日执行')).toBeVisible()
+    await expect(page.getByTestId('pipeline-trend-card')).toHaveCount(0)
+    const tableBox = await page.locator('table').boundingBox()
+    const overviewBox = await page.getByTestId('pipeline-overview-bar').boundingBox()
+    expect(tableBox?.width).toBeCloseTo(overviewBox?.width ?? 0, -1)
   })
 
   test('最近执行结果列打开历史执行记录抽屉，失败记录可展开错误日志', async ({ page }) => {

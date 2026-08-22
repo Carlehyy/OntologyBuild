@@ -14,7 +14,7 @@ import ConfirmDialog from '@/components/ConfirmDialog'
 import { useToast } from '@/components/ui/Toast'
 import RunPreviewModal from './RunPreviewModal'
 import PipelineEditWizard from './PipelineEditWizard'
-import PipelineOverviewBar, { PipelineTrendCard } from './PipelineOverviewBar'
+import PipelineOverviewBar from './PipelineOverviewBar'
 import PipelineRunHistoryDrawer from './PipelineRunHistoryDrawer'
 import { ArtifactPreviewPopover, TaskPreviewPopover } from './PipelineLinkPopovers'
 
@@ -425,9 +425,7 @@ export default function PipelineListPage() {
           )}
         </div>
       ) : (
-        <div className="grid min-h-0 grid-cols-1 gap-3 2xl:grid-cols-12">
-          <div className="col-span-1 min-w-0 2xl:col-span-9">
-            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)]">
+        <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)]">
           <table className="w-full min-w-[1080px] text-sm table-fixed">
             <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 backdrop-blur">
               <tr>
@@ -661,15 +659,6 @@ export default function PipelineListPage() {
               </button>
             </div>
           </div>
-          </div>
-          </div>
-
-          {/* 右侧栏：近 7 日执行趋势（≥2xl 展示，行为对齐数据任务池侧栏） */}
-          {overview && (
-            <aside className="hidden min-h-0 flex-col gap-3 2xl:col-span-3 2xl:flex">
-              <PipelineTrendCard overview={overview} />
-            </aside>
-          )}
         </div>
       )}
 
