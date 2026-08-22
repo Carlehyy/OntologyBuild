@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Copy, Download, Maximize2, X } from 'lucide-react'
 import InteractiveViewport from './InteractiveViewport'
 import { writeTextToClipboard } from '@/utils/clipboard'
+import { useThemeStore } from '@/stores/themeStore'
 
 /**
  * Mermaid 渲染块：对话内使用有界缩略槽，完整图放到预览层；SVG 与源码都可下载。
@@ -11,21 +12,23 @@ let mermaidPromise: Promise<typeof import('mermaid')['default']> | null = null
 
 function loadMermaid() {
   if (!mermaidPromise) {
-    mermaidPromise = import('mermaid').then(m => {
-      m.default.initialize({
-        startOnLoad: false,
-        securityLevel: 'strict',
-        theme: 'neutral',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        flowchart: { htmlLabels: false, curve: 'basis', nodeSpacing: 36, rankSpacing: 44 },
-        er: { useMaxWidth: false },
-        sequence: { useMaxWidth: false, actorMargin: 48, messageMargin: 30 },
-      })
-      return m.default
-    })
+    mermaidPromise = import('mermaid').then(m => m.default)
   }
   return mermaidPromise
 }
+
+// initialize 每次调用都会整体覆盖配置，因此基础配置独立成常量，随主题一起完整传入。
+const mermaidBaseConfig = {
+  startOnLoad: false,
+  securityLevel: 'strict' as const,
+  fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+  flowchart: { htmlLabels: false, curve: 'basis' as const, nodeSpacing: 36, rankSpacing: 44 },
+  er: { useMaxWidth: false },
+  sequence: { useMaxWidth: false, actorMargin: 48, messageMargin: 30 },
+}
+
+/** 浅色沿用 neutral（中性灰阶，与浅色界面最协调），深色切换官方 dark 主题。 */
+const mermaidThemeFor = (theme: 'light' | 'dark') => (theme === 'dark' ? 'dark' as const : 'neutral' as const)
 
 const safeName = (title: string) => (title || 'business-diagram')
   .replace(/[^\w\u3400-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '') || 'business-diagram'
@@ -59,6 +62,7 @@ export default function MermaidBlock({ chart, title = '业务建模图', warning
   compact?: boolean
 }) {
   const reactId = useId().replace(/[^a-zA-Z0-9]/g, '')
+  const theme = useThemeStore(state => state.theme)
   const [rendered, setRendered] = useState({ chart: '', svg: '' })
   const [failure, setFailure] = useState({ chart: '', message: '' })
   const [preview, setPreview] = useState(false)
@@ -72,7 +76,11 @@ export default function MermaidBlock({ chart, title = '业务建模图', warning
     if (!container) return
     container.innerHTML = ''
     loadMermaid()
-      .then(mermaid => mermaid.render(`mmd-${reactId}-${mySeq}`, chart, container))
+      .then(mermaid => {
+        // 每次渲染前按当前主题重设配置；theme 在依赖里，切主题时已出图也会重绘。
+        mermaid.initialize({ ...mermaidBaseConfig, theme: mermaidThemeFor(theme) })
+        return mermaid.render(`mmd-${reactId}-${mySeq}`, chart, container)
+      })
       .then(({ svg: out }) => {
         if (seq.current === mySeq) {
           setRendered({ chart, svg: out })
@@ -90,7 +98,7 @@ export default function MermaidBlock({ chart, title = '业务建模图', warning
         if (seq.current === mySeq) setFailure({ chart, message })
       })
     return () => { if (container) container.innerHTML = '' }
-  }, [chart, reactId])
+  }, [chart, reactId, theme])
 
   const svg = rendered.chart === chart ? rendered.svg : ''
   const error = failure.chart === chart ? failure.message : ''
