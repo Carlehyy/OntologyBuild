@@ -560,7 +560,7 @@ export default function ExplorationPage() {
 
   const canvasCount = completeness
     ? Object.values(completeness.counts).reduce((a, b) => a + b, 0) : 0
-  const panelClass = 'min-h-0 min-w-0 overflow-hidden rounded-lg border border-[var(--color-border)] shadow-sm'
+  const panelClass = 'min-h-0 min-w-0 overflow-hidden rounded-lg border border-[var(--color-border)] shadow-[0_1px_2px_rgba(15,23,42,0.05),0_12px_32px_-16px_rgba(15,23,42,0.18)]'
 
   // 开放堵门问题 → 输入框上方的快捷答复（最多展示 2 个，按登记顺序）
   const openBlocking = (canvas?.questions || [])
@@ -572,7 +572,7 @@ export default function ExplorationPage() {
   }
 
   return (
-    <div className="relative flex h-full min-h-[560px] overflow-hidden bg-[var(--color-bg-base)]">
+    <div className="explore-shell relative flex h-full min-h-[560px] overflow-hidden">
       <div
         ref={containerRef}
         className="scrollbar-none grid min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-1"
@@ -767,7 +767,7 @@ export default function ExplorationPage() {
                     <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 bg-[var(--color-nav-bg)] text-white">
                       <Paperclip size={14} />
                     </div>
-                    <div className={`group flex items-center gap-2.5 rounded-xl border bg-[var(--color-bg-elevated)] px-3 py-2 max-w-[85%] ${
+                    <div className={`group flex items-center gap-2.5 rounded-xl border bg-card px-3 py-2 max-w-[85%] ${
                       uploading ? 'border-dashed border-[var(--color-border)]' : 'border-[var(--color-border)]'}`}>
                       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-600">
                         {uploading ? <Loader2 size={15} className="animate-spin" /> : <FileText size={16} />}
@@ -823,7 +823,7 @@ export default function ExplorationPage() {
                       <>
                         <div className={`inline-block text-left rounded-xl px-3.5 py-2.5 ${m.role === 'user'
                           ? 'whitespace-pre-wrap break-words bg-[var(--color-nav-bg)] text-white text-sm leading-relaxed'
-                          : 'bg-[var(--color-bg-elevated)] border border-[var(--color-border)]'}`}>
+                          : 'bg-card border border-[var(--color-border)]'}`}>
                           {m.role === 'user' ? m.content : <Md text={m.content} />}
                         </div>
                         <div className={`mt-1 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
