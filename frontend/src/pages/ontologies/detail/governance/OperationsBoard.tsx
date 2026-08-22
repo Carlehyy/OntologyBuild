@@ -142,7 +142,7 @@ export default function OperationsBoard({
             <div
               key={stat.actionId}
               className={`grid gap-3 py-3 xl:items-center ${GRID_COLS} ${
-                hasPending ? '-mx-3 rounded-lg border-l-2 border-amber-400 bg-amber-50/50 px-3' : ''
+                hasPending ? '-mx-3 gov-row-pending rounded-lg border-l-2 border-amber-400 px-3' : ''
               }`}
             >
               {/* 动作 */}

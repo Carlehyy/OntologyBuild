@@ -42,13 +42,13 @@ export function buildDailyComboOption(daily: DailySparkDatum[]): EChartsOption {
       type: 'category',
       data: days,
       axisTick: { show: false },
-      axisLine: { lineStyle: { color: '#d7e0e8' } },
-      axisLabel: { color: '#788699', fontSize: 10 },
+      axisLine: { lineStyle: { color: 'rgba(148,163,184,0.4)' } },
+      axisLabel: { color: '#8b96a5', fontSize: 10 },
     },
     yAxis: {
       type: 'value',
       minInterval: 1,
-      splitLine: { lineStyle: { color: '#e9eef2', type: 'dashed' } },
+      splitLine: { lineStyle: { color: 'rgba(148,163,184,0.25)', type: 'dashed' } },
       axisLabel: { color: '#98a2b1', fontSize: 10 },
     },
     series: [
