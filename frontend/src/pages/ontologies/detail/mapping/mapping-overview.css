@@ -1,10 +1,10 @@
 /* ═══════════════════════════════════════════════════════════════
    数据映射总览页样式：全部色值经 --dmo-* 作用域变量定义，
    .dark 下整体覆盖为深色变体（对齐 tokens.css 的 GitHub-dark 色系）。
-   注意：预览弹窗 portal 到 body，故变量选择器必须同时覆盖
-   .dmo-card 与 .dmo-preview-backdrop。
+   注意：预览弹窗与血缘详情弹窗均 portal 到 body，故变量选择器必须
+   同时覆盖 .dmo-card、.dmo-preview-backdrop 与 .dmo-lineage-backdrop。
    ═══════════════════════════════════════════════════════════════ */
-.dmo-card, .dmo-preview-backdrop {
+.dmo-card, .dmo-preview-backdrop, .dmo-lineage-backdrop {
   --dmo-ink: #172033;
   --dmo-text: #354157;
   --dmo-subtle: #7b8796;
@@ -49,7 +49,7 @@
   --dmo-shadow: 0 12px 36px rgba(34,52,70,.07);
   --dmo-focus-ring: rgba(11,143,131,.38);
 }
-.dark .dmo-card, .dark .dmo-preview-backdrop {
+.dark .dmo-card, .dark .dmo-preview-backdrop, .dark .dmo-lineage-backdrop {
   --dmo-ink: #e6e9ef;
   --dmo-text: #c6cfdb;
   --dmo-subtle: #98a2b3;
@@ -97,23 +97,17 @@
 
 .dmo-card {
   width: 100%;
-  height: 100%;
-  min-height: 0;
   border: 1px solid var(--dmo-line);
   border-radius: 18px;
   display: flex;
   flex-direction: column;
-  /* 滚动优先在 .dmo-row-list 内进行，KPI 与供给全景常驻；
-     视口过矮、工作区触底 min-height 时，卡片自身作为兜底滚动容器 */
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-color: #cbd5da transparent;
-  scrollbar-width: thin;
+  /* 自然文档流：卡片高度由内容决定，页面级滚动（对齐治理推演页），
+     不再做卡片/清单内嵌滚动；overflow:hidden 仅用于圆角裁切 */
+  overflow: hidden;
   color: var(--dmo-ink);
   background: var(--dmo-surface);
   box-shadow: var(--dmo-shadow);
 }
-.dark .dmo-card, .dark .dmo-row-list, .dark .dmo-workspace { scrollbar-color: #2a3342 transparent; }
 .dmo-card button, .dmo-card input, .dmo-preview-dialog button, .dmo-preview-dialog select { font: inherit; }
 .dmo-card button:focus-visible, .dmo-card a:focus-visible, .dmo-card [role="button"]:focus-visible { outline: 2px solid var(--dmo-focus-ring); outline-offset: 2px; }
 .dmo-loading { min-height: 360px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--dmo-muted); font-size: 13px; }
@@ -123,9 +117,6 @@
   min-height: 96px;
   padding: 15px 18px;
   flex: none;
-  position: sticky;
-  top: 0;
-  z-index: 6;
   border-radius: 18px 18px 0 0;
   display: grid;
   grid-template-columns: minmax(270px,1.15fr) minmax(470px,1.7fr) auto;
@@ -159,7 +150,7 @@
 .dmo-primary-button:hover { transform: translateY(-1px); background: var(--dmo-teal-strong); box-shadow: 0 8px 17px rgba(11,143,131,.23); }
 .dmo-primary-button:active { transform: translateY(0); }
 
-/* ═══ 数据供给全景（桑基图） ═══ */
+/* ═══ 数据供给全景（节点卡链路画布） ═══ */
 .dmo-flow { flex: none; padding: 14px 18px 8px; border-bottom: 1px solid var(--dmo-line); background: var(--dmo-panel); }
 .dmo-flow-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; }
 .dmo-flow-title { min-width: 0; display: flex; flex-direction: column; }
@@ -176,8 +167,8 @@
 .dmo-flow-empty b { color: var(--dmo-muted); font-size: 13px; }
 .dmo-flow-empty span { max-width: 460px; color: var(--dmo-faint); font-size: 12px; line-height: 1.6; }
 
-.dmo-workspace { min-height: 240px; flex: 1 1 0%; display: flex; background: var(--dmo-workspace-bg); }
-.dmo-register { min-width: 0; min-height: 0; flex: 1 1 0%; display: flex; flex-direction: column; background: var(--dmo-panel); }
+.dmo-workspace { display: flex; background: var(--dmo-workspace-bg); }
+.dmo-register { min-width: 0; flex: 1 1 0%; display: flex; flex-direction: column; background: var(--dmo-panel); }
 .dmo-register-head { min-height: 64px; padding: 12px 16px 9px; border-bottom: 1px solid var(--dmo-line-soft); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .dmo-register-title { min-width: 0; display: flex; flex: 1; flex-direction: column; }
 .dmo-register-head b { color: var(--dmo-ink); font-size: 13px; font-weight: 700; }
@@ -194,7 +185,6 @@
 .dmo-table-head, .dmo-map-row { display: grid; grid-template-columns: minmax(190px,1.25fr) minmax(155px,1fr) 100px 82px 108px 18px; align-items: center; gap: 10px; }
 .dmo-table-head { min-height: 36px; padding: 0 15px; border-bottom: 1px solid var(--dmo-line-soft); color: var(--dmo-subtle); background: var(--dmo-workspace-bg); font-size: 11px; font-weight: 700; }
 .dmo-table-head span:nth-child(3), .dmo-table-head span:nth-child(4) { text-align: center; }
-.dmo-row-list { min-height: 0; flex: 1 1 0%; overflow-y: auto; scrollbar-color: #cbd5da transparent; scrollbar-width: thin; }
 .dmo-map-row { width: 100%; min-height: 68px; padding: 8px 15px; border: 0; border-bottom: 1px solid var(--dmo-line-soft); color: inherit; text-align: left; background: var(--dmo-cell-bg); cursor: pointer; transition: background-color .16s ease, box-shadow .16s ease; }
 .dmo-map-row:hover, .dmo-map-row[data-chart-hover="true"] { background: var(--dmo-hover-bg); }
 .dmo-map-row[data-selected="true"] { position: relative; background: var(--dmo-selected-bg); box-shadow: inset 3px 0 var(--dmo-teal); }
@@ -407,9 +397,8 @@
   .dmo-summary { grid-template-columns: 1fr auto; }
   .dmo-kpis { grid-column: 1/-1; grid-row: 2; padding-top: 12px; border-top: 1px solid var(--dmo-line-soft); }
   .dmo-summary { min-height: 150px; }
-  /* 窄屏纵向堆叠：回退为工作区整体单栏滚动，避免两个独立滚动区互相挤压截断 */
-  .dmo-workspace { display: flex; flex-direction: column; overflow-y: auto; scrollbar-color: #cbd5da transparent; scrollbar-width: thin; }
-  .dmo-row-list { flex: none; overflow: visible; }
+  /* 窄屏纵向堆叠 */
+  .dmo-workspace { flex-direction: column; }
   .dmo-register { border-right: 0; border-bottom: 1px solid var(--dmo-line); }
 }
 @media (max-width: 700px) {

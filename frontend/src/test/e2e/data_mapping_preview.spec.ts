@@ -199,9 +199,9 @@ test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async
   expect(Math.abs(filtersBox!.y + filtersBox!.height / 2 - (searchBox!.y + searchBox!.height / 2))).toBeLessThan(2)
   await expect(page.locator('.dmo-target-cell b').first()).toHaveCSS('font-size', '13px')
   await expect(page.locator('.dmo-target-cell small').first()).toHaveCSS('font-size', '11px')
-  const cardBox = await page.locator('.dmo-card').boundingBox()
-  expect(cardBox).not.toBeNull()
-  expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(page.viewportSize()!.height + 1)
+  // 自然文档流：卡片/清单不做内嵌滚动，内容多高页面就多高；页面级滚动只发生在根容器
+  await expect(page.locator('.dmo-card')).not.toHaveCSS('overflow-y', 'auto')
+  expect(await page.locator('.dmo-row-list').evaluate(element => element.scrollHeight <= element.clientHeight + 1)).toBeTruthy()
   expect(await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight + 1)).toBeTruthy()
 
   await lineage.getByRole('button', { name: '预览数据源 订单宽表' }).click()
@@ -359,10 +359,12 @@ test('数据供给全景：节点卡链路渲染，图与清单、血缘弹窗�
   await expect(page.getByText('数据供给全景')).toBeVisible()
   const chart = page.getByTestId('mapping-chain-panorama')
   await expect(chart).toBeVisible()
-  // 1 个数据集 + 1 个对象 → 两张节点卡 + 一条连线
+  // 1 个数据集 + 1 个对象 → 两张节点卡 + 一条连线；节点可拖拽、连线带流动动画
   await expect(chart.getByText('订单宽表')).toBeVisible()
   await expect(chart.getByText('订单', { exact: true })).toBeVisible()
   await expect.poll(async () => chart.locator('svg path').count()).toBeGreaterThan(0)
+  await expect(chart.locator('.react-flow__node.draggable')).toHaveCount(2)
+  await expect.poll(async () => chart.locator('.react-flow__edge.animated').count()).toBeGreaterThan(0)
   // 全部元素已映射时不显示"未接入数据流"caption
   await expect(page.locator('.dmo-flow-caption')).toHaveCount(0)
   // 点击元素节点卡 → 打开血缘详情弹窗；关闭后画布保持渲染

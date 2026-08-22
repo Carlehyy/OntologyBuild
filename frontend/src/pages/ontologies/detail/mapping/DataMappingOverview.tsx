@@ -836,12 +836,12 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
         </button>
       </header>
 
-      {/* ═══ 数据供给全景：桑基图直观呈现「数据资产 → 本体元素」的真实流向 ═══ */}
+      {/* ═══ 数据供给全景：节点卡链路呈现「数据资产 → 本体元素」的真实流向 ═══ */}
       <section className="dmo-flow" aria-label="数据供给全景">
         <div className="dmo-flow-head">
           <div className="dmo-flow-title">
             <b>数据供给全景</b>
-            <small>数据资产如何流入本体元素；流宽代表实例产出量，点击节点可定位详情</small>
+            <small>数据资产如何流入本体元素；点击节点查看详情，卡片可拖拽调整布局</small>
           </div>
           {mappingRows.length - mappedFlowCount > 0 && (
             <span className="dmo-flow-caption">另有 {mappingRows.length - mappedFlowCount} 个本体元素未接入数据流 · 见下方清单</span>
@@ -865,6 +865,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
                 if (dataset) setPreviewDataset(dataset)
               }}
               onHoverNode={setChartHoverKey}
+              ontologyId={ontologyId}
             />
           </Suspense>
         )}
