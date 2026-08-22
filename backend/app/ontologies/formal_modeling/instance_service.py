@@ -872,8 +872,9 @@ def list_instance_facts(
         instance_id: str,
         property_name: Optional[str],
         limit: int,
+        offset: int,
         db: Session):
-    """实例的属性级变更历史（Fact 溯源层），按时间倒序。"""
+    """实例的属性级变更历史（Fact 溯源层），按时间倒序。offset 供弹窗分页加载。"""
     _require_ontology(db, ontology_id)
     q = db.query(PropertyFact).filter(
         PropertyFact.ontology_id == ontology_id,
@@ -881,7 +882,7 @@ def list_instance_facts(
     )
     if property_name:
         q = q.filter(PropertyFact.property_name == property_name)
-    items = q.order_by(*fact_order_clause()).limit(limit).all()
+    items = q.order_by(*fact_order_clause()).offset(max(0, offset)).limit(limit).all()
     return _ok([_fact_to_dict(f) for f in items])
 
 

@@ -836,7 +836,10 @@ function TreeSection({
 }) {
   const objectTone = tone === 'object'
   return (
-    <section className="mb-4" data-catalog-kind={tone}>
+    <section
+      className="mb-3 rounded-xl border border-dashed border-slate-300 p-2 last:mb-0"
+      data-catalog-kind={tone}
+    >
       <div className={`flex min-h-8 items-center gap-1.5 rounded-md px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${
         objectTone ? 'bg-sky-50/80 text-sky-700' : 'bg-violet-50/80 text-violet-700'
       }`}>
