@@ -1293,3 +1293,102 @@ def rows_at_version(db, dataset, version_no: int) -> list[dict]:
                 out.append(logical)
     out.extend(restored for restored in remaining.values() if restored is not None)
     return out
+
+
+def _version_reverse_patch(db, dataset, version_no: int,
+                           later: list) -> dict[str, dict | None]:
+    """目标版本之后全部 run 变更集的逆向补丁（row_pk → 旧行 | None）。
+
+    与 rows_at_version 同一语义：变更集从新到旧覆盖，最旧者（最接近目标
+    版本的状态）胜出；None 表示该行在目标版本不存在。
+    """
+    patch: dict[str, dict | None] = {}
+    if not later:
+        return patch
+    rows_by_changeset: dict[str, list] = {}
+    for row in db.query(DatasetChangesetRow).filter(
+            DatasetChangesetRow.changeset_id.in_([cs.id for cs in later])):
+        rows_by_changeset.setdefault(row.changeset_id, []).append(row)
+    for changeset in later:
+        for row in rows_by_changeset.get(changeset.id, []):
+            patch[row.row_pk] = (None if row.change_type == "added"
+                                 else row.old_row)
+    return patch
+
+
+def page_rows_at_version(db, dataset, version_no: int, offset: int = 0,
+                         limit: int = 100) -> tuple[list[dict], int]:
+    """按页读取目标湖表版本：物理表 PK 序扫描 + 逆向补丁，只物化窗口。
+
+    审核三视图的分页回读入口。补丁语义与 rows_at_version 完全一致
+    （added→摘除，updated/deleted→原位换回 old_row），但不整版物化：
+    - 只把「目标版本之后」变更集涉及的变化行载入内存（通常远小于全量）；
+    - 物理表现存行按主键序流式扫描，命中补丁的原位替换/跳过，攒满当前
+      窗口即停止；
+    - 目标版本存在、物理表已无的恢复行按 row_pk 排序追加在尾部——追加
+      位置与全量回放一致，排序使跨请求分页顺序稳定。
+    返回 (窗口行, 目标版本总行数)。总行数按「物理表计数 − 后续新增现存行
+    + 后续消失恢复行」精确计算，不依赖发布时的 rowcount 快照。
+    """
+    found = _readable_table(db, dataset)
+    version = db.query(DatasetVersion).filter(
+        DatasetVersion.dataset_id == dataset.id,
+        DatasetVersion.version_no == version_no).first()
+    if version is None:
+        raise LakeStoreError(f"数据集 {dataset.id} 不存在版本 v{version_no}")
+    if version.data_blob is not None or version.storage_uri:
+        raise LakeStoreLegacyVersionError(
+            f"数据集 {dataset.id} v{version_no} 是迁移前的整份快照版本，"
+            "请走 DatasetService 遗留读取路径。")
+    later = (db.query(DatasetChangeset)
+             .join(DatasetVersion, DatasetChangeset.version_id == DatasetVersion.id)
+             .filter(DatasetChangeset.dataset_id == dataset.id,
+                     DatasetChangeset.change_type == "run",
+                     DatasetVersion.version_no > version_no)
+             .order_by(DatasetVersion.version_no.desc())
+             .all())
+    if found is None:
+        # 与 rows_at_version 一致：空湖无更晚变更集读作空；有变更集无表硬失败
+        if later:
+            raise LakeStoreError(
+                f"数据集 {dataset.id} 存在变更集但物理湖表缺失，数据不一致，"
+                f"无法回放到 v{version_no}。")
+        return [], 0
+    _, _, pk_cols = found
+
+    patch = _version_reverse_patch(db, dataset, version_no, later)
+    added_keys = {key for key, old in patch.items() if old is None}
+    restored_map = {key: old for key, old in patch.items() if old is not None}
+
+    # 存在性校验只针对被补丁触及的行，绝不扫全表。
+    present_pks: set[str] = set()
+    if patch:
+        present_pks = set(rows_by_pks(db, dataset, list(patch.keys())).keys())
+    restored_only_map = {
+        key: old for key, old in restored_map.items() if key not in present_pks}
+    total = (count_rows(db, dataset)
+             - len(added_keys & present_pks)
+             + len(restored_only_map))
+
+    def _target_rows():
+        for batch in stream_rows(db, dataset, batch_size=5000):
+            for logical in batch:
+                key = lake_row_pk(logical, pk_cols)
+                if key in added_keys:
+                    continue
+                yield restored_map.get(key, logical)
+        for key in sorted(restored_only_map):
+            yield restored_only_map[key]
+
+    out: list[dict] = []
+    skipped = 0
+    wanted_offset = max(0, int(offset))
+    wanted_limit = max(0, int(limit))
+    for row in _target_rows():
+        if skipped < wanted_offset:
+            skipped += 1
+            continue
+        out.append(row)
+        if len(out) >= wanted_limit:
+            break
+    return out, total
