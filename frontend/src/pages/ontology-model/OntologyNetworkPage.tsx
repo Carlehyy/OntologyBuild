@@ -48,7 +48,7 @@ const EMPTY_GRAPH: NetworkGraphData = {
   },
 }
 
-const panelClass = 'min-h-0 min-w-0 overflow-hidden rounded-lg border border-[var(--color-border)] shadow-sm'
+const panelClass = 'min-h-0 min-w-0 overflow-hidden rounded-lg border border-[var(--color-border)] shadow-[0_1px_2px_rgba(15,23,42,0.05),0_12px_32px_-16px_rgba(15,23,42,0.18)]'
 
 const stringifyValue = (value: unknown) => {
   if (value === null || value === undefined) return '空值'
@@ -309,7 +309,7 @@ export default function OntologyNetworkPage() {
   const legend = useMemo(() => legendItems(graph.ontologies), [graph.ontologies])
 
   return (
-    <div className="relative flex h-[calc(100vh-8.5rem)] min-h-[560px] overflow-hidden bg-[var(--color-bg-base)]">
+    <div className="relative flex h-full min-h-[560px] overflow-hidden bg-[var(--color-bg-base)]">
       <div
         ref={containerRef}
         className="scrollbar-none grid min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-1"

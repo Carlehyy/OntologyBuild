@@ -78,7 +78,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   // 由本容器滚动，而不是把 tab 内容关在固定视口里内滚（MYW-34 验收意见）。
   const isOntologyDataTab = isOntologyDetailPage
     && new URLSearchParams(location.search).get('tab') === 'data'
-  const isEdgeToEdgePage = isActive('/explore') || isActive('/agent') || isActive('/super-assistant') || isActive('/events') || isActive('/api-hub') || isMappingWorkspace
+  const isEdgeToEdgePage = isActive('/explore') || isActive('/agent') || isActive('/super-assistant') || isActive('/events') || isActive('/api-hub') || isActive('/ontology-model/network') || isMappingWorkspace
   const isStewardPage = isActive('/data/pipelines/steward')
   // 标签栏独立于所有页面，所有页面统一显示（含业务探索、智能助手等全屏页）
   const showTopTabBar = true
