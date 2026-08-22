@@ -3,14 +3,18 @@ import { describe, it } from 'node:test'
 
 import {
   clusterPositions,
+  degreeMap,
   legendItems,
+  maxDegreeOf,
   mergeOverlay,
+  nodeSize,
   ontologyColorMap,
   ONTOLOGY_PALETTE,
   toGraphNodeId,
 } from '../../../pages/ontology-model/network/networkModel.ts'
 import type {
   NetworkGraphData,
+  NetworkGraphEdge,
   NetworkGraphNode,
 } from '../../../api/ontologyNetwork'
 
@@ -110,5 +114,35 @@ describe('legendItems', () => {
     assert.deepEqual(items.map(item => item.label), ['供应链', '设备台账'])
     assert.deepEqual(items.map(item => item.published), [true, false])
     assert.notEqual(items[0].color, items[1].color)
+  })
+})
+
+describe('degreeMap / maxDegreeOf', () => {
+  const edges: NetworkGraphEdge[] = [
+    { id: 'e1', kind: 'relation', source: 'a', target: 'b', label: '关联' },
+    { id: 'e2', kind: 'relation', source: 'a', target: 'c', label: '关联' },
+    { id: 'e3', kind: 'bridge', source: 'b', target: 'd', label: '同名类型' },
+  ]
+
+  it('统计无向度数，桥接边不计入（展示层装饰不干扰大小语义）', () => {
+    const degrees = degreeMap(edges)
+    assert.equal(degrees.get('a'), 2)
+    assert.equal(degrees.get('b'), 1)
+    assert.equal(degrees.get('c'), 1)
+    assert.equal(degrees.get('d'), undefined)
+    assert.equal(maxDegreeOf(edges), 2)
+  })
+})
+
+describe('nodeSize（graphify 度数映射）', () => {
+  it('对象类型直径显著大于实例，且随度数单调放大、有上界', () => {
+    assert.ok(nodeSize({ kind: 'object_type' }, 0, 4) < nodeSize({ kind: 'object_type' }, 4, 4))
+    assert.ok(nodeSize({ kind: 'instance' }, 0, 4) < nodeSize({ kind: 'instance' }, 4, 4))
+    // 同度数下类型始终大于实例
+    assert.ok(nodeSize({ kind: 'object_type' }, 0, 4) > nodeSize({ kind: 'instance' }, 4, 4))
+    // 越界度数被夹紧，不产生无限大节点
+    assert.equal(nodeSize({ kind: 'object_type' }, 99, 4), nodeSize({ kind: 'object_type' }, 4, 4))
+    // 无边图（maxDegree=0）时退化为基准尺寸而非 NaN
+    assert.ok(Number.isFinite(nodeSize({ kind: 'instance' }, 0, 0)))
   })
 })

@@ -1,10 +1,13 @@
 /**
- * 本体网络画布：cytoscape 渲染跨本体全局图。
+ * 本体网络画布：cytoscape 渲染跨本体全局图（graphify 风格）。
  *
- * 与本体助手页的 InstanceKnowledgeGraph 同源视觉，但：
- * - 节点按「本体」着色（簇叠加视图），而不是按对象类型自身颜色；
- * - 支持跨本体同名类型桥接边（虚线，kind=bridge）；
- * - 布局用确定性聚类排布（见 networkModel.clusterPositions），不用随机力导向。
+ * 渲染语言对齐 Graphify-Labs/graphify 的 HTML 导出（vis.js Network）：
+ * - 深色画布（#0f0f1a）+ 社区配色点状节点，节点按本体着色；
+ * - 力导向物理布局：用确定性聚类坐标做种子，再由 cose 弹簧-斥力模型收敛，
+ *   兼顾"有机生长感"与"同一数据簇不乱飞"的稳定性；
+ * - 节点直径随度数放大（graphify 的 size = f(degree)）；
+ * - 边默认弱化（低透明度细线 + 小箭头 + 隐藏标签），悬停/路径高亮才显性化；
+ * - 实例标签在低缩放下隐藏，避免小节点标签糊成一片。
  * 组件本身无业务状态，高亮集合与选中回调全部由页面注入。
  */
 import { useEffect, useMemo, useRef } from 'react'
@@ -14,9 +17,18 @@ import type {
   NetworkGraphEdge,
   NetworkGraphNode,
 } from '@/api/ontologyNetwork'
-import { clusterPositions, ontologyColorMap } from './networkModel'
+import {
+  clusterPositions,
+  degreeMap,
+  maxDegreeOf,
+  nodeSize,
+  ontologyColorMap,
+} from './networkModel'
 
-const TYPE_COLORS = ['#0f766e', '#0369a1', '#7c3aed', '#b45309', '#be123c', '#15803d']
+const CANVAS_BG = '#0f0f1a'
+const FALLBACK_COLORS = ['#4E79A7', '#F28E2B', '#E15759', '#76B7B2', '#59A14F']
+/** 实例标签显性化所需的最低缩放（低于此值只显示对象类型标签）。 */
+const INSTANCE_LABEL_ZOOM = 0.55
 
 export interface NetworkCanvasHighlight {
   pathNodeIds?: Set<string>
@@ -36,266 +48,342 @@ interface Props {
   onBackgroundTap?: () => void
   /** 暴露 cytoscape 实例给页面（缩放/聚焦工具条）。 */
   onReady?: (cy: Core | null) => void
+  /** 跨重建的位置缓存：数据刷新（搜索/层级切换）时已有节点不重新飞位。 */
+  positionsRef?: React.MutableRefObject<Map<string, { x: number; y: number }>>
 }
 
 export default function NetworkCanvas(
-  { nodes, edges, sections, highlight, onSelect, onBackgroundTap, onReady }: Props,
+  { nodes, edges, sections, highlight, onSelect, onBackgroundTap, onReady, positionsRef }: Props,
 ) {
   const hostRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<Core | null>(null)
   const colorByOntology = useMemo(() => ontologyColorMap(sections), [sections])
-  const hasAnalysis = !!(highlight?.pathNodeIds?.size
-    || highlight?.directImpactIds?.size
-    || highlight?.indirectImpactIds?.size
-    || highlight?.changeNodeId)
+  const degrees = useMemo(() => degreeMap(edges), [edges])
+  const maxDegree = useMemo(() => maxDegreeOf(edges), [edges])
 
+  // ---- 画布构建：仅在图数据（节点/边/本体清单）变化时整体重建 ----
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
-    const positions = clusterPositions(nodes)
-    const pathNodeIds = highlight?.pathNodeIds || new Set<string>()
-    const pathEdgeIds = highlight?.pathEdgeIds || new Set<string>()
-    const directImpactIds = highlight?.directImpactIds || new Set<string>()
-    const indirectImpactIds = highlight?.indirectImpactIds || new Set<string>()
-    const changeNodeId = highlight?.changeNodeId || ''
+    const cache = positionsRef?.current
+    const seeded = clusterPositions(nodes)
+    const positions = new Map(seeded)
+    if (cache) {
+      // 缓存优先：数据刷新时保留用户已经"盘熟"的布局，只让新增节点参与收敛
+      for (const [id, position] of cache) positions.set(id, position)
+    }
+    const cachedRatio = nodes.length === 0 ? 0
+      : nodes.filter(node => cache?.has(node.id)).length / nodes.length
 
     const elements: ElementDefinition[] = [
-      ...nodes.map((node, index) => {
-        const isBridgeEndpoint = edges.some(
-          edge => edge.kind === 'bridge' && (edge.source === node.id || edge.target === node.id))
-        const classes = [
-          node.kind.replace('_', '-'),
-          pathNodeIds.has(node.id) ? 'path-node' : '',
-          directImpactIds.has(node.id) ? 'direct-impact' : '',
-          indirectImpactIds.has(node.id) ? 'indirect-impact' : '',
-          node.id === changeNodeId ? 'change-node' : '',
-          node.id === highlight?.selectedNodeId ? 'selected-node' : '',
-          isBridgeEndpoint ? 'bridge-endpoint' : '',
-          hasAnalysis
-            && !pathNodeIds.has(node.id)
-            && !directImpactIds.has(node.id)
-            && !indirectImpactIds.has(node.id)
-            && node.id !== changeNodeId
-            ? 'dimmed' : '',
-        ].filter(Boolean).join(' ')
-        return {
-          group: 'nodes' as const,
-          data: {
-            id: node.id,
-            label: node.label,
-            secondary: node.kind === 'object_type'
-              ? `${node.count || 0} 个实例`
-              : node.secondaryLabel || '',
-            kind: node.kind,
-            // 全局视图按本体着色；无归属（异常兜底）时退回类型调色板
-            color: colorByOntology.get(node.ontologyId) || TYPE_COLORS[index % TYPE_COLORS.length],
-          },
-          position: positions.get(node.id),
-          classes,
-        }
-      }),
+      ...nodes.map(node => ({
+        group: 'nodes' as const,
+        data: {
+          id: node.id,
+          label: node.label,
+          kind: node.kind,
+          size: nodeSize(node, degrees.get(node.id) || 0, maxDegree),
+          color: colorByOntology.get(node.ontologyId) || FALLBACK_COLORS[0],
+        },
+        position: positions.get(node.id),
+        classes: node.kind === 'object_type' ? 'object-type' : 'instance',
+      })),
       ...edges.map(edge => ({
         group: 'edges' as const,
         data: {
           id: edge.id,
           source: edge.source,
           target: edge.target,
-          label: edge.kind === 'contains' || edge.kind === 'attribute' ? '' : edge.label,
+          label: edge.label,
           kind: edge.kind,
         },
-        classes: [
-          edge.kind.replace('_', '-'),
-          pathEdgeIds.has(edge.id) ? 'path-edge' : '',
-          hasAnalysis && edge.kind === 'relation' ? 'impact-edge' : '',
-          // 分析态下只保留路径/关系/桥接的对比度，装饰性边（contains 等）淡出
-          hasAnalysis && !pathEdgeIds.has(edge.id)
-            && edge.kind !== 'relation' && edge.kind !== 'bridge' ? 'dimmed' : '',
-        ].filter(Boolean).join(' '),
+        classes: edge.kind.replace('_', '-'),
       })),
     ]
 
     const cy = cytoscape({
       container: host,
       elements,
-      layout: { name: 'preset', fit: true, padding: 54 },
       minZoom: 0.06,
-      maxZoom: 2.6,
+      maxZoom: 3,
       boxSelectionEnabled: false,
-      autoungrabify: false,
+      wheelSensitivity: 0.25,
       style: [
         {
           selector: 'node',
           style: {
-            'background-color': '#ffffff',
-            'border-color': '#94a3b8',
-            'border-width': 1.5,
-            color: '#0f172a',
+            shape: 'ellipse',
+            width: 'data(size)',
+            height: 'data(size)',
+            'background-color': 'data(color)',
+            'border-color': 'data(color)',
+            'border-width': 1.2,
+            'border-opacity': 0.9,
+            color: '#dcdce8',
             label: 'data(label)',
             'font-size': 11,
             'font-weight': 600,
             'text-wrap': 'ellipsis',
-            'text-max-width': '112px',
-            'text-valign': 'center',
-            'text-halign': 'center',
+            'text-max-width': '110px',
+            'text-valign': 'bottom',
+            'text-margin-y': 5,
+            'text-background-color': CANVAS_BG,
+            'text-background-opacity': 0.72,
+            'text-background-padding': '2px',
+            'text-background-shape': 'roundrectangle',
             'overlay-opacity': 0,
-            width: 54,
-            height: 54,
             'transition-property': 'border-color, border-width, opacity, background-color',
-            'transition-duration': 180,
+            'transition-duration': 160,
           },
         },
         {
-          selector: 'node.object-type',
-          style: {
-            shape: 'round-rectangle',
-            width: 132,
-            height: 58,
-            'background-color': '#f8fafc',
-            'border-color': 'data(color)',
-            'border-width': 2.5,
-            'text-margin-y': -6,
-          },
-        },
-        {
+          // graphify：只有高度数节点默认带标签；这里对象类型始终显示
           selector: 'node.instance',
-          style: {
-            shape: 'ellipse',
-            width: 76,
-            height: 76,
-            'background-color': '#ffffff',
-            'border-color': 'data(color)',
-          },
+          style: { 'font-size': 10, 'font-weight': 500 },
+        },
+        {
+          selector: 'node.label-muted',
+          style: { label: '', },
         },
         {
           selector: 'edge',
           style: {
             width: 1.4,
-            'line-color': '#94a3b8',
-            'target-arrow-color': '#94a3b8',
+            'line-color': 'rgba(154,164,214,0.32)',
+            'target-arrow-color': 'rgba(154,164,214,0.32)',
             'target-arrow-shape': 'triangle',
+            'arrow-scale': 0.55,
             'curve-style': 'bezier',
-            label: 'data(label)',
+            'control-point-step-size': 36,
+            label: '',
             'font-size': 9,
-            color: '#64748b',
-            'text-background-color': '#ffffff',
-            'text-background-opacity': 0.86,
-            'text-background-padding': '3px',
+            color: '#b9b9d6',
+            'text-background-color': CANVAS_BG,
+            'text-background-opacity': 0.85,
+            'text-background-padding': '2px',
             'text-rotation': 'autorotate',
             'overlay-opacity': 0,
             'transition-property': 'line-color, width, opacity',
-            'transition-duration': 180,
+            'transition-duration': 160,
           },
         },
         {
-          selector: 'edge.contains',
+          selector: 'edge.relation',
+          style: { width: 1.7, 'line-color': 'rgba(164,176,224,0.42)', 'target-arrow-color': 'rgba(164,176,224,0.42)' },
+        },
+        {
+          selector: 'edge.schema-relation',
           style: {
+            width: 1.2,
             'line-style': 'dashed',
+            'line-dash-pattern': [5, 4],
+            'line-color': 'rgba(140,152,206,0.34)',
+            'target-arrow-color': 'rgba(140,152,206,0.34)',
+          },
+        },
+        {
+          // 层级归属线：只做极淡的"聚拢暗示"，不与关系边抢视觉
+          selector: 'edge.contains, edge.attribute',
+          style: {
+            width: 0.8,
+            'line-style': 'dashed',
+            'line-dash-pattern': [2, 4],
+            'line-color': 'rgba(120,130,180,0.16)',
             'target-arrow-shape': 'none',
-            'line-color': '#cbd5e1',
-            width: 1,
           },
         },
         {
           selector: 'edge.bridge',
           style: {
             'line-style': 'dashed',
-            'line-color': '#8b5cf6',
+            'line-dash-pattern': [7, 5],
+            'line-color': 'rgba(179,157,255,0.66)',
             'target-arrow-shape': 'none',
-            width: 2,
+            width: 1.8,
+            label: 'data(label)',
+            color: '#cbb8ff',
+            'font-size': 9,
             'z-index': 10,
           },
         },
         {
-          selector: 'edge.schema-relation',
-          style: { width: 1.6 },
+          selector: 'edge.peek, edge.path-edge, edge.impact-edge',
+          style: { label: 'data(label)', width: 2.6 },
         },
         {
-          selector: '.bridge-endpoint',
-          style: { 'underlay-color': '#ddd6fe', 'underlay-opacity': 0.4, 'underlay-padding': 6 },
+          selector: '.dimmed',
+          style: { opacity: 0.1 },
         },
         {
           selector: '.path-node',
           style: {
-            'border-color': '#2563eb',
-            'border-width': 4,
-            'background-color': '#eff6ff',
+            'border-color': '#5aa2ff',
+            'border-width': 3,
+            'underlay-color': '#5aa2ff',
+            'underlay-opacity': 0.3,
+            'underlay-padding': 4,
           },
         },
         {
           selector: '.path-edge',
           style: {
-            'line-color': '#2563eb',
-            'target-arrow-color': '#2563eb',
-            width: 4,
+            'line-color': '#5aa2ff',
+            'target-arrow-color': '#5aa2ff',
+            width: 3.4,
             'z-index': 20,
           },
         },
         {
           selector: '.change-node',
           style: {
-            'border-color': '#7c3aed',
-            'border-width': 5,
-            'background-color': '#f5f3ff',
+            'border-color': '#c084fc',
+            'border-width': 3.5,
+            'underlay-color': '#c084fc',
+            'underlay-opacity': 0.32,
+            'underlay-padding': 5,
           },
         },
         {
           selector: '.direct-impact',
-          style: {
-            'border-color': '#ea580c',
-            'border-width': 4,
-            'background-color': '#fff7ed',
-          },
+          style: { 'border-color': '#ff9130', 'border-width': 3 },
         },
         {
           selector: '.indirect-impact',
-          style: {
-            'border-color': '#dc2626',
-            'border-width': 3,
-            'border-style': 'dashed',
-            'background-color': '#fef2f2',
-          },
+          style: { 'border-color': '#e05252', 'border-width': 2.4, 'border-style': 'dashed' },
         },
         {
           selector: '.impact-edge',
           style: {
-            'line-color': '#f97316',
-            'target-arrow-color': '#f97316',
+            'line-color': '#ff9130',
+            'target-arrow-color': '#ff9130',
             width: 2.8,
+            'z-index': 18,
           },
         },
-        { selector: '.dimmed', style: { opacity: 0.16 } },
         {
           selector: '.selected-node',
           style: {
-            'border-color': '#0f766e',
-            'border-width': 5,
-            'underlay-color': '#99f6e4',
-            'underlay-opacity': 0.34,
-            'underlay-padding': 8,
+            'border-color': '#ffffff',
+            'border-width': 2.6,
+            'underlay-color': '#ffffff',
+            'underlay-opacity': 0.22,
+            'underlay-padding': 6,
+          },
+        },
+        {
+          selector: 'node.hover-ring',
+          style: {
+            'border-color': '#ffffff',
+            'border-width': 2,
           },
         },
       ],
-    })
+      layout: {
+        name: 'cose',
+        // 聚类种子坐标 + 缓存：已有节点不随机重排，只做局部收敛
+        randomize: cachedRatio < 0.5,
+        transform: (node: any) => positions.get(node.id()) || { x: 0, y: 0 },
+        nodeRepulsion: () => 9000,
+        idealEdgeLength: () => 120,
+        edgeElasticity: () => 0.06,
+        nestingFactor: 1.2,
+        gravity: 0.35,
+        numIter: cachedRatio < 0.5 ? 420 : 140,
+        initialTemp: 220,
+        coolingFactor: 0.985,
+        minTemp: 1,
+        componentSpacing: 130,
+        nodeOverlap: 9000,
+        animate: true,
+        animationDuration: cachedRatio < 0.5 ? 620 : 260,
+        fit: false,
+        padding: 60,
+      },
+    } as any)
+
+    const applyZoomLabels = () => {
+      const showAll = cy.zoom() >= INSTANCE_LABEL_ZOOM
+      cy.batch(() => {
+        cy.nodes('node.instance').toggleClass('label-muted', !showAll)
+      })
+    }
+    applyZoomLabels()
+    cy.on('zoom', applyZoomLabels)
+
+    cy.on('mouseover', 'edge.relation', event => event.target.addClass('peek'))
+    cy.on('mouseout', 'edge.relation', event => event.target.removeClass('peek'))
+    cy.on('mouseover', 'node', event => event.target.addClass('hover-ring'))
+    cy.on('mouseout', 'node', event => event.target.removeClass('hover-ring'))
+
     cy.on('tap', 'node', event => onSelect?.(event.target.id()))
     cy.on('tap', event => {
       if (event.target === cy) onBackgroundTap?.()
     })
+
+    const savePositions = () => {
+      if (!cache) return
+      cache.clear()
+      cy.nodes().forEach(node => { cache.set(node.id(), { x: node.position().x, y: node.position().y }) })
+    }
+    cy.one('layoutstop', () => {
+      savePositions()
+      cy.fit(undefined, 64)
+    })
+
     cyRef.current = cy
     onReady?.(cy)
-    requestAnimationFrame(() => cy.fit(undefined, 54))
     return () => {
+      savePositions()
       cy.destroy()
       if (cyRef.current === cy) cyRef.current = null
       onReady?.(null)
     }
-    // 画布元素整体重建；高亮集合变化通过完整重建保证与 InstanceKnowledgeGraph 一致的语义
-  }, [nodes, edges, sections, colorByOntology, hasAnalysis,
-    highlight?.pathNodeIds, highlight?.pathEdgeIds, highlight?.directImpactIds,
-    highlight?.indirectImpactIds, highlight?.changeNodeId, highlight?.selectedNodeId,
-    onSelect, onBackgroundTap])
+    // 仅图数据变化才重建；高亮/选中由下方轻量 effect 处理，避免力导向重放
+  }, [nodes, edges, sections, colorByOntology, degrees, maxDegree, positionsRef])
+
+  // ---- 高亮应用：不重建画布，只批量切换类 ----
+  useEffect(() => {
+    const cy = cyRef.current
+    if (!cy || cy.destroyed()) return
+    const pathNodeIds = highlight?.pathNodeIds || new Set<string>()
+    const pathEdgeIds = highlight?.pathEdgeIds || new Set<string>()
+    const directImpactIds = highlight?.directImpactIds || new Set<string>()
+    const indirectImpactIds = highlight?.indirectImpactIds || new Set<string>()
+    const changeNodeId = highlight?.changeNodeId || ''
+    const selectedNodeId = highlight?.selectedNodeId || ''
+    const hasAnalysis = pathNodeIds.size > 0 || directImpactIds.size > 0
+      || indirectImpactIds.size > 0 || !!changeNodeId
+
+    cy.batch(() => {
+      cy.nodes().forEach(node => {
+        const id = node.id()
+        const classes = [
+          pathNodeIds.has(id) ? 'path-node' : '',
+          directImpactIds.has(id) ? 'direct-impact' : '',
+          indirectImpactIds.has(id) ? 'indirect-impact' : '',
+          id === changeNodeId ? 'change-node' : '',
+          id === selectedNodeId ? 'selected-node' : '',
+          hasAnalysis && !pathNodeIds.has(id) && !directImpactIds.has(id)
+            && !indirectImpactIds.has(id) && id !== changeNodeId ? 'dimmed' : '',
+        ].filter(Boolean).join(' ')
+        node.classes(node.hasClass('object-type') ? `object-type ${classes}` : `instance ${classes}`)
+      })
+      cy.edges().forEach(edge => {
+        const kindClass = edge.data('kind').replace('_', '-')
+        const id = edge.id()
+        const classes = [
+          pathEdgeIds.has(id) ? 'path-edge' : '',
+          hasAnalysis && edge.data('kind') === 'relation' ? 'impact-edge' : '',
+          hasAnalysis && !pathEdgeIds.has(id) && edge.data('kind') !== 'relation'
+            && edge.data('kind') !== 'bridge' ? 'dimmed' : '',
+        ].filter(Boolean).join(' ')
+        edge.classes(`${kindClass} ${classes}`)
+      })
+    })
+  }, [highlight])
 
   return (
-    <div className="relative h-full min-h-0 w-full overflow-hidden bg-[radial-gradient(circle_at_1px_1px,#dbe4ee_1px,transparent_0)] [background-size:24px_24px]">
+    <div className="relative h-full min-h-0 w-full overflow-hidden" style={{ backgroundColor: CANVAS_BG }}>
       <div ref={hostRef} className="absolute inset-0" aria-label="本体网络全局画布" />
     </div>
   )
