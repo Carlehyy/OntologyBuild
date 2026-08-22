@@ -82,6 +82,8 @@ const DEFAULT_SELECTED_MAX = 8
 export default function OntologyNetworkPage() {
   const { containerRef, sizes, startResize } = useSplitLayout([72, 28])
   const cyRef = useRef<Core | null>(null)
+  // 跨数据刷新保留力导向布局位置：搜索/层级切换时已布局节点不重飞
+  const positionsRef = useRef(new Map<string, { x: number; y: number }>())
 
   // -- 数据范围 --
   const { data: overview = [], isLoading: overviewLoading, refetch: refetchOverview } = useQuery({
@@ -362,22 +364,23 @@ export default function OntologyNetworkPage() {
               onSelect={setSelectedNodeId}
               onBackgroundTap={() => setSelectedNodeId('')}
               onReady={cy => { cyRef.current = cy }}
+              positionsRef={positionsRef}
             />
 
             {(graphFetching || overviewLoading) && (
-              <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/70 backdrop-blur-[1px]">
-                <div className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-white px-3 py-2 text-xs text-slate-600 shadow-sm">
-                  <Loader2 size={14} className="animate-spin text-violet-600" />正在构建全局图谱…
+              <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#0f0f1a]/70 backdrop-blur-[1px]">
+                <div className="flex items-center gap-2 rounded-md border border-[#3a3a5e] bg-[#16162a] px-3 py-2 text-xs text-slate-300 shadow-sm">
+                  <Loader2 size={14} className="animate-spin text-violet-400" />正在构建全局图谱…
                 </div>
               </div>
             )}
 
             {!graphFetching && selectedIds.length > 0 && displayGraph.nodes.length === 0 && (
               <div className="absolute inset-0 z-10 flex items-center justify-center p-6">
-                <div className="max-w-sm rounded-lg border border-dashed border-slate-300 bg-white/90 px-5 py-6 text-center">
-                  <Network size={22} className="mx-auto mb-2 text-slate-400" />
-                  <p className="text-sm font-medium text-slate-700">没有可展示的图数据</p>
-                  <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                <div className="max-w-sm rounded-lg border border-dashed border-[#3a3a5e] bg-[#14142a]/95 px-5 py-6 text-center">
+                  <Network size={22} className="mx-auto mb-2 text-slate-500" />
+                  <p className="text-sm font-medium text-slate-200">没有可展示的图数据</p>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-400">
                     选中的本体还没有对象类型，或搜索条件没有匹配到实例；可在右侧调整数据范围。
                   </p>
                 </div>
@@ -386,53 +389,53 @@ export default function OntologyNetworkPage() {
 
             {selectedIds.length === 0 && !graphFetching && (
               <div className="absolute inset-0 z-10 flex items-center justify-center p-6">
-                <div className="max-w-sm rounded-lg border border-dashed border-slate-300 bg-white/90 px-5 py-6 text-center">
-                  <Boxes size={22} className="mx-auto mb-2 text-slate-400" />
-                  <p className="text-sm font-medium text-slate-700">请选择要查看的本体</p>
-                  <p className="mt-1 text-xs leading-relaxed text-slate-500">在右侧「数据范围」中勾选本体后，全局网络会在此呈现。</p>
+                <div className="max-w-sm rounded-lg border border-dashed border-[#3a3a5e] bg-[#14142a]/95 px-5 py-6 text-center">
+                  <Boxes size={22} className="mx-auto mb-2 text-slate-500" />
+                  <p className="text-sm font-medium text-slate-200">请选择要查看的本体</p>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-400">在右侧「数据范围」中勾选本体后，全局网络会在此呈现。</p>
                 </div>
               </div>
             )}
 
             {graph.meta.truncated && (
-              <div className="absolute left-3 top-3 z-10 rounded-md border border-amber-200 bg-amber-50/95 px-2.5 py-1.5 text-[10px] font-medium text-amber-800 shadow-sm backdrop-blur">
+              <div className="absolute left-3 top-3 z-10 rounded-md border border-amber-500/40 bg-amber-950/80 px-2.5 py-1.5 text-[10px] font-medium text-amber-300 shadow-sm backdrop-blur">
                 已按预算截断（节点 {graph.meta.nodeCount}/{graph.meta.nodeBudget} · 边 {graph.meta.edgeCount}/{graph.meta.edgeBudget}）
               </div>
             )}
 
-            <div className="absolute bottom-3 left-3 z-10 max-w-[240px] rounded-md border border-[var(--color-border)] bg-white/92 px-2.5 py-2 text-[10px] text-slate-600 shadow-sm backdrop-blur">
-              <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-slate-700"><Layers3 size={11} />图例（按本体着色）</div>
+            <div className="absolute bottom-3 left-3 z-10 max-w-[240px] rounded-md border border-[#2a2a4e] bg-[#121224]/88 px-2.5 py-2 text-[10px] text-slate-300 shadow-sm backdrop-blur">
+              <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-slate-200"><Layers3 size={11} />图例（按本体着色）</div>
               <div className="space-y-1">
                 {legend.map(item => (
                   <span key={item.id} className="flex items-center gap-1.5">
-                    <i className="h-2.5 w-2.5 shrink-0 rounded-sm border-2" style={{ borderColor: item.color }} />
+                    <i className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} />
                     <span className="truncate">{item.label}</span>
-                    {!item.published && <span className="shrink-0 rounded bg-slate-100 px-1 text-[9px] text-slate-500">未发布</span>}
+                    {!item.published && <span className="shrink-0 rounded bg-slate-700 px-1 text-[9px] text-slate-300">未发布</span>}
                   </span>
                 ))}
                 {graph.bridges.enabled && (
-                  <span className="flex items-center gap-1.5 pt-0.5 text-slate-500">
-                    <i className="h-0 w-4 shrink-0 border-t-2 border-dashed border-violet-500" />同名类型桥接（启发式）
+                  <span className="flex items-center gap-1.5 pt-0.5 text-slate-400">
+                    <i className="h-0 w-4 shrink-0 border-t-2 border-dashed border-[#b39dff]" />同名类型桥接（启发式）
                   </span>
                 )}
               </div>
             </div>
 
             {(pathResult || impactResult) && (
-              <div className="absolute bottom-3 left-1/2 z-10 w-[min(520px,calc(100%-24px))] -translate-x-1/2 rounded-lg border border-[var(--color-border)] bg-white/95 p-3 shadow-lg backdrop-blur" data-testid="network-analysis-summary">
+              <div className="absolute bottom-3 left-1/2 z-10 w-[min(520px,calc(100%-24px))] -translate-x-1/2 rounded-lg border border-[#2a2a4e] bg-[#14142a]/95 p-3 shadow-lg backdrop-blur" data-testid="network-analysis-summary">
                 {pathResult && (
                   <div className="flex items-start gap-2">
                     <Route size={15} className="mt-0.5 shrink-0 text-blue-600" />
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-slate-800">
+                      <p className="text-xs font-semibold text-slate-100">
                         {pathResult.found ? `找到 ${pathResult.paths.length} 条候选路径` : '当前深度内没有找到路径'}
                       </p>
-                      <p className="mt-0.5 truncate text-[11px] text-slate-500">{pathResult.sourceLabel} → {pathResult.targetLabel}</p>
+                      <p className="mt-0.5 truncate text-[11px] text-slate-400">{pathResult.sourceLabel} → {pathResult.targetLabel}</p>
                       {pathResult.paths.length > 1 && (
                         <div className="mt-2 flex flex-wrap gap-1">
                           {pathResult.paths.map((path, index) => (
                             <button key={index} type="button" onClick={() => setSelectedPath(index)}
-                              className={['rounded px-2 py-1 text-[10px] font-medium', selectedPath === index ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'].join(' ')}>
+                              className={['rounded px-2 py-1 text-[10px] font-medium', selectedPath === index ? 'bg-blue-600 text-white' : 'bg-slate-700/70 text-slate-300 hover:bg-slate-600'].join(' ')}>
                               路径 {index + 1} · {path.hops} 跳
                             </button>
                           ))}
@@ -440,23 +443,23 @@ export default function OntologyNetworkPage() {
                       )}
                     </div>
                     <button type="button" onClick={clearAnalysis} aria-label="清除路径分析"
-                      className="flex h-7 w-7 items-center justify-center rounded text-slate-400 hover:bg-slate-100"><X size={13} /></button>
+                      className="flex h-7 w-7 items-center justify-center rounded text-slate-500 hover:bg-slate-700/60"><X size={13} /></button>
                   </div>
                 )}
                 {impactResult && (
                   <div className="flex items-start gap-2">
                     <ShieldCheck size={15} className="mt-0.5 shrink-0 text-violet-600" />
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-slate-800">只读关联影响预演</p>
-                      <p className="mt-0.5 text-[11px] text-slate-500">
+                      <p className="text-xs font-semibold text-slate-100">只读关联影响预演</p>
+                      <p className="mt-0.5 text-[11px] text-slate-400">
                         直接 {impactResult.summary.direct} · 间接 {impactResult.summary.indirect} · 未写入真实数据
                       </p>
-                      <div className="mt-2 flex items-start gap-1.5 rounded-md bg-amber-50 px-2 py-1.5 text-[10.5px] leading-relaxed text-amber-800">
+                      <div className="mt-2 flex items-start gap-1.5 rounded-md bg-amber-950/60 px-2 py-1.5 text-[10.5px] leading-relaxed text-amber-300">
                         <BadgeInfo size={12} className="mt-0.5 shrink-0" />{impactResult.disclaimer}
                       </div>
                     </div>
                     <button type="button" onClick={clearAnalysis} aria-label="清除影响分析"
-                      className="flex h-7 w-7 items-center justify-center rounded text-slate-400 hover:bg-slate-100"><X size={13} /></button>
+                      className="flex h-7 w-7 items-center justify-center rounded text-slate-500 hover:bg-slate-700/60"><X size={13} /></button>
                   </div>
                 )}
               </div>

@@ -9,11 +9,13 @@ import type {
   NetworkGraphNode,
 } from '@/api/ontologyNetwork'
 
-/** 本体簇固定调色板：按本体在响应中的顺序取色，保证同一会话内稳定。 */
+/**
+ * 本体簇固定调色板：取 graphify 的社区配色（Tableau10），按本体在响应中的
+ * 顺序取色，保证同一会话内稳定；深色画布上饱和度与区分度都更好。
+ */
 export const ONTOLOGY_PALETTE = [
-  '#0f766e', '#0369a1', '#7c3aed', '#b45309',
-  '#be123c', '#15803d', '#6d28d9', '#0e7490',
-  '#a16207', '#9f1239', '#1d4ed8', '#047857',
+  '#4E79A7', '#F28E2B', '#E15759', '#76B7B2', '#59A14F',
+  '#EDC948', '#B07AA1', '#FF9DA7', '#9C755F', '#BAB0AC',
 ] as const
 
 export function ontologyColorMap(sections: { id: string }[]): Map<string, string> {
@@ -22,6 +24,42 @@ export function ontologyColorMap(sections: { id: string }[]): Map<string, string
     map.set(section.id, ONTOLOGY_PALETTE[index % ONTOLOGY_PALETTE.length])
   })
   return map
+}
+
+/** graphify 同款节点尺寸策略：点状节点，直径随度数线性放大。 */
+export function degreeMap(edges: NetworkGraphEdge[]): Map<string, number> {
+  const degrees = new Map<string, number>()
+  for (const edge of edges) {
+    // 桥接边是展示层启发式，不计入度数，避免虚线装饰干扰大小语义。
+    if (edge.kind === 'bridge') continue
+    degrees.set(edge.source, (degrees.get(edge.source) || 0) + 1)
+    degrees.set(edge.target, (degrees.get(edge.target) || 0) + 1)
+  }
+  return degrees
+}
+
+const TYPE_BASE_SIZE = 30
+const TYPE_SIZE_RANGE = 26
+const INSTANCE_BASE_SIZE = 15
+const INSTANCE_SIZE_RANGE = 11
+
+/** 节点直径（px）：对象类型显著大于实例，同 kind 内按度数归一化放大。 */
+export function nodeSize(
+  node: Pick<NetworkGraphNode, 'kind'>,
+  degree: number,
+  maxDegree: number,
+): number {
+  const normalized = maxDegree > 0 ? Math.min(1, degree / maxDegree) : 0
+  return node.kind === 'object_type'
+    ? TYPE_BASE_SIZE + TYPE_SIZE_RANGE * normalized
+    : INSTANCE_BASE_SIZE + INSTANCE_SIZE_RANGE * normalized
+}
+
+/** 全画布的度数上限（用于归一化）。 */
+export function maxDegreeOf(edges: NetworkGraphEdge[]): number {
+  let max = 0
+  for (const degree of degreeMap(edges).values()) max = Math.max(max, degree)
+  return max
 }
 
 /**
