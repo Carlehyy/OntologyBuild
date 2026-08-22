@@ -407,3 +407,32 @@ test('深色模式：页面与链路全景随主题渲染', async ({ page }) => 
   await expect.poll(async () => page.locator('.dmo-flow-canvas svg path').count()).toBeGreaterThan(0)
   await expect(page.locator('.dmo-card')).toHaveCSS('background-color', 'rgb(22, 28, 38)')
 })
+
+test('element 深链在页面已打开时同样生效（同文档路由更新直接打开对应弹窗）', async ({ page }) => {
+  await mockMappingPreview(page, { withUnmappedObject: true })
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  await expect(page.getByText('映射结果清单')).toBeVisible()
+  await expect(page.getByRole('dialog', { name: '订单', exact: true })).toHaveCount(0)
+  // 模拟「已停留在本页时收到他人分享的深链」：仅 hash 变化的同文档导航，
+  // 选中状态必须跟随 URL 参数打开对应元素的血缘详情，而不是被组件内旧状态覆盖回删。
+  await page.evaluate(() => {
+    window.location.hash = '#/ontologies/ontology-preview?tab=data-mapping&element=object:object-log'
+  })
+  const lineage = page.getByRole('dialog', { name: '日志', exact: true })
+  await expect(lineage).toBeVisible()
+  // 打开后参数保持，不因同步逻辑被误删
+  expect(decodeURIComponent(page.url())).toContain('element=object:object-log')
+})
+
+test('KPI 首个数据帧直出终值：进页不再从 0 重放', async ({ page }) => {
+  await mockMappingPreview(page, { withInstances: true })
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  // 清单可见即代表数据已就绪；此刻 KPI 必须已是终值（1/3 可用、100% 字段连接），
+  // 不允许先渲染一帧全 0 再动画过渡（快速扫读会误读为链路全断）。
+  await expect(page.getByText('映射结果清单')).toBeVisible()
+  const kpiText = await page.locator('.dmo-kpis').innerText()
+  expect(kpiText).toContain('1 /')
+  expect(kpiText).toContain('100%')
+})
