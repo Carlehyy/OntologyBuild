@@ -5,6 +5,7 @@
   GET    /                      列表（筛选 + 分页）
   POST   /                      平台录入
   GET    /stats/summary         概览计数
+  GET    /export                按筛选条件导出 CSV（审计留存）
   GET    /ingest-keys           密钥列表（admin）
   POST   /ingest-keys           创建密钥（admin，明文仅此一次返回）
   DELETE /ingest-keys/{id}      吊销密钥（admin）
@@ -27,9 +28,12 @@
 """
 from __future__ import annotations
 
+import csv
+import io
 import tempfile
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
@@ -40,7 +44,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
@@ -126,6 +130,89 @@ def create_event(body: EventCreate, db: Session = Depends(get_db),
 @router.get("/stats/summary")
 def stats_summary(db: Session = Depends(get_db), _=Depends(get_current_user)):
     return _ok(query_service.stats_summary(db, now_utc=_now_utc()))
+
+
+# —— 导出（审计留存）——
+
+_SEVERITY_LABELS = {
+    "critical": "严重", "high": "高级", "medium": "中级",
+    "low": "低级", "info": "信息",
+}
+_STATUS_LABELS = {m.STATUS_ACTIVE: "活跃", m.STATUS_ARCHIVED: "归档"}
+_CSV_HEADERS = [
+    "事件编号", "标题", "事件类型", "级别", "状态",
+    "来源", "上报人", "发生时间", "登记时间", "描述",
+]
+
+
+def _shanghai_text(value: Optional[datetime]) -> str:
+    """数据库 UTC 时间 → 上海本地可读文本，空值为空串。"""
+    if not value:
+        return ""
+    return _as_utc(value).astimezone(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _csv_safe(value) -> str:
+    """防公式注入：Excel 会把以 = + - @ 开头的单元格当公式执行。"""
+    text = "" if value is None else str(value)
+    return f"'{text}" if text[:1] in ("=", "+", "-", "@") else text
+
+
+@router.get("/export")
+def export_events(
+    q: Optional[str] = Query(None, description="标题/描述/编号模糊搜索"),
+    source_type: Optional[str] = Query(None),
+    event_type: Optional[str] = Query(None),
+    severity: Optional[str] = Query(None),
+    status: Optional[str] = Query(None, description="active|archived|all；缺省仅 active"),
+    ontology_id: Optional[str] = Query(None),
+    start: Optional[datetime] = Query(None, description="recorded_at 下界"),
+    end: Optional[datetime] = Query(None, description="recorded_at 上界"),
+    db: Session = Depends(get_db), _=Depends(get_current_user),
+):
+    """按列表同款筛选条件导出事件 CSV（UTF-8 带 BOM，Excel 可直接打开）。"""
+    rows, truncated = query_service.export_rows(
+        db,
+        q=q,
+        source_type=source_type,
+        event_type=event_type,
+        severity=severity,
+        status=status,
+        ontology_id=ontology_id,
+        start=start,
+        end=end,
+    )
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(_CSV_HEADERS)
+    for ev in rows:
+        writer.writerow([
+            _csv_safe(ev.event_no),
+            _csv_safe(ev.title),
+            _csv_safe(ev.event_type or ""),
+            _SEVERITY_LABELS.get(ev.severity, ev.severity or ""),
+            _STATUS_LABELS.get(ev.status, ev.status or ""),
+            _csv_safe(service.source_label(ev)),
+            _csv_safe(ev.reporter_name or ""),
+            _shanghai_text(ev.occurred_at),
+            _shanghai_text(ev.recorded_at),
+            _csv_safe(ev.description or ""),
+        ])
+    if truncated:
+        writer.writerow([""] * (len(_CSV_HEADERS) - 1) + [
+            f"注意：已达单次导出上限 {query_service.EXPORT_MAX_ROWS} 条，"
+            "结果被截断，请缩小筛选范围后重试",
+        ])
+    filename = f"events-export-{_now_utc().astimezone(SHANGHAI_TZ):%Y%m%d-%H%M}.csv"
+    # BOM 让 Excel 按 UTF-8 识别中文表头
+    content = b"\xef\xbb\xbf" + buffer.getvalue().encode("utf-8")
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        },
+    )
 
 
 # —— 密钥管理（admin）——

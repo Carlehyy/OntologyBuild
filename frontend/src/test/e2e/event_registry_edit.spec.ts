@@ -42,6 +42,7 @@ async function mockEventRegistry(page: Page) {
     deletedAttachmentIds: [] as string[],
     uploadedFilenames: [] as string[],
     updatedBodies: [] as Record<string, unknown>[],
+    createdBodies: [] as Record<string, unknown>[],
   }
 
   await page.route(/^https?:\/\/[^/]+\/api\/v[12]\//, async (route: Route) => {
@@ -83,6 +84,15 @@ async function mockEventRegistry(page: Page) {
         }],
         auditTrail: [],
       })
+    }
+    if (url.pathname === '/api/v2/events' && request.method() === 'POST') {
+      calls.createdBodies.push(request.postDataJSON())
+      return ok({
+        ...eventItem,
+        id: 'event-created',
+        eventNo: 'EVT-20260822-new01',
+        attachmentCount: 0,
+      }, 201)
     }
     if (url.pathname === '/api/v2/events/event-1' && request.method() === 'PATCH') {
       calls.updatedBodies.push(request.postDataJSON())
@@ -164,12 +174,18 @@ test('事件登记列表与编辑附件流程符合交互要求', async ({ page 
 
   await page.getByRole('button', { name: '登记事件', exact: true }).click()
   const createDialog = page.getByRole('dialog', { name: '登记事件' })
+  // MYW-42 优化点4：必填校验一次报齐全部缺失项，无需多次提交试错。
   await createDialog.getByRole('button', { name: '登记', exact: true }).click()
-  await expect(createDialog.getByText('请填写事件标题')).toBeVisible()
+  await expect(
+    createDialog.getByText('请完善必填项：事件标题、事件类型、详细描述'),
+  ).toBeVisible()
   await createDialog.getByLabel('事件标题', { exact: false }).fill('新事件')
-  await createDialog.getByRole('button', { name: '登记', exact: true }).click()
-  await expect(createDialog.getByText('请选择或填写事件类型')).toBeVisible()
   await createDialog.getByLabel('事件类型', { exact: false }).fill('业务异常')
+  await createDialog
+    .getByLabel('详细描述', { exact: false })
+    .fill('补齐全部必填项后即可提交')
   await createDialog.getByRole('button', { name: '登记', exact: true }).click()
-  await expect(createDialog.getByText('请填写详细描述')).toBeVisible()
+  await expect(createDialog).toBeHidden()
+  expect(calls.createdBodies).toHaveLength(1)
+  expect(calls.createdBodies[0].title).toBe('新事件')
 })
