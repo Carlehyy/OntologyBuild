@@ -95,6 +95,16 @@ async function mockWorldModel(page: Page) {
     if (path.endsWith('/versions') && request.method() === 'GET') {
       return json(route, [{ id: 'v1', version_no: 1, duration_ms: 40, created_at: now }])
     }
+    if (path === `/api/v2/world-model/projects/${projectRow.id}/versions/v1` && request.method() === 'GET') {
+      return json(route, {
+        id: 'v1',
+        version_no: 1,
+        duration_ms: 40,
+        created_at: now,
+        test_input: { context: { current_value: 100 }, actions: [], horizon: 3 },
+        script: 'def simulate(context, actions, horizon):\n    return {"trajectory": [9, 9]}\n',
+      })
+    }
     if (path === '/api/v2/world-model/calls/overview') {
       return json(route, { total: 1, failed: 0, avg_duration_ms: 120 })
     }
@@ -423,7 +433,7 @@ test('开发页：执行通过才可保存，版本恢复需二次确认', async
   // 执行通过后保存才可用
   await page.getByRole('button', { name: '执行', exact: true }).click()
   await expect(page.getByText('simulate 返回值')).toBeVisible()
-  await expect(page.getByText('仅适用于居民用户')).toBeVisible()
+  await expect(page.getByText('适用边界：仅适用于居民用户')).toBeVisible()
   await expect(saveButton).toBeEnabled()
 
   // 保存成功出现版本号提示
@@ -436,6 +446,85 @@ test('开发页：执行通过才可保存，版本恢复需二次确认', async
   await expect(page.getByText('恢复到该历史版本？')).toBeVisible()
   await page.getByRole('button', { name: '取消' }).click()
   await expect(page.getByText('恢复到该历史版本？')).toHaveCount(0)
+})
+
+test('开发页：执行结果自动绘制轨迹折线，原始 JSON 折叠保留', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+  await mockWorldModel(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/#/world-model/models/${projectRow.id}/develop`)
+
+  // 契约返回数值 trajectory + confidence + boundary 时：折线预览 + 摘要行
+  await page.getByRole('button', { name: '执行', exact: true }).click()
+  await expect(page.getByText('simulate 返回值 · 轨迹预览')).toBeVisible()
+  await expect(page.getByText('轨迹 3 点')).toBeVisible()
+  await expect(page.getByText('置信度 0.8')).toBeVisible()
+  await expect(page.getByText('适用边界：仅适用于居民用户')).toBeVisible()
+  await expect(page.locator('section', { hasText: '执行结果' }).locator('canvas').first()).toBeVisible()
+
+  // 原始 JSON 默认折叠，展开后可核对
+  const rawDetails = page.locator('details', { hasText: '原始返回值（JSON）' })
+  await expect(rawDetails.locator('pre')).toBeHidden()
+  await rawDetails.locator('summary').click()
+  await expect(rawDetails.locator('pre')).toBeVisible()
+  await expect(rawDetails.locator('pre')).toContainText('"trajectory"')
+})
+
+test('开发页：历史版本可先查看脚本与入参，恢复时一并回退测试入参', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+  await mockWorldModel(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/#/world-model/models/${projectRow.id}/develop`)
+
+  // 展开查看：懒加载该版脚本与当时测试入参
+  await page.getByRole('button', { name: '历史版本' }).click()
+  await page.getByRole('button', { name: '查看', exact: true }).click()
+  await expect(page.getByText('该版脚本')).toBeVisible()
+  await expect(page.locator('pre', { hasText: 'return {"trajectory": [9, 9]}' })).toBeVisible()
+  await expect(page.getByText('该版测试入参')).toBeVisible()
+
+  // 确认恢复：编辑器与测试入参一并回退到该版
+  await page.getByRole('button', { name: '恢复' }).first().click()
+  await expect(page.getByText('恢复到该历史版本？')).toBeVisible()
+  // 确认框覆盖层内的「恢复」（抽屉列表项同名按钮仍在 DOM 中，需按覆盖层收敛）
+  await page.locator('div.fixed.inset-0').getByRole('button', { name: '恢复', exact: true }).click()
+  await expect(page.getByText('已恢复 v1 的脚本内容')).toBeVisible()
+  const editor = page.locator('.cm-content').first()
+  await expect(editor).toContainText('return {"trajectory": [9, 9]}')
+  await expect(page.getByLabel('测试入参 JSON')).toHaveValue(/"horizon": 3/)
+})
+
+test('开发页：测试入参即时校验定位错误，放大编辑区一键切换', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+  await mockWorldModel(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/#/world-model/models/${projectRow.id}/develop`)
+
+  const inputArea = page.getByLabel('测试入参 JSON')
+
+  // 非法 JSON：输入过程即时报错（不等点击执行）
+  await inputArea.fill('{ "context": }')
+  await expect(page.getByText(/测试入参 JSON 无效：/)).toBeVisible()
+  await expect(page.getByText('JSON 无效', { exact: true })).toBeVisible()
+
+  // 顶层为数组同样被拦截
+  await inputArea.fill('[1, 2]')
+  await expect(page.getByText('顶层必须是 JSON 对象（context / actions / horizon）')).toBeVisible()
+
+  // 合法化后行内错误消失
+  await inputArea.fill('{ "context": { "current_value": 1 }, "actions": [], "horizon": 3 }')
+  await expect(page.getByText(/测试入参 JSON 无效：/)).toHaveCount(0)
+
+  // 放大编辑区：整列让给入参、结果面板隐藏；执行时自动收回展示结果
+  await page.getByRole('button', { name: '放大入参编辑区' }).click()
+  await expect(page.getByRole('button', { name: '收起入参编辑区' })).toBeVisible()
+  await expect(page.getByText('点击「执行」在内核中试运行')).toHaveCount(0)
+  await page.getByRole('button', { name: '执行', exact: true }).click()
+  await expect(page.getByText('simulate 返回值 · 轨迹预览')).toBeVisible()
+  await expect(page.getByRole('button', { name: '放大入参编辑区' })).toBeVisible()
 })
 
 test('保存首个版本后发布按钮立即可用（无需刷新页面）', async ({ page }) => {

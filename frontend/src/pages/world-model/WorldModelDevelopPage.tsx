@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import CodeMirror from '@uiw/react-codemirror'
 import { EditorView } from '@codemirror/view'
@@ -8,6 +8,7 @@ import { python } from '@codemirror/lang-python'
 import '@fontsource/jetbrains-mono/400.css'
 import '@fontsource/jetbrains-mono/600.css'
 import {
+  AlertCircle,
   ArrowLeft,
   Check,
   CheckCircle2,
@@ -16,6 +17,8 @@ import {
   HelpCircle,
   History,
   Loader2,
+  Maximize2,
+  Minimize2,
   Play,
   Rocket,
   RotateCcw,
@@ -28,6 +31,7 @@ import {
   apiError,
   worldModelApi,
   type ScriptExecutionResult,
+  type ScriptVersionDetail,
   type ScriptVersionItem,
   type TestInput,
   type WorldModelProjectDetail,
@@ -35,6 +39,9 @@ import {
 } from '@/api/worldModel'
 import { engineTypeLabel } from './WorldModelModelsPage'
 import PublishServiceDialog from './PublishServiceDialog'
+import TrajectoryPreview from './TrajectoryPreview'
+import { extractTrajectorySummary } from './trajectorySummary'
+import { validateTestInputText } from './testInputValidation'
 import { useToast } from '@/components/ui/Toast'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { writeTextToClipboard } from '@/utils/clipboard'
@@ -130,10 +137,24 @@ export default function WorldModelDevelopPage() {
   const [endpointCopied, setEndpointCopied] = useState(false)
   const [insertingTs, setInsertingTs] = useState(false)
   const [confirmInsertTs, setConfirmInsertTs] = useState(false)
+  // 测试入参编辑区放大模式：放大时隐藏结果面板，把整列让给入参编辑
+  const [inputExpanded, setInputExpanded] = useState(false)
+  // 版本预览：抽屉内展开查看某版脚本与当时测试入参（懒加载，缓存已取版本）
+  const [previewVersionId, setPreviewVersionId] = useState<string | null>(null)
+  const [versionDetails, setVersionDetails] = useState<Record<string, ScriptVersionDetail | 'error'>>({})
 
   const dirty = script !== savedScript
   const contentKey = `${script}\n${testInputText}`
   const canSave = dirty && !executing && !saving && validatedKey === contentKey
+
+  // 测试入参即时校验：输入过程中定位 JSON 语法错误，不等点击「执行」才报错
+  const testInputStatus = useMemo(() => validateTestInputText(testInputText), [testInputText])
+
+  // 执行结果可图表化摘要：契约返回 trajectory（数值序列）时生成，否则为 null
+  const trajectory = useMemo(
+    () => (result?.ok ? extractTrajectorySummary(result.payload) : null),
+    [result],
+  )
 
   const parseTestInput = (): TestInput | null => {
     try {
@@ -197,6 +218,7 @@ export default function WorldModelDevelopPage() {
     if (!modelId || executing) return
     const testInput = parseTestInput()
     if (!testInput) return
+    setInputExpanded(false)
     setExecuting(true)
     setResult(null)
     const controller = new AbortController()
@@ -254,6 +276,7 @@ export default function WorldModelDevelopPage() {
   const openVersions = useCallback(async () => {
     if (!modelId) return
     setShowVersions(true)
+    setPreviewVersionId(null)
     setVersionsLoading(true)
     try {
       setVersions(await worldModelApi.listVersions(modelId))
@@ -269,7 +292,12 @@ export default function WorldModelDevelopPage() {
     try {
       const detail = await worldModelApi.getVersion(modelId, versionId)
       setScript(detail.script)
+      // 该版当时验证通过的测试入参一并回退，避免「脚本与入参从未组合通过过」的错配状态
+      if (detail.test_input) setTestInputText(JSON.stringify(detail.test_input, null, 2))
       setValidatedKey(null)
+      // 草稿横幅描述的是此前恢复的本地草稿，已被版本回退取代，需同步清除
+      setDraftRestoredAt(null)
+      setPreviewVersionId(null)
       setShowVersions(false)
       toast({ tone: 'success', title: `已恢复 v${detail.version_no} 的脚本内容`, description: '恢复后请重新执行并保存。' })
     } catch (error) {
@@ -287,8 +315,30 @@ export default function WorldModelDevelopPage() {
   const revertToSaved = () => {
     setScript(savedScript)
     setValidatedKey(null)
+    // 缺陷修复：恢复到已保存后，本地草稿已不再存在，需同步清除草稿横幅，
+    // 避免页头同时出现「已保存」与「已恢复 XX 草稿」两种矛盾状态
+    setDraftRestoredAt(null)
+    if (modelId) localStorage.removeItem(draftKey(modelId))
     setConfirmRevert(false)
   }
+
+  // 版本抽屉内展开/收起某版的脚本与测试入参预览（懒加载 getVersion，失败可重试）
+  const toggleVersionPreview = useCallback(async (version: ScriptVersionItem) => {
+    if (!modelId) return
+    if (previewVersionId === version.id) {
+      setPreviewVersionId(null)
+      return
+    }
+    setPreviewVersionId(version.id)
+    const cached = versionDetails[version.id]
+    if (cached && cached !== 'error') return
+    try {
+      const detail = await worldModelApi.getVersion(modelId, version.id)
+      setVersionDetails(previous => ({ ...previous, [version.id]: detail }))
+    } catch {
+      setVersionDetails(previous => ({ ...previous, [version.id]: 'error' }))
+    }
+  }, [modelId, previewVersionId, versionDetails])
 
   // 打开发布对话框：先拉版本列表供选择（默认最新）
   const openPublish = useCallback(async () => {
@@ -457,6 +507,11 @@ export default function WorldModelDevelopPage() {
               <Play size={14} /> 执行
             </button>
           )}
+          {dirty && !executing && !saving && !canSave && (
+            <span className="inline-flex items-center text-[11px] text-amber-600">
+              先执行通过，才能保存当前内容
+            </span>
+          )}
           <button
             type="button"
             onClick={save}
@@ -531,10 +586,25 @@ export default function WorldModelDevelopPage() {
         </section>
 
         <div className="flex min-h-0 flex-col gap-3">
-          <section className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white" style={{ maxHeight: '38%' }}>
+          <section
+            className={`flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white ${inputExpanded ? 'min-h-0 flex-1' : ''}`}
+            style={inputExpanded ? undefined : { maxHeight: '38%' }}
+          >
             <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 text-xs text-slate-500">
               <Terminal size={14} />
               <span>测试入参（context / actions / horizon）</span>
+              {!testInputStatus.ok && (
+                <span className="text-[11px] text-red-500">JSON 无效</span>
+              )}
+              <button
+                type="button"
+                onClick={() => setInputExpanded(value => !value)}
+                aria-label={inputExpanded ? '收起入参编辑区' : '放大入参编辑区'}
+                title={inputExpanded ? '收起，恢复下方结果区' : '放大为整列编辑长序列参数'}
+                className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+              >
+                {inputExpanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+              </button>
             </div>
             <textarea
               value={testInputText}
@@ -542,9 +612,17 @@ export default function WorldModelDevelopPage() {
               spellCheck={false}
               className="min-h-[110px] flex-1 resize-none px-3 py-2 font-mono text-xs leading-5 text-slate-700 focus:outline-none"
               aria-label="测试入参 JSON"
+              aria-invalid={!testInputStatus.ok}
             />
+            {!testInputStatus.ok && (
+              <div className="flex items-start gap-1.5 border-t border-red-100 bg-red-50/60 px-3 py-1.5 text-[11px] leading-4 text-red-600">
+                <AlertCircle size={12} className="mt-0.5 shrink-0" />
+                <span className="break-words">测试入参 JSON 无效：{testInputStatus.message}</span>
+              </div>
+            )}
           </section>
 
+          {!inputExpanded && (
           <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
             <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 text-xs text-slate-500">
               {result
@@ -571,12 +649,19 @@ export default function WorldModelDevelopPage() {
               ) : (
                 <div className="space-y-3">
                   {result.ok ? (
-                    <div>
-                      <p className="mb-1 text-[11px] font-medium text-slate-500">simulate 返回值</p>
-                      <pre className="overflow-auto rounded-lg bg-slate-50 p-2.5 text-xs leading-5 text-slate-700">
-                        {JSON.stringify(result.payload, null, 2)}
-                      </pre>
-                    </div>
+                    trajectory ? (
+                      <div>
+                        <p className="mb-1.5 text-[11px] font-medium text-slate-500">simulate 返回值 · 轨迹预览</p>
+                        <TrajectoryPreview summary={trajectory} payload={result.payload} />
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="mb-1 text-[11px] font-medium text-slate-500">simulate 返回值</p>
+                        <pre className="overflow-auto rounded-lg bg-slate-50 p-2.5 text-xs leading-5 text-slate-700">
+                          {JSON.stringify(result.payload, null, 2)}
+                        </pre>
+                      </div>
+                    )
                   ) : (
                     <div>
                       <p className="mb-1 text-[11px] font-medium text-red-600">执行失败</p>
@@ -600,6 +685,7 @@ export default function WorldModelDevelopPage() {
               )}
             </div>
           </section>
+          )}
         </div>
       </div>
 
@@ -617,20 +703,71 @@ export default function WorldModelDevelopPage() {
               <p className="py-8 text-center text-xs text-slate-400">暂无历史版本，保存一次后此处会出现记录。</p>
             ) : (
               versions.map(version => (
-                <div key={version.id} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5">
-                  <div>
-                    <p className="text-sm font-medium text-slate-700">v{version.version_no}</p>
-                    <p className="mt-0.5 text-[11px] text-slate-400">
-                      {formatDateTime(version.created_at)} · {version.duration_ms} ms
-                    </p>
+                <div key={version.id} className="rounded-lg border border-slate-200 px-3 py-2.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-slate-700">v{version.version_no}</p>
+                      <p className="mt-0.5 text-[11px] text-slate-400">
+                        {formatDateTime(version.created_at)} · {version.duration_ms} ms
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => void toggleVersionPreview(version)}
+                        aria-expanded={previewVersionId === version.id}
+                        className="inline-flex h-7 items-center rounded-md border border-slate-200 px-2.5 text-xs text-slate-600 transition-colors hover:bg-slate-50"
+                      >
+                        {previewVersionId === version.id ? '收起' : '查看'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setShowVersions(false); setConfirmRestoreVersionId(version.id) }}
+                        className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-xs text-slate-600 transition-colors hover:bg-slate-50"
+                      >
+                        <RotateCcw size={12} /> 恢复
+                      </button>
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => { setShowVersions(false); setConfirmRestoreVersionId(version.id) }}
-                    className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-xs text-slate-600 transition-colors hover:bg-slate-50"
-                  >
-                    <RotateCcw size={12} /> 恢复
-                  </button>
+                  {previewVersionId === version.id && (
+                    <div className="mt-2.5 space-y-2 border-t border-slate-100 pt-2.5">
+                      {(() => {
+                        const detail = versionDetails[version.id]
+                        if (!detail || detail === 'error') {
+                          return (
+                            <div className="flex items-center justify-between text-[11px] text-slate-400">
+                              <span className="inline-flex items-center gap-1.5">
+                                {detail === 'error'
+                                  ? '版本内容加载失败'
+                                  : <><Loader2 size={12} className="animate-spin" /> 加载版本内容…</>}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => void toggleVersionPreview(version)}
+                                className="rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 transition-colors hover:bg-slate-50"
+                              >
+                                重试
+                              </button>
+                            </div>
+                          )
+                        }
+                        return (
+                          <>
+                            <div>
+                              <p className="mb-1 text-[11px] font-medium text-slate-500">该版测试入参</p>
+                              <pre className="max-h-28 overflow-auto rounded-md bg-slate-50 p-2 font-mono text-[11px] leading-4 text-slate-600">
+                                {detail.test_input ? JSON.stringify(detail.test_input, null, 2) : '（未记录测试入参）'}
+                              </pre>
+                            </div>
+                            <div>
+                              <p className="mb-1 text-[11px] font-medium text-slate-500">该版脚本</p>
+                              <pre className="max-h-64 overflow-auto rounded-md bg-slate-50 p-2 font-mono text-[11px] leading-4 text-slate-700">{detail.script}</pre>
+                            </div>
+                          </>
+                        )
+                      })()}
+                    </div>
+                  )}
                 </div>
               ))
             )}
@@ -665,6 +802,7 @@ export default function WorldModelDevelopPage() {
             <section>
               <h3 className="text-sm font-semibold text-slate-800">返回值</h3>
               <p className="mt-1">JSON 可序列化的 dict，建议包含 <code>trajectory</code>（各时点轨迹）、<code>confidence</code>（置信度）、<code>boundary</code>（适用边界说明）。</p>
+              <p className="mt-1 text-slate-500">当 <code>trajectory</code> 为数值序列或等宽的数值二维数组时，执行结果面板会自动绘制轨迹折线预览，原始 JSON 折叠保留。</p>
             </section>
             <section>
               <h3 className="text-sm font-semibold text-slate-800">可用的时序/科学计算库</h3>
@@ -707,7 +845,7 @@ export default function WorldModelDevelopPage() {
       <ConfirmDialog
         open={confirmRestoreVersionId !== null}
         title="恢复到该历史版本？"
-        message="当前编辑器中的未保存修改将被覆盖丢弃，恢复后需重新执行并保存。"
+        message="当前编辑器中的未保存修改将被覆盖丢弃；若该版本记录了测试入参，入参编辑区也会一并回退。恢复后需重新执行并保存。"
         confirmLabel="恢复"
         tone="primary"
         onConfirm={() => { if (confirmRestoreVersionId) void restoreVersion(confirmRestoreVersionId) }}
