@@ -2,11 +2,11 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Plus, Search, Play, GitBranch, Trash2, Pencil, ChevronLeft, ChevronRight,
-  X, Loader2, CheckCircle2, XCircle, Clock, Table2, ListChecks, Sparkles, ExternalLink,
+  X, Loader2, CheckCircle2, XCircle, Clock, Sparkles, ExternalLink,
   AlertCircle, FileCode2, Copy,
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
-import type { Pipeline } from '@/api/v2/pipelines'
+import type { Pipeline, PipelineOverview } from '@/api/v2/pipelines'
 import { getPipelineEngine } from '@/api/v2/pipelines'
 import { stewardApi } from '@/api/steward'
 import type { StewardStatus } from '@/api/steward'
@@ -14,6 +14,9 @@ import ConfirmDialog from '@/components/ConfirmDialog'
 import { useToast } from '@/components/ui/Toast'
 import RunPreviewModal from './RunPreviewModal'
 import PipelineEditWizard from './PipelineEditWizard'
+import PipelineOverviewBar from './PipelineOverviewBar'
+import PipelineRunHistoryDrawer from './PipelineRunHistoryDrawer'
+import { ArtifactPreviewPopover, TaskPreviewPopover } from './PipelineLinkPopovers'
 
 // 发布状态：draft/published 双态（运行态在「最近执行结果」列，不混入生命周期）；
 // editing/running/failed 是 0008 迁移前的遗留值，展示上归为草稿
@@ -103,6 +106,7 @@ export default function PipelineListPage() {
   const { toast } = useToast()
   const [searchParams] = useSearchParams()
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
+  const [overview, setOverview] = useState<PipelineOverview | null>(null)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState(() => searchParams.get('search') || '')
   const [filterSource, setFilterSource] = useState('')
@@ -115,6 +119,7 @@ export default function PipelineListPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [previewTarget, setPreviewTarget] = useState<Pipeline | null>(null)
   const [editTarget, setEditTarget] = useState<Pipeline | null>(null)
+  const [historyTarget, setHistoryTarget] = useState<Pipeline | null>(null)
   const [n8nApiUrl, setN8nApiUrl] = useState('')
   const [n8nStatus, setN8nStatus] = useState<StewardStatus['n8n'] | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
@@ -136,6 +141,7 @@ export default function PipelineListPage() {
       .then(res => {
         setPipelines(Array.isArray(res.items) ? res.items : [])
         setTotal(res.total || 0)
+        setOverview(res.overview ?? null)
         if (page > 1 && res.items.length === 0 && res.total > 0) setPage(page - 1)
       })
       .catch(() => {
@@ -304,6 +310,9 @@ export default function PipelineListPage() {
   }
   return (
     <div className="space-y-4 pb-4">
+      {/* 运行概况：全量口径统计卡 + 近 7 日执行趋势（来自列表响应 overview 字段） */}
+      {overview && <PipelineOverviewBar overview={overview} />}
+
       {/* 搜索、筛选、操作按钮 */}
       <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 xl:flex-nowrap">
         <div className="relative w-full sm:w-64 xl:w-72 xl:flex-none">
@@ -420,7 +429,7 @@ export default function PipelineListPage() {
           <table className="w-full min-w-[1080px] text-sm table-fixed">
             <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 backdrop-blur">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: '18%' }}>
+                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: '23%' }}>
                   流水线信息
                 </th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '9%' }}>流水线类型</th>
@@ -429,7 +438,7 @@ export default function PipelineListPage() {
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '14%' }}>最近执行结果</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '11%' }}>产物</th>
                 <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '11%' }}>关联任务</th>
-                <th className="text-center px-2 py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl" style={{ width: '18%' }}>操作</th>
+                <th className="text-center px-2 py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl" style={{ width: '13%' }}>操作</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -503,13 +512,18 @@ export default function PipelineListPage() {
                         </span>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-center align-middle whitespace-nowrap">
+                    <td className="px-4 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       {runMeta ? (
-                        <div className={`relative inline-flex items-center gap-1.5 ${runFailed ? 'cursor-help group/err' : ''}`}>
+                        <button
+                          type="button"
+                          onClick={() => setHistoryTarget(pl)}
+                          className="relative inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-teal-50 group/hist group/err"
+                          title="点击查看历史执行记录"
+                        >
                           <span className={`inline-flex items-center gap-1 text-xs ${runMeta.color}`}>
                             {runMeta.icon}{runMeta.label}
                           </span>
-                          <span className="text-xs text-gray-400">{formatTime(pl.last_run_at)}</span>
+                          <span className="text-xs text-gray-400 group-hover/hist:text-teal-700">{formatTime(pl.last_run_at)}</span>
                           {runFailed && (
                             <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1.5 z-30 hidden group-hover/err:block w-80 text-left">
                               <div className="bg-gray-900/95 text-white text-xs rounded-lg px-3 py-2.5 shadow-xl whitespace-normal break-all leading-relaxed">
@@ -517,33 +531,21 @@ export default function PipelineListPage() {
                               </div>
                             </div>
                           )}
-                        </div>
+                        </button>
                       ) : (
                         <span className="text-xs text-gray-300">从未运行</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       {curatedCount > 0 ? (
-                        <button
-                          onClick={() => navigate(`/data/structured?pipeline=${encodeURIComponent(pl.name)}`)}
-                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-[var(--color-nav-bg)] transition-colors hover:bg-teal-50 hover:text-teal-800"
-                          title="点击查看数据集内容"
-                        >
-                          <Table2 size={12} /> {curatedCount} 个数据集
-                        </button>
+                        <ArtifactPreviewPopover pipeline={pl} />
                       ) : (
                         <span className="text-xs text-gray-300">-</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       {taskCount > 0 ? (
-                        <button
-                          onClick={() => navigate(`/data/pipelines/sync-tasks?pipeline_id=${encodeURIComponent(pl.id)}`)}
-                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-[var(--color-nav-bg)] transition-colors hover:bg-teal-50 hover:text-teal-800"
-                          title="点击查看关联的数据任务"
-                        >
-                          <ListChecks size={12} /> {taskCount} 个任务
-                        </button>
+                        <TaskPreviewPopover pipeline={pl} />
                       ) : (
                         <span className="text-xs text-gray-300">-</span>
                       )}
@@ -677,6 +679,14 @@ export default function PipelineListPage() {
             setEditTarget(null)
             updatePipelineLocally(updated)
           }}
+        />
+      )}
+
+      {/* 历史执行记录抽屉（最近执行结果列入口） */}
+      {historyTarget && (
+        <PipelineRunHistoryDrawer
+          pipeline={historyTarget}
+          onClose={() => setHistoryTarget(null)}
         />
       )}
 

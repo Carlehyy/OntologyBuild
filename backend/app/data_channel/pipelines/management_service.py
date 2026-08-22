@@ -8,8 +8,9 @@ the router to preserve existing extension and test contracts.
 from __future__ import annotations
 
 import copy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy import case, func
@@ -18,6 +19,34 @@ from sqlalchemy.orm import Session
 from app.data_channel.pipelines.contracts import PipelineCreate, PipelineUpdate
 from app.data_channel.steward.models import STATUS_ARCHIVED, N8nPipeline
 from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
+
+
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    """数据库裸时间统一按 UTC 解释；带时区值统一转换为 UTC。"""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _shanghai_day_start_utc(local_day) -> datetime:
+    """上海自然日零点转换为数据库使用的 UTC naive 边界。"""
+    local_start = datetime.combine(
+        local_day,
+        datetime.min.time(),
+        tzinfo=SHANGHAI_TZ,
+    )
+    return local_start.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _shanghai_date(value: datetime):
+    return _as_utc(value).astimezone(SHANGHAI_TZ).date()
 
 
 def create_pipeline(
@@ -196,14 +225,22 @@ def list_pipelines(
     return results
 
 
-def pipeline_overview(db: Session) -> dict[str, int]:
+def pipeline_overview(
+    db: Session,
+    *,
+    now_utc_fn: Callable[[], datetime] | None = None,
+) -> dict[str, Any]:
     """Return unfiltered catalog health counters for the list-page header.
 
     The overview deliberately ignores the current table filters: it is the
     user's stable system-health anchor while the paginated rows below it may be
     narrowed to a subset.  ``latest_failed`` counts pipelines whose most recent
-    run failed, rather than every historical failed run.
+    run failed, rather than every historical failed run.  ``trend_7d`` counts
+    every run of a non-archived pipeline (manual and task-triggered alike)
+    over the last 7 Shanghai calendar days — real observations only, never
+    synthesized series.
     """
+    now_fn = now_utc_fn or _now_utc
     active = Pipeline.status != "archived"
     totals = (
         db.query(
@@ -239,11 +276,48 @@ def pipeline_overview(db: Session) -> dict[str, int]:
         .scalar()
         or 0
     )
+
+    local_today = now_fn().astimezone(SHANGHAI_TZ).date()
+    first_day = local_today - timedelta(days=6)
+    trend = {
+        (first_day + timedelta(days=index)).isoformat(): {
+            "runs": 0,
+            "errors": 0,
+        }
+        for index in range(7)
+    }
+    recent = (
+        db.query(PipelineRun.created_at, PipelineRun.status)
+        .join(Pipeline, Pipeline.id == PipelineRun.pipeline_id)
+        .filter(
+            active,
+            PipelineRun.created_at >= _shanghai_day_start_utc(first_day),
+        )
+        .all()
+    )
+    for created_at, run_status in recent:
+        if not created_at:
+            continue
+        key = _shanghai_date(created_at).isoformat()
+        if key not in trend:
+            continue
+        trend[key]["runs"] += 1
+        if run_status == "failed":
+            trend[key]["errors"] += 1
+
     return {
         "total": int(totals.total or 0),
         "published": int(totals.published or 0),
         "enabled": int(totals.enabled or 0),
         "latest_failed": int(latest_failed),
+        "trend_7d": [
+            {
+                "date": day,
+                "runs": counts["runs"],
+                "errors": counts["errors"],
+            }
+            for day, counts in trend.items()
+        ],
     }
 
 
