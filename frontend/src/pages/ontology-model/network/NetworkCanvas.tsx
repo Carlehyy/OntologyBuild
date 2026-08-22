@@ -1,8 +1,9 @@
 /**
- * 本体网络画布：cytoscape 渲染跨本体全局图（graphify 风格）。
+ * 本体网络画布：cytoscape 渲染跨本体全局图（graphify 布局语言 + 浅色系）。
  *
  * 渲染语言对齐 Graphify-Labs/graphify 的 HTML 导出（vis.js Network）：
- * - 深色画布（#0f0f1a）+ 社区配色点状节点，节点按本体着色；
+ * - 社区配色点状节点、力导向物理成簇、度数决定大小、边降噪与标签分级；
+ * - 配色采用浅色系：浅底深字，关系边用中灰半透明，保证与平台整体观感一致；
  * - 力导向物理布局：用确定性聚类坐标做种子，再由 cose 弹簧-斥力模型收敛，
  *   兼顾"有机生长感"与"同一数据簇不乱飞"的稳定性；
  * - 节点直径随度数放大（graphify 的 size = f(degree)）；
@@ -25,7 +26,7 @@ import {
   ontologyColorMap,
 } from './networkModel'
 
-const CANVAS_BG = '#0f0f1a'
+const CANVAS_BG = '#f6f8fc'
 const FALLBACK_COLORS = ['#4E79A7', '#F28E2B', '#E15759', '#76B7B2', '#59A14F']
 /** 实例标签显性化所需的最低缩放（低于此值只显示对象类型标签）。 */
 const INSTANCE_LABEL_ZOOM = 0.55
@@ -119,7 +120,7 @@ export default function NetworkCanvas(
             'border-color': 'data(color)',
             'border-width': 1.2,
             'border-opacity': 0.9,
-            color: '#dcdce8',
+            color: '#334155',
             label: 'data(label)',
             'font-size': 11,
             'font-weight': 600,
@@ -149,8 +150,8 @@ export default function NetworkCanvas(
           selector: 'edge',
           style: {
             width: 1.4,
-            'line-color': 'rgba(154,164,214,0.32)',
-            'target-arrow-color': 'rgba(154,164,214,0.32)',
+            'line-color': 'rgba(100,116,139,0.34)',
+            'target-arrow-color': 'rgba(100,116,139,0.34)',
             'target-arrow-shape': 'triangle',
             'arrow-scale': 0.55,
             'curve-style': 'bezier',
@@ -169,7 +170,7 @@ export default function NetworkCanvas(
         },
         {
           selector: 'edge.relation',
-          style: { width: 1.7, 'line-color': 'rgba(164,176,224,0.42)', 'target-arrow-color': 'rgba(164,176,224,0.42)' },
+          style: { width: 1.7, 'line-color': 'rgba(71,85,105,0.42)', 'target-arrow-color': 'rgba(71,85,105,0.42)' },
         },
         {
           selector: 'edge.schema-relation',
@@ -177,8 +178,8 @@ export default function NetworkCanvas(
             width: 1.2,
             'line-style': 'dashed',
             'line-dash-pattern': [5, 4],
-            'line-color': 'rgba(140,152,206,0.34)',
-            'target-arrow-color': 'rgba(140,152,206,0.34)',
+            'line-color': 'rgba(100,116,139,0.30)',
+            'target-arrow-color': 'rgba(100,116,139,0.30)',
           },
         },
         {
@@ -188,7 +189,7 @@ export default function NetworkCanvas(
             width: 0.8,
             'line-style': 'dashed',
             'line-dash-pattern': [2, 4],
-            'line-color': 'rgba(120,130,180,0.16)',
+            'line-color': 'rgba(100,116,139,0.16)',
             'target-arrow-shape': 'none',
           },
         },
@@ -197,11 +198,11 @@ export default function NetworkCanvas(
           style: {
             'line-style': 'dashed',
             'line-dash-pattern': [7, 5],
-            'line-color': 'rgba(179,157,255,0.66)',
+            'line-color': 'rgba(124,58,237,0.55)',
             'target-arrow-shape': 'none',
             width: 1.8,
             label: 'data(label)',
-            color: '#cbb8ff',
+            color: '#6d28d9',
             'font-size': 9,
             'z-index': 10,
           },
@@ -217,18 +218,18 @@ export default function NetworkCanvas(
         {
           selector: '.path-node',
           style: {
-            'border-color': '#5aa2ff',
+            'border-color': '#2563eb',
             'border-width': 3,
-            'underlay-color': '#5aa2ff',
-            'underlay-opacity': 0.3,
+            'underlay-color': '#2563eb',
+            'underlay-opacity': 0.22,
             'underlay-padding': 4,
           },
         },
         {
           selector: '.path-edge',
           style: {
-            'line-color': '#5aa2ff',
-            'target-arrow-color': '#5aa2ff',
+            'line-color': '#2563eb',
+            'target-arrow-color': '#2563eb',
             width: 3.4,
             'z-index': 20,
           },
@@ -236,26 +237,26 @@ export default function NetworkCanvas(
         {
           selector: '.change-node',
           style: {
-            'border-color': '#c084fc',
+            'border-color': '#7c3aed',
             'border-width': 3.5,
-            'underlay-color': '#c084fc',
-            'underlay-opacity': 0.32,
+            'underlay-color': '#7c3aed',
+            'underlay-opacity': 0.24,
             'underlay-padding': 5,
           },
         },
         {
           selector: '.direct-impact',
-          style: { 'border-color': '#ff9130', 'border-width': 3 },
+          style: { 'border-color': '#ea580c', 'border-width': 3 },
         },
         {
           selector: '.indirect-impact',
-          style: { 'border-color': '#e05252', 'border-width': 2.4, 'border-style': 'dashed' },
+          style: { 'border-color': '#dc2626', 'border-width': 2.4, 'border-style': 'dashed' },
         },
         {
           selector: '.impact-edge',
           style: {
-            'line-color': '#ff9130',
-            'target-arrow-color': '#ff9130',
+            'line-color': '#ea580c',
+            'target-arrow-color': '#ea580c',
             width: 2.8,
             'z-index': 18,
           },
@@ -263,17 +264,17 @@ export default function NetworkCanvas(
         {
           selector: '.selected-node',
           style: {
-            'border-color': '#ffffff',
+            'border-color': '#0f172a',
             'border-width': 2.6,
-            'underlay-color': '#ffffff',
-            'underlay-opacity': 0.22,
+            'underlay-color': '#0f172a',
+            'underlay-opacity': 0.14,
             'underlay-padding': 6,
           },
         },
         {
           selector: 'node.hover-ring',
           style: {
-            'border-color': '#ffffff',
+            'border-color': '#0f172a',
             'border-width': 2,
           },
         },
@@ -383,7 +384,14 @@ export default function NetworkCanvas(
   }, [highlight])
 
   return (
-    <div className="relative h-full min-h-0 w-full overflow-hidden" style={{ backgroundColor: CANVAS_BG }}>
+    <div
+      className="relative h-full min-h-0 w-full overflow-hidden"
+      style={{
+        backgroundColor: CANVAS_BG,
+        backgroundImage: 'radial-gradient(circle at 1px 1px, #dde5f0 1px, transparent 0)',
+        backgroundSize: '24px 24px',
+      }}
+    >
       <div ref={hostRef} className="absolute inset-0" aria-label="本体网络全局画布" />
     </div>
   )
