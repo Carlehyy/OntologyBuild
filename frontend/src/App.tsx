@@ -196,6 +196,7 @@ export default function App() {
           <Route path="/settings/open-interfaces" element={<Navigate to="/settings/users" replace />} />
           <Route path="/settings/minio" element={<Navigate to="/settings/users" replace />} />
           <Route path="/settings/workflows" element={<Navigate to="/settings/users" replace />} />
+          <Route path="/settings/agents" element={<Navigate to="/settings/users" replace />} />
           <Route path="/settings/:tab" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="*" element={<UnknownRouteRedirect />} />
           </Routes>

@@ -23,18 +23,23 @@ import './mapping-overview.css'
 
 const MappingChainPanorama = lazy(() => import('./MappingChainPanorama'))
 
-/** KPI 数字：挂载直出终值（进页/从字段级映射页返回不再从 0 重放）；数据变化时 600ms ease-out 过渡；reduced-motion 直出终值。 */
-function useCountUp(target: number, duration = 600): number {
+/** KPI 数字：首个有效数据帧直出终值——进页/刷新/从字段级映射页返回都不再从 0 重放；
+    之后真实数据变化（如灌入后 refetch）才播放 600ms ease-out 过渡；reduced-motion 直出终值。
+    `active=false`（数据尚未就绪）期间只跟随目标值，不建立动画基准。 */
+function useCountUp(target: number, active = true, duration = 600): number {
   const [display, setDisplay] = useState(target)
-  const previous = useRef(target)
+  // null 表示尚未确立动画基准：首次拿到有效数据时直出终值而非从占位值起播
+  const previous = useRef<number | null>(null)
   useEffect(() => {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       previous.current = target
       setDisplay(target)
       return undefined
     }
+    if (!active) { setDisplay(target); return undefined }
     const from = previous.current
-    if (from === target) { setDisplay(target); return undefined }
+    previous.current = target
+    if (from == null || from === target) { setDisplay(target); return undefined }
     const start = performance.now()
     let frame = 0
     const tick = (now: number) => {
@@ -528,7 +533,16 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
   const navigate = useNavigate()
   const data = useMappingData(ontologyId, true)
   const [searchParams, setSearchParams] = useSearchParams()
-  const [selected, setSelected] = useState<TargetSelection | null>(() => parseElementParam(searchParams.get('element')))
+  // 选中行完全由 URL element 参数驱动（单一数据源）：首次进入/刷新/同页替换深链
+  // 都能打开对应血缘详情；点选/关闭只写回 URL，不再维护可能失步的组件内副本。
+  const selected = parseElementParam(searchParams.get('element'))
+  const selectElement = (selection: TargetSelection | null) => {
+    const params = new URLSearchParams(searchParams)
+    const next = selection ? `${selection.kind}:${selection.id}` : null
+    if (next) params.set('element', next)
+    else params.delete('element')
+    setSearchParams(params, { replace: true })
+  }
   const [mappingSearch, setMappingSearch] = useState(() => readSessionSearch(ontologyId))
   const [mappingFilter, setMappingFilter] = useState<MappingFilter>(() => readSessionFilter(ontologyId))
   const [previewDataset, setPreviewDataset] = useState<MappingDataset | null>(null)
@@ -538,16 +552,6 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
   const [rowHoverKey, setRowHoverKey] = useState<string | null>(null)
   const [chartHoverKey, setChartHoverKey] = useState<string | null>(null)
   const rowRefs = useRef(new Map<string, HTMLElement>())
-
-  // 选中行同步到 URL（replace 不写历史），从字段级映射页返回/刷新后保持对照上下文
-  useEffect(() => {
-    const next = selected ? `${selected.kind}:${selected.id}` : null
-    if (searchParams.get('element') === next) return
-    const params = new URLSearchParams(searchParams)
-    if (next) params.set('element', next)
-    else params.delete('element')
-    setSearchParams(params, { replace: true })
-  }, [selected, searchParams, setSearchParams])
 
   // 筛选与搜索词存 sessionStorage：从字段级映射页返回后不丢
   useEffect(() => {
@@ -757,7 +761,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
   const selectFromChart = (key: string) => {
     const row = mappingRows.find(candidate => candidate.key === key)
     if (!row) return
-    setSelected(row.selection)
+    selectElement(row.selection)
     rowRefs.current.get(key)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
   const flowRows = useMemo<ChainFlowRow[]>(() => mappingRows.map(row => ({
@@ -786,10 +790,10 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
     () => flowRows.filter(row => row.mappingExists && row.datasets.length > 0).length,
     [flowRows],
   )
-  const kpiReady = useCountUp(readyCount)
-  const kpiCoverage = useCountUp(fieldCoverage)
-  const kpiInstances = useCountUp(totalInstances)
-  const kpiAssets = useCountUp(usedDatasetIds.size)
+  const kpiReady = useCountUp(readyCount, !data.isLoading)
+  const kpiCoverage = useCountUp(fieldCoverage, !data.isLoading)
+  const kpiInstances = useCountUp(totalInstances, !data.isLoading)
+  const kpiAssets = useCountUp(usedDatasetIds.size, !data.isLoading)
   const readinessTitle = allHealthy
     ? '当前数据链路可用'
     : reviewOnlyIssue
@@ -914,11 +918,11 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
                     if (element) rowRefs.current.set(row.key, element)
                     else rowRefs.current.delete(row.key)
                   }}
-                  onClick={() => setSelected(row.selection)}
+                  onClick={() => selectElement(row.selection)}
                   onKeyDown={event => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault()
-                      setSelected(row.selection)
+                      selectElement(row.selection)
                     }
                   }}
                   onMouseEnter={() => setRowHoverKey(row.key)}
@@ -981,7 +985,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
           datasetVersionLists={data.datasetVersionLists}
           reconcileFeedback={reconcileFeedback}
           reconcilingMappingId={reconcilingMappingId}
-          onClose={() => setSelected(null)}
+          onClose={() => selectElement(null)}
           onPreviewDataset={setPreviewDataset}
           onReconcile={setReconcileTarget}
           onOpenWorkspace={openMappingWorkspace}
