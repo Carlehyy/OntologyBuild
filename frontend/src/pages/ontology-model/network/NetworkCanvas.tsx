@@ -5,16 +5,17 @@
  * 引擎由 cytoscape 切换为 ECharts（官方 graph 示例的力导向观感）：
  * - 布局：force + 确定性聚类种子坐标（clusterPositions）+ 跨重建位置缓存，
  *   数据刷新时已有节点不重新飞位；力参数随规模自适应防挤团；
- * - 悬停：一跳邻接强亮、其余淡出（分析态激活时让位给分析高亮）；
+ * - 悬停：ECharts 原生 emphasis.focus='adjacency'——一跳邻接强亮、其余 blur 淡出，
+ *   零 option 重建、自带过渡动画（分析态激活时让位给分析高亮）；
  * - 标签：胶囊化白底衬 + labelLayout.hideOverlap，低缩放下自动隐藏重叠标签；
  * - 高亮契约与旧版一致：路径蓝 / 变更紫 / 直接影响橙 / 间接影响红虚线 /
  *   非参与元素压暗 / 选中深描边，全部由页面 props 注入。
  *
  * 组件本身无业务状态，onReady 暴露轻量控制器（缩放/适应/聚焦）供工具条使用。
- * 渲染器选 svg 以支持 mocked E2E 的 DOM 级断言；若大规模图出现卡顿，
- * 改 opts.renderer 为 canvas 即可（一行切换，不影响任何逻辑）。
+ * 渲染器自适应：节点数超过阈值切 canvas（大图性能），小图保持 svg 以支持
+ * mocked E2E 的 DOM 级文本断言。
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { ECharts } from 'echarts'
 import type {
@@ -23,7 +24,6 @@ import type {
 import { clusterPositions } from './networkModel.ts'
 import {
   buildNetworkGraphOption,
-  hasActiveAnalysis,
   type NetworkCanvasHighlight,
 } from './networkGraphOption.ts'
 
@@ -52,6 +52,8 @@ interface Props {
 
 const ZOOM_MIN = 0.04
 const ZOOM_MAX = 4
+/** 节点数超过该阈值改用 canvas 渲染器：大图 DOM 元素量级显著下降。 */
+const RENDERER_CANVAS_THRESHOLD = 120
 
 function clampZoom(value: number): number {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value))
@@ -139,7 +141,6 @@ export default function NetworkCanvas(
   const initialViewRef = useRef<{ zoom: number; center?: [number, number] } | null>(null)
   const capturedInitialRef = useRef(false)
   const writeBackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [hoveredId, setHoveredId] = useState('')
 
   // 回调经 ref 转发，保证传给 echarts-for-react 的 handler 身份稳定。
   const callbacksRef = useRef({ onSelect, onBackgroundTap, onReady })
@@ -157,9 +158,6 @@ export default function NetworkCanvas(
     return merged
   }, [nodes, positionsRef])
 
-  const analysisActive = hasActiveAnalysis(highlight)
-  const analysisActiveRef = useRef(false)
-  analysisActiveRef.current = analysisActive
   // focusNode 的种子兜底坐标取最新值，避免闭包过期。
   const positionsNowRef = useRef(positions)
   positionsNowRef.current = positions
@@ -170,10 +168,9 @@ export default function NetworkCanvas(
       edges,
       sections,
       highlight,
-      hoveredId: analysisActive ? '' : hoveredId,
       positions,
     }),
-    [nodes, edges, sections, highlight, hoveredId, analysisActive, positions])
+    [nodes, edges, sections, highlight, positions])
 
   // 数据变化后重置"首帧快照未采集"标记，fit 语义始终对应当前数据的适应视图。
   useEffect(() => {
@@ -244,15 +241,6 @@ export default function NetworkCanvas(
       const id = params.data?.id || params.name
       if (id) callbacksRef.current.onSelect?.(id)
     },
-    mouseover: (params: { dataType?: string; data?: { id?: string } }) => {
-      if (params.dataType !== 'node' || analysisActiveRef.current) return
-      const id = params.data?.id
-      if (id) setHoveredId(previous => (previous === id ? previous : id))
-    },
-    mouseout: (params: { dataType?: string }) => {
-      if (params.dataType !== 'node' || analysisActiveRef.current) return
-      setHoveredId(previous => (previous === '' ? previous : ''))
-    },
   }), [])
 
   return (
@@ -270,7 +258,7 @@ export default function NetworkCanvas(
           option={option}
           notMerge={false}
           lazyUpdate
-          opts={{ renderer: 'svg' }}
+          opts={{ renderer: nodes.length > RENDERER_CANVAS_THRESHOLD ? 'canvas' : 'svg' }}
           style={{ width: '100%', height: '100%' }}
           onEvents={handleEvents}
           onChartReady={handleReady}

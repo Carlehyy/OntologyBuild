@@ -46,6 +46,7 @@ def promote_draft(
     from app.ontologies import cache as ontology_cache
     ontology_cache.invalidate_detail()
     ontology_cache.invalidate_overview()
+    ontology_cache.invalidate_instance_counts()
     ontology_cache.invalidate_pending()
     return result
 

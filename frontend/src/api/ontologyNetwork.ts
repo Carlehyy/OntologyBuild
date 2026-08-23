@@ -166,7 +166,9 @@ const base = '/ontology-network'
 // ---------- API ----------
 
 export const ontologyNetworkApi = {
-  overview: () => apiClientV2.get<NetworkOntologySection[]>(`${base}/overview`),
+  overview: (fresh?: boolean) => apiClientV2.get<NetworkOntologySection[]>(`${base}/overview`, {
+    params: fresh ? { fresh: 'true' } : undefined,
+  }),
 
   graph: (params: {
     ontologyIds: string[]
@@ -174,6 +176,8 @@ export const ontologyNetworkApi = {
     query?: string
     limitPerType?: number
     bridgeSameName?: boolean
+    /** 跳过实例计数缓存，强制直查（手动刷新时使用）。 */
+    fresh?: boolean
   }) => apiClientV2.get<NetworkGraphData>(`${base}/graph`, {
     params: {
       ontology_ids: params.ontologyIds.join(','),
@@ -181,6 +185,7 @@ export const ontologyNetworkApi = {
       query: params.query || undefined,
       limit_per_type: params.limitPerType,
       bridge_same_name: params.bridgeSameName !== false,
+      fresh: params.fresh ? 'true' : undefined,
     },
   }),
 

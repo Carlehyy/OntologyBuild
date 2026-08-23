@@ -8,8 +8,9 @@
  * - 类别色按本体顺序轮转平台十色板；关系边做两端类别色的低饱和渐变；
  * - 节点默认极浅投影，悬停发光只作为交互信号（克制 chrome）；
  * - 标签胶囊化 + labelLayout.hideOverlap 低缩放防重叠；
- * - 悬停联动是一跳邻接强亮、其余淡出（对齐官方 graph 示例
- *   emphasis.focus='adjacency' 的观感），分析高亮（路径/影响推演）优先于悬停联动。
+ * - 悬停联动直接用 ECharts 原生 emphasis.focus='adjacency' + blur 淡出：
+ *   零 option 重建、带过渡动画；分析高亮（路径/影响推演）优先于悬停联动
+ *   （分析态下 focus 置 none，压暗语义由数据侧 opacity 承担）。
  */
 import type { EChartsOption } from 'echarts'
 import {
@@ -85,51 +86,6 @@ export function soften(hex: string, toward = CHART_AXIS, ratio = 0.55): string {
   return `rgb(${mix(r, tr)},${mix(g, tg)},${mix(b, tb)})`
 }
 
-// ── 悬停联动：一跳邻接强亮，其余淡出 ──
-
-export interface HoverBandResult {
-  active: boolean
-  /** 被悬停节点自身 + 一跳邻居（保持全亮）。 */
-  strongNodeIds: Set<string>
-  /** 与悬停节点直接相连的边。 */
-  incidentEdgeIds: Set<string>
-}
-
-/**
- * 以无向邻接计算悬停带宽。桥接边同样计入连通性（跨本体同名类型互为邻居）。
- * hoveredId 为空时返回 inactive 结果。
- */
-export function hoverBands(
-  edges: Pick<NetworkGraphEdge, 'id' | 'source' | 'target'>[],
-  hoveredId?: string | null,
-): HoverBandResult {
-  const empty: HoverBandResult = {
-    active: false,
-    strongNodeIds: new Set(),
-    incidentEdgeIds: new Set(),
-  }
-  if (!hoveredId) return empty
-  const adjacency = new Map<string, Set<string>>()
-  const push = (from: string, to: string) => {
-    const bucket = adjacency.get(from) || new Set<string>()
-    bucket.add(to)
-    adjacency.set(from, bucket)
-  }
-  for (const edge of edges) {
-    push(edge.source, edge.target)
-    push(edge.target, edge.source)
-  }
-  const neighbors = adjacency.get(hoveredId)
-  if (!neighbors || neighbors.size === 0) return empty
-  // 官方示例语义：被悬停节点与其一跳邻居保持全亮，其余节点淡出。
-  const strongSet = new Set<string>([hoveredId, ...neighbors])
-  const incident = new Set<string>()
-  for (const edge of edges) {
-    if (edge.source === hoveredId || edge.target === hoveredId) incident.add(edge.id)
-  }
-  return { active: true, strongNodeIds: strongSet, incidentEdgeIds: incident }
-}
-
 // ── 节点 / 边状态解析 ──
 
 type NodeVisualState =
@@ -180,8 +136,6 @@ export interface BuildNetworkGraphOptionInput {
   edges: NetworkGraphEdge[]
   sections: NetworkGraphData['ontologies']
   highlight?: NetworkCanvasHighlight
-  /** 组件层保证：分析态激活时传空，悬停联动不与分析高亮打架。 */
-  hoveredId?: string
   /** 确定性初始坐标（缓存优先、clusterPositions 兜底），供 force initLayout:none 使用。 */
   positions?: Map<string, { x: number; y: number }>
 }
@@ -191,6 +145,12 @@ export function forceRepulsion(nodeCount: number): number {
   return nodeCount <= 0 ? 400 : Math.round(Math.min(1600, Math.max(340, nodeCount * 16)))
 }
 
+/** 理想边长途经随规模增长，超大图保持簇间呼吸感；始终有界。 */
+export function forceEdgeLength(nodeCount: number): number {
+  return Math.round(Math.min(160, 100 + Math.max(0, nodeCount) * 0.06))
+}
+
+
 const CAPSULE_LABEL_BASE = {
   backgroundColor: CHART_TOOLTIP_BG,
   borderColor: CHART_TOOLTIP_BORDER,
@@ -199,9 +159,8 @@ const CAPSULE_LABEL_BASE = {
 
 /** 构建完整的 graph series option；同一输入永远得到同一输出（可快照回归）。 */
 export function buildNetworkGraphOption(input: BuildNetworkGraphOptionInput): EChartsOption {
-  const { nodes, edges, sections, highlight, hoveredId = '', positions } = input
+  const { nodes, edges, sections, highlight, positions } = input
   const analysisActive = hasActiveAnalysis(highlight)
-  const bands = analysisActive ? hoverBands([], '') : hoverBands(edges, hoveredId)
 
   const colorByOntology = ontologyColorMap(sections)
   const degrees = degreeMap(edges)
@@ -227,7 +186,6 @@ export function buildNetworkGraphOption(input: BuildNetworkGraphOptionInput): EC
 
     let opacity = 1
     if (dimmedByAnalysis) opacity = 0.12
-    else if (bands.active && !bands.strongNodeIds.has(node.id)) opacity = 0.18
 
     const isType = node.kind === 'object_type'
     const position = positions?.get(node.id)
@@ -248,23 +206,16 @@ export function buildNetworkGraphOption(input: BuildNetworkGraphOptionInput): EC
         shadowColor: withAlpha(CHART_TEXT_STRONG, 0.14),
         shadowOffsetY: 1,
       },
-      emphasis: {
-        itemStyle: {
-          borderColor: CHART_TEAL,
-          borderWidth: 2.2,
-          shadowBlur: 16,
-          shadowColor: withAlpha(CHART_TEAL, 0.3),
-        },
-      },
       label: {
         show: true,
         formatter: node.label,
-        fontSize: isType ? 11 : 10,
-        fontWeight: isType ? 600 : 500,
+        fontSize: isType ? 11 : 9.5,
+        fontWeight: isType ? 600 : 400,
         color: isType ? CHART_TEXT_STRONG : CHART_TEXT,
-        borderWidth: isType ? 1 : 0.8,
-        padding: isType ? [3, 6] : [2, 5],
-        ...CAPSULE_LABEL_BASE,
+        // 胶囊只给对象类型：实例标签纯文本小号，密集画布不吵（对齐官方示例）。
+        borderWidth: isType ? 1 : 0,
+        padding: isType ? [3, 6] : [0, 1],
+        ...(isType ? CAPSULE_LABEL_BASE : { backgroundColor: 'transparent', borderColor: 'transparent' }),
       },
       // 自定义负载：tooltip 展示用。
       nodeLabel: node.label,
@@ -291,13 +242,6 @@ export function buildNetworkGraphOption(input: BuildNetworkGraphOptionInput): EC
       flatColor = CHART_ORANGE
     } else if (analysisActive && edge.kind !== 'bridge') {
       opacity = 0.06
-    } else if (bands.active) {
-      if (bands.incidentEdgeIds.has(edge.id)) {
-        width = style.width + 0.9
-        opacity = 1
-      } else {
-        opacity = 0.08
-      }
     }
 
     const sourceColor = colorByOntology.get(
@@ -377,10 +321,26 @@ export function buildNetworkGraphOption(input: BuildNetworkGraphOptionInput): EC
         force: {
           repulsion: forceRepulsion(nodes.length),
           gravity: 0.22,
-          edgeLength: 115,
+          edgeLength: forceEdgeLength(nodes.length),
           layoutAnimation: true,
           // 初始坐标来自确定性聚类种子/位置缓存（initLayout:'none' 时吃数据 x/y）。
           initLayout: 'none',
+        },
+        // 悬停联动：原生 adjacency——一跳邻接强亮、其余进入 blur 淡出，
+        // 零 option 重建 + 自带过渡动画；分析态下关闭让位给烘培压暗。
+        emphasis: {
+          focus: analysisActive ? 'none' : 'adjacency',
+          itemStyle: {
+            borderColor: CHART_TEAL,
+            borderWidth: 2.2,
+            shadowBlur: 16,
+            shadowColor: withAlpha(CHART_TEAL, 0.3),
+          },
+        },
+        blur: {
+          itemStyle: { opacity: 0.15 },
+          lineStyle: { opacity: 0.08 },
+          label: { opacity: 0.15 },
         },
         scaleLimit: { min: 0.04, max: 4 },
         symbol: 'circle',

@@ -29,11 +29,12 @@ def _ok(data):
 
 @router.get("/overview")
 def get_overview(
+    fresh: bool = Query(default=False, description="跳过实例计数缓存，强制直查"),
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
     """全部本体的发布口径与规模统计，供页面数据范围选择器使用。"""
-    return _ok(service.list_overview(db))
+    return _ok(service.list_overview(db, fresh=fresh))
 
 
 @router.get("/graph")
@@ -43,6 +44,7 @@ def get_network_graph(
     query: str | None = Query(default=None, max_length=200),
     limit_per_type: int = Query(default=service.DEFAULT_LIMIT_PER_TYPE, ge=1, le=20),
     bridge_same_name: bool = Query(default=True),
+    fresh: bool = Query(default=False, description="跳过实例计数缓存，强制直查"),
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
@@ -55,6 +57,7 @@ def get_network_graph(
             query=query,
             limit_per_type=limit_per_type,
             bridge_same_name=bridge_same_name,
+            fresh=fresh,
         )
     except ToolError as error:
         raise HTTPException(422, str(error)) from error

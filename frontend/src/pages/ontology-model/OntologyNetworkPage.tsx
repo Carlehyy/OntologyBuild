@@ -86,9 +86,13 @@ export default function OntologyNetworkPage() {
   const canvasRef = useRef<NetworkCanvasController | null>(null)
 
   // -- 数据范围 --
-  const { data: overview = [], isLoading: overviewLoading, refetch: refetchOverview } = useQuery({
-    queryKey: ['ontology-network-overview'],
-    queryFn: () => ontologyNetworkApi.overview(),
+  // 手动刷新：freshUntil 时间窗内发起的 overview/graph 请求携带 fresh=true，
+  // 强制穿透后端实例计数缓存（计数最多滞后 TTL 的问题由显式刷新解决）。
+  const freshUntilRef = useRef(0)
+  const [refreshToken, setRefreshToken] = useState(0)
+  const { data: overview = [], isLoading: overviewLoading } = useQuery({
+    queryKey: ['ontology-network-overview', refreshToken],
+    queryFn: () => ontologyNetworkApi.overview(Date.now() < freshUntilRef.current),
   })
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const seededRef = useRef(false)
@@ -106,13 +110,14 @@ export default function OntologyNetworkPage() {
   const [query, setQuery] = useState('')
 
   const graphKey = selectedIds.length > 0
-    ? ['ontology-network-graph', [...selectedIds].sort().join(','), level, query, limitPerType, bridgeEnabled]
+    ? ['ontology-network-graph', [...selectedIds].sort().join(','), level, query, limitPerType, bridgeEnabled, refreshToken]
     : null
   const { data: graph = EMPTY_GRAPH, isFetching: graphFetching, error: graphError } = useQuery({
     queryKey: graphKey ?? ['ontology-network-graph', 'idle'],
     queryFn: () => ontologyNetworkApi.graph({
       ontologyIds: selectedIds, level, query: query || undefined,
       limitPerType, bridgeSameName: bridgeEnabled,
+      fresh: Date.now() < freshUntilRef.current,
     }),
     enabled: graphKey !== null,
   })
@@ -293,6 +298,11 @@ export default function OntologyNetworkPage() {
     setSelectedPath(0)
   }
 
+  const refreshAll = () => {
+    freshUntilRef.current = Date.now() + 3000
+    setRefreshToken(previous => previous + 1)
+  }
+
   const focusSelected = () => {
     canvasRef.current?.focusNode(selectedNodeId)
   }
@@ -330,7 +340,7 @@ export default function OntologyNetworkPage() {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1">
-              <button type="button" onClick={() => void refetchOverview()} aria-label="刷新本体清单"
+              <button type="button" onClick={refreshAll} aria-label="刷新本体清单"
                 className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--color-border)] bg-white text-slate-500 hover:bg-slate-100">
                 <RefreshCw size={14} />
               </button>
