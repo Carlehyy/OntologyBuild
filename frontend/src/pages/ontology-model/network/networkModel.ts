@@ -38,10 +38,10 @@ export function degreeMap(edges: NetworkGraphEdge[]): Map<string, number> {
   return degrees
 }
 
-const TYPE_BASE_SIZE = 30
-const TYPE_SIZE_RANGE = 26
-const INSTANCE_BASE_SIZE = 15
-const INSTANCE_SIZE_RANGE = 11
+const TYPE_BASE_SIZE = 26
+const TYPE_SIZE_RANGE = 18
+const INSTANCE_BASE_SIZE = 13
+const INSTANCE_SIZE_RANGE = 8
 
 /** 节点直径（px）：对象类型显著大于实例，同 kind 内按度数归一化放大。 */
 export function nodeSize(
@@ -60,6 +60,58 @@ export function maxDegreeOf(edges: NetworkGraphEdge[]): number {
   let max = 0
   for (const degree of degreeMap(edges).values()) max = Math.max(max, degree)
   return max
+}
+
+function hashAngle(left: string, right: string): number {
+  let hash = 0
+  const text = left + '\u0000' + right
+  for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) >>> 0
+  return (hash % 3600) / 3600 * Math.PI * 2
+}
+
+/**
+ * 重叠消解（确定性后处理）：力导向收敛后，把仍然贴得太近的节点对沿连线
+ * 方向推开，保证任意两节点间隙 ≥ minGap。完全重合的节点用 id 哈希决定
+ * 分离方向，同一输入永远得到同一结果。返回是否有位置被调整。
+ */
+export function separateOverlaps(
+  positions: Map<string, { x: number; y: number }>,
+  diameters: Map<string, number>,
+  options: { iterations?: number; minGap?: number } = {},
+): boolean {
+  const iterations = options.iterations ?? 90
+  const minGap = options.minGap ?? 8
+  const ids = [...positions.keys()]
+  let adjusted = false
+  for (let iter = 0; iter < iterations; iter++) {
+    let movedThisRound = false
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const a = positions.get(ids[i])!
+        const b = positions.get(ids[j])!
+        const need = (diameters.get(ids[i]) ?? 20) / 2 + (diameters.get(ids[j]) ?? 20) / 2 + minGap
+        let dx = b.x - a.x
+        let dy = b.y - a.y
+        let dist = Math.hypot(dx, dy)
+        if (dist >= need) continue
+        if (dist < 1e-6) {
+          const angle = hashAngle(ids[i], ids[j])
+          dx = Math.cos(angle)
+          dy = Math.sin(angle)
+          dist = 1
+        }
+        const push = (need - dist) / 2
+        a.x -= (dx / dist) * push
+        a.y -= (dy / dist) * push
+        b.x += (dx / dist) * push
+        b.y += (dy / dist) * push
+        movedThisRound = true
+      }
+    }
+    if (!movedThisRound) break
+    adjusted = true
+  }
+  return adjusted
 }
 
 /**
