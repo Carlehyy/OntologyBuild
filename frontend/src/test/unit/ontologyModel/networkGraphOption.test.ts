@@ -4,15 +4,15 @@ import { describe, it } from 'node:test'
 import {
   baseEdgeStyle,
   buildNetworkGraphOption,
+  forceEdgeLength,
   forceRepulsion,
   hasActiveAnalysis,
-  hoverBands,
   soften,
   withAlpha,
   type BuildNetworkGraphOptionInput,
   type NetworkCanvasHighlight,
 } from '../../../pages/ontology-model/network/networkGraphOption.ts'
-import { CHART_AXIS, CHART_BLUE, CHART_ORANGE, CHART_VIOLET } from '../../../lib/echartsTheme.ts'
+import { CHART_AXIS, CHART_BLUE, CHART_ORANGE, CHART_TOOLTIP_BG, CHART_VIOLET } from '../../../lib/echartsTheme.ts'
 import type { NetworkGraphNode, NetworkOntologySection } from '../../../api/ontologyNetwork'
 
 function makeSection(id: string, name: string, published = true): NetworkOntologySection {
@@ -30,40 +30,7 @@ function makeNode(overrides: Partial<NetworkGraphNode>): NetworkGraphNode {
   }
 }
 
-const chainEdges = [
-  { id: 'ab', kind: 'relation' as const, source: 'a', target: 'b', label: 'r' },
-  { id: 'bc', kind: 'relation' as const, source: 'b', target: 'c', label: 'r' },
-  { id: 'cd', kind: 'relation' as const, source: 'c', target: 'd', label: 'r' },
-]
 
-describe('hoverBands（一跳邻接强亮，其余淡出）', () => {
-  it('悬停节点自身与一跳邻居进 strong，二跳不进入任何集合', () => {
-    const bands = hoverBands(chainEdges, 'b')
-    assert.equal(bands.active, true)
-    assert.deepEqual([...bands.strongNodeIds].sort(), ['a', 'b', 'c'])
-    assert.equal('softNodeIds' in bands, false)
-    assert.deepEqual([...bands.incidentEdgeIds].sort(), ['ab', 'bc'])
-  })
-
-  it('无悬停目标或孤立节点时返回 inactive 空集', () => {
-    for (const hovered of [null, undefined, '', 'ghost']) {
-      const bands = hoverBands(chainEdges, hovered)
-      assert.equal(bands.active, false)
-      assert.equal(bands.strongNodeIds.size, 0)
-      assert.equal(bands.incidentEdgeIds.size, 0)
-    }
-  })
-
-  it('桥接边同样计入连通性（跨本体同名类型互为邻居）', () => {
-    const edges = [
-      { id: 'br', kind: 'bridge' as const, source: 'x1', target: 'x2', label: '同名类型' },
-    ]
-    const bands = hoverBands(edges, 'x1')
-    assert.equal(bands.active, true)
-    assert.ok(bands.strongNodeIds.has('x2'))
-    assert.ok(bands.incidentEdgeIds.has('br'))
-  })
-})
 
 describe('颜色工具', () => {
   it('withAlpha 输出 rgba 字符串', () => {
@@ -76,12 +43,20 @@ describe('颜色工具', () => {
   })
 })
 
-describe('forceRepulsion / baseEdgeStyle', () => {
+describe('forceRepulsion / forceEdgeLength / baseEdgeStyle', () => {
   it('斥力随规模自适应并有上下界', () => {
     assert.equal(forceRepulsion(0), 400)
     assert.equal(forceRepulsion(10), 340)
     assert.equal(forceRepulsion(60), Math.min(1600, Math.max(340, 960)))
     assert.equal(forceRepulsion(500), 1600)
+  })
+
+
+  it('边长途经随规模增长且有上界', () => {
+    assert.equal(forceEdgeLength(0), 100)
+    assert.equal(forceEdgeLength(100), 106)
+    assert.equal(forceEdgeLength(800), 148)
+    assert.equal(forceEdgeLength(5000), 160)
   })
 
   it('五类边各有线型与箭头语义', () => {
@@ -111,7 +86,7 @@ const nodes: NetworkGraphNode[] = [
   makeNode({ id: 'type:t2', entityId: 't2', kind: 'object_type', label: '客户', ontologyId: 'o2', ontologyName: '设备台账' }),
   makeNode({ id: 'instance:i1', entityId: 'i1', label: '华东制造', objectTypeId: 't1', objectTypeLabel: '客户' }),
   makeNode({ id: 'instance:i2', entityId: 'i2', label: '华南贸易', objectTypeId: 't1' }),
-  // 无任何关联：悬停联动里充当"两跳之外"的压暗样本。
+  // 无任何关联的孤立节点。
   makeNode({ id: 'instance:i3', entityId: 'i3', label: '孤立实例' }),
 ]
 const edges = [
@@ -212,36 +187,34 @@ describe('buildNetworkGraphOption', () => {
     assert.equal(pathEdge.lineStyle.width, 3.2)
   })
 
-  it('悬停联动：悬停节点与一跳全亮、二跳及其余压暗、关联边加粗', () => {
-    const series = seriesOf(build({ hoveredId: 'type:t1' }))
-    const byId = new Map(series.data.map(datum => [datum.id as string, datum]))
-    const hovered = byId.get('type:t1') as { itemStyle: { opacity: number } }
-    const neighbor = byId.get('instance:i1') as { itemStyle: { opacity: number } }
-    const bridgePeer = byId.get('type:t2') as { itemStyle: { opacity: number } }
-    const twoHop = byId.get('instance:i2') as { itemStyle: { opacity: number } }
-    const unrelated = byId.get('instance:i3') as { itemStyle: { opacity: number } }
-    assert.equal(hovered.itemStyle.opacity, 1)
-    assert.equal(neighbor.itemStyle.opacity, 1)
-    assert.equal(bridgePeer.itemStyle.opacity, 1)
-    assert.equal(twoHop.itemStyle.opacity, 0.18)
-    assert.equal(unrelated.itemStyle.opacity, 0.18)
-
-    const incident = series.links.find(link => link.id === 'e1') as { lineStyle: { width: number; opacity: number } }
-    assert.equal(incident.lineStyle.opacity, 1)
-    assert.ok(incident.lineStyle.width > 1.6)
-
-    const far = series.links.find(link => link.id === 'e3') as { lineStyle: { opacity: number } }
-    assert.equal(far.lineStyle.opacity, 0.08)
+  it('悬停联动交给原生 adjacency：默认 focus=adjacency + blur 淡出样式', () => {
+    const option = build() as { series?: { emphasis?: { focus?: string }; blur?: { itemStyle?: { opacity?: number }; lineStyle?: { opacity?: number }; label?: { opacity?: number } } }[] }
+    const series = option.series?.[0]
+    assert.equal(series?.emphasis?.focus, 'adjacency')
+    assert.equal(series?.blur?.itemStyle?.opacity, 0.15)
+    assert.equal(series?.blur?.lineStyle?.opacity, 0.08)
+    assert.equal(series?.blur?.label?.opacity, 0.15)
   })
 
-  it('分析态激活时忽略悬停联动（分析高亮优先）', () => {
-    const series = seriesOf(build({
-      hoveredId: 'type:t1',
-      highlight: { changeNodeId: 'instance:i2' },
-    }))
+  it('分析态激活时关闭悬停联动（focus=none，压暗由数据侧承担）', () => {
+    const option = build({ highlight: { changeNodeId: 'instance:i2' } }) as { series?: { emphasis?: { focus?: string } }[] }
+    assert.equal(option.series?.[0]?.emphasis?.focus, 'none')
+    const series = seriesOf(option as ReturnType<typeof build>)
     const byId = new Map(series.data.map(datum => [datum.id as string, datum]))
     const neighbor = byId.get('instance:i1') as { itemStyle: { opacity: number } }
     assert.equal(neighbor.itemStyle.opacity, 0.12)
+  })
+
+  it('标签降噪：对象类型胶囊、实例纯文本小号', () => {
+    const series = seriesOf(build())
+    const byId = new Map(series.data.map(datum => [datum.id as string, datum]))
+    const typeLabel = (byId.get('type:t1') as { label: { backgroundColor: string; borderWidth: number; fontSize: number } }).label
+    const instanceLabel = (byId.get('instance:i1') as { label: { backgroundColor: string; borderWidth: number; fontSize: number } }).label
+    assert.equal(typeLabel.backgroundColor, CHART_TOOLTIP_BG)
+    assert.ok(typeLabel.borderWidth >= 1)
+    assert.equal(instanceLabel.backgroundColor, 'transparent')
+    assert.equal(instanceLabel.borderWidth, 0)
+    assert.ok(instanceLabel.fontSize < typeLabel.fontSize)
   })
 
   it('同一输入得到同一输出（确定性回归）', () => {

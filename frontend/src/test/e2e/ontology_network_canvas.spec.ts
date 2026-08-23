@@ -43,8 +43,24 @@ async function clickVisibleInstanceNode(page: Page, card: ReturnType<Page['getBy
       target = next
       if (settled) break
     }
-    // 标签挂在节点正下方：向标签上方偏移点击命中节点圆心
-    await page.mouse.click(target!.x, target!.y - 18)
+    // 标签挂在节点正下方：真实移动鼠标到节点圆心悬停，等 tooltip 浮层出现后
+    // 禁用其 pointer-events，再原地 mousedown/up（zrender 由 down/up 对推导 click，
+    // 且点击不再被 tooltip 拦截）。
+    const nodeX = target!.x
+    const nodeY = target!.y - 12
+    await page.mouse.move(nodeX, nodeY)
+    await page.waitForTimeout(150)
+    await page.evaluate(() => {
+      const host = document.querySelector('[data-testid="network-chart-host"]')
+      if (!host) return
+      const svg = host.querySelector('svg')
+      for (const div of host.querySelectorAll('div')) {
+        if (svg && div.contains(svg)) continue
+        div.style.setProperty('pointer-events', 'none', 'important')
+      }
+    })
+    await page.mouse.down()
+    await page.mouse.up()
     const inspector = page.getByTestId('network-inspector')
     try {
       await expect(inspector).toBeVisible({ timeout: 2500 })
@@ -226,4 +242,58 @@ test('工具条缩放/适应可用，搜索触发带 query 的图请求', async 
   await page.getByLabel('搜索实例').fill('华南')
   await page.getByLabel('搜索实例').press('Enter')
   await expect.poll(() => graphQueries.some(query => query.includes('query='))).toBe(true)
+})
+
+
+test('悬停节点：一跳邻接强亮、其余 blur 淡出并可恢复', async ({ page }) => {
+  await mockNetworkApi(page)
+  await page.goto('/#/ontology-model/network', { waitUntil: 'domcontentloaded' })
+
+  const host = page.getByTestId('network-chart-host')
+  await expect(host.locator('svg text').first()).toBeVisible()
+
+  // 任选一个可见的类型标签（订单/客户），等其位置稳定后悬停标签上方的节点圆心
+  const readTarget = () => page.evaluate(() => {
+    for (const name of ['订单', '客户']) {
+      for (const element of document.querySelectorAll('[data-testid="network-chart-host"] svg text')) {
+        if ((element.textContent || '').trim() !== name) continue
+        const rect = element.getBoundingClientRect()
+        if (!rect.width && !rect.height) continue
+        return { x: rect.x + rect.width / 2, y: rect.y }
+      }
+    }
+    return null
+  })
+  let target = null as { x: number; y: number } | null
+  for (let i = 0; i < 30; i++) {
+    const next = await readTarget()
+    if (!next) { await page.waitForTimeout(300); continue }
+    if (target && Math.abs(next.x - target.x) < 1 && Math.abs(next.y - target.y) < 1) break
+    target = next
+    await page.waitForTimeout(300)
+  }
+  assert.ok(target, '至少一个类型标签应可见')
+
+  // 淡出元素计数：zrender 把 blur 透明度写在 fill/stroke-opacity 上；
+  // 桥接边基线就 <0.5，因此用「悬停前后差值」断言而非绝对值。
+  const dimmedCount = () => page.evaluate(() => {
+    let count = 0
+    for (const path of document.querySelectorAll('[data-testid="network-chart-host"] svg path')) {
+      for (const attr of ['fill-opacity', 'stroke-opacity', 'opacity']) {
+        const raw = path.getAttribute(attr)
+        if (raw === null) continue
+        const value = parseFloat(raw)
+        if (Number.isFinite(value) && value > 0 && value < 0.5) { count += 1; break }
+      }
+    }
+    return count
+  })
+  const baseline = await dimmedCount()
+
+  await page.mouse.move(target.x, target.y - 14)
+  await expect.poll(dimmedCount).toBeGreaterThan(baseline)
+
+  // 移出画布后 blur 恢复，淡出元素回到基线
+  await page.mouse.move(5, 5)
+  await expect.poll(dimmedCount).toBe(baseline)
 })

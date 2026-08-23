@@ -685,6 +685,7 @@ def save_full_ontology(
     # 建模 + 实例数据的整体替换已落库：详情页总览统计口径变化，失效总览缓存。
     from app.ontologies import cache as ontology_cache
     ontology_cache.invalidate_overview()
+    ontology_cache.invalidate_instance_counts()
     return response
 
 
@@ -1023,6 +1024,7 @@ def patch_full_ontology(
     # 实例增量变更已落库：失效详情页总览缓存（fail-open）。
     from app.ontologies import cache as ontology_cache
     ontology_cache.invalidate_overview()
+    ontology_cache.invalidate_instance_counts()
     return ok_fn(data)
 
 
