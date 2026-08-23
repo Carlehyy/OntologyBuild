@@ -47,6 +47,7 @@ export default defineConfig({
     '**/overview.spec.ts',
     '**/pipeline_list_page.spec.ts',
     '**/python_script_page.spec.ts',
+    '**/scenes.spec.ts',
     '**/sentinel_firing_delta.spec.ts',
     '**/sentinel_panel_loading.spec.ts',
     '**/settings_monitoring.spec.ts',
