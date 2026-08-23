@@ -2,8 +2,8 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  AlertTriangle, ArrowRight, Check, ChevronDown, CircleAlert, Database,
-  GitBranch, GitCommitHorizontal, LockKeyhole, MoreHorizontal, Plus, Rocket,
+  AlertTriangle, ArrowRight, Bookmark, Check, ChevronDown, CircleAlert, Database,
+  GitBranch, GitCommitHorizontal, History, LockKeyhole, MoreHorizontal, Plus, Rocket,
   ShieldCheck, Trash2, Wrench,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
@@ -73,7 +73,7 @@ const STAGE_META: Record<VersionStage, { label: string; badge: 'success' | 'warn
     bar: 'border-l-amber-400',
   },
   archived: {
-    label: '已发布', badge: 'default', dot: 'bg-violet-400 ring-violet-100',
+    label: '已发布的分支', badge: 'default', dot: 'bg-violet-400 ring-violet-100',
     card: 'border-violet-100 bg-violet-50/30 hover:border-violet-200',
     bar: 'border-l-violet-400',
   },
@@ -394,9 +394,12 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
     const deletableStage = editing || trial
     const isLeaf = children.length === 0
     const promotedToVersion = promotedTarget.get(node.id) || null
-    const stageText = stage === 'archived' && promotedToVersion
-      ? `已发布为 ${promotedToVersion}`
-      : meta.label
+    // 徽章文案与顶部图例统一为「已发布的分支」，具体晋升成哪个发布版收进悬浮提示，
+    // 避免版本号后出现第二种“发布”措辞；sr-only 文本保留无障碍语义。
+    const stageText = meta.label
+    const promotedTooltip = stage === 'archived' && promotedToVersion
+      ? `该分支已完成隔离试跑并晋升为正式发布 ${promotedToVersion}`
+      : null
     const parentNode = node.parent_version_id
       ? nodes.find(item => item.id === node.parent_version_id)
       : undefined
@@ -428,14 +431,26 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                   ? <GitCommitHorizontal size={16} className={`shrink-0 ${stage === 'current' ? 'text-teal-700' : 'text-slate-500'}`} />
                   : <GitBranch size={16} className={`shrink-0 ${trial ? 'text-amber-600' : 'text-sky-600'}`} />}
                 <span className="shrink-0 font-mono text-base font-semibold tabular-nums text-slate-800">{node.version_number}</span>
-                <span className="shrink-0"><StageBadge stage={stage} label={stageText} /></span>
-                {node.version_label && <span className="min-w-0 truncate text-xs font-medium text-slate-500" title={node.version_label}>{node.version_label}</span>}
+                <span className="shrink-0" title={promotedTooltip || undefined}>
+                  <StageBadge stage={stage} label={stageText} />
+                  {promotedTooltip && promotedToVersion && <span className="sr-only">（已发布为 {promotedToVersion}）</span>}
+                </span>
+                {node.version_label && (
+                  <span
+                    className="inline-flex min-w-0 shrink items-center gap-1 text-[11px] font-normal italic text-slate-400"
+                    title={`自定义分支标签：${node.version_label}`}
+                  >
+                    <Bookmark size={11} className="shrink-0" aria-hidden="true" />
+                    <span className="truncate">{node.version_label}</span>
+                  </span>
+                )}
                 {recoveryFromVersion && (
                   <span
-                    className="shrink-0 whitespace-nowrap text-[11px] font-medium text-amber-700"
-                    title={`从历史发布 ${recoveryFromVersion} 创建的修复草稿，验证与试跑均以当前发布为基线`}
+                    className="inline-flex shrink-0 items-center gap-1 text-slate-400"
+                    title={`从历史发布 ${recoveryFromVersion} 创建的恢复草稿，验证与试跑均以当前发布为基线`}
                   >
-                    恢复自 {recoveryFromVersion}
+                    <History size={12} aria-hidden="true" />
+                    <span className="sr-only">恢复自 {recoveryFromVersion}</span>
                   </span>
                 )}
               </div>
@@ -444,29 +459,29 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
             <div className="ml-auto flex shrink-0 items-center gap-1.5">
               {editing ? (
                 <>
+                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.trial} loading={runTrial.isPending} onClick={() => runTrial.mutate(node)}>
+                    转为试跑态
+                  </Button>
                   <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.editor} onClick={() => openVersion(node)}>
                     打开编辑器
                   </Button>
                   <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.mapping} onClick={() => openMapping(node)}>
                     <Database size={14} /> 数据映射
-                  </Button>
-                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.trial} loading={runTrial.isPending} onClick={() => runTrial.mutate(node)}>
-                    转为试跑态
                   </Button>
                 </>
               ) : trial ? (
                 <>
-                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.editor} onClick={() => openVersion(node)}>
-                    打开编辑器
-                  </Button>
-                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.mapping} onClick={() => openMapping(node)}>
-                    <Database size={14} /> 数据映射
-                  </Button>
                   <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.release} onClick={() => {
                     promote.reset()
                     createRepairDraft.reset()
                     inspectImpact.mutate(node)
                   }}>转为发布态</Button>
+                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.editor} onClick={() => openVersion(node)}>
+                    打开编辑器
+                  </Button>
+                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.mapping} onClick={() => openMapping(node)}>
+                    <Database size={14} /> 数据映射
+                  </Button>
                 </>
               ) : (
                 <>
@@ -580,7 +595,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <p className="font-semibold">草稿尚未满足转为试跑态的硬性条件</p>
-              <div className="mt-1 max-h-24 space-y-1 overflow-y-auto pr-2 text-xs leading-5 text-red-800">
+              <div className="scrollbar-thin mt-1 max-h-24 space-y-1 overflow-y-auto pr-2 text-xs leading-5 text-red-800">
                 {gateIssues.map((item, index) => <p key={`${item.kind || ''}-${item.field || ''}-${index}`}>• {item.message}</p>)}
               </div>
             </div>
@@ -594,7 +609,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
         </div>
       )}
 
-      <section className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-slate-50/60 p-4" aria-label="本体版本树">
+      <section className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-slate-50/60 p-4" aria-label="本体版本树">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-slate-700">版本树</p>
@@ -784,7 +799,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                         {runtimeConflicts!.totalCount} 项
                       </span>
                     </div>
-                    <div className="max-h-72 space-y-3 overflow-y-auto pr-1">
+                    <div className="scrollbar-thin max-h-72 space-y-3 overflow-y-auto pr-1">
                       {runtimeConflicts!.items.map(conflict => (
                         <article
                           key={conflict.factId || [
@@ -870,7 +885,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                       <h3 id="release-blockers-heading" className="font-semibold text-slate-800">需要处理的问题</h3>
                       <span className="text-xs text-slate-500">{issues.length} 项 · 按本体元素归组</span>
                     </div>
-                    <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+                    <div className="scrollbar-thin max-h-64 space-y-2 overflow-y-auto pr-1">
                       {groups.map(group => (
                         <details key={group.key} data-testid="release-readiness-group" className="group rounded-lg border border-slate-200 bg-white open:border-red-200 open:bg-red-50/30">
                           <summary className="flex min-h-12 cursor-pointer list-none items-center gap-3 px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 [&::-webkit-details-marker]:hidden">
@@ -905,7 +920,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                   <div className="mt-3">
                     {promotion.impact.breakingCount === 0
                       ? <p className="rounded-lg bg-emerald-50 px-3 py-2 text-emerald-800">未发现结构性破坏。</p>
-                      : <div className="max-h-40 space-y-2 overflow-auto">{promotion.impact.breaking.map((item, index) => (
+                      : <div className="scrollbar-thin max-h-40 space-y-2 overflow-auto">{promotion.impact.breaking.map((item, index) => (
                         <div key={index} className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900"><AlertTriangle size={16} className="mt-0.5 shrink-0" />{item.message}</div>
                       ))}</div>}
                   </div>
