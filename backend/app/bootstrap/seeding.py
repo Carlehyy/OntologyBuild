@@ -72,6 +72,10 @@ def seed_database() -> None:
         from app.inbox.models import (  # noqa: F401
             InboxItem, InboxDelivery, InboxEventReceipt, InboxOutboxEvent,
         )
+        # 三维场景（白模场景管理：主体 / 版本冻结 / 运行日志）
+        from app.scenes.models import (  # noqa: F401
+            Scene, SceneVersion, SceneRuntimeLog,
+        )
         # 平台概览 · 运行健康度（API 性能监控）
         from app.platform.observability.models import (  # noqa: F401
             ApiPerfMinuteRollup, ApiPerfSlowRequest,

@@ -336,6 +336,16 @@ app.include_router(
     dependencies=world_model_guard,
 )
 
+# 三维场景 — 白模场景管理与建模：卡片列表 / 详情三标签 / 运行日志（场景助手属阶段二）
+scenes_guard = menu_guard("scenes")
+from app.scenes import router as scenes_router
+app.include_router(
+    scenes_router.router,
+    prefix="/api/v2/scenes",
+    tags=["scenes"],
+    dependencies=scenes_guard,
+)
+
 def get_db():
     db = SessionLocal()
     try:

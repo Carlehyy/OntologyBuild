@@ -16,6 +16,7 @@ ALL_MENU_KEYS = (
     "world_model.models",
     "world_model.services",
     "world_model.calls",
+    "scenes",
     "agent",
     "events",
     "data",

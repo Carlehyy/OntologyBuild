@@ -13,6 +13,7 @@ app/
 ├── super_assistant/   超级助手、Skill 与 MCP
 ├── exploration/       业务探索
 ├── ontologies/        本体、映射、图、Agent 与 Sentinel
+├── scenes/            三维场景（白模场景管理与建模）
 ├── events/            事件登记
 ├── data_channel/      连接、数据集、流水线与数据管家
 ├── api_hub/           接口定义、发布、凭据与代理
