@@ -147,12 +147,14 @@ test('列表页渲染卡片并支持新建场景', async ({ page }) => {
   await expect(page.getByText('供应链园区')).toBeVisible()
   await expect(page.getByText('能源场站')).toBeVisible()
   // 状态徽章：发布态 / 草稿态
-  await expect(page.getByText('已发布', { exact: true })).toBeVisible()
-  await expect(page.getByText('草稿', { exact: true }).first()).toBeVisible()
+  const publishedCard = page.locator('article', { hasText: '供应链园区' })
+  await expect(publishedCard.getByText('已发布', { exact: true })).toBeVisible()
+  const draftCard = page.locator('article', { hasText: '能源场站' })
+  await expect(draftCard.getByText('草稿', { exact: true })).toBeVisible()
   // 新建
   await page.getByRole('button', { name: '新建场景' }).click()
   await page.getByLabel('场景名称', { exact: true }).fill('港口调度场景')
-  await page.getByRole('button', { name: '创建' }).click()
+  await page.getByRole('button', { name: '创建', exact: true }).click()
   await expect(page.getByText('港口调度场景')).toBeVisible()
 })
 

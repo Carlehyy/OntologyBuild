@@ -151,6 +151,13 @@ export default function SceneModelingPage() {
 
   return (
     <div className="flex h-[calc(100vh-8.5rem)] flex-col px-6 py-4">
+      {modelsQuery.isSuccess && llmModels.length === 0 && (
+        <div className="flex shrink-0 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
+          <AlertTriangle size={15} className="shrink-0" />
+          <span className="flex-1">尚未配置对话模型：场景助手需要一个 LLM 才能工作。</span>
+          <Link to="/models" className="flex items-center gap-1 rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-xs hover:bg-amber-100">去模型配置</Link>
+        </div>
+      )}
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Link to="/scenes" className="inline-flex items-center gap-1 text-xs text-[var(--color-text-secondary)] hover:text-teal-600">

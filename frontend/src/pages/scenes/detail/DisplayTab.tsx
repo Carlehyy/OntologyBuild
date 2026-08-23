@@ -79,7 +79,7 @@ export function DisplayTab({ scene }: { scene: SceneDetail }) {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)]">
           渲染版本
@@ -108,7 +108,7 @@ export function DisplayTab({ scene }: { scene: SceneDetail }) {
           <Info size={12} /> 模拟数据仅用于演示规则命中，不会写入真实数据源
         </span>
       </div>
-      <div className="relative h-[520px] overflow-hidden rounded-xl border border-[var(--color-border)] bg-card">
+      <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--color-border)] bg-card">
         {definition
           ? (
             <SceneCanvas

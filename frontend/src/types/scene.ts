@@ -17,6 +17,9 @@ export interface SceneSummary {
   status: SceneStatus
   /** 最新草稿版本号；0 = 尚无任何定义 */
   current_version_no: number
+  /** 列表卡片指标：版本总数与运行日志条数（仅列表接口聚合返回） */
+  version_count?: number
+  runtime_log_count?: number
   /** 最近一次发布冻结的版本号；null = 从未发布 */
   published_version_no: number | null
   created_by: string | null
