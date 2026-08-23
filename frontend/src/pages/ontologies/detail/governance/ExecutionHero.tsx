@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import type { GovernanceKpis } from '../tabs/governanceFormat'
 import type { DailySparkDatum } from './storyModel'
+import { CHART_BLUE, CHART_EMERALD, CHART_RED, CHART_VIOLET } from '../../../../lib/echartsTheme.ts'
 import {
   buildDailyComboOption, buildMiniBarOption, buildMiniLineOption,
   type KpiSparkSeries,
@@ -97,7 +98,7 @@ export function KpiOverviewGrid({
           value={String(kpis.pendingCount)}
           detail={kpis.pendingCount > 0 ? '需要人工裁决' : '全部已处理'}
           spark={{
-            kind: 'bar', values: sparks.decisions, color: '#3b82f6',
+            kind: 'bar', values: sparks.decisions, color: CHART_BLUE,
             hint: '近 7 日每日人工决策处理量(批准+拒绝)',
           }}
           onClick={() => onNavigate('board')} />
@@ -107,7 +108,7 @@ export function KpiOverviewGrid({
             ? `累计 ${kpis.decisionsTotal} 次(批准 ${kpis.decisionsApproved} · 拒绝 ${kpis.decisionsRejected})`
             : '暂无人工决策'}
           spark={{
-            kind: 'line', values: sparks.approvalRate, color: '#8b5cf6',
+            kind: 'line', values: sparks.approvalRate, color: CHART_VIOLET,
             hint: '近 7 日每日批准率(当日无决策则断点)',
           }}
           onClick={() => onNavigate('board')} />
@@ -119,7 +120,7 @@ export function KpiOverviewGrid({
               ? `影子 ${kpis.sentinelsMuted} · 停用 ${kpis.sentinelsDisabled}`
               : '全部在线'}
           spark={{
-            kind: 'bar', values: sparks.sentinelHits, color: '#f43f5e',
+            kind: 'bar', values: sparks.sentinelHits, color: CHART_RED,
             hint: '近 7 日每日哨兵命中次数',
           }}
           onClick={() => onNavigate('board')} />
@@ -129,7 +130,7 @@ export function KpiOverviewGrid({
             ? '尚未配置动作'
             : `自动 ${kpis.levelCounts.L2} · 人审 ${kpis.levelCounts.L1} · 影子 ${kpis.levelCounts.L0}`}
           spark={{
-            kind: 'bar', values: sparks.actionSuccess, color: '#10b981',
+            kind: 'bar', values: sparks.actionSuccess, color: CHART_EMERALD,
             hint: '近 7 日每日动作执行成功次数',
           }}
           onClick={() => onNavigate('board')} />

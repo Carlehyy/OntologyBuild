@@ -78,6 +78,10 @@ app/services/v2/graph/neo4j_service.py
 为权威。某业务域迁入 `frontend/src/features/<capability>/` 必须经维护者批准
 并先建立目标骨架；此前继续维护现有路径，不得制造第三套并行实现。
 
+前端页面 UI 开发须遵循仓库根目录 `DESIGN.md`（平台设计语言唯一事实来源）：
+界面颜色取自 `frontend/src/styles/tokens.css` 的语义令牌，ECharts 图表取值统一
+导入 `frontend/src/lib/echartsTheme.ts`；禁止在页域新建平行的主题常量或色板。
+
 ## 2. 不可破坏的兼容契约
 
 纯目录整理不得擅自改变以下内容：
@@ -206,7 +210,8 @@ npm run test:e2e:mocked
 
 - `README.md`：三分钟项目入口和标准启动方式；
 - `docs/operations/`：如何配置、部署、监控、备份和回滚；
-- `docs/development/`：如何搭建本地环境并验证改动。
+- `docs/development/`：如何搭建本地环境并验证改动；
+- 根目录 `DESIGN.md`：前端设计语言基线（色彩、排版、组件与图表规范）及外部样例拷贝规则。
 
 变更史以 Git 提交历史为准，不单独维护 Changelog。
 
