@@ -7,7 +7,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Boxes, Pencil, Plus, Trash2, Copy } from 'lucide-react'
+import { Boxes, Pencil, Plus, Trash2, Copy, Sparkles } from 'lucide-react'
 import { scenesApi } from '@/api/scenes'
 import type { SceneSummary, SceneStatus } from '@/types/scene'
 import { Button } from '@/components/ui/Button'
@@ -114,6 +114,9 @@ export default function SceneListPage() {
           </div>
           <Button onClick={() => setCreateOpen(true)}>
             <Plus size={16} /> 新建场景
+          </Button>
+          <Button variant="outline" onClick={() => navigate("/scenes/modeling")}>
+            <Sparkles size={15} /> 场景助手
           </Button>
         </div>
       </div>

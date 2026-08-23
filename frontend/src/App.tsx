@@ -40,6 +40,7 @@ import WorldModelDevelopPage from '@/pages/world-model/WorldModelDevelopPage'
 import ApiHubPage from '@/pages/api-hub/ApiHubPage'
 import SceneListPage from '@/pages/scenes/list/SceneListPage'
 import SceneDetailPage from '@/pages/scenes/detail/SceneDetailPage'
+import SceneModelingPage from '@/pages/scenes/modeling/SceneModelingPage'
 import PublicManualDatasetPage from '@/pages/data-management/structured/PublicManualDatasetPage'
 import { ToastProvider } from '@/components/ui/Toast'
 import { AccessDeniedPage, NoAssignedPagesPage } from '@/pages/errors/AccessDeniedPage'
@@ -190,6 +191,7 @@ export default function App() {
           <Route path="/super-assistant" element={<ProtectedRoute><SuperAssistantPage /></ProtectedRoute>} />
           <Route path="/events" element={<ProtectedRoute><EventRegistryPage /></ProtectedRoute>} />
           <Route path="/scenes" element={<ProtectedRoute><SceneListPage /></ProtectedRoute>} />
+          <Route path="/scenes/modeling" element={<ProtectedRoute><SceneModelingPage /></ProtectedRoute>} />
           <Route path="/scenes/:id" element={<ProtectedRoute><SceneDetailPage /></ProtectedRoute>} />
           <Route path="/rag" element={<Navigate to="/agent" replace />} />
           <Route path="/settings" element={<Navigate to="/settings/users" replace />} />

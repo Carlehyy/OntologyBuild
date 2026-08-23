@@ -192,3 +192,65 @@ test('custom 角色未授权 scenes 时直达被拦截', async ({ page }) => {
   await page.goto('/#/scenes')
   await expect(page.getByText('供应链园区')).toHaveCount(0)
 })
+
+// —— 场景建模页（阶段二）——
+
+const LF = String.fromCharCode(10)
+
+const chatStreamOk = [
+  'event: meta',
+  'data: {"conversation_id":"sc-1","scene_id":null}',
+  '',
+  'event: scene_updated',
+  'data: {"scene_id":"scn-1","name":"供应链园区","version_no":3,"status":"draft","note":"初版布局"}',
+  '',
+  'event: done',
+  'data: {}',
+  '',
+].join(LF)
+
+const chatStreamError = [
+  'event: meta',
+  'data: {"conversation_id":"sc-2","scene_id":null}',
+  '',
+  'event: error',
+  'data: {"code":"model_unavailable","message":"尚未配置可用的对话模型"}',
+  '',
+  'event: done',
+  'data: {}',
+  '',
+].join(LF)
+
+async function mockModeling(page: Page, sseBody: string) {
+  await mockPlatformShell(page)
+  await mockScenesApi(page)
+  const convId = sseBody.includes('model_unavailable') ? 'sc-2' : 'sc-1'
+  await page.route('**/api/v2/scenes/conversations', route => {
+    if (route.request().method() === 'POST') {
+      return json(route, { id: convId, scene_id: null, title: '', model_config_id: null, created_at: now, updated_at: now }, 201)
+    }
+    return json(route, { items: [], total: 0 })
+  })
+  const chatPattern = '**/api/v2/scenes/conversations/' + convId + '/chat'
+  await page.route(chatPattern, route =>
+    route.fulfill({ status: 200, contentType: 'text/event-stream', body: sseBody }))
+}
+
+test('建模页从零新建：对话应用定义生成版本并绑定场景', async ({ page }) => {
+  await seedAuth(page)
+  await mockModeling(page, chatStreamOk)
+  await page.goto('/#/scenes/modeling')
+  await page.getByPlaceholder('描述要从零构建的场景…').fill('建一个园区场景')
+  await page.getByRole('button', { name: /发送/ }).click()
+  await expect(page.getByText('已应用 v3 · 初版布局')).toBeVisible()
+  await expect(page.getByText('v2 · 手动')).toBeVisible()
+})
+
+test('建模页 error 事件展示告警条', async ({ page }) => {
+  await seedAuth(page)
+  await mockModeling(page, chatStreamError)
+  await page.goto('/#/scenes/modeling')
+  await page.getByPlaceholder('描述要从零构建的场景…').fill('你好')
+  await page.getByRole('button', { name: /发送/ }).click()
+  await expect(page.getByText('尚未配置可用的对话模型')).toBeVisible()
+})
