@@ -9,6 +9,51 @@ import { expect, test, type Page, type Route } from '@playwright/test'
  * 工具条缩放按钮、搜索触发的新图请求。全部请求本地 mock，不依赖后端。
  */
 
+/**
+ * 力导向布局在动画收敛期间节点会持续微移：读取任一可见实例标签的屏幕坐标，
+ * 等其连续两次采样位置稳定后再点击标签上方偏移命中节点圆心；若因漂移点空，
+ * 自动重试。返回前确保详情抽屉已打开。
+ */
+async function clickVisibleInstanceNode(page: Page, card: ReturnType<Page['getByTestId']>) {
+  const instanceLabels = ['华东制造', '华南贸易', 'SO-2026-001', '设备-77']
+  const readTarget = (names: string[]) => page.evaluate((labelNames) => {
+    for (const element of document.querySelectorAll('[data-testid="network-chart-host"] svg text')) {
+      const content = (element.textContent || '').trim()
+      if (!labelNames.includes(content)) continue
+      const rect = element.getBoundingClientRect()
+      if (!rect.width && !rect.height) continue
+      return { x: rect.x + rect.width / 2, y: rect.y }
+    }
+    return null
+  }, names)
+
+  await expect.poll(async () => (await card.getByTestId('network-chart-host').locator('svg text').allTextContents())
+    .map(text => text.trim()).filter(text => instanceLabels.includes(text)).length,
+    { timeout: 5000 }).toBeGreaterThanOrEqual(1)
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let target = await readTarget(instanceLabels)
+    assert.ok(target, '应能找到可见的实例标签')
+    // 等待标签位置稳定（连续两次采样一致）再点击，避免命中漂移中的空位
+    for (let sample = 0; sample < 8; sample++) {
+      await page.waitForTimeout(240)
+      const next = await readTarget(instanceLabels)
+      if (!next) break
+      const settled = Math.abs(next.x - target.x) < 1 && Math.abs(next.y - target.y) < 1
+      target = next
+      if (settled) break
+    }
+    // 标签挂在节点正下方：向标签上方偏移点击命中节点圆心
+    await page.mouse.click(target!.x, target!.y - 18)
+    const inspector = page.getByTestId('network-inspector')
+    try {
+      await expect(inspector).toBeVisible({ timeout: 2500 })
+      return inspector
+    } catch { /* 点空（背景点击清除选中）：等布局进一步收敛后重试 */ }
+  }
+  throw new Error('三次尝试均未能通过实例标签命中节点')
+}
+
 const overview = [
   {
     id: 'o-supply', name: '供应链', domain: '供应链', published: true,
@@ -134,11 +179,20 @@ test('本体网络画布渲染全局图：统计、图例与节点标签可见',
   await expect(legend.getByText('设备台账')).toBeVisible()
   await expect(legend.getByText('同名类型桥接（启发式）')).toBeVisible()
 
-  // ECharts svg 渲染：实例标签以 <text> 呈现且可被定位
-  const chartSvg = card.locator('svg').last()
-  await expect(chartSvg).toBeVisible()
-  await expect(card.getByText('华东制造', { exact: true })).toBeVisible()
-  await expect(card.getByText('SO-2026-001', { exact: true })).toBeVisible()
+  // ECharts svg 渲染：节点标签以 <text> 呈现。力导向坐标存在时序抖动，
+  // labelLayout.hideOverlap 会按收敛结果隐藏少量重叠标签，因此断言
+  // 「标签总数下限 + 至少两个实例标签」，不对具体标签逐字强断言。
+  const chartTexts = card.getByTestId('network-chart-host').locator('svg text')
+  await expect(chartTexts.first()).toBeVisible()
+  await expect.poll(async () => (await chartTexts.allTextContents()).map(text => text.trim()).filter(Boolean).length,
+    { timeout: 5000 }).toBeGreaterThanOrEqual(5)
+  const labelTexts = (await chartTexts.allTextContents()).map(text => text.trim()).filter(Boolean)
+  const instanceLabels = ['华东制造', '华南贸易', 'SO-2026-001', '设备-77']
+  const visibleInstances = instanceLabels.filter(label => labelTexts.includes(label))
+  assert.ok(
+    visibleInstances.length >= 2,
+    ['实例标签至少 2/4 可见，实际可见：', visibleInstances.join('、') || '无'].join(''),
+  )
 })
 
 test('点击实例节点打开详情抽屉，可关闭', async ({ page }) => {
@@ -146,16 +200,9 @@ test('点击实例节点打开详情抽屉，可关闭', async ({ page }) => {
   await page.goto('/#/ontology-model/network', { waitUntil: 'domcontentloaded' })
 
   const card = page.getByTestId('network-canvas-card')
-  const label = card.getByText('华东制造', { exact: true })
-  await expect(label).toBeVisible()
-
-  // 标签挂在节点正下方：向标签上方偏移点击命中节点圆心
-  const box = await label.boundingBox()
-  assert.ok(box, '标签应有可点击的包围盒')
-  await page.mouse.click(box.x + box.width / 2, box.y - 18)
-
-  const inspector = page.getByTestId('network-inspector')
-  await expect(inspector).toBeVisible()
+  // 力导向布局下具体哪个实例标签可见存在时序抖动：自适应命中任一可见实例标签，
+  // 详情接口由 mock 返回统一实例载荷。
+  const inspector = await clickVisibleInstanceNode(page, card)
   await expect(inspector.getByText('华东制造')).toBeVisible()
   await expect(inspector.getByRole('button', { name: /设为起点/ })).toBeVisible()
 

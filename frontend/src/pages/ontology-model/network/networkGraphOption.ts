@@ -8,8 +8,8 @@
  * - 类别色按本体顺序轮转平台十色板；关系边做两端类别色的低饱和渐变；
  * - 节点默认极浅投影，悬停发光只作为交互信号（克制 chrome）；
  * - 标签胶囊化 + labelLayout.hideOverlap 低缩放防重叠；
- * - 悬停联动是自定义"一跳强亮 + 二跳微亮"（hoverBands），分析高亮
- *   （路径/影响推演）优先于悬停联动。
+ * - 悬停联动是一跳邻接强亮、其余淡出（对齐官方 graph 示例
+ *   emphasis.focus='adjacency' 的观感），分析高亮（路径/影响推演）优先于悬停联动。
  */
 import type { EChartsOption } from 'echarts'
 import {
@@ -85,14 +85,12 @@ export function soften(hex: string, toward = CHART_AXIS, ratio = 0.55): string {
   return `rgb(${mix(r, tr)},${mix(g, tg)},${mix(b, tb)})`
 }
 
-// ── 悬停带宽：一跳强亮 + 二跳微亮 ──
+// ── 悬停联动：一跳邻接强亮，其余淡出 ──
 
 export interface HoverBandResult {
   active: boolean
-  /** 一跳邻居（含被悬停节点自身的关联边两端）。 */
+  /** 被悬停节点自身 + 一跳邻居（保持全亮）。 */
   strongNodeIds: Set<string>
-  /** 二跳可达（不含一跳与自身）。 */
-  softNodeIds: Set<string>
   /** 与悬停节点直接相连的边。 */
   incidentEdgeIds: Set<string>
 }
@@ -108,7 +106,6 @@ export function hoverBands(
   const empty: HoverBandResult = {
     active: false,
     strongNodeIds: new Set(),
-    softNodeIds: new Set(),
     incidentEdgeIds: new Set(),
   }
   if (!hoveredId) return empty
@@ -122,20 +119,15 @@ export function hoverBands(
     push(edge.source, edge.target)
     push(edge.target, edge.source)
   }
-  const strong = [...(adjacency.get(hoveredId) ?? [])]
-  if (strong.length === 0) return empty
-  const strongSet = new Set(strong)
-  const softSet = new Set<string>()
-  for (const neighbor of strong) {
-    for (const next of adjacency.get(neighbor) ?? []) {
-      if (next !== hoveredId && !strongSet.has(next)) softSet.add(next)
-    }
-  }
+  const neighbors = adjacency.get(hoveredId)
+  if (!neighbors || neighbors.size === 0) return empty
+  // 官方示例语义：被悬停节点与其一跳邻居保持全亮，其余节点淡出。
+  const strongSet = new Set<string>([hoveredId, ...neighbors])
   const incident = new Set<string>()
   for (const edge of edges) {
     if (edge.source === hoveredId || edge.target === hoveredId) incident.add(edge.id)
   }
-  return { active: true, strongNodeIds: strongSet, softNodeIds: softSet, incidentEdgeIds: incident }
+  return { active: true, strongNodeIds: strongSet, incidentEdgeIds: incident }
 }
 
 // ── 节点 / 边状态解析 ──
@@ -235,9 +227,7 @@ export function buildNetworkGraphOption(input: BuildNetworkGraphOptionInput): EC
 
     let opacity = 1
     if (dimmedByAnalysis) opacity = 0.12
-    else if (bands.active && !bands.strongNodeIds.has(node.id)) {
-      opacity = bands.softNodeIds.has(node.id) ? 0.5 : 0.18
-    }
+    else if (bands.active && !bands.strongNodeIds.has(node.id)) opacity = 0.18
 
     const isType = node.kind === 'object_type'
     const position = positions?.get(node.id)

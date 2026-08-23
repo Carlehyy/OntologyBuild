@@ -36,21 +36,20 @@ const chainEdges = [
   { id: 'cd', kind: 'relation' as const, source: 'c', target: 'd', label: 'r' },
 ]
 
-describe('hoverBands（一跳强亮 + 二跳微亮）', () => {
-  it('一跳邻居进 strong，二跳进 soft 且不与 strong 重叠', () => {
+describe('hoverBands（一跳邻接强亮，其余淡出）', () => {
+  it('悬停节点自身与一跳邻居进 strong，二跳不进入任何集合', () => {
     const bands = hoverBands(chainEdges, 'b')
     assert.equal(bands.active, true)
-    assert.deepEqual([...bands.strongNodeIds].sort(), ['a', 'c'])
-    assert.deepEqual([...bands.softNodeIds], ['d'])
+    assert.deepEqual([...bands.strongNodeIds].sort(), ['a', 'b', 'c'])
+    assert.equal('softNodeIds' in bands, false)
     assert.deepEqual([...bands.incidentEdgeIds].sort(), ['ab', 'bc'])
   })
 
-  it('无悬停目标时返回 inactive 空集', () => {
+  it('无悬停目标或孤立节点时返回 inactive 空集', () => {
     for (const hovered of [null, undefined, '', 'ghost']) {
       const bands = hoverBands(chainEdges, hovered)
       assert.equal(bands.active, false)
       assert.equal(bands.strongNodeIds.size, 0)
-      assert.equal(bands.softNodeIds.size, 0)
       assert.equal(bands.incidentEdgeIds.size, 0)
     }
   })
@@ -213,16 +212,18 @@ describe('buildNetworkGraphOption', () => {
     assert.equal(pathEdge.lineStyle.width, 3.2)
   })
 
-  it('悬停联动：一跳全亮、二跳微亮、其余压暗、关联边加粗', () => {
+  it('悬停联动：悬停节点与一跳全亮、二跳及其余压暗、关联边加粗', () => {
     const series = seriesOf(build({ hoveredId: 'type:t1' }))
     const byId = new Map(series.data.map(datum => [datum.id as string, datum]))
+    const hovered = byId.get('type:t1') as { itemStyle: { opacity: number } }
     const neighbor = byId.get('instance:i1') as { itemStyle: { opacity: number } }
     const bridgePeer = byId.get('type:t2') as { itemStyle: { opacity: number } }
     const twoHop = byId.get('instance:i2') as { itemStyle: { opacity: number } }
     const unrelated = byId.get('instance:i3') as { itemStyle: { opacity: number } }
+    assert.equal(hovered.itemStyle.opacity, 1)
     assert.equal(neighbor.itemStyle.opacity, 1)
     assert.equal(bridgePeer.itemStyle.opacity, 1)
-    assert.equal(twoHop.itemStyle.opacity, 0.5)
+    assert.equal(twoHop.itemStyle.opacity, 0.18)
     assert.equal(unrelated.itemStyle.opacity, 0.18)
 
     const incident = series.links.find(link => link.id === 'e1') as { lineStyle: { width: number; opacity: number } }

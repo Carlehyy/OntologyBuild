@@ -5,7 +5,7 @@
  * 引擎由 cytoscape 切换为 ECharts（官方 graph 示例的力导向观感）：
  * - 布局：force + 确定性聚类种子坐标（clusterPositions）+ 跨重建位置缓存，
  *   数据刷新时已有节点不重新飞位；力参数随规模自适应防挤团；
- * - 悬停：自定义"一跳强亮 + 二跳微亮"带宽联动（分析态激活时让位给分析高亮）；
+ * - 悬停：一跳邻接强亮、其余淡出（分析态激活时让位给分析高亮）；
  * - 标签：胶囊化白底衬 + labelLayout.hideOverlap，低缩放下自动隐藏重叠标签；
  * - 高亮契约与旧版一致：路径蓝 / 变更紫 / 直接影响橙 / 间接影响红虚线 /
  *   非参与元素压暗 / 选中深描边，全部由页面 props 注入。
@@ -264,17 +264,18 @@ export default function NetworkCanvas(
         backgroundSize: '24px 24px',
       }}
     >
-      <ReactECharts
-        ref={chartRef}
-        option={option}
-        notMerge={false}
-        lazyUpdate
-        opts={{ renderer: 'svg' }}
-        style={{ width: '100%', height: '100%' }}
-        onEvents={handleEvents}
-        onChartReady={handleReady}
-      />
-      <div className="pointer-events-none absolute inset-0" aria-label="本体网络全局画布" />
+      <div className="absolute inset-0" data-testid="network-chart-host" aria-label="本体网络全局画布">
+        <ReactECharts
+          ref={chartRef}
+          option={option}
+          notMerge={false}
+          lazyUpdate
+          opts={{ renderer: 'svg' }}
+          style={{ width: '100%', height: '100%' }}
+          onEvents={handleEvents}
+          onChartReady={handleReady}
+        />
+      </div>
     </div>
   )
 }
