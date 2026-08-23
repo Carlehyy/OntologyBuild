@@ -227,7 +227,7 @@ async function mockModeling(page: Page, sseBody: string) {
   await mockPlatformShell(page)
   await mockScenesApi(page)
   const convId = sseBody.includes('model_unavailable') ? 'sc-2' : 'sc-1'
-  await page.route('**/api/v2/scenes/conversations', route => {
+  await page.route(/\/api\/v2\/scenes\/conversations(\?.*)?$/, route => {
     if (route.request().method() === 'POST') {
       return json(route, { id: convId, scene_id: null, title: '', model_config_id: null, created_at: now, updated_at: now }, 201)
     }
@@ -261,13 +261,13 @@ test('建模页历史会话切换与消息回放', async ({ page }) => {
   await seedAuth(page)
   await mockPlatformShell(page)
   await mockScenesApi(page)
-  await page.route('**/api/v2/scenes/conversations', route => {
+  await page.route(/\/api\/v2\/scenes\/conversations(\?.*)?$/, route => {
     if (route.request().method() === 'POST') {
       return json(route, { id: 'sc-9', scene_id: 'scn-1', title: '旧会话', model_config_id: null, created_at: now, updated_at: now }, 201)
     }
     return json(route, { items: [{ id: 'sc-9', scene_id: 'scn-1', title: '旧会话', model_config_id: null, created_at: now, updated_at: now }], total: 1 })
   })
-  await page.route('**/api/v2/scenes/conversations/sc-9/messages', route => json(route, {
+  await page.route(/\/api\/v2\/scenes\/conversations\/sc-9\/messages(\?.*)?$/, route => json(route, {
     items: [
       { id: 'm1', conversation_id: 'sc-9', role: 'user', content: '建一个仓库场景', status: 'complete', version_no: null, created_at: now },
       { id: 'm2', conversation_id: 'sc-9', role: 'assistant', content: '初版布局', status: 'complete', version_no: 2, created_at: now },
