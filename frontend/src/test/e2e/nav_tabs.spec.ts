@@ -255,3 +255,53 @@ test('标签可见标题使用平台导航的一级/二级菜单标签，不使�
   await expect(stewardTab).toBeVisible()
   await expect(tabList.getByRole('tab', { name: '数据管家' })).toHaveCount(0)
 })
+
+test('左侧导航：本体模型分组在子页面收起后保持收起，再点恢复展开', async ({ page }) => {
+  await mockNavTabs(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+
+  const nav = page.getByRole('navigation')
+  const ontologyGroup = nav.getByRole('button', { name: '本体模型' })
+  const exploreLink = nav.getByRole('link', { name: '本体建模' })
+
+  // 直接落在子页面 /explore（顶级路由、不在父路径前缀下）：分组应默认展开
+  await page.goto('/#/explore')
+  await expect(ontologyGroup).toHaveAttribute('aria-expanded', 'true')
+  await expect(exploreLink).toBeVisible()
+
+  // 收起后必须保持收起：回归点是子项为顶级路由时曾被误判“已离开分组”而自动弹回
+  await ontologyGroup.click()
+  await expect(ontologyGroup).toHaveAttribute('aria-expanded', 'false')
+  await expect(exploreLink).toHaveCount(0)
+
+  // 分组状态清理走 setTimeout(0)，留出时间窗验证不会闪回展开
+  await page.waitForTimeout(250)
+  await expect(ontologyGroup).toHaveAttribute('aria-expanded', 'false')
+
+  // 再点击重新展开
+  await ontologyGroup.click()
+  await expect(ontologyGroup).toHaveAttribute('aria-expanded', 'true')
+  await expect(exploreLink).toBeVisible()
+})
+
+test('左侧导航：「数据集成」显示新名称且收展行为与其他分组一致', async ({ page }) => {
+  await mockNavTabs(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+
+  await page.goto('/#/data/pipelines')
+  const nav = page.getByRole('navigation')
+  const dataGroup = nav.getByRole('button', { name: '数据集成' })
+  await expect(dataGroup).toBeVisible()
+  await expect(nav.getByRole('button', { name: '数据通道' })).toHaveCount(0)
+
+  // 激活的分组默认展开；收起后保持收起
+  await expect(dataGroup).toHaveAttribute('aria-expanded', 'true')
+  await dataGroup.click()
+  await expect(dataGroup).toHaveAttribute('aria-expanded', 'false')
+  await expect(nav.getByRole('link', { name: '数据流水线' })).toHaveCount(0)
+
+  // 再点击重新展开（已在组内不重复跳转）
+  await dataGroup.click()
+  await expect(dataGroup).toHaveAttribute('aria-expanded', 'true')
+  await expect(page).toHaveURL(/\/#\/data\/pipelines$/)
+})
