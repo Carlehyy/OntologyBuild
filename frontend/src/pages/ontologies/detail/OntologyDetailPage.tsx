@@ -55,7 +55,7 @@ function TippedAction({ tip, children }: { tip: string; children: ReactElement<H
       <span
         role="tooltip"
         id={tipId}
-        className="pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-xs font-medium leading-5 text-white opacity-0 shadow-md ring-1 ring-white/10 transition-opacity duration-100 group-hover:opacity-100 group-focus-within:opacity-100"
+        className="pointer-events-none absolute left-1/2 top-full z-[var(--z-tooltip)] mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-[var(--color-popover)] px-2 py-1 text-xs font-medium leading-5 text-[var(--color-text-primary)] opacity-0 shadow-[var(--shadow-lg)] ring-1 ring-[var(--color-border)] transition-opacity duration-100 group-hover:opacity-100 group-focus-within:opacity-100"
       >
         {tip}
       </span>
