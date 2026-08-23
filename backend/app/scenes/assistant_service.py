@@ -62,6 +62,10 @@ SYSTEM_PROMPT = """你是平台内的三维场景建模助手，通过对话帮�
   when 支持 > >= < <= == != 与 between a b，最后一条必须是 {"when":"else",...} 兜底；
   status 枚举 normal|warning|alarm；禁止任何函数或表达式计算
 - stage(可选): camera/background/floor/ambience；sources(可选): client 型数据源
+- stage(可选，全部可省略，缺省用引擎默认值):
+  background 为 #RRGGBB 色值；camera.pos 与 camera.target 必须是三个数字的数组
+  [x,y,z]（示例 [92,78,92]），camera.fov 为 10~100 的数字；floor.size/gridCell 为数字
+- sources(可选): client 型数据源；不确定时就完全省略 stage 与 sources
 
 输出规则——只输出一个 JSON 对象，不要 markdown 围栏、不要解释性文字：
 1) 需要生成或整体更新场景定义时：
@@ -150,6 +154,56 @@ def create_conversation(
     return conversation
 
 
+
+
+def _as_vec3(value):
+    """把 LLM 常见的坐标写法（对象 {x,y,z} / 数字字符串）收敛为 [x,y,z] 数字数组。"""
+    if isinstance(value, dict):
+        value = [value.get("x"), value.get("y"), value.get("z")]
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return None
+    out = []
+    for item in value:
+        if isinstance(item, str):
+            try:
+                item = float(item.strip())
+            except ValueError:
+                return None
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            return None
+        out.append(float(item))
+    return out
+
+
+def _repair_definition(definition):
+    """修正模型输出的常见形态偏差（不改语义，只做可逆收敛）。
+
+    当前覆盖：stage.camera.pos/target 的对象写法与数字字符串；
+    无法收敛的 camera 字段直接移除（stage 本就可选，引擎有默认机位）。
+    """
+    import copy
+    repaired = copy.deepcopy(definition)
+    if not isinstance(repaired, dict):
+        return repaired
+    stage = repaired.get("stage")
+    if isinstance(stage, dict):
+        camera = stage.get("camera")
+        if isinstance(camera, dict):
+            for key in ("pos", "target"):
+                value = camera.get(key)
+                if value is None:
+                    continue
+                vec = _as_vec3(value)
+                if vec is None:
+                    camera.pop(key, None)
+                else:
+                    camera[key] = vec
+            if "pos" not in camera:
+                stage.pop("camera", None)
+        if isinstance(stage, dict) and not stage:
+            repaired.pop("stage", None)
+    return repaired
+
 def chat_stream(
     db: Session, conversation: m.SceneConversation,
     body: SceneChatRequest, user,
@@ -190,12 +244,13 @@ def chat_stream(
         # llm_call_kwargs 会附带 model_config_id / max_*_tokens 等键，
         # _call_llm 签名只收 provider/api_key/api_base/model/messages/json_mode，
         # 必须显式取字段转发（**展开会 TypeError）。
+        messages = build_messages(db, conversation, body.content)
         raw = _call_llm(
             provider=call_kwargs["provider"],
             api_key=call_kwargs["api_key"],
             api_base=call_kwargs.get("api_base"),
             model=call_kwargs["model"],
-            messages=build_messages(db, conversation, body.content),
+            messages=messages,
         )
         parsed = _parse_response(raw) if isinstance(raw, str) else raw
         action = parsed.get("action") if isinstance(parsed, dict) else None
@@ -208,8 +263,32 @@ def chat_stream(
             return
 
         if action == "set_definition":
-            definition = parsed.get("definition")
+            messages = build_messages(db, conversation, body.content)
+            definition = _repair_definition(parsed.get("definition"))
             issues = validation.validate_definition(definition)
+            if issues:
+                # 带校验意见自动修正一次：把错误逐条回喂给模型，要求按意见重出 JSON
+                corrective_user = (
+                    "你上一次输出的场景定义未通过校验，请按以下问题修正后"
+                    "重新输出完整 JSON（其余内容保持不变）：" + chr(10) +
+                    chr(10).join("- " + item["path"] + ": " + item["message"]
+                                   for item in issues[:8]))
+                retry_raw = _call_llm(
+                    provider=call_kwargs["provider"],
+                    api_key=call_kwargs["api_key"],
+                    api_base=call_kwargs.get("api_base"),
+                    model=call_kwargs["model"],
+                    messages=messages + [
+                        {"role": "assistant", "content": json.dumps(parsed, ensure_ascii=False)},
+                        {"role": "user", "content": corrective_user},
+                    ],
+                )
+                retry_parsed = _parse_response(retry_raw) if isinstance(retry_raw, str) else retry_raw
+                if isinstance(retry_parsed, dict) and retry_parsed.get("action") == "set_definition":
+                    definition = _repair_definition(retry_parsed.get("definition"))
+                    issues = validation.validate_definition(definition)
+                    if not issues:
+                        parsed = retry_parsed
             if issues:
                 _persist_assistant_message(
                     db, conversation,

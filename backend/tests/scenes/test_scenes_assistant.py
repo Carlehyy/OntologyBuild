@@ -183,3 +183,61 @@ def test_chat_without_model_reports_model_unavailable(
 def test_chat_unknown_conversation_returns_404(client, auth_headers):
     resp = _chat(client, auth_headers, "no-such", "你好")
     assert resp.status_code == 404
+
+
+def test_chat_repairs_common_camera_deviations(client, auth_headers, monkeypatch):
+    """模型常见偏差：camera.pos 写成对象 {x,y,z}——应被修复而非整段拒绝。"""
+    deviated = {**VALID_DEFINITION}
+    deviated["stage"] = {
+        "camera": {
+            "pos": {"x": 92, "y": 78, "z": 92},
+            "target": [0, 0, 0],
+            "fov": 30,
+        },
+    }
+    _patch_llm(monkeypatch, {"action": "set_definition",
+                             "definition": deviated, "note": "初版"})
+    conversation = _create_conversation(client, auth_headers)
+    resp = _chat(client, auth_headers, conversation["id"], "建个园区")
+    events = _parse_sse(resp.text)
+    applied = [data for name, data in events if name == "scene_updated"]
+    assert applied, [name for name, _ in events]
+    stored = client.get(
+        f"/api/v2/scenes/{applied[0]['scene_id']}/versions/1",
+        headers=auth_headers).json()["data"]["definition"]
+    assert stored["stage"]["camera"]["pos"] == [92.0, 78.0, 92.0]
+    assert stored["stage"]["camera"]["target"] == [0.0, 0.0, 0.0]
+
+
+def test_chat_retries_once_with_validation_feedback(client, auth_headers, monkeypatch):
+    calls = []
+    invalid = {**VALID_DEFINITION, "objects": []}
+    monkeypatch.setattr(
+        assistant_service, "select_llm_model_config",
+        lambda db, model_id=None: object())
+    monkeypatch.setattr(
+        assistant_service, "llm_call_kwargs",
+        lambda cfg: {"model_config_id": "cfg-real-1", "provider": "openai",
+                     "api_key": "k", "api_base": None, "model": "test-model",
+                     "max_output_tokens": 2048})
+
+    def fake_llm(**kwargs):
+        calls.append(kwargs.get("messages"))
+        if len(calls) == 1:
+            return json.dumps({"action": "set_definition",
+                               "definition": invalid, "note": "坏定义"},
+                              ensure_ascii=False)
+        return json.dumps({"action": "set_definition",
+                           "definition": VALID_DEFINITION, "note": "已修正"},
+                          ensure_ascii=False)
+
+    monkeypatch.setattr(assistant_service, "_call_llm", fake_llm)
+    conversation = _create_conversation(client, auth_headers)
+    resp = _chat(client, auth_headers, conversation["id"], "建个园区")
+    events = _parse_sse(resp.text)
+    applied = [data for name, data in events if name == "scene_updated"]
+    assert applied and applied[0]["note"] == "已修正"
+    assert len(calls) == 2
+    # 第二次调用带上了校验反馈（用户消息以「你上一次输出」开头）
+    last_user = calls[1][-1]["content"]
+    assert "你上一次输出的场景定义未通过校验" in last_user
