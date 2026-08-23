@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { cloneElement, useCallback, useEffect, useId, useRef, useState, type HTMLAttributes, type ReactElement } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { ontologyApi } from '@/api/ontologies'
 import { apiClientV2 } from '@/api/client'
 import { LoadingState } from '@/components/ui/LoadingState'
+import { useToast } from '@/components/ui/Toast'
 import type { OntologyDetail } from '@/types/ontology'
 import OverviewDashboard from './tabs/OverviewDashboard'
 import GovernanceTab from './tabs/GovernanceTab'
@@ -15,7 +16,7 @@ import VersionsTab from './tabs/VersionsTab'
 import { Modal } from '@/components/ui/Modal'
 import './ontology-glass.css'
 import {
-  History, Download, Loader2, Network,
+  History, Download, Loader2, Network, Workflow,
 } from 'lucide-react'
 
 /* ═════════════════════════════════════════════════════════════
@@ -41,6 +42,27 @@ const GROUPS: GroupDef[] = [
   { key: 'governance', label: '治理推演' },
 ]
 
+// 详情页头部右侧操作的统一样式：三个图标按钮逐字共用，避免某个按钮单独长出别的悬停表现。
+const HEADER_ICON_BUTTON_CLASS = 'inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2'
+
+/** 头部操作的统一悬停提示：hover / 键盘聚焦即时显示的深色浮层（纯 CSS，无依赖）。
+    取代原生 title（约 1s 延迟、样式不可控）；pointer-events-none 让点击穿透，不影响下层交互。 */
+function TippedAction({ tip, children }: { tip: string; children: ReactElement<HTMLAttributes<HTMLElement>> }) {
+  const tipId = useId()
+  return (
+    <div className="group relative inline-flex">
+      {cloneElement(children, { 'aria-describedby': tipId })}
+      <span
+        role="tooltip"
+        id={tipId}
+        className="pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-xs font-medium leading-5 text-white opacity-0 shadow-md ring-1 ring-white/10 transition-opacity duration-100 group-hover:opacity-100 group-focus-within:opacity-100"
+      >
+        {tip}
+      </span>
+    </div>
+  )
+}
+
 export default function OntologyDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -54,7 +76,7 @@ export default function OntologyDetailPage() {
   const [indicatorPos, setIndicatorPos] = useState({ left: 0, width: 0 })
   const [tabsMoreRight, setTabsMoreRight] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
-  const [exportFeedback, setExportFeedback] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
+  const { toast } = useToast()
   const [showVersionModal, setShowVersionModal] = useState(false)
 
   useEffect(() => {
@@ -83,33 +105,25 @@ export default function OntologyDetailPage() {
 
   const handleExport = async () => {
     if (!id || !ontology || isExporting) return
-    setExportFeedback(null)
     setIsExporting(true)
     try {
       await ontologyApi.exportOntology(id, ontology.name, ontology.version)
-      setExportFeedback({ tone: 'success', message: '本体结构 JSON 已下载' })
+      // 反馈走全局右下角 toast 浮层：不再在页面文档流里插入横幅，避免把内容区往下顶。
+      toast({ tone: 'success', title: '本体结构 JSON 已下载' })
     } catch (error: unknown) {
       const candidate = typeof error === 'object' && error !== null
         ? error as { detail?: unknown; message?: unknown }
         : null
       const detail = candidate?.detail
-      setExportFeedback({
-        tone: 'error',
-        message: typeof detail === 'string' ? detail
-          : detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
-            ? detail.message
-            : typeof candidate?.message === 'string' ? candidate.message : '导出失败，请稍后重试',
-      })
+      const message = typeof detail === 'string' ? detail
+        : detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
+          ? detail.message
+          : typeof candidate?.message === 'string' ? candidate.message : '导出失败，请稍后重试'
+      toast({ tone: 'error', title: '本体结构导出失败', description: message })
     } finally {
       setIsExporting(false)
     }
   }
-
-  useEffect(() => {
-    if (exportFeedback?.tone !== 'success') return
-    const timer = window.setTimeout(() => setExportFeedback(null), 3000)
-    return () => window.clearTimeout(timer)
-  }, [exportFeedback])
 
   useEffect(() => {
     const container = groupTabsRef.current
@@ -211,58 +225,59 @@ export default function OntologyDetailPage() {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          <span
-            className="inline-flex h-9 items-center rounded-lg border border-teal-100 bg-teal-50 px-3 font-mono text-sm font-semibold tabular-nums text-teal-700"
-            title="当前最新发布版本"
-            data-testid="current-release-version"
-          >
-            {ontology.current_release_version || ontology.version || 'v0'}
-          </span>
-          <button
-            type="button"
-            onClick={() => navigate(`/ontologies/${id}/graph`)}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
-            title="查看当前发布图谱"
-            aria-label="查看当前发布图谱"
-          >
-            <Network size={18} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowVersionModal(true)}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
-            title="历史版本"
-            aria-label="查看历史版本"
-          >
-            <History size={18} />
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleExport()}
-            disabled={isExporting}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0 disabled:cursor-wait disabled:opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
-            title={isExporting ? '正在导出 JSON' : '导出本体结构 JSON'}
-            aria-label={isExporting ? '正在导出本体结构 JSON' : '导出本体结构 JSON'}
-            aria-busy={isExporting}
-          >
-            {isExporting ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
-          </button>
+          <TippedAction tip="当前最新发布版本">
+            <span
+              className="inline-flex h-10 items-center rounded-lg border border-teal-100 bg-teal-50 px-3 font-mono text-sm font-semibold tabular-nums text-teal-700"
+              data-testid="current-release-version"
+            >
+              {ontology.current_release_version || ontology.version || 'v0'}
+            </span>
+          </TippedAction>
+          <TippedAction tip="查看当前发布图谱">
+            <button
+              type="button"
+              onClick={() => navigate(`/ontologies/${id}/graph`)}
+              className={HEADER_ICON_BUTTON_CLASS}
+              aria-label="查看当前发布图谱"
+            >
+              <Network size={18} />
+            </button>
+          </TippedAction>
+          <TippedAction tip="打开数据映射工作台">
+            <button
+              type="button"
+              onClick={() => navigate(`/ontologies/${id}/graph?view=mapping`)}
+              className={HEADER_ICON_BUTTON_CLASS}
+              aria-label="打开数据映射工作台"
+              data-testid="open-mapping-workspace"
+            >
+              <Workflow size={18} />
+            </button>
+          </TippedAction>
+          <TippedAction tip="查看历史版本">
+            <button
+              type="button"
+              onClick={() => setShowVersionModal(true)}
+              className={HEADER_ICON_BUTTON_CLASS}
+              aria-label="查看历史版本"
+            >
+              <History size={18} />
+            </button>
+          </TippedAction>
+          <TippedAction tip={isExporting ? '正在导出本体结构 JSON' : '导出本体结构 JSON'}>
+            <button
+              type="button"
+              onClick={() => void handleExport()}
+              disabled={isExporting}
+              className={HEADER_ICON_BUTTON_CLASS + ' disabled:cursor-wait disabled:opacity-70'}
+              aria-label={isExporting ? '正在导出本体结构 JSON' : '导出本体结构 JSON'}
+              aria-busy={isExporting}
+            >
+              {isExporting ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+            </button>
+          </TippedAction>
         </div>
       </div>
-
-      {exportFeedback && (
-        <div
-          role={exportFeedback.tone === 'error' ? 'alert' : 'status'}
-          aria-live="polite"
-          className={`rounded-xl border px-4 py-2.5 text-sm ${
-            exportFeedback.tone === 'error'
-              ? 'border-red-200 bg-red-50 text-red-700'
-              : 'border-emerald-200 bg-emerald-50 text-emerald-700'
-          }`}
-        >
-          {exportFeedback.message}
-        </div>
-      )}
 
       {/* ═══ 内容 ═══ */}
       {activeGroup === 'overview' ? (

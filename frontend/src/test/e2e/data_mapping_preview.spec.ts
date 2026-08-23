@@ -39,6 +39,14 @@ async function mockMappingPreview(page: Page, options: MockOptions = {}) {
       entity_count: 1, relation_count: 0, action_count: 0, sentinel_count: 0,
       created_by: 'tester', created_at: '2026-07-22T00:00:00Z', updated_at: '2026-07-22T00:00:00Z',
     })
+    // 头部"导出本体结构"按钮：以 blob 方式下载，mocked 套件内返回最小 JSON 结构
+    if (url.pathname === '/api/v1/ontologies/ontology-preview/export') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: { ontology: { id: 'ontology-preview', name: '预览测试本体' } } }),
+      })
+    }
     if (url.pathname === '/api/v2/ontologies/ontology-preview/current-release/workspace') return ok({
       versionId: 'release-1', versionNumber: 'v1', isCurrentRelease: true,
       workspaceMode: 'release', editable: false, revision: 'r1',
@@ -407,6 +415,68 @@ test('深色模式：页面与链路全景随主题渲染', async ({ page }) => 
   await expect.poll(async () => page.locator('.dmo-flow-canvas svg path').count()).toBeGreaterThan(0)
   await expect(page.locator('.dmo-card')).toHaveCSS('background-color', 'rgb(22, 28, 38)')
 })
+
+test('详情页头部操作区：映射入口跳转、悬停即时提示、导出反馈不再推挤页面', async ({ page }) => {
+  await mockMappingPreview(page)
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  // 版本徽章与三个图标按钮等高（h-10 = 40px），不再是偏小的 h-9
+  const versionBadge = page.getByTestId('current-release-version')
+  const graphButton = page.getByRole('button', { name: '查看当前发布图谱', exact: true })
+  const exportButton = page.getByRole('button', { name: '导出本体结构 JSON', exact: true })
+  await expect(versionBadge).toHaveCSS('height', '40px')
+  await expect(graphButton).toHaveCSS('height', '40px')
+  await expect(exportButton).toHaveCSS('height', '40px')
+
+  // 新增的数据映射工作台入口位于图谱编辑器右侧：点击后带 view=mapping 跳转
+  const mappingEntry = page.getByTestId('open-mapping-workspace')
+  await expect(mappingEntry).toHaveCSS('height', '40px')
+
+  // 下载按钮与其他图标按钮共用样式：悬停不再上下位移
+  await expect(exportButton).toHaveCSS('transform', 'none')
+  await exportButton.hover()
+  await expect(exportButton).toHaveCSS('transform', 'none')
+
+  // 悬停即时提示浮层（替代原生 title）：hover 后 opacity 从 0 → 1
+  const exportTip = exportButton.locator('..').getByRole('tooltip')
+  await expect(exportTip).toHaveText('导出本体结构 JSON')
+  await expect(exportTip).toHaveCSS('opacity', '1')
+  // 浮层出现在按钮正下方且不改变任何布局（不把内容区往下顶）
+  const buttonBox = await exportButton.boundingBox()
+  const tipBox = await exportTip.boundingBox()
+  expect(buttonBox).toBeTruthy()
+  expect(tipBox).toBeTruthy()
+  expect(tipBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height)
+
+  // 内容区基准要在懒加载链路全景图落地、布局完全沉降后采样（与本文件其他用例同一手法），
+  // 否则会把图表自身的落位误判成“导出反馈推挤页面”。
+  const contentLocator = page.getByTestId('ontology-detail-content')
+  let contentBefore = await contentLocator.boundingBox()
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await page.waitForTimeout(120)
+    const next = await contentLocator.boundingBox()
+    const settled = contentBefore && next
+      && Math.abs(next.y - contentBefore.y) < 1
+      && Math.abs((next.height ?? 0) - (contentBefore.height ?? 0)) < 1
+    contentBefore = next
+    if (settled) break
+  }
+
+  // 导出成功：真实触发下载 + 右下角 toast 提示；页面文档流保持原位
+  const downloadPromise = page.waitForEvent('download')
+  await exportButton.click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('预览测试本体_v1.json')
+  const successToast = page.getByText('本体结构 JSON 已下载')
+  await expect(successToast).toBeVisible()
+  expect(await successToast.count()).toBe(1)
+  expect(await contentLocator.boundingBox()).toEqual(contentBefore)
+
+  // 最后验证数据映射入口的跳转目标（离开详情页的断言放最后）
+  await mappingEntry.click()
+  await expect(page).toHaveURL(/\/ontologies\/ontology-preview\/graph\?view=mapping$/)
+  await expect(page.getByTestId('mapping-workspace')).toBeVisible()
+});
 
 test('element 深链在页面已打开时同样生效（同文档路由更新直接打开对应弹窗）', async ({ page }) => {
   await mockMappingPreview(page, { withUnmappedObject: true })
