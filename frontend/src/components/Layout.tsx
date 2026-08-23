@@ -9,7 +9,7 @@ import FloatingAssistantWidget from '@/components/assistant-widget/FloatingAssis
 import InboxPopover from '@/components/inbox/InboxPopover'
 import NavTabs from '@/components/NavTabs'
 import PreferencesModal from '@/components/preferences/PreferencesModal'
-import { visibleNavigation, type PlatformNavItem } from '@/config/navigation'
+import { PLATFORM_NAV_ITEMS, visibleNavigation, type PlatformNavItem } from '@/config/navigation'
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const logout = useAuthStore(s => s.logout)
@@ -26,17 +26,25 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const inboxRef = useRef<HTMLDivElement>(null)
   const userMenuRef = useRef<HTMLDivElement>(null)
 
+  // 分组激活范围：父路径前缀或任一子项路径命中都算仍在组内。「本体模型」的
+  // 子项 /explore、/ontologies 是顶级路由、不在 /ontology-model/ 前缀下；若只按
+  // 父路径判定，在该域内手动收起的分组会被立即清掉状态并随激活态自动弹回，
+  // 表现为“点击一级导航无法收起”。与世界模型/数据通道等嵌套分组行为对齐。
+  const isGroupStillActive = (groupTo: string, pathname: string) => {
+    if (pathname === groupTo || pathname.startsWith(groupTo + '/')) return true
+    const item = PLATFORM_NAV_ITEMS.find(candidate => candidate.to === groupTo)
+    return item?.subItems?.some(sub => pathname === sub.to || pathname.startsWith(sub.to + '/')) ?? false
+  }
+
   useEffect(() => {
     if (expandedGroup) {
-      const stillActive = location.pathname === expandedGroup || location.pathname.startsWith(expandedGroup + '/')
-      if (!stillActive) {
+      if (!isGroupStillActive(expandedGroup, location.pathname)) {
         const timer = window.setTimeout(() => setExpandedGroup(null), 0)
         return () => window.clearTimeout(timer)
       }
     }
     if (collapsedActiveGroup) {
-      const stillActive = location.pathname === collapsedActiveGroup || location.pathname.startsWith(collapsedActiveGroup + '/')
-      if (stillActive) return
+      if (isGroupStillActive(collapsedActiveGroup, location.pathname)) return
       const timer = window.setTimeout(() => setCollapsedActiveGroup(null), 0)
       return () => window.clearTimeout(timer)
     }
