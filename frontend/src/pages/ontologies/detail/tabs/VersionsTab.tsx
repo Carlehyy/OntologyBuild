@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -228,6 +228,18 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
     })
     for (const [parent, items] of children) children.set(parent, sort(items))
     return { rootNodes: sort(rootNodes), children }
+  }, [nodes])
+
+  // 版本树按创建时间升序渲染，最新版本位于底部；内容溢出出现滚动条时
+  // 默认滚动到底部，让用户打开弹窗第一眼就能看到最新版本信息。
+  // 仅在版本数量变化时执行：同数量的后台刷新不打断用户手动滚动位置。
+  const treeScrollRef = useRef<HTMLElement | null>(null)
+  const prevTreeCountRef = useRef<number | null>(null)
+  useEffect(() => {
+    const el = treeScrollRef.current
+    if (!el || prevTreeCountRef.current === nodes.length) return
+    prevTreeCountRef.current = nodes.length
+    el.scrollTop = el.scrollHeight
   }, [nodes])
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['version-tree', ontologyId] })
@@ -609,7 +621,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
         </div>
       )}
 
-      <section className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-slate-50/60 p-4" aria-label="本体版本树">
+      <section ref={treeScrollRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-slate-50/60 p-4" aria-label="本体版本树">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-slate-700">版本树</p>

@@ -178,4 +178,4 @@ npm --prefix frontend run test:e2e:mocked
 当前部署事实源是仓库中已跟踪的 `deploy/production.dependencies.env`（含真实生产
 凭据，属受控临时例外）：日常开发不得修改、复制或回显其中的值。后续迁移到
 GitHub Environment Secrets/Variables 必须作为独立运维变更执行；仅删除当前
-文件不等于清理 Git 历史。凭据与卫生红线见 [AGENTS.md](./AGENTS.md) 第 5 节。
+文件不等于清理 Git 历史。凭据与卫生红线见 [AGENTS.md](./AGENTS.md) 第 6 节。
