@@ -1,22 +1,21 @@
 /**
- * 场景建模页 — 左侧与场景助手对话（草稿态场景 / 从零新建），
- * 右侧白模画布实时渲染 + 版本管理条。对话应用的定义以
- * source=assistant 冻结新版本，版本条可回看任意历史版本。
+ * 场景建模页 — 参照数据管家页：左侧与场景助手对话（草稿态场景 / 从零新建），
+ * 支持会话历史切换与消息回放；右侧白模画布实时渲染 + 版本管理条。
+ * 对话应用的定义以 source=assistant 冻结新版本，版本条可回看任意历史版本。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, ArrowLeft, Send, Sparkles, Square } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, History, Send, Sparkles, Square } from 'lucide-react'
 import { scenesApi } from '@/api/scenes'
-import { createConversation, streamSceneChat } from '@/api/sceneAssistant'
-import type {
-  ConversationMessage, SceneSseEvent,
-} from '@/types/sceneAssistant'
+import { createConversation, listConversations, listMessages, streamSceneChat } from '@/api/sceneAssistant'
+import type { ConversationMessage, ConversationSummary, SceneSseEvent } from '@/types/sceneAssistant'
 import type { SceneDefinition, SceneSummary } from '@/types/scene'
 import { modelApi } from '@/api/ontologies'
 import { Button } from '@/components/ui/Button'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { useToast } from '@/components/ui/Toast'
+import SessionHistoryPopover, { type SessionHistoryItem } from '@/components/SessionHistoryPopover'
 import { SceneCanvas } from '@/lib/scene3d/SceneCanvas'
 
 type TimelineItem =
@@ -28,6 +27,26 @@ type TimelineItem =
 let seq = 0
 const nextId = () => 'tl-' + Date.now() + '-' + (seq++)
 const NEW_SCENE = '__new__'
+
+function messagesToTimeline(messages: ConversationMessage[]): TimelineItem[] {
+  const items: TimelineItem[] = []
+  for (const message of messages) {
+    if (message.role === 'user') {
+      items.push({ kind: 'user', id: message.id, content: message.content })
+    } else if (message.status === 'error') {
+      items.push({ kind: 'error', id: message.id, message: message.content })
+    } else if (message.version_no != null) {
+      items.push({
+        kind: 'system', id: message.id,
+        text: '已应用 v' + message.version_no + ' · ' + message.content,
+        versionNo: message.version_no,
+      })
+    } else {
+      items.push({ kind: 'assistant', id: message.id, content: message.content })
+    }
+  }
+  return items
+}
 
 export default function SceneModelingPage() {
   const queryClient = useQueryClient()
@@ -41,6 +60,10 @@ export default function SceneModelingPage() {
     queryKey: ['models'],
     queryFn: () => modelApi.list(),
   })
+  const conversationsQuery = useQuery({
+    queryKey: ['scene-conversations'],
+    queryFn: () => listConversations({ page_size: 50 }),
+  })
   const llmModels = (modelsQuery.data ?? []).filter(
     model => model.config_type === 'llm' || !model.config_type)
 
@@ -50,8 +73,19 @@ export default function SceneModelingPage() {
   const [timeline, setTimeline] = useState<TimelineItem[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  const conversations: ConversationSummary[] = conversationsQuery.data?.items ?? []
+  const historyItems: SessionHistoryItem[] = useMemo(
+    () => conversations.map(conversation => ({
+      id: conversation.id,
+      title: conversation.title || '未命名会话',
+      updatedAt: conversation.updated_at ?? conversation.created_at ?? '',
+    })),
+    [conversations],
+  )
 
   // 右侧：绑定场景的版本与定义
   const boundSceneId =
@@ -85,9 +119,19 @@ export default function SceneModelingPage() {
   const draftScenes: SceneSummary[] = useMemo(
     () => draftsQuery.data?.items ?? [], [draftsQuery.data])
 
-  function resetConversation() {
+  function resetChat() {
     setConversationId(null)
     setTimeline([])
+    setShowHistory(false)
+  }
+
+  async function loadConversation(conversationIdToLoad: string) {
+    const conversation = conversations.find(item => item.id === conversationIdToLoad)
+    const result = await listMessages(conversationIdToLoad)
+    setConversationId(conversationIdToLoad)
+    setTargetSceneId(conversation?.scene_id ?? NEW_SCENE)
+    setTimeline(messagesToTimeline(result.items))
+    setShowHistory(false)
   }
 
   async function ensureConversation(): Promise<string> {
@@ -146,11 +190,13 @@ export default function SceneModelingPage() {
     } finally {
       abortRef.current = null
       setStreaming(false)
+      // 标题/更新时间可能变化：刷新会话历史
+      void queryClient.invalidateQueries({ queryKey: ['scene-conversations'] })
     }
   }
 
   return (
-    <div className="flex h-[calc(100vh-8.5rem)] flex-col px-6 py-4">
+    <div className="flex h-[calc(100vh-8.5rem)] flex-col gap-2 px-6 py-4">
       {modelsQuery.isSuccess && llmModels.length === 0 && (
         <div className="flex shrink-0 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
           <AlertTriangle size={15} className="shrink-0" />
@@ -158,31 +204,31 @@ export default function SceneModelingPage() {
           <Link to="/models" className="flex items-center gap-1 rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-xs hover:bg-amber-100">去模型配置</Link>
         </div>
       )}
-      <div className="mb-3 flex items-center justify-between">
+
+      <div className="flex shrink-0 items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link to="/scenes" className="inline-flex items-center gap-1 text-xs text-[var(--color-text-secondary)] hover:text-teal-600">
+          <Link to="/scenes" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-teal-700">
             <ArrowLeft size={13} /> 返回三维场景列表
           </Link>
-          <h1 className="text-base font-semibold text-[var(--color-text-primary)]">场景助手 · 对话式建模</h1>
+          <h1 className="text-base font-semibold text-slate-800">场景助手 · 对话式建模</h1>
         </div>
         <div className="flex items-center gap-2">
           <select
             value={targetSceneId}
             aria-label="选择草稿场景"
-            onChange={event => { resetConversation(); setTargetSceneId(event.target.value) }}
-            className="h-8 rounded-md border border-[var(--color-border)] bg-white px-2 text-xs text-[var(--color-text-primary)] focus:border-teal-500 focus:outline-none dark:bg-slate-900"
+            onChange={event => { resetChat(); setTargetSceneId(event.target.value) }}
+            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
           >
             <option value={NEW_SCENE}>从零新建</option>
             {draftScenes.map(scene => (
-              <option key={scene.id} value={scene.id}>{
-                scene.name}</option>
+              <option key={scene.id} value={scene.id}>{scene.name}</option>
             ))}
           </select>
           <select
             value={modelId}
             aria-label="选择对话模型"
             onChange={event => setModelId(event.target.value)}
-            className="h-8 rounded-md border border-[var(--color-border)] bg-white px-2 text-xs text-[var(--color-text-primary)] focus:border-teal-500 focus:outline-none dark:bg-slate-900"
+            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
           >
             <option value="">选择对话模型</option>
             {llmModels.map(model => (
@@ -194,14 +240,37 @@ export default function SceneModelingPage() {
 
       <div className="flex min-h-0 flex-1 gap-4">
         {/* 左侧对话面板 */}
-        <section className="flex w-[400px] shrink-0 flex-col rounded-xl border border-[var(--color-border)] bg-card">
+        <section className="flex w-[400px] shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm/50">
+          <div className="relative flex shrink-0 items-center justify-between border-b border-slate-100 px-4 py-2">
+            <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-800">
+              <Sparkles size={14} className="text-teal-600" /> 场景助手
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowHistory(true)}
+              className="inline-flex h-8 items-center gap-1 rounded-lg bg-slate-100 px-2.5 text-xs font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
+              title="历史会话"
+            >
+              <History size={13} /> 历史会话
+            </button>
+            <SessionHistoryPopover
+              open={showHistory}
+              items={historyItems}
+              currentId={conversationId}
+              onClose={() => setShowHistory(false)}
+              onCreate={resetChat}
+              onSelect={id => void loadConversation(id)}
+              renderItemIcon={() => <Sparkles size={16} />}
+              emptyDescription="新建会话后，可随时回到之前的场景建设过程。"
+            />
+          </div>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
             {timeline.length === 0 && (
-              <div className="mt-10 space-y-2 text-center text-xs leading-5 text-[var(--color-text-tertiary)]">
+              <div className="mt-10 space-y-2 text-center text-xs leading-5 text-slate-400">
                 <Sparkles size={22} className="mx-auto text-teal-500" />
                 <p>描述你想构建的业务场景，例如：</p>
-                <p>「建一个供应链园区：采购、仓库、生产三栋建筑，
-                 库位利用率超 95% 时告警」</p>
+                <p>「建一个供应链园区：采购、仓库、生产三栋建筑，</p>
+                <p>库位利用率超 95% 时告警」</p>
                 <p>生成的定义会自动冻结为草稿场景的新版本。</p>
               </div>
             )}
@@ -217,20 +286,20 @@ export default function SceneModelingPage() {
               }
               if (item.kind === 'assistant') {
                 return (
-                  <div key={item.id} className="max-w-[90%] rounded-lg border border-[var(--color-border)] bg-background px-3 py-2 text-xs leading-5 text-[var(--color-text-primary)]">
+                  <div key={item.id} className="max-w-[90%] rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700">
                     {item.content}
                   </div>
                 )
               }
               if (item.kind === 'system') {
                 return (
-                  <div key={item.id} className="rounded-md bg-[var(--color-success-bg)] px-2.5 py-1.5 text-center text-[11px] text-[var(--color-success)]">
+                  <div key={item.id} className="rounded-md bg-teal-50 px-2.5 py-1.5 text-center text-[11px] text-teal-700">
                     {item.text}
                   </div>
                 )
               }
               return (
-                <div key={item.id} className="rounded-md border border-red-200 bg-red-50/70 px-2.5 py-1.5 text-[11px] text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
+                <div key={item.id} className="rounded-md border border-red-200 bg-red-50/70 px-2.5 py-1.5 text-[11px] text-red-700">
                   <div className="flex items-center gap-1 font-medium">
                     <AlertTriangle size={12} /> {item.message}
                   </div>
@@ -246,7 +315,7 @@ export default function SceneModelingPage() {
             })}
             <div ref={bottomRef} />
           </div>
-          <div className="border-t border-[var(--color-border)] p-3">
+          <div className="border-t border-slate-100 p-3">
             <textarea
               value={input}
               onChange={event => setInput(event.target.value)}
@@ -259,7 +328,7 @@ export default function SceneModelingPage() {
               rows={3}
               maxLength={4000}
               placeholder={targetSceneId === NEW_SCENE ? '描述要从零构建的场景…' : '描述对当前场景的调整…'}
-              className="w-full resize-none rounded-md border border-[var(--color-border)] bg-white px-3 py-2 text-xs text-[var(--color-text-primary)] focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30 dark:bg-slate-900"
+              className="w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 placeholder:text-slate-400 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
             />
             <div className="mt-2 flex justify-end gap-2">
               {streaming ? (
@@ -277,25 +346,25 @@ export default function SceneModelingPage() {
 
         {/* 右侧画布 + 版本管理 */}
         <section className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--color-border)] bg-card">
+          <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm/50">
             {definition
               ? <SceneCanvas definition={definition} className="absolute inset-0" />
               : (
-                <div className="flex h-full items-center justify-center px-6 text-center text-xs leading-5 text-[var(--color-text-tertiary)]">
+                <div className="flex h-full items-center justify-center px-6 text-center text-xs leading-5 text-slate-400">
                   {boundSceneId
                     ? '该场景还没有版本定义：在左侧描述需求，助手将生成第一个版本'
                     : '选择或创建场景后，这里将实时渲染助手生成的白模场景'}
                 </div>
               )}
           </div>
-          <div className="rounded-xl border border-[var(--color-border)] bg-card p-3">
-            <h3 className="mb-2 text-xs font-semibold text-[var(--color-text-primary)]">版本管理</h3>
+          <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm/50">
+            <h3 className="mb-2 text-xs font-semibold text-slate-800">版本管理</h3>
             {!boundSceneId ? (
-              <p className="text-[11px] text-[var(--color-text-tertiary)]">尚未绑定场景</p>
+              <p className="text-[11px] text-slate-400">尚未绑定场景</p>
             ) : versionsQuery.isLoading ? (
               <LoadingState />
             ) : versionList.length === 0 ? (
-              <p className="text-[11px] text-[var(--color-text-tertiary)]">暂无版本</p>
+              <p className="text-[11px] text-slate-400">暂无版本</p>
             ) : (
               <div className="flex flex-wrap gap-1.5">
                 {versionList.map(version => (
@@ -307,8 +376,8 @@ export default function SceneModelingPage() {
                     className={
                       'rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ' +
                       (selectedVersionNo === version.version_no
-                        ? 'border-teal-500 bg-teal-50 text-teal-700 dark:bg-teal-950 dark:text-teal-300'
-                        : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-teal-300')
+                        ? 'border-teal-500 bg-teal-50 text-teal-700'
+                        : 'border-slate-200 text-slate-500 hover:border-teal-300')
                     }
                     title={version.note}
                   >
@@ -340,5 +409,5 @@ function errorMessageText(error: unknown): string {
   return (error as Error)?.message || '对话失败，请稍后重试'
 }
 
-// 引用保持：ConversationMessage 类型供后续历史加载使用
+// 引用保持：ConversationMessage 类型供历史回放使用
 export type { ConversationMessage }

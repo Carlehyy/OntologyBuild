@@ -256,3 +256,30 @@ test('建模页 error 事件展示告警条', async ({ page }) => {
   await page.getByRole('button', { name: /发送/ }).click()
   await expect(page.getByText('尚未配置可用的对话模型')).toBeVisible()
 })
+
+test('建模页历史会话切换与消息回放', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+  await mockScenesApi(page)
+  await page.route('**/api/v2/scenes/conversations', route => {
+    if (route.request().method() === 'POST') {
+      return json(route, { id: 'sc-9', scene_id: 'scn-1', title: '旧会话', model_config_id: null, created_at: now, updated_at: now }, 201)
+    }
+    return json(route, { items: [{ id: 'sc-9', scene_id: 'scn-1', title: '旧会话', model_config_id: null, created_at: now, updated_at: now }], total: 1 })
+  })
+  await page.route('**/api/v2/scenes/conversations/sc-9/messages', route => json(route, {
+    items: [
+      { id: 'm1', conversation_id: 'sc-9', role: 'user', content: '建一个仓库场景', status: 'complete', version_no: null, created_at: now },
+      { id: 'm2', conversation_id: 'sc-9', role: 'assistant', content: '初版布局', status: 'complete', version_no: 2, created_at: now },
+    ],
+    total: 2,
+  }))
+  await page.goto('/#/scenes/modeling')
+  await page.getByRole('button', { name: '历史会话' }).click()
+  await page.getByText('旧会话').click()
+  // 消息回放：用户消息 + 版本应用系统条
+  await expect(page.getByText('建一个仓库场景')).toBeVisible()
+  await expect(page.getByText('已应用 v2 · 初版布局')).toBeVisible()
+  // 会话绑定场景后，版本管理条可见
+  await expect(page.getByText('v2 · 手动')).toBeVisible()
+})
