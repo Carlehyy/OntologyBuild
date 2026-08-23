@@ -15,4 +15,4 @@ Secrets 迁移方向见 [配置说明](../docs/operations/configuration.md) 与
 [部署说明](../docs/operations/deployment.md)。
 
 `production.dependencies.env` 含真实生产凭据：不得修改、复制或回显其中的值，
-红线见 [AGENTS.md](../AGENTS.md) 第 5 节。
+红线见 [AGENTS.md](../AGENTS.md) 第 6 节。
