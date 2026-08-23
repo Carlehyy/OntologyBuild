@@ -5,6 +5,16 @@
    - buildKpiSparkSeries:四个 KPI 卡的近 7 日序列装配(全部来自现有只读数据) */
 import type { EChartsOption } from 'echarts'
 import type { DailySparkDatum } from './storyModel.ts'
+import {
+  CHART_AXIS_LINE_SOFT,
+  CHART_EMERALD,
+  CHART_RED,
+  CHART_RED_RGB,
+  CHART_SPLIT_LINE_SOFT,
+  CHART_TEXT,
+  CHART_TEXT_STRONG,
+  CHART_TOOLTIP_BORDER,
+} from '../../../../lib/echartsTheme.ts'
 
 const formatDay = (date: string) => {
   const value = new Date(`${date}T00:00:00`)
@@ -30,26 +40,26 @@ export function buildDailyComboOption(daily: DailySparkDatum[]): EChartsOption {
       itemWidth: 8,
       itemHeight: 8,
       itemGap: 12,
-      textStyle: { color: '#7d899a', fontSize: 10 },
+      textStyle: { color: CHART_TEXT, fontSize: 10 },
     },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      borderColor: '#dfe6ed',
-      textStyle: { color: '#39475c', fontSize: 12 },
+      borderColor: CHART_TOOLTIP_BORDER,
+      textStyle: { color: CHART_TEXT_STRONG, fontSize: 12 },
     },
     xAxis: {
       type: 'category',
       data: days,
       axisTick: { show: false },
-      axisLine: { lineStyle: { color: 'rgba(148,163,184,0.4)' } },
-      axisLabel: { color: '#8b96a5', fontSize: 10 },
+      axisLine: { lineStyle: { color: CHART_AXIS_LINE_SOFT } },
+      axisLabel: { color: CHART_TEXT, fontSize: 10 },
     },
     yAxis: {
       type: 'value',
       minInterval: 1,
-      splitLine: { lineStyle: { color: 'rgba(148,163,184,0.25)', type: 'dashed' } },
-      axisLabel: { color: '#98a2b1', fontSize: 10 },
+      splitLine: { lineStyle: { color: CHART_SPLIT_LINE_SOFT, type: 'dashed' } },
+      axisLabel: { color: CHART_TEXT, fontSize: 10 },
     },
     series: [
       {
@@ -57,7 +67,7 @@ export function buildDailyComboOption(daily: DailySparkDatum[]): EChartsOption {
         type: 'bar',
         stack: 'run',
         barMaxWidth: 14,
-        itemStyle: { color: '#10b981', borderRadius: [2, 2, 0, 0] },
+        itemStyle: { color: CHART_EMERALD, borderRadius: [2, 2, 0, 0] },
         data: daily.map(day => day.runSuccess),
       },
       {
@@ -65,7 +75,7 @@ export function buildDailyComboOption(daily: DailySparkDatum[]): EChartsOption {
         type: 'bar',
         stack: 'run',
         barMaxWidth: 14,
-        itemStyle: { color: '#f87171', borderRadius: [2, 2, 0, 0] },
+        itemStyle: { color: CHART_RED, borderRadius: [2, 2, 0, 0] },
         data: daily.map(day => day.runFailed),
       },
       {
@@ -74,14 +84,14 @@ export function buildDailyComboOption(daily: DailySparkDatum[]): EChartsOption {
         smooth: true,
         symbol: 'circle',
         symbolSize: 5,
-        lineStyle: { color: '#f43f5e', width: 2 },
-        itemStyle: { color: '#f43f5e' },
+        lineStyle: { color: CHART_RED, width: 2 },
+        itemStyle: { color: CHART_RED },
         areaStyle: {
           color: {
             type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
             colorStops: [
-              { offset: 0, color: 'rgba(244,63,94,0.18)' },
-              { offset: 1, color: 'rgba(244,63,94,0.01)' },
+              { offset: 0, color: `rgba(${CHART_RED_RGB},0.18)` },
+              { offset: 1, color: `rgba(${CHART_RED_RGB},0.01)` },
             ],
           },
         },

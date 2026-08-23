@@ -11,6 +11,7 @@ import {
   WM_CHART_TEAL,
   WM_CHART_TEXT,
 } from './worldModelChartTheme'
+import { CHART_TOOLTIP_BG, CHART_TOOLTIP_BORDER, CHART_TOOLTIP_CSS } from '../../lib/echartsTheme.ts'
 
 const formatDay = (date: string) => {
   const value = new Date(`${date}T00:00:00`)
@@ -42,10 +43,10 @@ export default function CallsTrendChart({ days }: { days: CallRecordDailyBucket[
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      backgroundColor: 'rgba(255,255,255,0.96)',
-      borderColor: '#E2E8F0',
+      backgroundColor: CHART_TOOLTIP_BG,
+      borderColor: CHART_TOOLTIP_BORDER,
       textStyle: { color: WM_CHART_TEXT, fontSize: 12 },
-      extraCssText: 'box-shadow:0 8px 24px rgba(15,23,42,0.10);border-radius:10px;padding:8px 12px;',
+      extraCssText: CHART_TOOLTIP_CSS,
     },
     xAxis: {
       type: 'category',
