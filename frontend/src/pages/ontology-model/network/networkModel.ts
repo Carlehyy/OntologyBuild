@@ -2,21 +2,20 @@
  * 本体网络页的纯数据模型工具：本体配色、聚类布局、结果叠加合并。
  *
  * 全部是纯函数（无 DOM / React 依赖），供页面组件与单元测试共用。
+ * 配色唯一来源是平台共享图表主题（DESIGN.md §5.1），本模块不再维护页域色板。
  */
 import type {
   NetworkGraphData,
   NetworkGraphEdge,
   NetworkGraphNode,
-} from '@/api/ontologyNetwork'
+} from '../../../api/ontologyNetwork'
+import { CHART_SERIES_PALETTE } from '../../../lib/echartsTheme.ts'
 
 /**
- * 本体簇固定调色板：取 graphify 的社区配色（Tableau10），按本体在响应中的
- * 顺序取色，保证同一会话内稳定；深色画布上饱和度与区分度都更好。
+ * 本体簇固定调色板：直接引用平台共享十色板（原 Tableau10 私有副本已收敛），
+ * 按本体在响应中的顺序取色，保证同一会话内稳定。保留导出名以稳定图例等调用方。
  */
-export const ONTOLOGY_PALETTE = [
-  '#4E79A7', '#F28E2B', '#E15759', '#76B7B2', '#59A14F',
-  '#EDC948', '#B07AA1', '#FF9DA7', '#9C755F', '#BAB0AC',
-] as const
+export const ONTOLOGY_PALETTE: readonly string[] = CHART_SERIES_PALETTE
 
 export function ontologyColorMap(sections: { id: string }[]): Map<string, string> {
   const map = new Map<string, string>()

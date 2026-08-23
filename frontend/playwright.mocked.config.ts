@@ -40,6 +40,7 @@ export default defineConfig({
     '**/models.spec.ts',
     '**/nav_tabs.spec.ts',
     '**/ontology_domain_source.spec.ts',
+    '**/ontology_network_canvas.spec.ts',
     '**/ontology_overview_responsive.spec.ts',
     '**/ontology_structure_initial_view.spec.ts',
     '**/ontology_runtime_state_conflict.spec.ts',

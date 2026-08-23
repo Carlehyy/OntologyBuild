@@ -1,424 +1,281 @@
 /**
- * 本体网络画布：cytoscape 渲染跨本体全局图（graphify 布局语言 + 浅色系）。
+ * 本体网络画布：ECharts graph 渲染跨本体全局图（固定浅色作用域，取值口径
+ * 见根目录 DESIGN.md §5，颜色全部来自 @/lib/echartsTheme）。
  *
- * 渲染语言对齐 Graphify-Labs/graphify 的 HTML 导出（vis.js Network）：
- * - 社区配色点状节点、力导向物理成簇、度数决定大小、边降噪与标签分级；
- * - 配色采用浅色系：浅底深字，关系边用中灰半透明，保证与平台整体观感一致；
- * - 力导向物理布局：用确定性聚类坐标做种子，再由 cose 弹簧-斥力模型收敛，
- *   兼顾"有机生长感"与"同一数据簇不乱飞"的稳定性；
- * - 节点直径随度数放大（graphify 的 size = f(degree)）；
- * - 边默认弱化（低透明度细线 + 小箭头 + 隐藏标签），悬停/路径高亮才显性化；
- * - 实例标签在低缩放下隐藏，避免小节点标签糊成一片。
- * 组件本身无业务状态，高亮集合与选中回调全部由页面注入。
+ * 引擎由 cytoscape 切换为 ECharts（官方 graph 示例的力导向观感）：
+ * - 布局：force + 确定性聚类种子坐标（clusterPositions）+ 跨重建位置缓存，
+ *   数据刷新时已有节点不重新飞位；力参数随规模自适应防挤团；
+ * - 悬停：一跳邻接强亮、其余淡出（分析态激活时让位给分析高亮）；
+ * - 标签：胶囊化白底衬 + labelLayout.hideOverlap，低缩放下自动隐藏重叠标签；
+ * - 高亮契约与旧版一致：路径蓝 / 变更紫 / 直接影响橙 / 间接影响红虚线 /
+ *   非参与元素压暗 / 选中深描边，全部由页面 props 注入。
+ *
+ * 组件本身无业务状态，onReady 暴露轻量控制器（缩放/适应/聚焦）供工具条使用。
+ * 渲染器选 svg 以支持 mocked E2E 的 DOM 级断言；若大规模图出现卡顿，
+ * 改 opts.renderer 为 canvas 即可（一行切换，不影响任何逻辑）。
  */
-import { useEffect, useMemo, useRef } from 'react'
-import cytoscape, { type Core, type ElementDefinition } from 'cytoscape'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import ReactECharts from 'echarts-for-react'
+import type { ECharts } from 'echarts'
 import type {
   NetworkGraphData,
-  NetworkGraphEdge,
-  NetworkGraphNode,
 } from '@/api/ontologyNetwork'
+import { clusterPositions } from './networkModel.ts'
 import {
-  clusterPositions,
-  degreeMap,
-  maxDegreeOf,
-  nodeSize,
-  ontologyColorMap,
-  separateOverlaps,
-} from './networkModel'
+  buildNetworkGraphOption,
+  hasActiveAnalysis,
+  type NetworkCanvasHighlight,
+} from './networkGraphOption.ts'
 
-const CANVAS_BG = '#f6f8fc'
-const FALLBACK_COLORS = ['#4E79A7', '#F28E2B', '#E15759', '#76B7B2', '#59A14F']
-/** 实例标签显性化所需的最低缩放（低于此值只显示对象类型标签）。 */
-const INSTANCE_LABEL_ZOOM = 0.55
-
-export interface NetworkCanvasHighlight {
-  pathNodeIds?: Set<string>
-  pathEdgeIds?: Set<string>
-  directImpactIds?: Set<string>
-  indirectImpactIds?: Set<string>
-  changeNodeId?: string
-  selectedNodeId?: string
+/** 工具条用的最小控制器：替代旧版直接暴露 cytoscape Core 实例。 */
+export interface NetworkCanvasController {
+  /** 相对缩放（>1 放大）。 */
+  zoom(factor: number): void
+  /** 回到初始适应视图（首帧布局完成后的 zoom/center 快照）。 */
+  fit(): void
+  /** 居中并适度放大到指定节点。 */
+  focusNode(nodeId: string): void
 }
 
 interface Props {
-  nodes: NetworkGraphNode[]
-  edges: NetworkGraphEdge[]
+  nodes: NetworkGraphData['nodes']
+  edges: NetworkGraphData['edges']
   sections: NetworkGraphData['ontologies']
   highlight?: NetworkCanvasHighlight
   onSelect?: (nodeId: string) => void
   onBackgroundTap?: () => void
-  /** 暴露 cytoscape 实例给页面（缩放/聚焦工具条）。 */
-  onReady?: (cy: Core | null) => void
+  /** 暴露控制器给页面（缩放/聚焦工具条）；卸载或重建时回调 null。 */
+  onReady?: (controller: NetworkCanvasController | null) => void
   /** 跨重建的位置缓存：数据刷新（搜索/层级切换）时已有节点不重新飞位。 */
   positionsRef?: React.MutableRefObject<Map<string, { x: number; y: number }>>
+}
+
+const ZOOM_MIN = 0.04
+const ZOOM_MAX = 4
+
+function clampZoom(value: number): number {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value))
+}
+
+/** 从 option 读当前视图（zoom/center），roam 之后 getOption 反映最新值。 */
+function readView(chart: ECharts): { zoom: number; center?: [number, number] } {
+  const series = ((chart.getOption() as { series?: { zoom?: number; center?: number[] }[] }).series ?? [])[0]
+  const center = Array.isArray(series?.center) && series.center.length === 2
+    ? [series.center[0], series.center[1]] as [number, number]
+    : undefined
+  return { zoom: typeof series?.zoom === 'number' ? series.zoom : 1, center }
+}
+
+/** 尽力读取内部布局结果写回位置缓存；内部 API 变化时静默降级为不写回。 */
+function readLayoutPositions(chart: ECharts): Map<string, { x: number; y: number }> {
+  const out = new Map<string, { x: number; y: number }>()
+  try {
+    const model = (chart as unknown as {
+      getModel?: () => {
+        getSeriesByIndex?: (index: number) => {
+          getGraph?: () => {
+            eachNode?: (visit: (node: {
+              id?: string
+              getLayout?: () => unknown
+            }) => void) => void
+          }
+        }
+      }
+    }).getModel?.()
+    const graph = model?.getSeriesByIndex?.(0)?.getGraph?.()
+    graph?.eachNode?.(node => {
+      if (!node.id) return
+      const layout = node.getLayout?.()
+      if (Array.isArray(layout) && layout.length === 2
+        && Number.isFinite(layout[0]) && Number.isFinite(layout[1])) {
+        out.set(node.id, { x: layout[0], y: layout[1] })
+        return
+      }
+      const point = layout as { x?: unknown; y?: unknown } | null
+      if (point && typeof point.x === 'number' && typeof point.y === 'number') {
+        out.set(node.id, { x: point.x, y: point.y })
+      }
+    })
+  } catch {
+    // 内部模型不可用时保持旧缓存即可，仅损失"刷新不飞位"的一部分体验。
+  }
+  return out
+}
+
+/** 在内部布局里查节点坐标（聚焦用），失败退回种子坐标。 */
+function readNodePosition(chart: ECharts, nodeId: string): { x: number; y: number } | null {
+  try {
+    const model = (chart as unknown as {
+      getModel?: () => {
+        getSeriesByIndex?: (index: number) => {
+          getGraph?: () => {
+            getNodeById?: (id: string) => { getLayout?: () => unknown } | null
+          }
+        }
+      }
+    }).getModel?.()
+    const node = model?.getSeriesByIndex?.(0)?.getGraph?.()?.getNodeById?.(nodeId)
+    const layout = node?.getLayout?.()
+    if (Array.isArray(layout) && layout.length === 2
+      && Number.isFinite(layout[0]) && Number.isFinite(layout[1])) {
+      return { x: layout[0], y: layout[1] }
+    }
+    const point = layout as { x?: unknown; y?: unknown } | null
+    if (point && typeof point.x === 'number' && typeof point.y === 'number') {
+      return { x: point.x, y: point.y }
+    }
+  } catch {
+    // 交给调用方的种子坐标兜底。
+  }
+  return null
 }
 
 export default function NetworkCanvas(
   { nodes, edges, sections, highlight, onSelect, onBackgroundTap, onReady, positionsRef }: Props,
 ) {
-  const hostRef = useRef<HTMLDivElement>(null)
-  const cyRef = useRef<Core | null>(null)
-  const colorByOntology = useMemo(() => ontologyColorMap(sections), [sections])
-  const degrees = useMemo(() => degreeMap(edges), [edges])
-  const maxDegree = useMemo(() => maxDegreeOf(edges), [edges])
+  const chartRef = useRef<ReactECharts | null>(null)
+  const instanceRef = useRef<ECharts | null>(null)
+  const controllerRef = useRef<NetworkCanvasController | null>(null)
+  const initialViewRef = useRef<{ zoom: number; center?: [number, number] } | null>(null)
+  const capturedInitialRef = useRef(false)
+  const writeBackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [hoveredId, setHoveredId] = useState('')
 
-  // ---- 画布构建：仅在图数据（节点/边/本体清单）变化时整体重建 ----
+  // 回调经 ref 转发，保证传给 echarts-for-react 的 handler 身份稳定。
+  const callbacksRef = useRef({ onSelect, onBackgroundTap, onReady })
   useEffect(() => {
-    const host = hostRef.current
-    if (!host) return
-    const cache = positionsRef?.current
+    callbacksRef.current = { onSelect, onBackgroundTap, onReady }
+  }, [onSelect, onBackgroundTap, onReady])
+
+  // ---- 确定性种子 + 缓存合并（与旧版语义一致：已有节点不重新飞位） ----
+  const positions = useMemo(() => {
     const seeded = clusterPositions(nodes)
-    const positions = new Map(seeded)
-    if (cache) {
-      // 缓存优先：数据刷新时保留用户已经"盘熟"的布局，只让新增节点参与收敛
-      for (const [id, position] of cache) positions.set(id, position)
-    }
-    const cachedRatio = nodes.length === 0 ? 0
-      : nodes.filter(node => cache?.has(node.id)).length / nodes.length
+    const cache = positionsRef?.current
+    if (!cache) return seeded
+    const merged = new Map(seeded)
+    for (const [id, position] of cache) merged.set(id, position)
+    return merged
+  }, [nodes, positionsRef])
 
-    const sizeById = new Map<string, number>()
+  const analysisActive = hasActiveAnalysis(highlight)
+  const analysisActiveRef = useRef(false)
+  analysisActiveRef.current = analysisActive
+  // focusNode 的种子兜底坐标取最新值，避免闭包过期。
+  const positionsNowRef = useRef(positions)
+  positionsNowRef.current = positions
 
-    const elements: ElementDefinition[] = [
-      ...nodes.map(node => {
-        const size = nodeSize(node, degrees.get(node.id) || 0, maxDegree)
-        sizeById.set(node.id, size)
-        return {
-        group: 'nodes' as const,
-        data: {
-          id: node.id,
-          label: node.label,
-          kind: node.kind,
-          size,
-          color: colorByOntology.get(node.ontologyId) || FALLBACK_COLORS[0],
-        },
-        position: positions.get(node.id),
-        classes: node.kind === 'object_type' ? 'object-type' : 'instance',
-        }
-      }),
-      ...edges.map(edge => ({
-        group: 'edges' as const,
-        data: {
-          id: edge.id,
-          source: edge.source,
-          target: edge.target,
-          label: edge.label,
-          kind: edge.kind,
-        },
-        classes: edge.kind.replace('_', '-'),
-      })),
-    ]
+  const option = useMemo(
+    () => buildNetworkGraphOption({
+      nodes,
+      edges,
+      sections,
+      highlight,
+      hoveredId: analysisActive ? '' : hoveredId,
+      positions,
+    }),
+    [nodes, edges, sections, highlight, hoveredId, analysisActive, positions])
 
-    const cy = cytoscape({
-      container: host,
-      elements,
-      minZoom: 0.06,
-      maxZoom: 3,
-      boxSelectionEnabled: false,
-      wheelSensitivity: 0.25,
-      style: [
-        {
-          selector: 'node',
-          style: {
-            shape: 'ellipse',
-            width: 'data(size)',
-            height: 'data(size)',
-            'background-color': 'data(color)',
-            'border-color': 'data(color)',
-            'border-width': 1.2,
-            'border-opacity': 0.9,
-            color: '#334155',
-            label: 'data(label)',
-            'font-size': 11,
-            'font-weight': 600,
-            'text-wrap': 'ellipsis',
-            'text-max-width': '110px',
-            'text-valign': 'bottom',
-            'text-margin-y': 5,
-            'text-background-color': CANVAS_BG,
-            'text-background-opacity': 0.72,
-            'text-background-padding': '2px',
-            'text-background-shape': 'roundrectangle',
-            'overlay-opacity': 0,
-            'transition-property': 'border-color, border-width, opacity, background-color',
-            'transition-duration': 160,
-          },
-        },
-        {
-          // graphify：只有高度数节点默认带标签；这里对象类型始终显示
-          selector: 'node.instance',
-          style: { 'font-size': 10, 'font-weight': 500 },
-        },
-        {
-          selector: 'node.label-muted',
-          style: { label: '', },
-        },
-        {
-          selector: 'edge',
-          style: {
-            width: 1.4,
-            'line-color': 'rgba(100,116,139,0.34)',
-            'target-arrow-color': 'rgba(100,116,139,0.34)',
-            'target-arrow-shape': 'triangle',
-            'arrow-scale': 0.55,
-            'curve-style': 'bezier',
-            'control-point-step-size': 36,
-            label: '',
-            'font-size': 9,
-            color: '#b9b9d6',
-            'text-background-color': CANVAS_BG,
-            'text-background-opacity': 0.85,
-            'text-background-padding': '2px',
-            'text-rotation': 'autorotate',
-            'overlay-opacity': 0,
-            'transition-property': 'line-color, width, opacity',
-            'transition-duration': 160,
-          },
-        },
-        {
-          selector: 'edge.relation',
-          style: { width: 1.7, 'line-color': 'rgba(71,85,105,0.42)', 'target-arrow-color': 'rgba(71,85,105,0.42)' },
-        },
-        {
-          selector: 'edge.schema-relation',
-          style: {
-            width: 1.2,
-            'line-style': 'dashed',
-            'line-dash-pattern': [5, 4],
-            'line-color': 'rgba(100,116,139,0.30)',
-            'target-arrow-color': 'rgba(100,116,139,0.30)',
-          },
-        },
-        {
-          // 层级归属线：只做极淡的"聚拢暗示"，不与关系边抢视觉
-          selector: 'edge.contains, edge.attribute',
-          style: {
-            width: 0.8,
-            'line-style': 'dashed',
-            'line-dash-pattern': [2, 4],
-            'line-color': 'rgba(100,116,139,0.16)',
-            'target-arrow-shape': 'none',
-          },
-        },
-        {
-          selector: 'edge.bridge',
-          style: {
-            'line-style': 'dashed',
-            'line-dash-pattern': [7, 5],
-            'line-color': 'rgba(124,58,237,0.55)',
-            'target-arrow-shape': 'none',
-            width: 1.8,
-            label: 'data(label)',
-            color: '#6d28d9',
-            'font-size': 9,
-            'z-index': 10,
-          },
-        },
-        {
-          selector: 'edge.peek, edge.path-edge, edge.impact-edge',
-          style: { label: 'data(label)', width: 2.6 },
-        },
-        {
-          selector: '.dimmed',
-          style: { opacity: 0.1 },
-        },
-        {
-          selector: '.path-node',
-          style: {
-            'border-color': '#2563eb',
-            'border-width': 3,
-            'underlay-color': '#2563eb',
-            'underlay-opacity': 0.22,
-            'underlay-padding': 4,
-          },
-        },
-        {
-          selector: '.path-edge',
-          style: {
-            'line-color': '#2563eb',
-            'target-arrow-color': '#2563eb',
-            width: 3.4,
-            'z-index': 20,
-          },
-        },
-        {
-          selector: '.change-node',
-          style: {
-            'border-color': '#7c3aed',
-            'border-width': 3.5,
-            'underlay-color': '#7c3aed',
-            'underlay-opacity': 0.24,
-            'underlay-padding': 5,
-          },
-        },
-        {
-          selector: '.direct-impact',
-          style: { 'border-color': '#ea580c', 'border-width': 3 },
-        },
-        {
-          selector: '.indirect-impact',
-          style: { 'border-color': '#dc2626', 'border-width': 2.4, 'border-style': 'dashed' },
-        },
-        {
-          selector: '.impact-edge',
-          style: {
-            'line-color': '#ea580c',
-            'target-arrow-color': '#ea580c',
-            width: 2.8,
-            'z-index': 18,
-          },
-        },
-        {
-          selector: '.selected-node',
-          style: {
-            'border-color': '#0f172a',
-            'border-width': 2.6,
-            'underlay-color': '#0f172a',
-            'underlay-opacity': 0.14,
-            'underlay-padding': 6,
-          },
-        },
-        {
-          selector: 'node.hover-ring',
-          style: {
-            'border-color': '#0f172a',
-            'border-width': 2,
-          },
-        },
-      ],
-      layout: {
-        name: 'cose',
-        // 聚类种子坐标 + 缓存：已有节点不随机重排，只做局部收敛。
-        // 斥力/重叠参数必须保持 cytoscape 默认量级（nodeRepulsion≈4e5），
-        // 压低会让节点互相穿透挤成一团（MYW-28 验收意见的根因）。
-        randomize: cachedRatio < 0.5,
-        transform: (node: any) => positions.get(node.id()) || { x: 0, y: 0 },
-        nodeRepulsion: () => 400000,
-        nodeOverlap: 14,
-        idealEdgeLength: (edge: any) => {
-          const a = sizeById.get(edge.source().id()) || 20
-          const b = sizeById.get(edge.target().id()) || 20
-          return a / 2 + b / 2 + 105
-        },
-        edgeElasticity: () => 0.05,
-        nestingFactor: 1.2,
-        gravity: 0.3,
-        numIter: cachedRatio < 0.5 ? 800 : 240,
-        initialTemp: 300,
-        coolingFactor: 0.99,
-        minTemp: 1,
-        componentSpacing: 150,
-        animate: true,
-        animationDuration: cachedRatio < 0.5 ? 680 : 280,
-        fit: false,
-        padding: 60,
-      },
-    } as any)
-
-    const applyZoomLabels = () => {
-      const showAll = cy.zoom() >= INSTANCE_LABEL_ZOOM
-      cy.batch(() => {
-        cy.nodes('node.instance').toggleClass('label-muted', !showAll)
-      })
-    }
-    applyZoomLabels()
-    cy.on('zoom', applyZoomLabels)
-
-    cy.on('mouseover', 'edge.relation', event => event.target.addClass('peek'))
-    cy.on('mouseout', 'edge.relation', event => event.target.removeClass('peek'))
-    cy.on('mouseover', 'node', event => event.target.addClass('hover-ring'))
-    cy.on('mouseout', 'node', event => event.target.removeClass('hover-ring'))
-
-    cy.on('tap', 'node', event => onSelect?.(event.target.id()))
-    cy.on('tap', event => {
-      if (event.target === cy) onBackgroundTap?.()
-    })
-
-    const savePositions = () => {
-      if (!cache) return
-      cache.clear()
-      cy.nodes().forEach(node => { cache.set(node.id(), { x: node.position().x, y: node.position().y }) })
-    }
-    cy.one('layoutstop', () => {
-      // 确定性重叠消解：物理收敛后仍贴在一起的节点对被推开（不依赖物理参数手感）
-      const finalPositions = new Map<string, { x: number; y: number }>()
-      const diameters = new Map<string, number>()
-      cy.nodes().forEach(node => {
-        finalPositions.set(node.id(), { x: node.position().x, y: node.position().y })
-        diameters.set(node.id(), node.data('size') || 20)
-      })
-      if (separateOverlaps(finalPositions, diameters, { iterations: 90, minGap: 8 })) {
-        cy.batch(() => cy.nodes().forEach(node => {
-          const position = finalPositions.get(node.id())
-          if (position) node.position(position)
-        }))
-      }
-      savePositions()
-      cy.fit(undefined, 64)
-    })
-
-    cyRef.current = cy
-    onReady?.(cy)
-    return () => {
-      savePositions()
-      cy.destroy()
-      if (cyRef.current === cy) cyRef.current = null
-      onReady?.(null)
-    }
-    // 仅图数据变化才重建；高亮/选中由下方轻量 effect 处理，避免力导向重放
-  }, [nodes, edges, sections, colorByOntology, degrees, maxDegree, positionsRef])
-
-  // ---- 高亮应用：不重建画布，只批量切换类 ----
+  // 数据变化后重置"首帧快照未采集"标记，fit 语义始终对应当前数据的适应视图。
   useEffect(() => {
-    const cy = cyRef.current
-    if (!cy || cy.destroyed()) return
-    const pathNodeIds = highlight?.pathNodeIds || new Set<string>()
-    const pathEdgeIds = highlight?.pathEdgeIds || new Set<string>()
-    const directImpactIds = highlight?.directImpactIds || new Set<string>()
-    const indirectImpactIds = highlight?.indirectImpactIds || new Set<string>()
-    const changeNodeId = highlight?.changeNodeId || ''
-    const selectedNodeId = highlight?.selectedNodeId || ''
-    const hasAnalysis = pathNodeIds.size > 0 || directImpactIds.size > 0
-      || indirectImpactIds.size > 0 || !!changeNodeId
+    capturedInitialRef.current = false
+  }, [nodes, edges])
 
-    cy.batch(() => {
-      cy.nodes().forEach(node => {
-        const id = node.id()
-        const classes = [
-          pathNodeIds.has(id) ? 'path-node' : '',
-          directImpactIds.has(id) ? 'direct-impact' : '',
-          indirectImpactIds.has(id) ? 'indirect-impact' : '',
-          id === changeNodeId ? 'change-node' : '',
-          id === selectedNodeId ? 'selected-node' : '',
-          hasAnalysis && !pathNodeIds.has(id) && !directImpactIds.has(id)
-            && !indirectImpactIds.has(id) && id !== changeNodeId ? 'dimmed' : '',
-        ].filter(Boolean).join(' ')
-        node.classes(node.hasClass('object-type') ? `object-type ${classes}` : `instance ${classes}`)
-      })
-      cy.edges().forEach(edge => {
-        const kindClass = edge.data('kind').replace('_', '-')
-        const id = edge.id()
-        const classes = [
-          pathEdgeIds.has(id) ? 'path-edge' : '',
-          hasAnalysis && edge.data('kind') === 'relation' ? 'impact-edge' : '',
-          hasAnalysis && !pathEdgeIds.has(id) && edge.data('kind') !== 'relation'
-            && edge.data('kind') !== 'bridge' ? 'dimmed' : '',
-        ].filter(Boolean).join(' ')
-        edge.classes(`${kindClass} ${classes}`)
-      })
+  // 卸载清理：定时器 + 通知页面控制器失效。
+  useEffect(() => () => {
+    if (writeBackTimerRef.current) clearTimeout(writeBackTimerRef.current)
+    callbacksRef.current.onReady?.(null)
+  }, [])
+
+  const handleReady = (instance: ECharts | undefined) => {
+    if (!instance) return
+    instanceRef.current = instance
+
+    // 点空白取消选中（zrender 空目标点击 = 画布空白区域）。
+    instance.getZr().on('click', event => {
+      if (!event.target) callbacksRef.current.onBackgroundTap?.()
     })
-  }, [highlight])
+
+    // 布局收敛后写回位置缓存 + 采集初始视图快照（fit 的回退目标）。
+    instance.on('finished', () => {
+      if (!capturedInitialRef.current) {
+        capturedInitialRef.current = true
+        initialViewRef.current = readView(instance)
+      }
+      if (!positionsRef?.current) return
+      if (writeBackTimerRef.current) clearTimeout(writeBackTimerRef.current)
+      writeBackTimerRef.current = setTimeout(() => {
+        const latest = readLayoutPositions(instance)
+        if (latest.size === 0) return
+        const cache = positionsRef.current!
+        cache.clear()
+        for (const [id, position] of latest) cache.set(id, position)
+      }, 260)
+    })
+
+    const controller: NetworkCanvasController = {
+      zoom(factor) {
+        const next = clampZoom(readView(instance).zoom * factor)
+        instance.setOption({ series: [{ zoom: next }] })
+      },
+      fit() {
+        const snapshot = initialViewRef.current
+        if (!snapshot) return
+        instance.setOption({
+          series: [{ zoom: snapshot.zoom, ...(snapshot.center ? { center: snapshot.center } : {}) }],
+        })
+      },
+      focusNode(nodeId) {
+        if (!nodeId) return
+        const target = readNodePosition(instance, nodeId) ?? positionsNowRef.current.get(nodeId) ?? null
+        if (!target) return
+        const current = readView(instance).zoom
+        instance.setOption({
+          series: [{ center: [target.x, target.y], zoom: Math.max(current, 1.35) }],
+        })
+      },
+    }
+    controllerRef.current = controller
+    callbacksRef.current.onReady?.(controller)
+  }
+
+  const handleEvents = useMemo(() => ({
+    click: (params: { dataType?: string; data?: { id?: string }; name?: string }) => {
+      if (params.dataType !== 'node') return
+      const id = params.data?.id || params.name
+      if (id) callbacksRef.current.onSelect?.(id)
+    },
+    mouseover: (params: { dataType?: string; data?: { id?: string } }) => {
+      if (params.dataType !== 'node' || analysisActiveRef.current) return
+      const id = params.data?.id
+      if (id) setHoveredId(previous => (previous === id ? previous : id))
+    },
+    mouseout: (params: { dataType?: string }) => {
+      if (params.dataType !== 'node' || analysisActiveRef.current) return
+      setHoveredId(previous => (previous === '' ? previous : ''))
+    },
+  }), [])
 
   return (
     <div
       className="relative h-full min-h-0 w-full overflow-hidden"
       style={{
-        backgroundColor: CANVAS_BG,
-        backgroundImage: 'radial-gradient(circle at 1px 1px, #dde5f0 1px, transparent 0)',
+        backgroundColor: 'var(--color-bg-base)',
+        backgroundImage: 'radial-gradient(circle at 1px 1px, var(--color-border) 1px, transparent 0)',
         backgroundSize: '24px 24px',
       }}
     >
-      <div ref={hostRef} className="absolute inset-0" aria-label="本体网络全局画布" />
+      <div className="absolute inset-0" data-testid="network-chart-host" aria-label="本体网络全局画布">
+        <ReactECharts
+          ref={chartRef}
+          option={option}
+          notMerge={false}
+          lazyUpdate
+          opts={{ renderer: 'svg' }}
+          style={{ width: '100%', height: '100%' }}
+          onEvents={handleEvents}
+          onChartReady={handleReady}
+        />
+      </div>
     </div>
   )
 }

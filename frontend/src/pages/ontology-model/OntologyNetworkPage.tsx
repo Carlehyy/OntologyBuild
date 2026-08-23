@@ -1,14 +1,13 @@
 /**
  * 本体网络 — 跨本体全局网络可视化（只读）
  *
- * 左卡片：cytoscape 全局画布（各本体子图叠加、按本体着色、同名类型虚线桥接）
+ * 左卡片：ECharts 全局画布（各本体子图叠加、按本体着色、同名类型虚线桥接）
  * 右卡片：操作区（数据范围 / 层级与预算 / 搜索 / 路径与影响分析 / 节点详情）
  * 布局复用本体建模页的可拖拽左右分栏；数据基座是 PG fo_* 表 / 发布快照，
  * 不依赖 Neo4j 投影就绪。本页不提供任何增删改，编辑仍在本体建模/详情页完成。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import type { Core } from 'cytoscape'
 import {
   AlertTriangle, ArrowRight, BadgeInfo, Boxes, CircleDotDashed, Focus, Layers3,
   Loader2, LocateFixed, Network, RefreshCw, Route, Search, Share2,
@@ -23,7 +22,7 @@ import {
   type NetworkPathResult,
 } from '@/api/ontologyNetwork'
 import { SplitHandle, useSplitLayout } from '@/hooks/useSplitLayout'
-import NetworkCanvas from './network/NetworkCanvas'
+import NetworkCanvas, { type NetworkCanvasController } from './network/NetworkCanvas'
 import {
   legendItems,
   mergeOverlay,
@@ -81,9 +80,10 @@ const DEFAULT_SELECTED_MAX = 8
 
 export default function OntologyNetworkPage() {
   const { containerRef, sizes, startResize } = useSplitLayout([72, 28])
-  const cyRef = useRef<Core | null>(null)
   // 跨数据刷新保留力导向布局位置：搜索/层级切换时已布局节点不重飞
   const positionsRef = useRef(new Map<string, { x: number; y: number }>())
+  // 画布控制器（缩放/适应/聚焦），由 NetworkCanvas onReady 注入。
+  const canvasRef = useRef<NetworkCanvasController | null>(null)
 
   // -- 数据范围 --
   const { data: overview = [], isLoading: overviewLoading, refetch: refetchOverview } = useQuery({
@@ -294,10 +294,7 @@ export default function OntologyNetworkPage() {
   }
 
   const focusSelected = () => {
-    const node = cyRef.current?.getElementById(selectedNodeId)
-    if (node?.length) {
-      cyRef.current?.animate({ center: { eles: node }, zoom: 1.35 }, { duration: 220 })
-    }
+    canvasRef.current?.focusNode(selectedNodeId)
   }
 
   const stats = useMemo(() => ({
@@ -337,15 +334,15 @@ export default function OntologyNetworkPage() {
                 className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--color-border)] bg-white text-slate-500 hover:bg-slate-100">
                 <RefreshCw size={14} />
               </button>
-              <button type="button" onClick={() => cyRef.current?.zoom(cyRef.current.zoom() * 1.18)} aria-label="放大画布"
+              <button type="button" onClick={() => canvasRef.current?.zoom(1.18)} aria-label="放大画布"
                 className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--color-border)] bg-white text-slate-500 hover:bg-slate-100">
                 <ZoomIn size={14} />
               </button>
-              <button type="button" onClick={() => cyRef.current?.zoom(cyRef.current.zoom() / 1.18)} aria-label="缩小画布"
+              <button type="button" onClick={() => canvasRef.current?.zoom(1 / 1.18)} aria-label="缩小画布"
                 className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--color-border)] bg-white text-slate-500 hover:bg-slate-100">
                 <ZoomOut size={14} />
               </button>
-              <button type="button" onClick={() => cyRef.current?.fit(undefined, 54)} aria-label="适应画布"
+              <button type="button" onClick={() => canvasRef.current?.fit()} aria-label="适应画布"
                 className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--color-border)] bg-white text-slate-500 hover:bg-slate-100">
                 <LocateFixed size={14} />
               </button>
@@ -363,7 +360,7 @@ export default function OntologyNetworkPage() {
               }}
               onSelect={setSelectedNodeId}
               onBackgroundTap={() => setSelectedNodeId('')}
-              onReady={cy => { cyRef.current = cy }}
+              onReady={controller => { canvasRef.current = controller }}
               positionsRef={positionsRef}
             />
 
