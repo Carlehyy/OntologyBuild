@@ -85,7 +85,7 @@ export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
     ],
   },
   {
-    key: 'data', to: '/data', icon: Database, label: '数据通道', description: '数据接入、加工与治理', subItems: [
+    key: 'data', to: '/data', icon: Database, label: '数据集成', description: '数据接入、加工与治理', subItems: [
       { key: 'data.pipelines', to: '/data/pipelines', icon: GitBranch, label: '数据流水线', description: '连接、转换与编排' },
       { key: 'data.sync_tasks', to: '/data/pipelines/sync-tasks', icon: Repeat, label: '数据任务池', description: '同步任务与运行历史' },
       { key: 'data.structured', to: '/data/structured', icon: Table2, label: '数据资产湖', description: '结构化数据资产' },

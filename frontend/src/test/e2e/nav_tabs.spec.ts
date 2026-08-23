@@ -177,8 +177,8 @@ test('顶栏多标签页：按最近访问从左往右排序，最多保留 10 �
     { path: '/world-model/models', title: '世界模型 · 推演模型' },
     { path: '/world-model/services', title: '世界模型 · 推演服务' },
     { path: '/world-model/calls', title: '世界模型 · 调用记录' },
-    { path: '/data/pipelines', title: '数据通道 · 数据流水线' },
-    { path: '/data/structured', title: '数据通道 · 数据资产湖' },
+    { path: '/data/pipelines', title: '数据集成 · 数据流水线' },
+    { path: '/data/structured', title: '数据集成 · 数据资产湖' },
     { path: '/events', title: '事件登记' },
     { path: '/api-hub/history', title: '接口代理 · 调用历史' },
     { path: '/models', title: '模型配置' },
@@ -251,7 +251,7 @@ test('标签可见标题使用平台导航的一级/二级菜单标签，不使�
 
   // 数据管家页：一级 · 二级菜单标签（不显示“数据管家”）
   await page.goto('/#/data/pipelines/steward')
-  const stewardTab = tabList.getByRole('tab', { name: '数据通道 · 数据流水线' })
+  const stewardTab = tabList.getByRole('tab', { name: '数据集成 · 数据流水线' })
   await expect(stewardTab).toBeVisible()
   await expect(tabList.getByRole('tab', { name: '数据管家' })).toHaveCount(0)
 })
