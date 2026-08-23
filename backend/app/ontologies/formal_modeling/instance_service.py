@@ -97,6 +97,7 @@ def _commit_graph_mutation(
     # （fail-open，进程外写入由短 TTL 兜底）。
     from app.ontologies import cache as ontology_cache
     ontology_cache.invalidate_overview()
+    ontology_cache.invalidate_instance_counts()
     try:
         rebuild_after_commit(db, ontology_id)
     except ProjectionRebuildError as exc:

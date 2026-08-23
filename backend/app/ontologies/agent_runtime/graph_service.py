@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from typing import Any, Iterable, Optional
 
-from sqlalchemy import String, cast, or_
+from sqlalchemy import String, Text, cast, or_
 
 from app.models.ontology_formal import LinkInstance, ObjectInstance
 from app.ontologies.agent_runtime.boundary import AgentScope, ToolError
@@ -265,8 +265,10 @@ def build_workspace_graph(
                 q = q.filter(or_(
                     ObjectInstance.id.ilike(pattern),
                     ObjectInstance.external_id.ilike(pattern),
-                    cast(ObjectInstance.properties, String).ilike(pattern),
-                    cast(ObjectInstance.computed, String).ilike(pattern),
+                    # CAST AS TEXT 与迁移 0076 的 (properties::text) 表达式索引
+                    # 严格一致，规划器才能命中 trgm GIN；VARCHAR 会退化为全表扫。
+                    cast(ObjectInstance.properties, Text).ilike(pattern),
+                    cast(ObjectInstance.computed, Text).ilike(pattern),
                 ))
             # 无关键词时复用一次 group-by 得到的计数，避免对象类型越多就多出一轮 count 查询。
             matched_count = q.count() if keyword else counts.get(object_type.id, 0)

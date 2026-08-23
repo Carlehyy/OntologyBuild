@@ -307,6 +307,7 @@ def delete_ontology(ontology_id: str, db: Session = Depends(get_db), current_use
                 # requested outcome and must converge to the normal 204 result.
                 ontology_cache.invalidate_detail()
                 ontology_cache.invalidate_overview()
+                ontology_cache.invalidate_instance_counts()
                 ontology_cache.invalidate_pending()
                 return None
             mark_failed(
@@ -325,4 +326,5 @@ def delete_ontology(ontology_id: str, db: Session = Depends(get_db), current_use
         else:
             ontology_cache.invalidate_detail()
             ontology_cache.invalidate_overview()
+            ontology_cache.invalidate_instance_counts()
             ontology_cache.invalidate_pending()

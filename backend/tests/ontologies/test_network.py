@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+from sqlalchemy.exc import OperationalError
+
 from app.models.ontology_formal import LinkInstance, ObjectInstance
 from app.models.ontology import OntologyProject
 from app.models.ontology_version import OntologyVersion
@@ -279,3 +282,61 @@ def test_network_instance_detail_returns_fields(client, auth_headers, db, ontolo
     r = client.get(
         _network(f"/{ontology['id']}/instances/not-exist"), headers=auth_headers)
     assert r.status_code == 404
+
+
+# ------------------------------------------------- 计数缓存与超时护栏
+
+
+from app.ontologies.agent_runtime.boundary import AgentScope
+from app.ontologies.network import service
+from app.ontologies.network.service import NetworkRequestError, _raise_timeout
+
+
+def test_network_overview_and_graph_accept_fresh_param(client, auth_headers, db):
+    """fresh=true 是可选透传参数：跳过计数缓存强制直查，响应契约不变。"""
+    first = _create_ontology(client, auth_headers, "缓存穿透-A")
+    _publish_draft(db, first, _save_model(client, auth_headers, first["id"]))
+
+    r = client.get(_network("/overview?fresh=true"), headers=auth_headers)
+    assert r.status_code == 200, r.text
+    item = next(item for item in r.json()["data"] if item["id"] == first["id"])
+    assert item["instanceCount"] == 2
+
+    r = client.get(
+        _network("/graph"), headers=auth_headers,
+        params={"ontology_ids": first["id"], "level": 2, "fresh": "true"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["meta"]["totalInstances"] == 2
+
+
+def test_service_threads_fresh_into_instance_counts(client, auth_headers, db, monkeypatch):
+    first = _create_ontology(client, auth_headers, "缓存穿透-B")
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        AgentScope, "instance_counts",
+        lambda self, *, fresh=False: (calls.append(fresh), {})[1],
+    )
+
+    service.list_overview(db, fresh=True)
+    assert calls == [True]
+
+    service.list_overview(db)
+    assert calls == [True, False]
+
+    calls.clear()
+    service.build_network_graph(db, ontology_ids=[first["id"]], level=1, fresh=True)
+    assert True in calls, "fresh 必须透传到 scope.instance_counts"
+
+
+def test_statement_timeout_maps_to_friendly_error():
+    timed_out = Exception("canceling statement due to statement timeout")
+    timed_out.pgcode = "57014"
+    with pytest.raises(NetworkRequestError, match="数据量过大"):
+        _raise_timeout(OperationalError("stmt", {}, timed_out))
+
+    other = Exception("no such table")
+    other.pgcode = "42P01"
+    with pytest.raises(OperationalError):
+        _raise_timeout(OperationalError("stmt", {}, other))
+

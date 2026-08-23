@@ -14,6 +14,8 @@ import unicodedata
 from typing import Any, Iterable, Optional
 from uuid import uuid4
 
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.models.ontology import OntologyProject
@@ -33,8 +35,27 @@ NETWORK_MAX_ONTOLOGIES = 12
 NETWORK_MAX_NODES = 800
 NETWORK_MAX_EDGES = 2000
 DEFAULT_LIMIT_PER_TYPE = 10
+# 单请求语句超时：上亿实例下未命中缓存的计数/搜索可能长跑，
+# 超时统一转为可读错误而非挂死数据库连接。
+NETWORK_STATEMENT_TIMEOUT_MS = 8000
+_TIMEOUT_MESSAGE = "数据量过大，请缩小范围或稍后重试"
 
 _BRIDGE_LABEL = "同名类型"
+
+
+def _arm_statement_timeout(db: Session) -> None:
+    """为当前事务设置语句超时；上下文不具备事务时静默跳过。"""
+    try:
+        db.execute(text(f"SET LOCAL statement_timeout = '{NETWORK_STATEMENT_TIMEOUT_MS}ms'"))
+    except Exception:  # noqa: BLE001 - 超时护栏失败不阻塞业务
+        pass
+
+
+def _raise_timeout(error: OperationalError) -> None:
+    """PG 语句超时（SQLSTATE 57014）映射为可读的请求错误。"""
+    if getattr(error.orig, "pgcode", None) == "57014":
+        raise NetworkRequestError(_TIMEOUT_MESSAGE) from error
+    raise error
 
 
 def _normalize_key(raw: Optional[str]) -> str:
@@ -61,9 +82,10 @@ def _resolve_scope(
 
 
 def _section_from_scope(
-    project: OntologyProject, scope: AgentScope, release_id: Optional[str]
+    project: OntologyProject, scope: AgentScope, release_id: Optional[str],
+    *, fresh: bool = False,
 ) -> dict:
-    counts = scope.instance_counts()
+    counts = scope.instance_counts(fresh=fresh)
     version = None
     if release_id and scope.release is not None:
         version = getattr(scope.release, "version_number", None)
@@ -81,21 +103,30 @@ def _section_from_scope(
 
 
 def _ontology_section(
-    db: Session, project: OntologyProject
+    db: Session, project: OntologyProject, *, fresh: bool = False,
 ) -> dict:
     """单个本体的概览统计（overview 与 graph 共用口径）。"""
     scope, release_id, _published = _resolve_scope(db, project)
-    return _section_from_scope(project, scope, release_id)
+    return _section_from_scope(project, scope, release_id, fresh=fresh)
 
 
-def list_overview(db: Session) -> list[dict]:
+def list_overview(db: Session, *, fresh: bool = False) -> list[dict]:
+    _arm_statement_timeout(db)
+    try:
+        return _list_overview(db, fresh=fresh)
+    except OperationalError as error:
+        _raise_timeout(error)
+        raise
+
+
+def _list_overview(db: Session, *, fresh: bool) -> list[dict]:
     projects = (
         db.query(OntologyProject).order_by(OntologyProject.created_at, OntologyProject.id).all()
     )
     items: list[dict] = []
     for project in projects:
         try:
-            items.append(_ontology_section(db, project))
+            items.append(_ontology_section(db, project, fresh=fresh))
         except ToolError as error:
             # 单个本体口径异常（如发布指针损坏）不拖垮整个清单。
             items.append({
@@ -267,8 +298,35 @@ def build_network_graph(
     query: Optional[str] = None,
     limit_per_type: int = DEFAULT_LIMIT_PER_TYPE,
     bridge_same_name: bool = True,
+    fresh: bool = False,
 ) -> dict:
     """构建跨本体全局图：逐本体投影后合并 + 同名类型桥接。"""
+    _arm_statement_timeout(db)
+    try:
+        return _build_network_graph(
+            db,
+            ontology_ids=ontology_ids,
+            level=level,
+            query=query,
+            limit_per_type=limit_per_type,
+            bridge_same_name=bridge_same_name,
+            fresh=fresh,
+        )
+    except OperationalError as error:
+        _raise_timeout(error)
+        raise
+
+
+def _build_network_graph(
+    db: Session,
+    *,
+    ontology_ids: list[str],
+    level: int = 2,
+    query: Optional[str] = None,
+    limit_per_type: int = DEFAULT_LIMIT_PER_TYPE,
+    bridge_same_name: bool = True,
+    fresh: bool = False,
+) -> dict:
     unique_ids = list(dict.fromkeys(oid.strip() for oid in ontology_ids if oid.strip()))
     if not unique_ids:
         raise NetworkRequestError("请至少选择一个本体")
@@ -294,7 +352,7 @@ def build_network_graph(
             continue
         try:
             scope, _release_id, _published = _resolve_scope(db, project)
-            section = _section_from_scope(project, scope, _release_id)
+            section = _section_from_scope(project, scope, _release_id, fresh=fresh)
             graph = build_workspace_graph(
                 scope,
                 depth=depth,
@@ -347,6 +405,17 @@ def network_instance_detail(
 def network_find_paths(
     db: Session, ontology_id: str, body: S.GraphPathRequest
 ) -> dict:
+    _arm_statement_timeout(db)
+    try:
+        return _network_find_paths(db, ontology_id, body)
+    except OperationalError as error:
+        _raise_timeout(error)
+        raise
+
+
+def _network_find_paths(
+    db: Session, ontology_id: str, body: S.GraphPathRequest
+) -> dict:
     project = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()
     if not project:
         raise ToolError("本体不存在")
@@ -362,6 +431,17 @@ def network_find_paths(
 
 
 def network_analyze_impact(
+    db: Session, ontology_id: str, body: S.GraphImpactRequest
+) -> dict:
+    _arm_statement_timeout(db)
+    try:
+        return _network_analyze_impact(db, ontology_id, body)
+    except OperationalError as error:
+        _raise_timeout(error)
+        raise
+
+
+def _network_analyze_impact(
     db: Session, ontology_id: str, body: S.GraphImpactRequest
 ) -> dict:
     project = db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first()

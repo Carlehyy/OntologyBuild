@@ -145,14 +145,29 @@ class AgentScope:
 
     # ---------- 本体技能卡 ----------
 
-    def instance_counts(self) -> dict[str, int]:
-        rows = (self.db.query(ObjectInstance.object_type_id, func.count(ObjectInstance.id))
-                .filter(ObjectInstance.ontology_id == self.ontology.id)
-                )
-        if self.release_id is not None:
-            rows = rows.filter(ObjectInstance.ontology_release_id == self.release_id)
-        rows = rows.group_by(ObjectInstance.object_type_id).all()
-        return {tid: n for tid, n in rows if tid in self.object_types}
+    def instance_counts(self, *, fresh: bool = False) -> dict[str, int]:
+        """按类型计数实例。
+
+        上亿实例下 group-by count 可能长跑：默认走 Redis cache-aside
+        （短 TTL + 版本键失效，Redis 不可用时静默降级直查）；fresh=True
+        强制直查，供「刷新本体清单」等显式操作绕过缓存。
+        """
+
+        def build() -> dict[str, int]:
+            rows = (self.db.query(ObjectInstance.object_type_id, func.count(ObjectInstance.id))
+                    .filter(ObjectInstance.ontology_id == self.ontology.id)
+                    )
+            if self.release_id is not None:
+                rows = rows.filter(ObjectInstance.ontology_release_id == self.release_id)
+            rows = rows.group_by(ObjectInstance.object_type_id).all()
+            return {tid: n for tid, n in rows if tid in self.object_types}
+
+        if fresh:
+            return build()
+        from app.ontologies import cache as ontology_cache
+        key = ontology_cache.instance_counts_cache_key(self.ontology.id, self.release_id)
+        return ontology_cache.cached_call(
+            key, ontology_cache.INSTANCE_COUNTS_TTL_SECONDS, build)
 
     def skill_card(self) -> str:
         """从受限视图生成紧凑的 schema 说明 — agent 对世界的全部认知。"""

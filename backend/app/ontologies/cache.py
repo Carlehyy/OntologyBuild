@@ -20,6 +20,11 @@ from app.shared import redis_cache
 _DETAIL_VERSION_KEY = "ob:ont:detail:ver"
 _OVERVIEW_VERSION_KEY = "ob:ont:overview:ver"
 _PENDING_VERSION_KEY = "ob:ont:pending:ver"
+_INSTANCE_COUNTS_VERSION_KEY = "ob:ont:instance-counts:ver"
+
+# 实例计数缓存 TTL：外部灌数/executor 进程无法事件失效，短 TTL 兜底；
+# 手动"刷新本体清单"可带 fresh 参数绕过缓存强制直查。
+INSTANCE_COUNTS_TTL_SECONDS = 60
 
 
 def _enabled() -> bool:
@@ -48,6 +53,12 @@ def pending_cache_key(ontology_id: str, release_id: Optional[str]) -> str:
     return f"ob:ont:pending:v{_version(_PENDING_VERSION_KEY)}:{ontology_id}:{scope}"
 
 
+def instance_counts_cache_key(ontology_id: str, release_id: Optional[str]) -> str:
+    """本体实例计数（发布版 or 工作区实时口径分别缓存）。"""
+    scope = release_id or "workspace"
+    return f"ob:ont:instance-counts:v{_version(_INSTANCE_COUNTS_VERSION_KEY)}:{ontology_id}:{scope}"
+
+
 def cached_call(key: str, ttl_seconds: int, builder: Callable[[], Any]) -> Any:
     """开关关闭时完全绕过缓存，等价于现状直查路径。"""
     if not _enabled():
@@ -65,3 +76,7 @@ def invalidate_overview() -> None:
 
 def invalidate_pending() -> None:
     redis_cache.cache_bump(_PENDING_VERSION_KEY)
+
+
+def invalidate_instance_counts() -> None:
+    redis_cache.cache_bump(_INSTANCE_COUNTS_VERSION_KEY)
