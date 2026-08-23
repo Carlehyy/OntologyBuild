@@ -24,6 +24,7 @@ import {
   maxDegreeOf,
   nodeSize,
   ontologyColorMap,
+  separateOverlaps,
 } from './networkModel'
 
 const CANVAS_BG = '#f6f8fc'
@@ -76,19 +77,25 @@ export default function NetworkCanvas(
     const cachedRatio = nodes.length === 0 ? 0
       : nodes.filter(node => cache?.has(node.id)).length / nodes.length
 
+    const sizeById = new Map<string, number>()
+
     const elements: ElementDefinition[] = [
-      ...nodes.map(node => ({
+      ...nodes.map(node => {
+        const size = nodeSize(node, degrees.get(node.id) || 0, maxDegree)
+        sizeById.set(node.id, size)
+        return {
         group: 'nodes' as const,
         data: {
           id: node.id,
           label: node.label,
           kind: node.kind,
-          size: nodeSize(node, degrees.get(node.id) || 0, maxDegree),
+          size,
           color: colorByOntology.get(node.ontologyId) || FALLBACK_COLORS[0],
         },
         position: positions.get(node.id),
         classes: node.kind === 'object_type' ? 'object-type' : 'instance',
-      })),
+        }
+      }),
       ...edges.map(edge => ({
         group: 'edges' as const,
         data: {
@@ -281,22 +288,28 @@ export default function NetworkCanvas(
       ],
       layout: {
         name: 'cose',
-        // 聚类种子坐标 + 缓存：已有节点不随机重排，只做局部收敛
+        // 聚类种子坐标 + 缓存：已有节点不随机重排，只做局部收敛。
+        // 斥力/重叠参数必须保持 cytoscape 默认量级（nodeRepulsion≈4e5），
+        // 压低会让节点互相穿透挤成一团（MYW-28 验收意见的根因）。
         randomize: cachedRatio < 0.5,
         transform: (node: any) => positions.get(node.id()) || { x: 0, y: 0 },
-        nodeRepulsion: () => 9000,
-        idealEdgeLength: () => 120,
-        edgeElasticity: () => 0.06,
+        nodeRepulsion: () => 400000,
+        nodeOverlap: 14,
+        idealEdgeLength: (edge: any) => {
+          const a = sizeById.get(edge.source().id()) || 20
+          const b = sizeById.get(edge.target().id()) || 20
+          return a / 2 + b / 2 + 105
+        },
+        edgeElasticity: () => 0.05,
         nestingFactor: 1.2,
-        gravity: 0.35,
-        numIter: cachedRatio < 0.5 ? 420 : 140,
-        initialTemp: 220,
-        coolingFactor: 0.985,
+        gravity: 0.3,
+        numIter: cachedRatio < 0.5 ? 800 : 240,
+        initialTemp: 300,
+        coolingFactor: 0.99,
         minTemp: 1,
-        componentSpacing: 130,
-        nodeOverlap: 9000,
+        componentSpacing: 150,
         animate: true,
-        animationDuration: cachedRatio < 0.5 ? 620 : 260,
+        animationDuration: cachedRatio < 0.5 ? 680 : 280,
         fit: false,
         padding: 60,
       },
@@ -327,6 +340,19 @@ export default function NetworkCanvas(
       cy.nodes().forEach(node => { cache.set(node.id(), { x: node.position().x, y: node.position().y }) })
     }
     cy.one('layoutstop', () => {
+      // 确定性重叠消解：物理收敛后仍贴在一起的节点对被推开（不依赖物理参数手感）
+      const finalPositions = new Map<string, { x: number; y: number }>()
+      const diameters = new Map<string, number>()
+      cy.nodes().forEach(node => {
+        finalPositions.set(node.id(), { x: node.position().x, y: node.position().y })
+        diameters.set(node.id(), node.data('size') || 20)
+      })
+      if (separateOverlaps(finalPositions, diameters, { iterations: 90, minGap: 8 })) {
+        cy.batch(() => cy.nodes().forEach(node => {
+          const position = finalPositions.get(node.id())
+          if (position) node.position(position)
+        }))
+      }
       savePositions()
       cy.fit(undefined, 64)
     })
