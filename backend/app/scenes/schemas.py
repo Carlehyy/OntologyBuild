@@ -35,3 +35,14 @@ class RuntimeLogEntry(BaseModel):
 
 class RuntimeLogAppend(BaseModel):
     entries: list[RuntimeLogEntry]
+
+
+class SceneConversationCreate(BaseModel):
+    scene_id: Optional[str] = None
+    title: str = Field(default="", max_length=200)
+    model_config_id: Optional[str] = None
+
+
+class SceneChatRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=4000)
+    model_config_id: Optional[str] = None

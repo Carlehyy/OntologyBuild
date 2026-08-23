@@ -4,7 +4,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from app.scenes import query_service, service
+from app.scenes import assistant_service, query_service, service
 from app.scenes import router as scenes_router
 
 
@@ -90,6 +90,10 @@ def test_scene_endpoints_delegate_to_cohesive_domain_services():
         "get_scene_version",
         "list_scene_runtime_logs",
         "append_scene_runtime_logs",
+        "create_scene_conversation",
+        "list_scene_conversations",
+        "list_scene_conversation_messages",
+        "chat_scene_conversation",
     }
     expected_calls = {
         "list_scenes": "query_service.list_scenes",
@@ -104,6 +108,10 @@ def test_scene_endpoints_delegate_to_cohesive_domain_services():
         "get_scene_version": "query_service.get_version",
         "list_scene_runtime_logs": "query_service.list_runtime_logs",
         "append_scene_runtime_logs": "service.append_runtime_logs",
+        "create_scene_conversation": "assistant_service.create_conversation",
+        "list_scene_conversations": "assistant_service.list_conversations",
+        "list_scene_conversation_messages": "assistant_service.list_messages",
+        "chat_scene_conversation": "assistant_service.chat_stream",
     }
     for endpoint_name, expected_call in expected_calls.items():
         assert expected_call in _calls(endpoints[endpoint_name])

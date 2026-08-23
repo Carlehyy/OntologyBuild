@@ -53,6 +53,8 @@ def test_upgrade_creates_tables_and_backfills_role_menu_keys(
         assert "scenes" in tables
         assert "scene_versions" in tables
         assert "scene_runtime_logs" in tables
+        assert "scene_conversations" in tables
+        assert "scene_messages" in tables
 
         version_columns = {
             row[1]
@@ -93,6 +95,8 @@ def test_downgrade_removes_tables_and_menu_key(tmp_path, monkeypatch):
         assert "scenes" not in tables
         assert "scene_versions" not in tables
         assert "scene_runtime_logs" not in tables
+        assert "scene_conversations" not in tables
+        assert "scene_messages" not in tables
         rows = connection.execute(text(
             "SELECT role,menu_keys FROM role_menu_permissions ORDER BY role"
         )).mappings().all()

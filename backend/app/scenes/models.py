@@ -46,6 +46,7 @@ VERSION_SOURCE_CLONE = "clone"            # 克隆快照落地的首个版本
 LOG_LEVELS = ("info", "normal", "warning", "alarm")
 
 # 版本保留上限：与 world_model.SCRIPT_VERSION_KEEP 同一纪律
+CHAT_HISTORY_KEEP = 20  # 送入 LLM 的历史消息条数上限
 DEFINITION_VERSION_KEEP = 20
 
 
@@ -116,3 +117,47 @@ class SceneRuntimeLog(Base):
     payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=_now)
     recorded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+
+class SceneConversation(Base):
+    """场景建模助手的会话。
+
+    scene_id 允许为空：「从零新建」模式下对话先于场景存在，
+    首次成功应用定义时创建草稿场景并绑定；场景被删除后置空，
+    会话与历史保留。
+    """
+
+    __tablename__ = "scene_conversations"
+    __table_args__ = (
+        Index("ix_scene_conversations_scene", "scene_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    scene_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("scenes.id", ondelete="SET NULL"), nullable=True,
+    )
+    title: Mapped[str] = mapped_column(String(200), default="")
+    model_config_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class SceneMessage(Base):
+    """会话消息（user/assistant）。assistant 消息记录其应用的版本号。"""
+
+    __tablename__ = "scene_messages"
+    __table_args__ = (
+        Index("ix_scene_messages_conversation", "conversation_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    conversation_id: Mapped[str] = mapped_column(
+        String, ForeignKey("scene_conversations.id", ondelete="CASCADE"),
+    )
+    role: Mapped[str] = mapped_column(String(10))  # user | assistant
+    content: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(12), default="complete")  # complete | error
+    version_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=_now)

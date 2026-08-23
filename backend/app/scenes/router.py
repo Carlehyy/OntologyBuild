@@ -7,12 +7,14 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.deps import get_db, get_current_user
-from app.scenes import query_service, service
+from app.scenes import assistant_service, query_service, service
 from app.scenes.schemas import (
-    RuntimeLogAppend, SceneCreate, SceneDefinitionSave, SceneUpdate,
+    RuntimeLogAppend, SceneChatRequest, SceneConversationCreate,
+    SceneCreate, SceneDefinitionSave, SceneUpdate,
 )
 
 router = APIRouter()
@@ -23,6 +25,54 @@ def _ok(data):
 
 
 _require_scene = query_service.require_scene
+
+# —— 会话路由须在 /{scene_id} 动态段之前声明，避免被动态段吞掉 ——
+
+@router.post("/conversations", status_code=201)
+def create_scene_conversation(
+    body: SceneConversationCreate, db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    return _ok(assistant_service.conversation_out(
+        assistant_service.create_conversation(db, body, user)))
+
+
+@router.get("/conversations")
+def list_scene_conversations(
+    scene_id: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db), _=Depends(get_current_user),
+):
+    return _ok(assistant_service.list_conversations(
+        db, scene_id=scene_id, page=page, page_size=page_size))
+
+
+@router.get("/conversations/{conversation_id}/messages")
+def list_scene_conversation_messages(
+    conversation_id: str, db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    conversation = assistant_service.require_conversation(db, conversation_id)
+    return _ok(assistant_service.list_messages(db, conversation))
+
+
+@router.post("/conversations/{conversation_id}/chat")
+def chat_scene_conversation(
+    conversation_id: str, body: SceneChatRequest,
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    conversation = assistant_service.require_conversation(db, conversation_id)
+    return StreamingResponse(
+        assistant_service.chat_stream(db, conversation, body, user),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
 
 
 @router.get("")
