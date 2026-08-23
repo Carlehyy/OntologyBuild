@@ -187,8 +187,16 @@ def chat_stream(
             yield sse("done", {})
             return
 
-        raw = _call_llm(**call_kwargs, messages=build_messages(
-            db, conversation, body.content))
+        # llm_call_kwargs 会附带 model_config_id / max_*_tokens 等键，
+        # _call_llm 签名只收 provider/api_key/api_base/model/messages/json_mode，
+        # 必须显式取字段转发（**展开会 TypeError）。
+        raw = _call_llm(
+            provider=call_kwargs["provider"],
+            api_key=call_kwargs["api_key"],
+            api_base=call_kwargs.get("api_base"),
+            model=call_kwargs["model"],
+            messages=build_messages(db, conversation, body.content),
+        )
         parsed = _parse_response(raw) if isinstance(raw, str) else raw
         action = parsed.get("action") if isinstance(parsed, dict) else None
 

@@ -37,11 +37,14 @@ def _patch_llm(monkeypatch, payload=None, *, config=None, call_kwargs=None):
     monkeypatch.setattr(
         assistant_service, "select_llm_model_config",
         lambda db, model_id=None: config or object())
+    # 刻意还原真实形状：llm_call_kwargs 恒含 model_config_id，
+    # 且 options 配置时附带 max_*_tokens——回归必须覆盖这些多余键的过滤。
+    real_shape = {
+        "model_config_id": "cfg-real-1", "provider": "openai",
+        "api_key": "k", "api_base": None, "model": "test-model",
+        "max_output_tokens": 2048, "max_context_tokens": 8192}
     monkeypatch.setattr(
-        assistant_service, "llm_call_kwargs",
-        lambda cfg: call_kwargs or {
-            "provider": "openai", "api_key": "k",
-            "api_base": None, "model": "test-model"})
+        assistant_service, "llm_call_kwargs", lambda cfg: call_kwargs or real_shape)
     if payload is not None:
         monkeypatch.setattr(
             assistant_service, "_call_llm",
