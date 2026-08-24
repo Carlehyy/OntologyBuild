@@ -58,6 +58,9 @@ class OntologyVersion(Base):
     # 画布布局是展示元数据，不参与 snapshot_hash / revision / 试跑冻结契约。
     # 这样发布、试跑和历史快照都能调整节点位置，而不会伪造模型变更。
     canvas_layout: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    # 业务语义层：7类画布+需求文档+指纹，不参与 snapshot_hash。
+    # 与画布布局同属语义/展示元数据，可在不伪造模型变更的前提下重建。
+    snapshot_semantic: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # 变更统计
     change_summary: Mapped[dict] = mapped_column(JSON, default=dict)  # {added: N, modified: N, deleted: N}

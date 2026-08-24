@@ -33,7 +33,7 @@ def test_revision_graph_head_is_single_head(tmp_path, monkeypatch):
 
     # 单头门禁：新迁移必须线性追加（当前 head 见 alembic heads 输出）。
     assert len(heads) == 1
-    assert heads == ["0073_drop_agent_config"]
+    assert heads == ["0074_version_semantic_layer"]
 
 
 def _create_0067_shape_skills_table(db_path: Path) -> None:
