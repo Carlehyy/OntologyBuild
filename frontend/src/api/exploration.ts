@@ -107,6 +107,9 @@ export interface BxSession {
   title: string
   canvasVersion: number
   status: string
+  /** 版本业务语义层挂载点；未绑定会话为 null/缺省。 */
+  ontologyId?: string | null
+  ontologyVersionId?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -320,6 +323,9 @@ export interface ApplyDraftResult {
   ontologyName: string
   created: { objectTypes: number; linkTypes: number; actions: number; functions: number; sentinels: number }
   skipped: { key: string; reason: string }[]
+  /** 草稿落地写入的版本（合并路径为目标草稿版本，新建路径为 v0 基线）；旧后端可能缺省。 */
+  versionId?: string
+  versionNumber?: string
 }
 
 export interface BxAttachment {
@@ -362,8 +368,12 @@ export interface BxWorkspacePreview {
 
 export const explorationApi = {
   sessions: () => apiClientV2.get<BxSession[]>('/exploration/sessions'),
-  createSession: (title?: string) =>
-    apiClientV2.post<BxSession>('/exploration/sessions', { title }),
+  createSession: (title?: string, binding?: { ontologyId: string; ontologyVersionId?: string | null }) =>
+    apiClientV2.post<BxSession>('/exploration/sessions', {
+      title,
+      ontologyId: binding?.ontologyId || undefined,
+      ontologyVersionId: binding?.ontologyVersionId || undefined,
+    }),
   session: (sid: string) => apiClientV2.get<BxSessionDetail>(`/exploration/sessions/${sid}`),
   deleteSession: (sid: string) => apiClientV2.delete(`/exploration/sessions/${sid}`),
   canvas: (sid: string) =>

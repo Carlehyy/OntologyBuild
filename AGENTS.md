@@ -25,6 +25,13 @@ OntologyBuild 是“本体即服务”平台。前端导航是代码发现入口
 | 系统设置 | `backend/app/settings/` |
 | 鉴权与收件箱 | `backend/app/auth/`、`backend/app/inbox/` |
 
+业务探索与本体的依赖方向固定为 `exploration` → `ontologies`：版本语义一致性
+校验器位于 `backend/app/exploration/semantic_gate.py`，须经
+`ontologies/versions/router.py` 的关键字注入接线进入试跑/发布链路，
+`ontologies` 域不得反向 import `exploration`。探索"生成本体模型"落地只走
+版本正门：新建本体冻结 v0（携 `snapshot_semantic` 语义层），合并进已有本体
+写入 draft 版本快照，禁止直写 live `fo_*` 表。
+
 `backend/app/routers/`、`models/`、`schemas/`、`services/` 以迁移期兼容层为主：
 
 - 不得假设整个目录都可删除；

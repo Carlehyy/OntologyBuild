@@ -18,9 +18,11 @@ type DraftRisk =
 
 /** 需求文档工作区：历史版本 + markdown 预览 + 生成本体模型。 */
 export default function DocumentsDrawer({
-  sessionId, onClose, onDraftCreated, onGenerate, documentGenerating, canGenerateDocument,
+  sessionId, binding, onClose, onDraftCreated, onGenerate, documentGenerating, canGenerateDocument,
 }: {
   sessionId: string
+  /** 绑定态（会话锚定本体版本）：草稿固定写入绑定本体，不再提供目标选择 */
+  binding?: { ontologyId: string; versionId?: string | null; name?: string } | null
   onClose: () => void
   onDraftCreated: (draft: BxDraft) => void
   onGenerate: () => Promise<void>
@@ -33,6 +35,7 @@ export default function DocumentsDrawer({
   })
   const { data: ontologies } = useQuery({
     queryKey: ['ontologies'], queryFn: () => ontologyApi.list() as any,
+    enabled: !binding,
   })
   const ontologyList: { id: string; name: string }[] = (ontologies as any)?.items || ontologies || []
 
@@ -96,7 +99,7 @@ export default function DocumentsDrawer({
     setGenerating(true)
     try {
       const draft = await explorationApi.generateDraft(doc.id, {
-        targetOntologyId: target || undefined,
+        targetOntologyId: binding?.ontologyId || target || undefined,
         force,
       })
       setGateBlock(null)
@@ -333,16 +336,33 @@ export default function DocumentsDrawer({
                 </div>
               )}
               <div className="flex items-center gap-2">
-                <select
-                  value={target}
-                  onChange={e => setTarget(e.target.value)}
-                  className="flex-1 px-2.5 py-1.5 text-xs rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] outline-none"
-                >
-                  <option value="">生成到：新建本体</option>
-                  {ontologyList.map(o => (
-                    <option key={o.id} value={o.id}>合并到：{o.name}（保守合并，同名跳过）</option>
-                  ))}
-                </select>
+                {binding ? (
+                  <div
+                    data-testid="bound-target-ontology"
+                    className="flex flex-1 min-w-0 items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] text-[var(--color-text-secondary)]"
+                  >
+                    <span className="truncate">写入本体：{binding.name || binding.ontologyId}</span>
+                    {binding.versionId && (
+                      <span
+                        className="shrink-0 rounded border border-teal-200 bg-teal-50 px-1.5 py-px text-[10px] font-medium text-teal-700"
+                        title="草稿落地写入绑定的草稿版本，生效路径：草稿 → 试跑验证 → 发布"
+                      >
+                        草稿版本 · 试跑后发布生效
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <select
+                    value={target}
+                    onChange={e => setTarget(e.target.value)}
+                    className="flex-1 px-2.5 py-1.5 text-xs rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] outline-none"
+                  >
+                    <option value="">生成到：新建本体</option>
+                    {ontologyList.map(o => (
+                      <option key={o.id} value={o.id}>合并到：{o.name}（保守合并，同名跳过）</option>
+                    ))}
+                  </select>
+                )}
                 <button
                   onClick={() => void generateDraft(false)}
                   disabled={generating}

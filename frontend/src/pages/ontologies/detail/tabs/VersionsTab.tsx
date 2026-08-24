@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
-  AlertTriangle, ArrowRight, Bookmark, Check, ChevronDown, CircleAlert, Database,
+  AlertTriangle, ArrowRight, Bookmark, Check, ChevronDown, CircleAlert, Compass, Database,
   GitBranch, GitCommitHorizontal, History, LockKeyhole, MoreHorizontal, Plus, Rocket,
   ShieldCheck, Trash2, Wrench,
 } from 'lucide-react'
@@ -15,6 +15,7 @@ import TrialActionPlanReview, {
   redactTrialText,
   sanitizeTrialValue,
 } from '@/components/ontology/TrialActionPlanReview'
+import SemanticReadinessSection from './SemanticReadinessSection'
 import {
   ontologyVersionApi,
   type OntologyImpactReport,
@@ -38,7 +39,7 @@ function errorText(error: any) {
   return error?.message || '操作失败'
 }
 
-function errorIssues(error: any): Array<{ message: string; kind?: string; field?: string }> {
+function errorIssues(error: any): Array<{ message: string; kind?: string; field?: string; code?: string }> {
   const detail = error?.response?.data?.detail ?? error?.detail
   return Array.isArray(detail?.errors) ? detail.errors.filter((item: any) => item?.message) : []
 }
@@ -184,7 +185,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
   const [trialDetail, setTrialDetail] = useState<Trial | null>(null)
   const [promotion, setPromotion] = useState<{ node: VersionNode; impact: OntologyImpactReport } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<VersionNode | null>(null)
-  const [gateIssues, setGateIssues] = useState<Array<{ message: string; kind?: string; field?: string }>>([])
+  const [gateIssues, setGateIssues] = useState<Array<{ message: string; kind?: string; field?: string; code?: string }>>([])
   const [gateVersionId, setGateVersionId] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null)
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
@@ -599,12 +600,27 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                 {gateIssues.map((item, index) => <p key={`${item.kind || ''}-${item.field || ''}-${index}`}>• {item.message}</p>)}
               </div>
             </div>
-            <Button variant="outline" size="sm" onClick={() => {
-              const node = nodes.find(item => item.id === gateVersionId)
-              if (node) openMapping(node)
-            }}>
-              <Database size={14} /> 完善映射
-            </Button>
+            <div className="flex shrink-0 items-center gap-2">
+              {gateIssues.some(item => item.code?.startsWith('semantic_')) && gateVersionId && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="semantic-gate-explore-button"
+                  onClick={() => {
+                    onClose?.()
+                    navigate(`/explore?ontologyId=${ontologyId}&versionId=${gateVersionId}`)
+                  }}
+                >
+                  <Compass size={14} /> 去本体建模补齐
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={() => {
+                const node = nodes.find(item => item.id === gateVersionId)
+                if (node) openMapping(node)
+              }}>
+                <Database size={14} /> 完善映射
+              </Button>
+            </div>
           </div>
         </div>
       )}
@@ -908,6 +924,10 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                       ))}
                     </div>
                   </section>
+                )}
+
+                {promotion.impact.semanticOverview && (
+                  <SemanticReadinessSection overview={promotion.impact.semanticOverview} />
                 )}
 
                 <section aria-labelledby="release-impact-heading">
