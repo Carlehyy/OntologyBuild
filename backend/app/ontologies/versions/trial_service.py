@@ -373,6 +373,7 @@ def create_trial_run(
     _trial_materialization_candidate,
     _trial_payload,
     _validate_sentinels,
+    semantic_consistency_fn=None,
 ):
     project = db.query(OntologyProject).filter(
         OntologyProject.id == ontology_id,
@@ -417,6 +418,10 @@ def create_trial_run(
     except Exception as exc:
         structural_errors.append(_gate_error(
             "sentinel_validation_failed", "sentinel", str(exc)))
+    # 业务语义层一致性：结构元素必须在业务画布中有对应语义，反之亦然。
+    if semantic_consistency_fn is not None:
+        structural_errors.extend(semantic_consistency_fn(
+            draft.snapshot_semantic, snap))
     _raise_publish_errors(structural_errors, "试跑前发布就绪校验未通过")
 
     report = impact_report(current.snapshot_formal, snap)

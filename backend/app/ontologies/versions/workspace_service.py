@@ -56,6 +56,11 @@ def _trial_payload(run: OntologyTrialRun) -> dict:
 
 
 def _version_payload(version: OntologyVersion, latest_trial: OntologyTrialRun | None = None) -> dict:
+    semantic = (
+        version.snapshot_semantic
+        if isinstance(version.snapshot_semantic, dict) else {}
+    )
+    semantic_revision = semantic.get("semanticRevision")
     return {
         "id": version.id,
         "version_number": version.version_number,
@@ -69,6 +74,11 @@ def _version_payload(version: OntologyVersion, latest_trial: OntologyTrialRun | 
             "released" if (version.node_kind or "release") == "release" else "editing"),
         "revision": version.revision or 0,
         "snapshot_hash": version.snapshot_hash,
+        # 语义层只透出摘要标记，不透出整份 JSON（画布+文档体积大）。
+        "hasSemanticLayer": bool(
+            semantic.get("canvas") or semantic.get("documentMd")),
+        "semanticRevision": (
+            semantic_revision if isinstance(semantic_revision, int) else 0),
         "change_summary": version.change_summary or {},
         "created_by": version.created_by,
         "created_at": version.created_at.isoformat() if version.created_at else None,
@@ -574,6 +584,7 @@ def create_draft_version(
         node_kind="draft", lifecycle_status="editing", revision=0,
         snapshot_formal=snap, snapshot_hash=snapshot_hash(snap),
         canvas_layout=_json_safe(source.canvas_layout or {}),
+        snapshot_semantic=_json_safe(source.snapshot_semantic),
         snapshot_entities=_json_safe(source.snapshot_entities or []),
         snapshot_relations=_json_safe(source.snapshot_relations or []),
         snapshot_logic=_json_safe(source.snapshot_logic or []),
@@ -897,13 +908,14 @@ def get_draft_impact(
     version_id: str,
     *,
     validate_release_mapping_contract,
+    semantic_overview_fn=None,
 ):
     draft = _draft_or_404(db, ontology_id, version_id)
     project = db.query(OntologyProject).filter(
         OntologyProject.id == ontology_id).first()
     current = _current_release(db, project)
     report = impact_report(current.snapshot_formal, draft.snapshot_formal)
-    return {"data": {
+    data = {
         **report,
         "baseReleaseId": draft.base_release_id,
         "currentReleaseId": current.id,
@@ -915,4 +927,32 @@ def get_draft_impact(
             report=report,
             release_mapping_validator=validate_release_mapping_contract,
         ),
+    }
+    if semantic_overview_fn is not None:
+        data["semanticOverview"] = semantic_overview_fn(
+            draft.snapshot_semantic, complete_snapshot(draft.snapshot_formal))
+    return {"data": data}
+
+
+def get_version_semantic(
+    db: Session,
+    ontology_id: str,
+    version_id: str,
+    *,
+    semantic_overview_fn,
+):
+    """读取任一版本的业务语义层快照与一致性总览（发布/草稿均可，只读）。"""
+    version = db.query(OntologyVersion).filter(
+        OntologyVersion.id == version_id,
+        OntologyVersion.ontology_id == ontology_id,
+    ).first()
+    if version is None:
+        raise HTTPException(404, "Version not found")
+    semantic = (
+        version.snapshot_semantic
+        if isinstance(version.snapshot_semantic, dict) else None
+    )
+    return {"data": {
+        "semantic": semantic,
+        "overview": semantic_overview_fn(semantic, version.snapshot_formal),
     }}

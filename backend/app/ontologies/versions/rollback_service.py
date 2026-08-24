@@ -348,6 +348,7 @@ def _rollback_version_locked(
             snapshot_formal=activation_snapshot,
             snapshot_hash=snapshot_hash(activation_snapshot),
             canvas_layout=_json_safe(v.canvas_layout or {}),
+            snapshot_semantic=_json_safe(v.snapshot_semantic),
             published_at=datetime.now(timezone.utc),
             change_summary={
                 "formal": _diff_formal(

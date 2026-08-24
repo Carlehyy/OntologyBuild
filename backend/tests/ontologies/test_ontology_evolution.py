@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import copy
+import hashlib
 import io
 import threading
 from contextlib import contextmanager
@@ -15,6 +16,8 @@ from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 
 from app.data_channel.datasets.service import DatasetService
+from app.exploration.document import canvas_fingerprint
+from app.exploration.reverse_projection import project_snapshot_to_canvas
 from app.models.ontology import OntologyProject
 from app.models.entity import Entity
 from app.models.relation import Relation
@@ -72,6 +75,29 @@ def _empty_csv(columns: list[str]) -> bytes:
     buffer = io.StringIO()
     csv.DictWriter(buffer, fieldnames=columns).writeheader()
     return buffer.getvalue().encode()
+
+
+_SEMANTIC_TEST_DOCUMENT_MD = "# 测试需求文档\n\n语义层一致性回归用确定性文档。\n"
+
+
+def _attach_semantic_layer(db, version_id: str) -> None:
+    """为版本写回与当前结构快照自洽的最小业务语义层（试跑语义门禁用）。
+
+    画布由 reverse_projection 从结构反投影生成，正向重放后与结构保持
+    名集合恒等；文档与双指纹现算现填，保证一致性校验返回空 issue 列表。
+    """
+    row = db.query(OntologyVersion).filter_by(id=version_id).one()
+    canvas = project_snapshot_to_canvas(row.snapshot_formal)
+    row.snapshot_semantic = {
+        "canvas": canvas,
+        "canvasFingerprint": canvas_fingerprint(canvas),
+        "documentMd": _SEMANTIC_TEST_DOCUMENT_MD,
+        "documentTitle": "测试需求文档",
+        "documentFingerprint": hashlib.sha256(
+            _SEMANTIC_TEST_DOCUMENT_MD.encode("utf-8")).hexdigest(),
+        "semanticRevision": 1,
+    }
+    db.commit()
 
 
 def _root(client, headers, ontology_id: str) -> dict:
@@ -447,7 +473,7 @@ def _builtin_sentinel(**overrides) -> dict:
     return definition
 
 
-def _configure_draft(client, headers, ontology_id: str, draft: dict) -> dict:
+def _configure_draft(client, headers, ontology_id: str, draft: dict, db) -> dict:
     saved = client.put(
         f"/api/v2/ontologies/{ontology_id}/versions/{draft['id']}/workspace",
         headers=headers, json=_workspace(draft),
@@ -468,6 +494,7 @@ def _configure_draft(client, headers, ontology_id: str, draft: dict) -> dict:
         },
     )
     assert mapping.status_code == 200, mapping.text
+    _attach_semantic_layer(db, draft["id"])
     tree = client.get(
         f"/api/v2/ontologies/{ontology_id}/version-tree", headers=headers).json()["data"]
     return next(item for item in tree["versions"] if item["id"] == draft["id"])
@@ -687,11 +714,12 @@ def _dataset(db, monkeypatch) -> tuple[DatasetService, MemoryStorage]:
 
 
 def _promote_configured_lake_release(
-    client, headers, ontology_id: str, source_release_id: str,
+    client, headers, ontology_id: str, source_release_id: str, db,
 ) -> dict:
     draft = _configure_draft(
         client, headers, ontology_id,
         _draft(client, headers, ontology_id, source_release_id),
+        db,
     )
     run_response = client.post(
         f"/api/v2/ontologies/{ontology_id}/versions/{draft['id']}/trial-runs",
@@ -794,6 +822,7 @@ def test_production_manual_mapping_contract_fails_trial_readiness_and_promote(
     draft = _configure_draft(
         client, auth_headers, oid,
         _draft(client, auth_headers, oid, root["id"]),
+        db,
     )
     monkeypatch.setattr(version_router.settings, "environment", "production")
 
@@ -2009,7 +2038,7 @@ def test_trial_derived_rejects_result_outside_computed_property_type():
 
 
 def test_structure_only_draft_cannot_enter_trial(
-        client, auth_headers, ontology):
+        client, auth_headers, ontology, db):
     oid = ontology["id"]
     root = _root(client, auth_headers, oid)
     draft = _draft(client, auth_headers, oid, root["id"])
@@ -2018,6 +2047,7 @@ def test_structure_only_draft_cannot_enter_trial(
         headers=auth_headers, json=_workspace(draft),
     )
     assert saved.status_code == 200, saved.text
+    _attach_semantic_layer(db, draft["id"])
 
     trial = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -2054,6 +2084,7 @@ def test_trial_start_is_single_flight_while_first_materialization_is_running(
         client, auth_headers, oid,
         _draft(client, auth_headers, oid, _root(
             client, auth_headers, oid)["id"]),
+        db,
     )
     actor = SimpleNamespace(id=admin_user.id, username=admin_user.username)
     db.rollback()
@@ -2120,6 +2151,7 @@ def test_expired_trial_is_recovered_for_retry_and_branch_deletion(
     draft = _configure_draft(
         client, auth_headers, oid,
         _draft(client, auth_headers, oid, root["id"]),
+        db,
     )
     now = datetime.now(timezone.utc)
     expired = OntologyTrialRun(
@@ -2204,6 +2236,7 @@ def test_late_trial_completion_cannot_revive_a_drifted_draft(
         client, auth_headers, oid,
         _draft(client, auth_headers, oid, _root(
             client, auth_headers, oid)["id"]),
+        db,
     )
     actor = SimpleNamespace(id=admin_user.id, username=admin_user.username)
     db.rollback()
@@ -2344,6 +2377,7 @@ def test_one_mapped_object_can_enter_trial_with_other_types_unmapped(
         },
     )
     assert mapped.status_code == 200, mapped.text
+    _attach_semantic_layer(db, draft["id"])
 
     trial = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -2366,7 +2400,7 @@ def test_version_tree_uses_complete_snapshots_and_dependency_numbering(
     root = _root(client, auth_headers, oid)
     first = _draft(client, auth_headers, oid, root["id"])
     assert first["version_number"] == "v0.1"
-    configured = _configure_draft(client, auth_headers, oid, first)
+    configured = _configure_draft(client, auth_headers, oid, first, db)
 
     nested = _draft(client, auth_headers, oid, configured["id"])
     sibling = _draft(client, auth_headers, oid, root["id"])
@@ -2435,7 +2469,7 @@ def test_only_unpublished_leaf_branches_can_be_deleted(
     # A trial-ready branch is still unpublished and may be deleted when it is
     # a leaf; isolated objects/runs are removed by the FK cascade.
     _dataset(db, monkeypatch)
-    configured = _configure_draft(client, auth_headers, oid, parent)
+    configured = _configure_draft(client, auth_headers, oid, parent, db)
     run = client.post(
         f"/api/v2/ontologies/{oid}/versions/{parent['id']}/trial-runs",
         headers=auth_headers, json={},
@@ -2486,6 +2520,7 @@ def test_trial_uses_real_pinned_data_but_isolates_runtime_and_side_effects(
     draft = _configure_draft(
         client, auth_headers, oid,
         _draft(client, auth_headers, oid, _root(client, auth_headers, oid)["id"]),
+        db,
     )
 
     trial = client.post(
@@ -2549,6 +2584,7 @@ def test_trial_freezes_computed_projection_and_promotion_activates_exact_values(
         },
     )
     assert mapping.status_code == 200, mapping.text
+    _attach_semantic_layer(db, draft["id"])
 
     trial = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -2649,6 +2685,7 @@ def test_trial_keeps_same_dataset_mappings_separate_by_endpoint_type(
             "sentinels": [],
         })
     assert mapped.status_code == 200, mapped.text
+    _attach_semantic_layer(db, draft["id"])
 
     trial = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -2887,6 +2924,7 @@ def test_trial_uses_each_object_mapping_primary_key_for_order_supplier_fat_table
         },
     )
     assert mapped.status_code == 200, mapped.text
+    _attach_semantic_layer(db, draft["id"])
 
     trial_response = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -2962,6 +3000,7 @@ def test_passed_trial_is_frozen_and_can_only_continue_in_a_new_branch(
     draft = _configure_draft(
         client, auth_headers, oid,
         _draft(client, auth_headers, oid, _root(client, auth_headers, oid)["id"]),
+        db,
     )
     run = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -3124,6 +3163,7 @@ def test_promotion_switches_exact_trial_projection_and_keeps_fact_history(
     draft = _configure_draft(
         client, auth_headers, oid,
         _draft(client, auth_headers, oid, root["id"]),
+        db,
     )
     run = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -3317,7 +3357,7 @@ def test_runtime_action_state_conflict_is_previewed_and_promotion_writes_nothing
     _dataset(db, monkeypatch)
     root = _root(client, auth_headers, oid)
     current = _promote_configured_lake_release(
-        client, auth_headers, oid, root["id"])
+        client, auth_headers, oid, root["id"], db)
     draft = _draft(client, auth_headers, oid, current["id"])
     run_response = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -3425,7 +3465,7 @@ def test_runtime_action_committed_after_impact_preview_is_rechecked_on_promote(
     _dataset(db, monkeypatch)
     root = _root(client, auth_headers, oid)
     current = _promote_configured_lake_release(
-        client, auth_headers, oid, root["id"])
+        client, auth_headers, oid, root["id"], db)
     draft = _draft(client, auth_headers, oid, current["id"])
     run = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -3492,7 +3532,7 @@ def test_runtime_link_conflicts_cover_create_delete_and_same_id_drift(
     _dataset(db, monkeypatch)
     root = _root(client, auth_headers, oid)
     current = _promote_configured_lake_release(
-        client, auth_headers, oid, root["id"])
+        client, auth_headers, oid, root["id"], db)
     draft = _draft(client, auth_headers, oid, current["id"])
     run = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -3690,7 +3730,7 @@ def test_normal_promotion_adopts_stable_link_without_relation_lineage(
     _dataset(db, monkeypatch)
     root = _root(client, auth_headers, oid)
     release_v1 = _promote_configured_lake_release(
-        client, auth_headers, oid, root["id"])
+        client, auth_headers, oid, root["id"], db)
     stable_link_type_id = "lt-legacy-stable"
     release_row = db.query(OntologyVersion).filter_by(
         id=release_v1["id"]).one()
@@ -3706,6 +3746,7 @@ def test_normal_promotion_adopts_stable_link_without_relation_lineage(
     }]
     release_row.snapshot_formal = release_snapshot
     release_row.snapshot_hash = snapshot_hash(release_snapshot)
+    _attach_semantic_layer(db, release_v1["id"])
     db.add(LinkType(
         id=stable_link_type_id,
         ontology_id=oid,
@@ -3878,7 +3919,7 @@ def test_runtime_object_tombstone_blocks_candidate_revival(
     _dataset(db, monkeypatch)
     root = _root(client, auth_headers, oid)
     current = _promote_configured_lake_release(
-        client, auth_headers, oid, root["id"])
+        client, auth_headers, oid, root["id"], db)
     draft = _draft(client, auth_headers, oid, current["id"])
     run = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -3933,7 +3974,7 @@ def test_lake_mapping_tombstone_allows_candidate_object_revival(
     _dataset(db, monkeypatch)
     root = _root(client, auth_headers, oid)
     current = _promote_configured_lake_release(
-        client, auth_headers, oid, root["id"])
+        client, auth_headers, oid, root["id"], db)
     draft = _draft(client, auth_headers, oid, current["id"])
     run = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -3984,7 +4025,7 @@ def test_property_removal_fact_guards_revival_without_blocking_new_or_lake_field
     _dataset(db, monkeypatch)
     root = _root(client, auth_headers, oid)
     current = _promote_configured_lake_release(
-        client, auth_headers, oid, root["id"])
+        client, auth_headers, oid, root["id"], db)
     draft = _draft(client, auth_headers, oid, current["id"])
     run = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -4138,7 +4179,7 @@ def test_promotion_does_not_backfill_presence_for_legacy_existing_objects(
     _dataset(db, monkeypatch)
     root = _root(client, auth_headers, oid)
     release_v1 = _promote_configured_lake_release(
-        client, auth_headers, oid, root["id"])
+        client, auth_headers, oid, root["id"], db)
     # Simulate an installation upgraded from before object-presence facts.
     db.query(PropertyFact).filter_by(
         ontology_id=oid, kind="object",
@@ -4173,7 +4214,7 @@ def test_zero_property_runtime_object_cannot_be_silently_deleted(
     _dataset(db, monkeypatch)
     root = _root(client, auth_headers, oid)
     current = _promote_configured_lake_release(
-        client, auth_headers, oid, root["id"])
+        client, auth_headers, oid, root["id"], db)
     draft = _draft(client, auth_headers, oid, current["id"])
     client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -4361,7 +4402,7 @@ def test_runtime_property_conflict_values_are_redacted_by_field_name(
     _dataset(db, monkeypatch)
     root = _root(client, auth_headers, oid)
     current = _promote_configured_lake_release(
-        client, auth_headers, oid, root["id"])
+        client, auth_headers, oid, root["id"], db)
     draft = _draft(client, auth_headers, oid, current["id"])
     client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -4540,7 +4581,7 @@ def test_pipeline_fact_difference_does_not_block_promotion(
     _dataset(db, monkeypatch)
     root = _root(client, auth_headers, oid)
     current = _promote_configured_lake_release(
-        client, auth_headers, oid, root["id"])
+        client, auth_headers, oid, root["id"], db)
     draft = _draft(client, auth_headers, oid, current["id"])
     run = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -4609,7 +4650,7 @@ def test_inherited_lake_facts_allow_change_and_delete_after_noop_release(
     oid = ontology["id"]
     root = _root(client, auth_headers, oid)
     release_v1 = _promote_configured_lake_release(
-        client, auth_headers, oid, root["id"])
+        client, auth_headers, oid, root["id"], db)
 
     noop_draft = _draft(client, auth_headers, oid, release_v1["id"])
     noop_run = client.post(
@@ -4716,7 +4757,7 @@ def test_rollback_activation_inherits_post_baseline_action_update_and_delete(
     _dataset(db, monkeypatch)
     root = _root(client, auth_headers, oid)
     release_v1 = _promote_configured_lake_release(
-        client, auth_headers, oid, root["id"])
+        client, auth_headers, oid, root["id"], db)
     noop_draft = _draft(client, auth_headers, oid, release_v1["id"])
     noop_run = client.post(
         f"/api/v2/ontologies/{oid}/versions/{noop_draft['id']}/trial-runs",
@@ -4846,7 +4887,7 @@ def test_promoted_baseline_prevents_old_action_provenance_crossing_rollback(
     service, _ = _dataset(db, monkeypatch)
     root = _root(client, auth_headers, oid)
     release_v1 = _promote_configured_lake_release(
-        client, auth_headers, oid, root["id"])
+        client, auth_headers, oid, root["id"], db)
     objects = db.query(ObjectInstance).filter_by(
         ontology_id=oid, ontology_release_id=release_v1["id"],
     ).all()
@@ -4979,6 +5020,7 @@ def test_production_promotion_observes_restored_mapping_before_runtime_gate(
     draft = _configure_draft(
         client, auth_headers, oid,
         _draft(client, auth_headers, oid, root["id"]),
+        db,
     )
     draft_row = db.query(OntologyVersion).filter_by(id=draft["id"]).one()
     candidate = copy.deepcopy(draft_row.snapshot_formal)
@@ -5288,6 +5330,7 @@ def test_release_readiness_groups_legacy_missing_property_mappings(
     draft = _configure_draft(
         client, auth_headers, oid,
         _draft(client, auth_headers, oid, root["id"]),
+        db,
     )
     run_payload = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -5338,6 +5381,7 @@ def test_new_lake_version_after_trial_requires_rerun(
     draft = _configure_draft(
         client, auth_headers, oid,
         _draft(client, auth_headers, oid, _root(client, auth_headers, oid)["id"]),
+        db,
     )
     run = client.post(
         f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
@@ -5368,7 +5412,8 @@ def test_impact_report_marks_breaking_property_changes(
     oid = ontology["id"]
     root = _root(client, auth_headers, oid)
     first = _configure_draft(
-        client, auth_headers, oid, _draft(client, auth_headers, oid, root["id"]))
+        client, auth_headers, oid, _draft(client, auth_headers, oid, root["id"]),
+        db)
     # 直接把构造好的候选作为当前发布基线，专测语义影响分析，无需引入数据湖。
     root_row = db.query(OntologyVersion).filter_by(id=root["id"]).one()
     candidate = db.query(OntologyVersion).filter_by(id=first["id"]).one()
@@ -5391,3 +5436,285 @@ def test_impact_report_marks_breaking_property_changes(
     assert impact["breakingCount"] == 1
     assert impact["breaking"][0]["code"] == "property_type_changed"
     assert len(impact["impactHash"]) == 64
+
+
+# ---------------------------------------------------------------- 业务语义层接线
+
+
+def test_semantic_layer_summary_and_branch_inheritance(
+        client, auth_headers, ontology, db):
+    """版本摘要透出 hasSemanticLayer/semanticRevision；分支继承整份语义层。"""
+    oid = ontology["id"]
+    root = _root(client, auth_headers, oid)
+    tree = client.get(
+        f"/api/v2/ontologies/{oid}/version-tree", headers=auth_headers,
+    ).json()["data"]
+    root_payload = next(
+        item for item in tree["versions"] if item["id"] == root["id"])
+    assert root_payload["hasSemanticLayer"] is False
+    assert root_payload["semanticRevision"] == 0
+
+    draft = _draft(client, auth_headers, oid, root["id"])
+    saved = client.put(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace",
+        headers=auth_headers, json=_workspace(draft),
+    )
+    assert saved.status_code == 200, saved.text
+    _attach_semantic_layer(db, draft["id"])
+
+    tree = client.get(
+        f"/api/v2/ontologies/{oid}/version-tree", headers=auth_headers,
+    ).json()["data"]
+    draft_payload = next(
+        item for item in tree["versions"] if item["id"] == draft["id"])
+    assert draft_payload["hasSemanticLayer"] is True
+    assert draft_payload["semanticRevision"] == 1
+    # 摘要只给标记与修订号，不透出整份画布/文档 JSON
+    assert "canvas" not in draft_payload
+    assert "documentMd" not in draft_payload
+
+    child = _draft(client, auth_headers, oid, draft["id"])
+    assert child["hasSemanticLayer"] is True
+    assert child["semanticRevision"] == 1
+    db.expire_all()
+    parent_row = db.query(OntologyVersion).filter_by(id=draft["id"]).one()
+    child_row = db.query(OntologyVersion).filter_by(id=child["id"]).one()
+    assert child_row.snapshot_semantic == parent_row.snapshot_semantic
+
+
+def test_trial_gate_requires_semantic_layer_for_non_empty_structure(
+        client, auth_headers, ontology, db, monkeypatch):
+    """结构非空但无语义层的草稿被试跑门禁拦下；补上自洽语义层后放行。"""
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    draft = _draft(client, auth_headers, oid, root["id"])
+    saved = client.put(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace",
+        headers=auth_headers, json=_workspace(draft),
+    )
+    assert saved.status_code == 200, saved.text
+    mapped = client.put(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace/mappings",
+        headers=auth_headers, json={
+            "baseRevision": saved.json()["data"]["revision"],
+            "mappings": [{
+                "id": "mapping-order", "curatedDatasetId": "dataset-orders",
+                "entityClass": "Order", "targetObjectTypeId": "ot-order",
+                "fieldMapping": {
+                    "id": "id", "name": "name", "__primary_key__": "id",
+                },
+                "status": "draft", "confidence": 1,
+            }],
+            "linkMappings": [], "sentinels": [],
+        },
+    )
+    assert mapped.status_code == 200, mapped.text
+
+    blocked = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    )
+    assert blocked.status_code == 422, blocked.text
+    detail = blocked.json()["detail"]
+    assert detail["code"] == "publish_validation_failed"
+    assert {item["code"] for item in detail["errors"]} == {
+        "semantic_business_missing",
+    }
+    error = detail["errors"][0]
+    assert error["kind"] == "objectType"
+    assert error["id"] == "Order"
+    assert "在业务画布中没有对应" in error["message"]
+    assert db.query(OntologyTrialRun).filter_by(
+        version_id=draft["id"]).count() == 0
+
+    _attach_semantic_layer(db, draft["id"])
+    trial = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/trial-runs",
+        headers=auth_headers, json={},
+    )
+    assert trial.status_code == 201, trial.text
+    assert trial.json()["data"]["status"] == "passed"
+
+
+def test_promotion_carries_semantic_layer_to_release(
+        client, auth_headers, ontology, db, monkeypatch):
+    oid = ontology["id"]
+    _dataset(db, monkeypatch)
+    root = _root(client, auth_headers, oid)
+    release = _promote_configured_lake_release(
+        client, auth_headers, oid, root["id"], db)
+    assert release["hasSemanticLayer"] is True
+    assert release["semanticRevision"] == 1
+
+    db.expire_all()
+    release_row = db.query(OntologyVersion).filter_by(id=release["id"]).one()
+    semantic = release_row.snapshot_semantic
+    assert semantic["documentTitle"] == "测试需求文档"
+    assert semantic["documentFingerprint"] == hashlib.sha256(
+        _SEMANTIC_TEST_DOCUMENT_MD.encode("utf-8")).hexdigest()
+    assert semantic["canvasFingerprint"] == canvas_fingerprint(
+        semantic["canvas"])
+    assert [item["name"] for item in semantic["canvas"]["objects"]] == ["Order"]
+    # 语义层是展示/语义元数据，不参与结构快照哈希契约
+    assert release_row.snapshot_hash == snapshot_hash(
+        release_row.snapshot_formal)
+
+
+def test_rollback_activation_inherits_semantic_layer(
+        client, auth_headers, ontology, db, admin_user, monkeypatch):
+    oid = ontology["id"]
+    root = _root(client, auth_headers, oid)
+
+    def make_release(version_id: str, number: str, parent_id: str,
+                     *, with_semantic: bool) -> OntologyVersion:
+        snapshot = {
+            "objectTypes": [{
+                "id": "ot-order", "name": "Order", "displayName": "订单",
+                "primaryKey": "p-id",
+                "properties": [{
+                    "id": "p-id", "name": "id", "displayName": "订单号",
+                    "type": "string", "required": True,
+                }],
+            }],
+            "linkTypes": [], "actions": [], "functions": [],
+            "sentinels": [], "mappings": [], "linkMappings": [],
+        }
+        row = OntologyVersion(
+            id=version_id, ontology_id=oid, version_number=number,
+            parent_version_id=parent_id, base_release_id=version_id,
+            node_kind="release", lifecycle_status="released", revision=0,
+            snapshot_formal=snapshot, snapshot_hash=snapshot_hash(snapshot),
+            published_at=datetime.now(timezone.utc),
+            created_by=admin_user.id,
+        )
+        db.add(row)
+        db.flush()
+        if with_semantic:
+            _attach_semantic_layer(db, row.id)
+        return row
+
+    target = make_release(
+        "rollback-semantic-v1", "v1", root["id"], with_semantic=True)
+    current = make_release(
+        "rollback-semantic-v2", "v2", target.id, with_semantic=False)
+    project = db.query(OntologyProject).filter_by(id=oid).one()
+    project.current_release_id = current.id
+    project.version = current.version_number
+    project.status = "published"
+    db.commit()
+    monkeypatch.setattr(
+        version_router, "_rebuild_required_query_projections",
+        lambda *_args, **_kwargs: {"ready": True, "neo4j": "ok"},
+    )
+
+    response = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{target.id}/rollback",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    activation = response.json()["data"]
+    assert activation["hasSemanticLayer"] is True
+    assert activation["semanticRevision"] == 1
+    db.expire_all()
+    activation_row = db.query(OntologyVersion).filter_by(
+        id=activation["id"]).one()
+    target_row = db.query(OntologyVersion).filter_by(id=target.id).one()
+    assert activation_row.snapshot_semantic == target_row.snapshot_semantic
+
+    # 历史版本没有语义层时，回滚激活也不伪造语义层
+    plain = client.post(
+        f"/api/v2/ontologies/{oid}/versions/{current.id}/rollback",
+        headers=auth_headers,
+    )
+    assert plain.status_code == 200, plain.text
+    assert plain.json()["data"]["hasSemanticLayer"] is False
+    assert plain.json()["data"]["semanticRevision"] == 0
+
+
+def test_impact_and_semantic_endpoints_expose_semantic_overview(
+        client, auth_headers, ontology, db):
+    oid = ontology["id"]
+    root = _root(client, auth_headers, oid)
+    draft = _draft(client, auth_headers, oid, root["id"])
+    saved = client.put(
+        f"/api/v2/ontologies/{oid}/versions/{draft['id']}/workspace",
+        headers=auth_headers, json=_workspace(draft),
+    )
+    assert saved.status_code == 200, saved.text
+
+    impact_url = f"/api/v2/ontologies/{oid}/versions/{draft['id']}/impact"
+    impact = client.get(impact_url, headers=auth_headers)
+    assert impact.status_code == 200, impact.text
+    overview = impact.json()["data"]["semanticOverview"]
+    assert overview["hasSemanticLayer"] is False
+    assert overview["documentTitle"] is None
+    assert overview["structureCounts"]["objectTypes"] == 1
+    assert overview["consistency"]["byCode"] == {"semantic_business_missing": 1}
+
+    _attach_semantic_layer(db, draft["id"])
+    impact = client.get(impact_url, headers=auth_headers).json()["data"]
+    overview = impact["semanticOverview"]
+    assert overview["hasSemanticLayer"] is True
+    assert overview["documentTitle"] == "测试需求文档"
+    assert overview["documentStale"] is False
+    assert overview["canvasCounts"]["objects"] == 1
+    assert overview["structureCounts"]["objectTypes"] == 1
+    assert overview["consistency"] == {"issueCount": 0, "byCode": {}}
+    # 纯增量：影响分析既有字段保持原样
+    assert "releaseReadiness" in impact
+    assert len(impact["impactHash"]) == 64
+
+    semantic_url = f"/api/v2/ontologies/{oid}/versions/{draft['id']}/semantic"
+    detail = client.get(semantic_url, headers=auth_headers)
+    assert detail.status_code == 200, detail.text
+    payload = detail.json()["data"]
+    assert payload["semantic"]["documentTitle"] == "测试需求文档"
+    assert payload["semantic"]["semanticRevision"] == 1
+    assert payload["semantic"]["canvas"]["objects"][0]["name"] == "Order"
+    assert payload["overview"] == overview
+
+    # 读端点不要求 draft：发布版本同样可读；v0 尚未沉淀语义层
+    root_detail = client.get(
+        f"/api/v2/ontologies/{oid}/versions/{root['id']}/semantic",
+        headers=auth_headers,
+    )
+    assert root_detail.status_code == 200, root_detail.text
+    root_payload = root_detail.json()["data"]
+    assert root_payload["semantic"] is None
+    assert root_payload["overview"]["hasSemanticLayer"] is False
+    assert root_payload["overview"]["structureCounts"]["objectTypes"] == 0
+
+    missing = client.get(
+        f"/api/v2/ontologies/{oid}/versions/no-such-version/semantic",
+        headers=auth_headers,
+    )
+    assert missing.status_code == 404, missing.text
+
+
+def test_create_initial_release_persists_optional_semantic_layer(
+        db, admin_user):
+    from app.ontologies.release_context import create_initial_release
+
+    project = OntologyProject(
+        id="semantic-initial-release-project", name="语义层初始基线",
+        domain="其他", version="v0.1", status="draft", build_mode="manual",
+        created_by=admin_user.id,
+    )
+    db.add(project)
+    db.flush()
+    release = create_initial_release(
+        db, project, snapshot=None, created_by=admin_user.id)
+    assert release.snapshot_semantic is None
+
+    second = OntologyProject(
+        id="semantic-initial-release-project-2", name="语义层初始基线二",
+        domain="其他", version="v0.1", status="draft", build_mode="manual",
+        created_by=admin_user.id,
+    )
+    db.add(second)
+    db.flush()
+    layer = {"canvas": {"objects": []}, "semanticRevision": 7}
+    release_with_layer = create_initial_release(
+        db, second, snapshot=None, created_by=admin_user.id, semantic=layer)
+    assert release_with_layer.snapshot_semantic == layer

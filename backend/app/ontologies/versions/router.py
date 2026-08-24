@@ -8,6 +8,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from app.deps import get_db, get_current_user, require_admin
 from app.config import settings
+from app.exploration.semantic_gate import (
+    semantic_consistency_issues,
+    semantic_overview,
+)
 from app.models.ontology_version import OntologyChangeLog, OntologyVersion
 from app.models.ontology import OntologyProject
 from app.models.ontology_formal import (
@@ -321,6 +325,20 @@ def get_draft_impact(
         ontology_id,
         version_id,
         validate_release_mapping_contract=validate_release_mapping_contract,
+        semantic_overview_fn=semantic_overview,
+    )
+
+
+@router.get("/{ontology_id}/versions/{version_id}/semantic")
+def get_version_semantic(
+    ontology_id: str, version_id: str, db: Session = Depends(get_db),
+):
+    """读取任一版本的业务语义层快照与一致性总览（读端点，不要求 draft）。"""
+    return workspace_service.get_version_semantic(
+        db,
+        ontology_id,
+        version_id,
+        semantic_overview_fn=semantic_overview,
     )
 
 
@@ -393,6 +411,7 @@ def create_trial_run(
         _trial_materialization_candidate=_trial_materialization_candidate,
         _trial_payload=_trial_payload,
         _validate_sentinels=_validate_sentinels,
+        semantic_consistency_fn=semantic_consistency_issues,
     )
 
 
