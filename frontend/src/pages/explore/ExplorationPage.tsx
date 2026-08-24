@@ -6,8 +6,9 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import {
-  Bot, Check, CircleHelp, Compass, Copy, Download, ExternalLink, Files, FileText, Globe2, History, List,
+  Bot, Check, CircleHelp, Compass, Copy, Download, ExternalLink, Files, FileText, GitBranch, Globe2, History, List,
   Loader2, Paperclip, Plus, Send, ShieldAlert, ShieldCheck, Trash2, User, Wrench, X,
 } from 'lucide-react'
 import {
@@ -15,7 +16,8 @@ import {
   type BusinessCanvas, type BxAttachment, type BxDraft, type BxQuestion, type BxStep,
   type BxSession, type Completeness, type Readiness,
 } from '@/api/exploration'
-import { modelApi } from '@/api/ontologies'
+import { modelApi, ontologyApi } from '@/api/ontologies'
+import { ontologyVersionApi } from '@/api/v2/ontology-versions'
 import MermaidBlock from '@/components/MermaidBlock'
 import { ConfirmModal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
@@ -25,6 +27,7 @@ import CanvasPanel from './CanvasPanel'
 import DocumentsDrawer from './DocumentsDrawer'
 import DraftReviewDrawer from './DraftReviewDrawer'
 import FileWorkspaceDrawer from './FileWorkspaceDrawer'
+import { parseSessionBinding, resolveBoundSession, sessionBindingKey } from './sessionBinding'
 import { SplitHandle, useSplitLayout } from '@/hooks/useSplitLayout'
 import type { ModelConfig } from '@/types/ontology'
 
@@ -182,8 +185,11 @@ function QuickReplies({ questions, disabled, onAnswer, onCustom }: {
 export default function ExplorationPage() {
   const { containerRef, sizes, startResize } = useSplitLayout()
   const { toast } = useToast()
+  // -- URL 绑定锚点（/explore?ontologyId=…&versionId=…，来自版本试跑门禁的补齐入口） --
+  const [searchParams] = useSearchParams()
+  const binding = useMemo(() => parseSessionBinding(searchParams), [searchParams])
   // -- 会话 --
-  const { data: sessions = [], refetch: refetchSessions } = useQuery({
+  const { data: sessions = [], refetch: refetchSessions, isSuccess: sessionsLoaded } = useQuery({
     queryKey: ['bx-sessions'], queryFn: () => explorationApi.sessions(),
   })
   const [sid, setSid] = useState('')
@@ -224,6 +230,8 @@ export default function ExplorationPage() {
   const sidRef = useRef('')
   const sessionRequestRef = useRef(0)
   const sessionCreationRef = useRef<Promise<string> | null>(null)
+  // 绑定态会话解析按绑定目标只执行一次，避免列表 refetch 与用户手动选择打架
+  const bindingResolvedRef = useRef('')
   const sendInFlightRef = useRef(false)
   const chatGenerationRef = useRef(0)
   const chatAbortRef = useRef<AbortController | null>(null)
@@ -345,10 +353,11 @@ export default function ExplorationPage() {
     }
   }, [cancelActiveChat, selectSession])
 
-  // 首次进入自动选中最近会话
+  // 首次进入自动选中最近会话；绑定态下由绑定解析决定选中，不抢绑定的落点
   useEffect(() => {
+    if (binding) return
     if (!sid && sessions.length > 0) void loadSession(sessions[0].id)
-  }, [sessions, sid, loadSession])
+  }, [sessions, sid, loadSession, binding])
 
   const newSession = async () => {
     const s = await explorationApi.createSession()
@@ -382,13 +391,16 @@ export default function ExplorationPage() {
     }
   }
 
-  // 无会话时懒创建（首条消息 / 首个附件都可能触发）
+  // 无会话时懒创建（首条消息 / 首个附件都可能触发）；绑定态下创建带本体版本锚点
   const ensureSession = async (): Promise<string> => {
     if (sidRef.current) return sidRef.current
     // send 与 upload 可能在同一事件轮并发进入。创建请求必须是 single-flight，
     // 否则两边会各建一个会话，并把消息和附件写到不同 sid。
     if (sessionCreationRef.current) return sessionCreationRef.current
-    const creation = explorationApi.createSession().then(s => {
+    const creation = explorationApi.createSession(
+      undefined,
+      binding ? { ontologyId: binding.ontologyId, ontologyVersionId: binding.versionId } : undefined,
+    ).then(s => {
       // 创建等待期间若用户已主动选中其他会话，不再抢回焦点；
       // 本轮调用统一归属当前选中会话。
       const targetSid = sidRef.current || s.id
@@ -403,6 +415,45 @@ export default function ExplorationPage() {
       if (sessionCreationRef.current === creation) sessionCreationRef.current = null
     }
   }
+
+  // 绑定态会话解析：优先选中同绑定的既有会话，无匹配则经 ensureSession 创建绑定会话
+  useEffect(() => {
+    if (!binding || !sessionsLoaded) return
+    const key = sessionBindingKey(binding)
+    if (bindingResolvedRef.current === key) return
+    const resolution = resolveBoundSession(sessions, binding, sid)
+    bindingResolvedRef.current = key
+    if (resolution.action === 'none') return
+    if (resolution.action === 'select') {
+      void loadSession(resolution.sessionId)
+      return
+    }
+    void (async () => {
+      try {
+        const id = await ensureSession()
+        await loadSession(id)
+      } catch (error: unknown) {
+        setBanner(errorMessage(error, '绑定会话创建失败，请重试'))
+      }
+    })()
+  }, [binding, sessionsLoaded, sessions, sid, loadSession])
+
+  // 绑定徽章数据：本体名 + 版本号（queryKey 与本体详情页/版本 Tab 一致，共享缓存）
+  const currentSession = sessions.find(s => s.id === sid)
+  const boundOntologyId = currentSession?.ontologyId || null
+  const { data: boundOntology } = useQuery({
+    queryKey: ['ontology', boundOntologyId],
+    queryFn: () => ontologyApi.get(boundOntologyId!),
+    enabled: Boolean(boundOntologyId),
+  })
+  const { data: boundVersionTree } = useQuery({
+    queryKey: ['version-tree', boundOntologyId],
+    queryFn: () => ontologyVersionApi.tree(boundOntologyId!),
+    enabled: Boolean(boundOntologyId),
+  })
+  const boundVersionNumber = boundVersionTree?.versions.find(
+    v => v.id === currentSession?.ontologyVersionId,
+  )?.version_number
 
   const pickFiles = () => fileInputRef.current?.click()
 
@@ -592,6 +643,19 @@ export default function ExplorationPage() {
                 </h3>
                 <p className="truncate text-[11px] text-[var(--color-text-tertiary)]">通过对话澄清业务，从而生成本体模型</p>
               </div>
+              {boundOntologyId && (
+                <span
+                  data-testid="session-binding-badge"
+                  title="本会话绑定本体版本：草稿落地写入该版本，经试跑验证后发布生效"
+                  className="inline-flex h-8 max-w-56 shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2.5 text-xs font-medium text-[var(--color-text-secondary)]"
+                >
+                  <GitBranch size={13} className="shrink-0 text-teal-600" />
+                  <span className="truncate">{boundOntology?.name || '…'}</span>
+                  {boundVersionNumber && (
+                    <span className="shrink-0 font-mono text-[11px] text-[var(--color-text-tertiary)]">{boundVersionNumber}</span>
+                  )}
+                </span>
+              )}
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {readiness && canvasCount > 0 && (
@@ -1005,6 +1069,11 @@ export default function ExplorationPage() {
       {docsOpen && sid && (
         <DocumentsDrawer
           sessionId={sid}
+          binding={currentSession?.ontologyId ? {
+            ontologyId: currentSession.ontologyId,
+            versionId: currentSession.ontologyVersionId || null,
+            name: boundOntology?.name,
+          } : null}
           onClose={() => setDocsOpen(false)}
           onDraftCreated={draft => { setDocsOpen(false); setReviewDraft(draft) }}
           onGenerate={generateDocument}

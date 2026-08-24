@@ -45,6 +45,7 @@ export default defineConfig({
     '**/ontology_structure_initial_view.spec.ts',
     '**/ontology_runtime_state_conflict.spec.ts',
     '**/ontology_safe_recovery.spec.ts',
+    '**/ontology_semantic_gate.spec.ts',
     '**/overview.spec.ts',
     '**/pipeline_list_page.spec.ts',
     '**/python_script_page.spec.ts',

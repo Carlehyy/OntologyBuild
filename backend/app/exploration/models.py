@@ -42,6 +42,10 @@ class ExplorationSession(Base):
 
     status: Mapped[str] = mapped_column(String(20), default="active")
 
+    # 会话绑定的本体与版本锚点（语义层挂载点，应用草稿时回填）
+    ontology_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
+    ontology_version_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
+
     # 长会话的确定性压缩状态。summary 覆盖最早的 N 条消息；编排器只把摘要、
     # 画布权威快照与最近消息送入模型，避免简单截断造成“聊几句就忘了”。
     context_summary: Mapped[str] = mapped_column(Text, default="")
@@ -132,6 +136,8 @@ class ExplorationDraft(Base):
 
     status: Mapped[str] = mapped_column(String(20), default="draft")  # draft | applied | discarded
     applied_ontology_id: Mapped[str] = mapped_column(String, nullable=True)
+    # 草稿应用后落地的版本（与 applied_ontology_id 配对回填）
+    applied_version_id: Mapped[str] = mapped_column(String, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

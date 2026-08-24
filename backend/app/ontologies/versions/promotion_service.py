@@ -376,6 +376,7 @@ def _promote_draft_locked(
             snapshot_formal=release_snapshot,
             snapshot_hash=snapshot_hash(release_snapshot),
             canvas_layout=_json_safe(draft.canvas_layout or {}),
+            snapshot_semantic=_json_safe(draft.snapshot_semantic),
             published_at=datetime.now(timezone.utc),
             change_summary={"formal": _diff_formal(
                                 current.snapshot_formal, release_snapshot),

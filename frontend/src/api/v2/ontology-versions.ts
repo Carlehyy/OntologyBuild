@@ -64,6 +64,10 @@ export interface OntologyVersionNode {
   node_kind: 'release' | 'draft'
   lifecycle_status: 'editing' | 'trial_ready' | 'released' | 'superseded'
   revision: number
+  /** 语义层只透摘要标记：是否已沉淀业务语义（画布/需求文档）。 */
+  hasSemanticLayer?: boolean
+  /** 语义层修订号；无语义层或旧后端为 0/缺省。 */
+  semanticRevision?: number
   latest_trial?: OntologyTrialRun | null
   created_at?: string
   published_at?: string
@@ -76,12 +80,44 @@ export interface OntologyVersionTree {
   versions: OntologyVersionNode[]
 }
 
+/** 版本业务语义层只读总览（后端 semantic_gate.semantic_overview 同口径）。 */
+export interface OntologySemanticOverview {
+  hasSemanticLayer: boolean
+  documentTitle?: string | null
+  documentStale: boolean
+  canvasCounts: {
+    objects: number
+    actors: number
+    behaviors: number
+    events: number
+    rules: number
+    scenarios: number
+    processes: number
+  }
+  structureCounts: {
+    objectTypes: number
+    linkTypes: number
+    actions: number
+    functions: number
+    sentinels: number
+  }
+  consistency: { issueCount: number; byCode: Record<string, number> }
+}
+
+/** GET .../versions/{vid}/semantic 的 data：语义层快照原文 + 一致性总览。 */
+export interface OntologyVersionSemantic {
+  semantic: Record<string, unknown> | null
+  overview: OntologySemanticOverview
+}
+
 export interface OntologyImpactReport {
   impactHash: string
   baseOutdated: boolean
   breakingCount: number
   breaking: Array<{ message: string }>
   total: { added: number; modified: number; deleted: number }
+  /** 旧后端无此字段，前端按缺失处理（不渲染业务语义区块）。 */
+  semanticOverview?: OntologySemanticOverview
   releaseReadiness?: {
     ready: boolean
     blockingCount: number
@@ -149,6 +185,9 @@ export const ontologyVersionApi = {
   impact: (ontologyId: string, versionId: string) =>
     apiClientV2.get<OntologyImpactReport>(
       `/ontologies/${ontologyId}/versions/${versionId}/impact`),
+  versionSemantic: (ontologyId: string, versionId: string) =>
+    apiClientV2.get<OntologyVersionSemantic>(
+      `/ontologies/${ontologyId}/versions/${versionId}/semantic`),
   promote: (ontologyId: string, versionId: string, body: {
     trialRunId: string
     impactHash: string

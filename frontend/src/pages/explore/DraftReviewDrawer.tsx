@@ -7,6 +7,7 @@ import {
 import {
   explorationApi, type ApplyDraftResult, type BxDraft, type DraftValidation,
 } from '@/api/exploration'
+import { appliedGraphPath } from './draftReviewLogic'
 
 const CARDINALITY_LABEL: Record<string, string> = {
   'one-to-one': '1:1', 'one-to-many': '1:N', 'many-to-one': 'N:1', 'many-to-many': 'N:N',
@@ -168,7 +169,7 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
                 </ul>
               )}
               <Link
-                to={`/ontologies/${result.ontologyId}/graph`}
+                to={appliedGraphPath(result)}
                 className="inline-block mt-2.5 text-xs font-medium text-teal-700 underline underline-offset-2"
               >
                 前往图谱编辑器继续完善 →

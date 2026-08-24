@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 import uuid
 
 from fastapi import HTTPException
@@ -19,6 +20,11 @@ from app.ontologies.versions.snapshot_contract import (
     complete_snapshot,
     snapshot_hash,
 )
+
+
+def _json_safe(value):
+    """快照只保留 JSON 值；不把 ORM/时间对象渗入 JSON 列。"""
+    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
 
 @dataclass(frozen=True)
@@ -52,6 +58,7 @@ def create_initial_release(
     created_by: str,
     version_label: str = "初始基线",
     description: str = "系统创建的完整发布基线",
+    semantic: dict | None = None,
 ) -> OntologyVersion:
     """Create the immutable v0 release that every ontology owns from birth."""
     if project.current_release_id:
@@ -75,6 +82,7 @@ def create_initial_release(
         revision=0,
         snapshot_formal=frozen,
         snapshot_hash=snapshot_hash(frozen),
+        snapshot_semantic=_json_safe(semantic),
         published_at=project.created_at or datetime.now(timezone.utc),
         created_by=created_by,
     )
