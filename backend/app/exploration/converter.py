@@ -16,6 +16,8 @@
 
 草稿永不直写本体 —— apply_draft 只落用户勾选且无冲突的元素，且转出的
 函数/哨兵带三重闸门（enabled=false / muted / status=draft），落地即休眠待人工形式化。
+合并进已有本体走版本正门：apply_draft_to_snapshot 以同一保守合并语义改写
+目标草稿版本的结构快照，不触碰 fo_* live 表（发布时才物化）。
 落库元素写 source 血缘列（sessionId/documentId/draftId/draftKey/sourceRefs），
 元素级可回溯到探索会话与画布卡片。
 """
@@ -25,6 +27,7 @@ import json
 import logging
 import re
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -33,6 +36,11 @@ from sqlalchemy.orm import Session
 from app.ontologies.agent_runtime import llm_bridge
 from app.ontologies.formal_modeling.models import ActionType, LinkType, ObjectType, OntologyFunction
 from app.ontologies.sentinels.models import Sentinel
+from app.ontologies.versions.models import OntologyVersion
+from app.ontologies.versions.snapshot_contract import (
+    complete_snapshot,
+    snapshot_hash,
+)
 from app.exploration import canvas as C
 from app.exploration.canvas import norm_name
 
@@ -910,15 +918,18 @@ def _selected_draft_keys(
 
 
 def validate_draft_selection(draft: dict, selected_keys: Optional[list[str]] = None,
-                             existing: Optional[dict[str, set[str]]] = None) -> dict:
+                             existing: Optional[dict[str, set[str]]] = None,
+                             snapshot: Optional[dict] = None) -> dict:
     """按图谱编辑器正式契约校验一次草稿选择集，不依赖 LLM。
 
     默认选择全部非冲突项；显式选择用于落地前检查依赖闭包，避免“选了关系但
     没选端点对象”这类静默跳过。返回结构可直接展示在前端质量报告中。
+    ``snapshot=`` 指定目标草稿版本的结构快照作为“已有名集合”来源（合并路径
+    的权威真相）；缺省时沿用调用方传入的 ``existing``（live 表口径）。
     """
     errors: list[dict] = []
     warnings: list[dict] = []
-    existing = existing or {}
+    existing = _snapshot_name_sets(snapshot) if snapshot is not None else (existing or {})
     collections = ("objectTypes", "linkTypes", "actions", "functions", "sentinels")
     all_items = [item for coll in collections for item in (draft.get(coll) or [])]
     by_key = {str(item.get("key") or ""): item for item in all_items if item.get("key")}
@@ -1037,7 +1048,32 @@ def validate_draft_selection(draft: dict, selected_keys: Optional[list[str]] = N
 # ---------------------------------------------------------------- 对外入口
 
 
-def existing_name_sets(db: Session, ontology_id: str) -> dict[str, set[str]]:
+def _snapshot_name_sets(snapshot: dict) -> dict[str, set[str]]:
+    """从版本结构快照读取五类集合的归一化名集合（与 live 表口径同构）。"""
+    snap = complete_snapshot(snapshot)
+    return {
+        collection: {
+            normalized
+            for item in snap[collection]
+            if isinstance(item, dict)
+            for normalized in [norm_name(str(item.get("name") or ""))]
+            if normalized
+        }
+        for collection in (
+            "objectTypes", "linkTypes", "actions", "functions", "sentinels",
+        )
+    }
+
+
+def existing_name_sets(db: Session, ontology_id: str,
+                       *, snapshot: Optional[dict] = None) -> dict[str, set[str]]:
+    """目标本体的五类同名集合。
+
+    默认读 fo_* live 表；传入 ``snapshot=``（目标草稿版本的结构快照）时改从
+    快照读取 —— 合并路径的权威真相是版本快照，live 表会漏掉草稿内未发布元素。
+    """
+    if snapshot is not None:
+        return _snapshot_name_sets(snapshot)
     return {
         "objectTypes": {norm_name(x.name) for x in db.query(ObjectType.name)
                         .filter(ObjectType.ontology_id == ontology_id)},
@@ -1050,6 +1086,40 @@ def existing_name_sets(db: Session, ontology_id: str) -> dict[str, set[str]]:
         "sentinels": {norm_name(x.name) for x in db.query(Sentinel.name)
                       .filter(Sentinel.ontology_id == ontology_id)},
     }
+
+
+def resolve_merge_baseline_snapshot(
+    db: Session,
+    ontology_id: str,
+    *,
+    bound_version_id: Optional[str] = None,
+    current_release_id: Optional[str] = None,
+    version_model=OntologyVersion,
+) -> Optional[dict]:
+    """只读解析“合并进已有本体”的校验基线快照（不修复、不分叉、不写库）。
+
+    优先会话绑定的有效草稿版本（同本体 + draft + editing），其次当前发布
+    指针指向的发布快照；两者都不可用时返回 None（调用方回退 live 表口径，
+    与 legacy 基线修复将从 live 表冻结的内容同构）。
+    """
+    if bound_version_id:
+        bound = db.query(version_model).filter(
+            version_model.id == str(bound_version_id),
+            version_model.ontology_id == ontology_id,
+        ).first()
+        if (bound is not None and bound.node_kind == "draft"
+                and bound.lifecycle_status == "editing"):
+            return complete_snapshot(bound.snapshot_formal)
+    if current_release_id:
+        release = db.query(version_model).filter(
+            version_model.id == str(current_release_id),
+            version_model.ontology_id == ontology_id,
+            version_model.node_kind == "release",
+            version_model.lifecycle_status == "released",
+        ).first()
+        if release is not None and release.snapshot_formal is not None:
+            return complete_snapshot(release.snapshot_formal)
+    return None
 
 
 def build_draft(canvas: dict, existing: Optional[dict[str, set[str]]] = None,
@@ -1080,6 +1150,22 @@ def build_draft(canvas: dict, existing: Optional[dict[str, set[str]]] = None,
     return draft, report
 
 
+def _source_of(item: dict, lineage: Optional[dict]) -> Optional[dict]:
+    """元素级血缘：sessionId/documentId/draftId + draftKey/sourceRefs。
+
+    正式模型暂时没有主体运行时绑定列；把结构化 actorRefs/主体元数据留在
+    血缘中，既不伪装成授权能力，也不让需求语义在落库后消失。
+    """
+    if not lineage:
+        return None
+    source = {"kind": "business_exploration", **lineage,
+              "draftKey": item.get("key"), "sourceRefs": item.get("sourceRefs") or []}
+    for field in ("actorRefs", "actorMetadata", "semanticRole", "originKind"):
+        if item.get(field):
+            source[field] = item[field]
+    return source
+
+
 def apply_draft(db: Session, draft_data: dict, selected_keys: Optional[list[str]],
                 ontology_id: str, lineage: Optional[dict] = None) -> dict:
     """把勾选且无冲突的草稿元素落入本体（保守合并：同名一律跳过）。
@@ -1095,16 +1181,7 @@ def apply_draft(db: Session, draft_data: dict, selected_keys: Optional[list[str]
         return str(item.get("key") or "") in selected
 
     def src_of(item: dict) -> Optional[dict]:
-        if not lineage:
-            return None
-        source = {"kind": "business_exploration", **lineage,
-                  "draftKey": item.get("key"), "sourceRefs": item.get("sourceRefs") or []}
-        # 正式模型暂时没有主体运行时绑定列；把结构化 actorRefs/主体元数据留在
-        # 血缘中，既不伪装成授权能力，也不让需求语义在落库后消失。
-        for field in ("actorRefs", "actorMetadata", "semanticRole", "originKind"):
-            if item.get(field):
-                source[field] = item[field]
-        return source
+        return _source_of(item, lineage)
 
     existing = existing_name_sets(db, ontology_id)
     existing_obj_ids = {norm_name(x.name): x.id for x in
@@ -1243,3 +1320,197 @@ def apply_draft(db: Session, draft_data: dict, selected_keys: Optional[list[str]
 
     db.flush()
     return {"created": created, "skipped": skipped}
+
+
+def apply_draft_to_snapshot(
+    db: Session,
+    draft_data: dict,
+    selected_keys: Optional[list[str]],
+    draft_version,
+    *,
+    lineage: Optional[dict] = None,
+    stale_trials_fn=None,
+    diff_formal_fn=None,
+) -> dict:
+    """把勾选元素合并进目标草稿版本的结构快照（走版本正门，不触碰 fo_* live 表）。
+
+    与 apply_draft 同一保守合并语义：同名 norm_name 一律跳过（重复应用天然幂等）；
+    端点/绑定解析顺序：本批新落元素 → 既有快照同名元素 → 两端不可解析则跳过。
+    新元素补 createdAt/updatedAt（ISO）与 source 血缘；对象补 interfaces/icon 缺省；
+    函数 enabled=False；哨兵带三重闸门（muted + enabled=false + status=draft）。
+    写回草稿版本：snapshot_formal 整体替换、revision + 1、snapshot_hash 重算、
+    change_summary 用既有 _diff_formal 口径、既有非 running 试跑置 stale；
+    mappings/linkMappings 原样保留。本函数不 commit，事务由调用方持有。
+    """
+    selected = _selected_draft_keys(draft_data, selected_keys)
+
+    def picked(item: dict) -> bool:
+        return str(item.get("key") or "") in selected
+
+    before = complete_snapshot(draft_version.snapshot_formal)
+    candidate = complete_snapshot(draft_version.snapshot_formal)
+    existing = _snapshot_name_sets(candidate)
+    existing_obj_ids = {
+        norm_name(str(ot.get("name") or "")): str(ot.get("id"))
+        for ot in candidate["objectTypes"]
+        if isinstance(ot, dict) and ot.get("id")
+    }
+    created = {"objectTypes": 0, "linkTypes": 0, "actions": 0,
+               "functions": 0, "sentinels": 0}
+    skipped: list[dict] = []
+    if selected_keys is None:
+        # 与 live 落地同一口径：生成期冲突项留在审计可见的 skipped 报告中，
+        # 但永不进入默认选择集。
+        for collection in ("objectTypes", "linkTypes", "actions", "functions", "sentinels"):
+            skipped.extend({
+                "key": item.get("key"),
+                "reason": (
+                    f"草稿元素「{item.get('name') or item.get('displayName') or item.get('key')}」"
+                    "在生成时已标记为目标本体冲突，未纳入默认应用选择"
+                ),
+            } for item in (draft_data.get(collection) or []) if item.get("conflict"))
+    key2id: dict[str, str] = {}
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    base_count = len(existing_obj_ids)
+    for item in draft_data.get("objectTypes", []):
+        if not picked(item):
+            continue
+        if norm_name(item["name"]) in existing["objectTypes"]:
+            skipped.append({"key": item["key"], "reason": f"目标本体已存在同名对象类型「{item['name']}」"})
+            continue
+        oid = str(uuid.uuid4())
+        idx = base_count + created["objectTypes"]
+        candidate["objectTypes"].append({
+            "id": oid, "name": item["name"], "displayName": item["displayName"],
+            "description": item.get("description"), "icon": item.get("icon"),
+            "color": item.get("color"), "primaryKey": item.get("primaryKey"),
+            "properties": item.get("properties") or [], "interfaces": [],
+            "positionX": 120 + (idx % 4) * 340, "positionY": 120 + (idx // 4) * 260,
+            "source": _source_of(item, lineage),
+            "createdAt": now_iso, "updatedAt": now_iso,
+        })
+        key2id[item["key"]] = oid
+        existing["objectTypes"].add(norm_name(item["name"]))
+        created["objectTypes"] += 1
+
+    def resolve_obj(key: Optional[str], name_hint: str) -> Optional[str]:
+        if key and key in key2id:
+            return key2id[key]
+        return existing_obj_ids.get(norm_name(name_hint))
+
+    for item in draft_data.get("linkTypes", []):
+        if not picked(item):
+            continue
+        if norm_name(item["name"]) in existing["linkTypes"]:
+            skipped.append({"key": item["key"], "reason": f"目标本体已存在同名链接类型「{item['name']}」"})
+            continue
+        src = resolve_obj(item.get("sourceKey"), item.get("sourceName", ""))
+        tgt = resolve_obj(item.get("targetKey"), item.get("targetName", ""))
+        if not src or not tgt:
+            skipped.append({"key": item["key"],
+                            "reason": f"链接「{item['displayName']}」的端点对象未落地也不在目标本体中"})
+            continue
+        candidate["linkTypes"].append({
+            "id": str(uuid.uuid4()), "name": item["name"],
+            "displayName": item["displayName"],
+            "description": item.get("description"),
+            "sourceObjectTypeId": src, "targetObjectTypeId": tgt,
+            "cardinality": item.get("cardinality") or "one-to-many",
+            "sourceRole": None, "targetRole": None, "properties": [],
+            "source": _source_of(item, lineage),
+            "createdAt": now_iso, "updatedAt": now_iso,
+        })
+        existing["linkTypes"].add(norm_name(item["name"]))
+        created["linkTypes"] += 1
+
+    for item in draft_data.get("actions", []):
+        if not picked(item):
+            continue
+        if norm_name(item["name"]) in existing["actions"]:
+            skipped.append({"key": item["key"], "reason": f"目标本体已存在同名动作「{item['name']}」"})
+            continue
+        obj_key = item.get("objectTypeKey")
+        obj_id = key2id.get(obj_key) if obj_key else None
+        if obj_key and not obj_id:
+            # 端点对象是冲突/未勾选项 → 尝试按名字绑到快照既有对象
+            src_name = item.get("objectTypeName") or obj_key.split(":", 1)[-1]
+            obj_id = existing_obj_ids.get(norm_name(src_name))
+        candidate["actions"].append({
+            "id": str(uuid.uuid4()), "name": item["name"],
+            "displayName": item["displayName"],
+            "description": item.get("description"),
+            "objectTypeId": obj_id,
+            "parameters": item.get("parameters") or [],
+            "rules": item.get("rules") or [],
+            "validationFunctionId": None,
+            "requiresApproval": bool(item.get("requiresApproval")),
+            "source": _source_of(item, lineage),
+            "createdAt": now_iso, "updatedAt": now_iso,
+        })
+        existing["actions"].add(norm_name(item["name"]))
+        created["actions"] += 1
+
+    # 激活函数草稿（enabled=false，函数体待人工形式化后启用）
+    for item in draft_data.get("functions", []):
+        if not picked(item):
+            continue
+        if norm_name(item["name"]) in existing["functions"]:
+            skipped.append({"key": item["key"], "reason": f"目标本体已存在同名函数「{item['name']}」"})
+            continue
+        target_id = resolve_obj(item.get("targetObjectTypeKey"),
+                                item.get("targetObjectTypeName", ""))
+        candidate["functions"].append({
+            "id": str(uuid.uuid4()), "name": item["name"],
+            "displayName": item["displayName"],
+            "description": item.get("description"),
+            "functionType": (item.get("functionType") or "query") if target_id else "query",
+            "language": "expression", "targetObjectTypeId": target_id,
+            "targetActionId": None, "parameters": [],
+            "returnType": item.get("returnType") or "string",
+            "body": item.get("body") or "",
+            "cacheStrategy": None, "cacheTtl": None, "enabled": False,
+            "source": _source_of(item, lineage),
+            "createdAt": now_iso, "updatedAt": now_iso,
+        })
+        existing["functions"].add(norm_name(item["name"]))
+        created["functions"] += 1
+
+    # 哨兵草稿（muted 影子 + enabled=false + status=draft，三重闸门确保不进执行链路）
+    for item in draft_data.get("sentinels", []):
+        if not picked(item):
+            continue
+        if norm_name(item["name"]) in existing["sentinels"]:
+            skipped.append({"key": item["key"], "reason": f"目标本体已存在同名哨兵「{item['name']}」"})
+            continue
+        bind_id = resolve_obj(item.get("bindingObjectKey"), item.get("bindingObjectName", ""))
+        bindings = [{"alias": "a", "objectTypeId": bind_id, "filter": None}] if bind_id else []
+        candidate["sentinels"].append({
+            "id": str(uuid.uuid4()), "name": item["name"],
+            "displayName": item["displayName"],
+            "description": item.get("description"),
+            "bindings": bindings, "links": [], "condition": None,
+            "conditionRows": [], "conditionLogic": "and",
+            "primaryAlias": "a" if bindings else None,
+            "actionIds": [], "actionParameters": {},
+            "onChange": bool(item.get("onChange", True)),
+            "onSchedule": bool(item.get("onSchedule")),
+            "scanIntervalSeconds": int(item.get("scanIntervalSeconds") or 300),
+            "triggerMode": "on_enter",
+            "muted": True, "enabled": False, "status": "draft",
+            "source": _source_of(item, lineage),
+            "createdAt": now_iso, "updatedAt": now_iso,
+        })
+        existing["sentinels"].add(norm_name(item["name"]))
+        created["sentinels"] += 1
+
+    draft_version.snapshot_formal = candidate
+    draft_version.revision = (draft_version.revision or 0) + 1
+    draft_version.snapshot_hash = snapshot_hash(candidate)
+    if diff_formal_fn is not None:
+        draft_version.change_summary = diff_formal_fn(before, candidate)
+    draft_version.lifecycle_status = "editing"
+    if stale_trials_fn is not None:
+        stale_trials_fn(db, draft_version)
+    return {"created": created, "skipped": skipped,
+            "versionId": str(draft_version.id)}

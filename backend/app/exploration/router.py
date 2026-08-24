@@ -49,9 +49,15 @@ from app.ontologies.access import (
     require_ontology_create_access,
 )
 from app.ontologies.release_context import create_initial_release
+from app.ontologies.versions.models import OntologyTrialRun, OntologyVersion
 from app.ontologies.versions.release_service import (
     collect_publishable_snapshot,
     resolve_current_release,
+)
+from app.ontologies.versions.trial_service import _stale_previous_trials
+from app.ontologies.versions.workspace_service import (
+    _diff_formal,
+    create_draft_version,
 )
 
 
@@ -175,9 +181,16 @@ def _application_dependencies() -> dict:
         "require_ontology_create_access_fn": require_ontology_create_access,
         "converter_module": converter,
         "project_model": OntologyProject,
+        "session_model": ExplorationSession,
+        "document_model": ExplorationDocument,
+        "version_model": OntologyVersion,
+        "trial_run_model": OntologyTrialRun,
         "resolve_current_release_fn": resolve_current_release,
         "create_initial_release_fn": create_initial_release,
         "collect_publishable_snapshot_fn": collect_publishable_snapshot,
+        "create_draft_version_fn": create_draft_version,
+        "stale_trials_fn": _stale_previous_trials,
+        "diff_formal_fn": _diff_formal,
     }
 
 

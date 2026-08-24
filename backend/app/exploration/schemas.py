@@ -11,6 +11,9 @@ from app.ontologies.formal_modeling.schemas import CamelModel
 
 class SessionCreate(CamelModel):
     title: Optional[str] = None
+    # 可选绑定本体版本锚点（版本业务语义层挂载点）；绑定时按版本引导初始画布
+    ontology_id: Optional[str] = None
+    ontology_version_id: Optional[str] = None
 
 
 class SessionOut(CamelModel):
@@ -18,6 +21,8 @@ class SessionOut(CamelModel):
     title: str
     canvas_version: int = 0
     status: str = "active"
+    ontology_id: Optional[str] = None
+    ontology_version_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

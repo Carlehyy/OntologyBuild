@@ -12,7 +12,10 @@ from app.exploration import readiness as R
 from app.exploration import schemas as S
 from app.exploration.document import document_source_state
 from app.exploration.document_service import _require_document
-from app.exploration.models import ExplorationDraft
+from app.exploration.models import (
+    ExplorationDraft,
+    ExplorationSession,
+)
 from app.exploration.session_service import _ok, _require_session
 from app.model_configs.selector import (
     llm_call_kwargs,
@@ -267,6 +270,7 @@ def validate_draft(
     require_draft_fn=_require_draft,
     require_ontology_access_fn=require_ontology_access,
     converter_module=converter,
+    session_model=ExplorationSession,
     ok_fn: Callable[[Any], dict] = _ok,
 ):
     draft = require_draft_fn(db, draft_id, current_user)
@@ -274,18 +278,31 @@ def validate_draft(
         draft.applied_ontology_id
         or draft.target_ontology_id
     )
+    existing = None
     if target_id:
-        require_ontology_access_fn(
+        project = require_ontology_access_fn(
             db,
             target_id,
             current_user,
             write=True,
         )
-    existing = (
-        converter_module.existing_name_sets(db, target_id)
-        if target_id
-        else None
-    )
+        # 合并路径的预检基线与 apply 同一口径：目标草稿版本/当前发布的结构
+        # 快照优先（live 表会漏掉草稿内未发布元素），无快照时回退 live 表。
+        session = db.query(session_model).filter(
+            session_model.id == draft.session_id
+        ).first()
+        baseline = converter_module.resolve_merge_baseline_snapshot(
+            db,
+            target_id,
+            bound_version_id=(
+                getattr(session, "ontology_version_id", None)
+                if session is not None else None
+            ),
+            current_release_id=getattr(project, "current_release_id", None),
+        )
+        existing = converter_module.existing_name_sets(
+            db, target_id, snapshot=baseline,
+        )
     return ok_fn(converter_module.validate_draft_selection(
         draft.draft or {},
         body.selected_keys,

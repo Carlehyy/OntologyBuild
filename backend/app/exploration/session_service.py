@@ -1,10 +1,12 @@
 """Session lifecycle and read-side application services for Exploration."""
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 from app.exploration import canvas as C
@@ -22,6 +24,9 @@ from app.exploration.models import (
     ExplorationMessage,
     ExplorationSession,
 )
+from app.exploration.reverse_projection import project_snapshot_to_canvas
+from app.ontologies.access import require_ontology_access
+from app.ontologies.versions.models import OntologyVersion
 
 
 def _ok(data):
@@ -120,6 +125,36 @@ def list_sessions(
     return ok_fn([session_out_fn(session) for session in rows])
 
 
+def _bootstrap_canvas(
+    version,
+    *,
+    canvas_module=C,
+    project_snapshot_to_canvas_fn=project_snapshot_to_canvas,
+) -> dict | None:
+    """从绑定版本引导初始画布：语义层画布优先，其次结构快照反向投影。
+
+    返回 None 表示没有可引导内容（保持空画布现状）。语义层画布经深拷贝 +
+    _ensure_canvas 归一，避免与版本快照共享可变引用；反向投影同样过
+    _ensure_canvas 归一。
+    """
+    semantic = (
+        version.snapshot_semantic
+        if isinstance(version.snapshot_semantic, dict) else {}
+    )
+    raw_canvas = semantic.get("canvas")
+    if isinstance(raw_canvas, dict):
+        canvas = canvas_module._ensure_canvas(copy.deepcopy(raw_canvas))
+        if any(canvas[key] for key in canvas_module.KIND_KEYS.values()):
+            return canvas
+    formal = version.snapshot_formal
+    if isinstance(formal, dict) and any(
+        formal.get(key)
+        for key in ("objectTypes", "linkTypes", "actions", "functions", "sentinels")
+    ):
+        return canvas_module._ensure_canvas(project_snapshot_to_canvas_fn(formal))
+    return None
+
+
 def create_session(
     body,
     db: Session,
@@ -127,15 +162,74 @@ def create_session(
     *,
     session_model=ExplorationSession,
     canvas_module=C,
+    version_model=OntologyVersion,
+    require_ontology_access_fn=require_ontology_access,
+    project_snapshot_to_canvas_fn=project_snapshot_to_canvas,
     session_out_fn: Callable[[ExplorationSession], dict] = _session_out,
     ok_fn: Callable[[Any], dict] = _ok,
 ):
+    """创建探索会话；可选绑定本体版本锚点（版本业务语义层挂载点）。
+
+    绑定时校验本体写权限（与草稿落地同一访问惯例）并按版本引导初始画布：
+    snapshot_semantic.canvas 非空 → 语义层画布；否则 snapshot_formal 结构
+    非空 → 反向投影骨架；皆空 → 空画布。画布写库走与 toolkit._commit_canvas
+    相同的 CAS 范式（base 从初始值 0 开始，新会话无并发）。
+    """
+    bound_version = None
+    if body.ontology_version_id:
+        bound_version = db.query(version_model).filter(
+            version_model.id == str(body.ontology_version_id)
+        ).first()
+        if bound_version is None:
+            raise HTTPException(404, "绑定的本体版本不存在")
+        if body.ontology_id and str(bound_version.ontology_id) != str(body.ontology_id):
+            raise HTTPException(422, "绑定版本不属于指定本体")
+        require_ontology_access_fn(
+            db, bound_version.ontology_id, current_user, write=True
+        )
+    elif body.ontology_id:
+        project = require_ontology_access_fn(
+            db, str(body.ontology_id), current_user, write=True
+        )
+        release_id = getattr(project, "current_release_id", None)
+        bound_version = (
+            db.query(version_model).filter(
+                version_model.id == release_id,
+                version_model.ontology_id == project.id,
+            ).first()
+            if release_id else None
+        )
+        if bound_version is None:
+            raise HTTPException(409, "本体尚未建立当前发布版本，无法绑定")
+    bootstrap_canvas = (
+        _bootstrap_canvas(
+            bound_version,
+            canvas_module=canvas_module,
+            project_snapshot_to_canvas_fn=project_snapshot_to_canvas_fn,
+        )
+        if bound_version is not None else None
+    )
     session = session_model(
         user_id=getattr(current_user, "id", None),
         title=(body.title or "").strip() or "新的业务探索",
         canvas=canvas_module.empty_canvas(),
+        ontology_id=bound_version.ontology_id if bound_version else None,
+        ontology_version_id=bound_version.id if bound_version else None,
     )
     db.add(session)
+    db.flush()
+    if bootstrap_canvas is not None:
+        result = db.execute(
+            sa_update(session_model)
+            .where(
+                session_model.id == session.id,
+                session_model.canvas_version == 0,
+            )
+            .values(canvas=bootstrap_canvas, canvas_version=1)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise HTTPException(409, "会话画布初始化冲突，请重试")
     db.commit()
     db.refresh(session)
     return ok_fn(session_out_fn(session))

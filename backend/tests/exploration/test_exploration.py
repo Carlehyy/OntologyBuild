@@ -518,6 +518,30 @@ def test_draft_apply_to_new_ontology(client, auth_headers, session, db):
         "Order", "Supplier", "Finance",
     }
 
+    # v0 业务语义层：画布（剔除 _document_source 元键）+ 文档 + 指纹 + 血缘；
+    # 草稿回填落地版本，响应透出 versionId/versionNumber 供前端跳转
+    import hashlib
+
+    from app.exploration.document import canvas_fingerprint
+    from app.exploration.models import ExplorationDocument, ExplorationDraft
+    assert result["versionId"] == release.id
+    assert result["versionNumber"] == "v0"
+    semantic = release.snapshot_semantic
+    assert semantic and semantic["semanticRevision"] == 1
+    assert semantic["sourceSessionId"] == session["id"]
+    document = db.query(ExplorationDocument).filter_by(
+        id=draft["documentId"]).one()
+    assert semantic["sourceDocumentId"] == document.id
+    assert semantic["documentMd"] == document.content_md
+    assert semantic["documentTitle"] == document.title
+    assert semantic["documentFingerprint"] == hashlib.sha256(
+        document.content_md.encode("utf-8")).hexdigest()
+    assert "_document_source" not in semantic["canvas"]
+    assert semantic["canvasFingerprint"] == canvas_fingerprint(semantic["canvas"])
+    assert semantic["updatedAt"]
+    stored_draft = db.query(ExplorationDraft).filter_by(id=draft["id"]).one()
+    assert stored_draft.applied_version_id == release.id
+
     # 血缘：五类元素都带 source（session/document/draft/draftKey/sourceRefs）
     from app.ontologies.formal_modeling.models import (ActionType, LinkType,
                                                        ObjectType, OntologyFunction)
@@ -637,7 +661,16 @@ def test_draft_discard(client, auth_headers, session, db):
 
 
 def test_draft_conservative_merge(client, auth_headers, session, db, ontology):
-    """合并进已有本体：同名跳过并在报告/结果中体现，链接端点绑定到既有类型。"""
+    """合并进已有本体：走版本正门 —— 合并进草稿版本快照（同名跳过、端点绑定到
+    既有类型），不触碰 fo_* live 表、不新建 release、不重建图投影。"""
+    from app.exploration.models import ExplorationDraft, ExplorationSession
+    from app.models.ontology_version import OntologyVersion
+    from app.ontologies.formal_modeling.models import LinkType, ObjectType
+    from app.ontologies.versions.snapshot_contract import (
+        complete_snapshot,
+        snapshot_hash,
+    )
+
     oid = ontology["id"]
     r = client.put(f"/api/v2/formal/ontologies/{oid}/full", headers=auth_headers, json={
         "objectTypes": [{"id": "ot-order", "name": "Order", "displayName": "已有订单",
@@ -648,24 +681,68 @@ def test_draft_conservative_merge(client, auth_headers, session, db, ontology):
         "linkTypes": [], "actions": [], "functions": [], "instances": [], "linkInstances": [],
     })
     assert r.status_code == 200, r.text
+    # “目标本体已有 Order”在版本域的含义是发布快照内含 Order：
+    # 把 live 表内容同步进 v0 基线（live 投影与发布基线一致的真实状态）。
+    release = db.query(OntologyVersion).filter_by(
+        ontology_id=oid, version_number="v0").one()
+    snap = complete_snapshot(release.snapshot_formal)
+    snap["objectTypes"].append({
+        "id": "ot-order", "name": "Order", "displayName": "已有订单",
+        "primaryKey": "p1",
+        "properties": [{"id": "p1", "name": "order_no", "displayName": "订单号",
+                        "type": "string", "required": True}],
+        "positionX": 0, "positionY": 0,
+    })
+    release.snapshot_formal = snap
+    release.snapshot_hash = snapshot_hash(snap)
+    db.commit()
 
     draft = _make_draft(client, auth_headers, session["id"], db, target_ontology_id=oid)
     conflicted = {o["name"]: o["conflict"] for o in draft["draft"]["objectTypes"]}
     assert conflicted["Order"] is True and conflicted["Supplier"] is False
     assert any("Order" in c for c in draft["report"]["conflicts"])
 
+    live_objects_before = db.query(ObjectType).filter(
+        ObjectType.ontology_id == oid).count()
+    live_links_before = db.query(LinkType).filter(
+        LinkType.ontology_id == oid).count()
+
     r = client.post(f"{BASE}/drafts/{draft['id']}/apply", headers=auth_headers, json={})
+    assert r.status_code == 200, r.text
     result = r.json()["data"]
     assert result["ontologyId"] == oid
     assert result["created"]["objectTypes"] == 2      # Order 被跳过
     assert any("Order" in s["reason"] for s in result["skipped"])
     assert result["created"]["linkTypes"] == 1        # Order→Supplier 绑到既有 ot-order
 
-    r = client.get(f"/api/v2/formal/ontologies/{oid}/full", headers=auth_headers)
-    full = r.json()["data"]
-    assert {o["name"] for o in full["objectTypes"]} == {"Order", "Supplier", "Finance"}
-    link = full["linkTypes"][0]
-    assert link["sourceObjectTypeId"] == "ot-order"   # 端点解析到已有对象类型
+    # 断点修复回归：合并不触碰 live 表、不新建 release、不重建图投影
+    assert db.query(ObjectType).filter(
+        ObjectType.ontology_id == oid).count() == live_objects_before
+    assert db.query(LinkType).filter(
+        LinkType.ontology_id == oid).count() == live_links_before
+    assert db.query(OntologyVersion).filter_by(
+        ontology_id=oid, node_kind="release").count() == 1
+
+    # 元素落在目标草稿版本快照中，端点解析到既有 ot-order
+    target_version = db.query(OntologyVersion).filter_by(
+        id=result["versionId"]).one()
+    assert target_version.node_kind == "draft"
+    assert target_version.lifecycle_status == "editing"
+    assert result["versionNumber"] == target_version.version_number
+    merged = complete_snapshot(target_version.snapshot_formal)
+    assert {o["name"] for o in merged["objectTypes"]} == {
+        "Order", "Supplier", "Finance"}
+    link = merged["linkTypes"][0]
+    assert link["sourceObjectTypeId"] == "ot-order"   # 端点解析到既有对象类型
+
+    # 草稿/会话锚点回填
+    stored_draft = db.query(ExplorationDraft).filter_by(id=draft["id"]).one()
+    assert stored_draft.applied_ontology_id == oid
+    assert stored_draft.applied_version_id == target_version.id
+    stored_session = db.query(ExplorationSession).filter_by(
+        id=session["id"]).one()
+    assert stored_session.ontology_id == oid
+    assert stored_session.ontology_version_id == target_version.id
 
 
 def test_apply_requires_new_ontology_name(client, auth_headers, session, db):
