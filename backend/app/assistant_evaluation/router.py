@@ -10,6 +10,7 @@ from app.assistant_evaluation import service
 from app.assistant_evaluation.adapters import get_adapters
 from app.assistant_evaluation.dimensions import BASE_DIMENSION_KEYS, DIMENSIONS
 from app.assistant_evaluation.engine import openjudge_available
+from app.assistant_evaluation.models import AssistantEvalItem
 from app.deps import get_db, require_admin
 
 router = APIRouter(prefix="/assistant-evaluation", tags=["assistant-evaluation"],
@@ -54,6 +55,36 @@ class CreateTaskIn(BaseModel):
     sample_days: int = 30
     dimension_keys: list[str] = Field(default_factory=list)
     model_config_id: str | None = None
+    rubric_id: str | None = None
+
+
+class RubricIn(BaseModel):
+    name: str
+    task_description: str
+    sample_queries: list[str] = Field(default_factory=list)
+    min_score: float = 0
+    max_score: float = 5
+    model_config_id: str | None = None
+
+
+class RubricOut(BaseModel):
+    id: str
+    name: str
+    task_description: str
+    rubrics: str
+    min_score: float
+    max_score: float
+    judge_model_name: str
+    created_at: str | None = None
+
+
+class TrendPointOut(BaseModel):
+    id: str
+    title: str
+    created_at: str | None = None
+    overall: float | None = None
+    dimensions: dict
+    judge_model_name: str
 
 
 class TaskItemReason(BaseModel):
@@ -94,6 +125,16 @@ class TaskDetailOut(TaskOut):
     items: list[TaskItemOut]
 
 
+class TraceOut(BaseModel):
+    conversation_id: str
+    conversation_title: str
+    query: str
+    response: str
+    openai_messages: list
+    actions: list
+    tool_error_count: int
+
+
 # ---------------------------------------------------------------- helpers
 
 
@@ -126,6 +167,19 @@ def _task_out(db: Session, task) -> TaskOut:
     )
 
 
+def _rubric_out(row) -> RubricOut:
+    return RubricOut(
+        id=row.id,
+        name=row.name,
+        task_description=row.task_description,
+        rubrics=row.rubrics or "",
+        min_score=row.min_score,
+        max_score=row.max_score,
+        judge_model_name=row.judge_model_name,
+        created_at=_iso(row.created_at),
+    )
+
+
 # ---------------------------------------------------------------- endpoints
 
 
@@ -148,6 +202,47 @@ def get_meta(db: Session = Depends(get_db)):
         ],
         base_dimension_keys=list(BASE_DIMENSION_KEYS),
     ))
+
+
+@router.post("/rubrics")
+def create_rubric(payload: RubricIn, db: Session = Depends(get_db)):
+    try:
+        row = service.create_rubric(
+            db,
+            name=payload.name,
+            task_description=payload.task_description,
+            sample_queries=payload.sample_queries,
+            min_score=payload.min_score,
+            max_score=payload.max_score,
+            model_config_id=payload.model_config_id,
+            created_by=None,
+        )
+    except (service.ServiceError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _ok(_rubric_out(row))
+
+
+@router.get("/rubrics")
+def list_rubrics(db: Session = Depends(get_db)):
+    return _ok([_rubric_out(r) for r in service.list_rubrics(db)])
+
+
+@router.delete("/rubrics/{rubric_id}")
+def delete_rubric(rubric_id: str, db: Session = Depends(get_db)):
+    if not service.delete_rubric(db, rubric_id):
+        raise HTTPException(status_code=404, detail="评分标准不存在")
+    return _ok({"deleted": True})
+
+
+@router.get("/trend")
+def get_trend(assistant_key: str, limit: int = 12, db: Session = Depends(get_db)):
+    rows = service.trend(db, assistant_key, limit=limit)
+    return _ok([TrendPointOut(
+        id=t.id, title=t.title, created_at=_iso(t.created_at),
+        overall=(t.summary or {}).get("overall"),
+        dimensions=(t.summary or {}).get("dimensions") or {},
+        judge_model_name=t.judge_model_name,
+    ) for t in rows])
 
 
 @router.get("/{assistant_key}/conversations")
@@ -180,6 +275,7 @@ def create_task(payload: CreateTaskIn, db: Session = Depends(get_db)):
             sample_days=payload.sample_days,
             dimension_keys=payload.dimension_keys or list(BASE_DIMENSION_KEYS),
             model_config_id=payload.model_config_id,
+            rubric_id=payload.rubric_id,
             created_by=None,
         )
     except service.ServiceError as exc:
@@ -217,6 +313,24 @@ def get_task_detail(task_id: str, db: Session = Depends(get_db)):
         for item in service.task_items(db, task_id)
     ]
     return _ok(TaskDetailOut(**base))
+
+
+@router.get("/tasks/{task_id}/items/{item_id}/trace")
+def get_item_trace(task_id: str, item_id: str, db: Session = Depends(get_db)):
+    task = service.get_task(db, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="评估任务不存在")
+    item = (
+        db.query(AssistantEvalItem)
+        .filter(AssistantEvalItem.id == item_id, AssistantEvalItem.task_id == task_id)
+        .first()
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="评估明细不存在")
+    payload = service.load_item_trace(db, task, item)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="会话轨迹不存在或内容为空")
+    return _ok(TraceOut(**payload))
 
 
 @router.get("/tasks/{task_id}/export")

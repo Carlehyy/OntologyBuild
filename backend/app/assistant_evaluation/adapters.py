@@ -1,17 +1,20 @@
 """助手适配层 — 把各助手的落库轨迹归一化为评估输入。
 
 平台现有 5 个有落库对话的智能体面，各自的消息/步骤结构不同：
-- ontology_agent   本体助手     /agent           AgentMessage.steps: {tool, arguments, summary, durationMs, error?}
+- ontology_agent   本体助手     /agent           AgentMessage.steps: {tool, arguments, summary, durationMs, result, error?}
 - super_assistant  超级助手     /super-assistant  SuperAssistantMessage.steps: {toolName, status, arguments, preview}
 - exploration      建模对话     /explore         ExplorationMessage.steps: {tool, arguments, summary, durationMs, error?}
 - steward          数据管家     数据集成          StewardMessage.steps: {tool, arguments, resultSummary, durationMs, error?}
 - scene_assistant  场景建模助手  三维场景          SceneMessage：role/content（无工具步骤）
 
 每个适配器负责两件事：会话列表（供选择）与轨迹装载（归一化为 Trace）。
+轨迹按 OpenAI messages 格式重建：助手消息携带 tool_calls，紧随 tool 消息
+（结果取自各助手 steps 的结果字段并截断），轨迹类评分器可直接消费。
 新助手接入 = 在 build_adapters() 里加一个条目。
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -31,7 +34,9 @@ class Trace:
 
     query: str                                            # 最后一轮用户输入
     response: str                                         # 助手最终答复
-    openai_messages: list = field(default_factory=list)   # OpenAI messages 格式全轨迹
+    # OpenAI messages 格式全轨迹：assistant 消息携带 tool_calls，紧随 tool 消息
+    # （工具结果已截断），轨迹类评分器可直接消费。
+    openai_messages: list = field(default_factory=list)
     actions: list = field(default_factory=list)           # 归一化工具动作序列
     tool_error_count: int = 0                             # 失败工具调用数
 
@@ -51,7 +56,7 @@ class AssistantAdapter:
     label: str
     description: str
     conv_model: type                                       # 会话 ORM 模型（取标题/时间）
-    list_conversations: Callable  # (db, limit, offset) -> (total, list[ConversationRef])
+    list_conversations: Callable  # (db, limit, offset, since=None) -> (total, list[ConversationRef])
     load_trace: Callable          # (db, conversation_id) -> Trace | None
 
     def get_title(self, db: Session, conversation_id: str) -> str:
@@ -63,17 +68,33 @@ class AssistantAdapter:
         return getattr(row, "created_at", None) if row is not None else None
 
 
-def _extract_steps(rows: list, name_key: str, status_key: str | None,
-                   preview_keys: tuple) -> tuple[list[dict], list[dict], int]:
-    """从消息行提取归一化动作序列与 OpenAI 格式轨迹。"""
-    actions: list[dict] = []
-    openai_messages: list[dict] = []
+_TOOL_CONTENT_LIMIT = 2000
+
+
+def _truncate(value, limit: int) -> str:
+    """截断长文本，避免巨型工具结果撑爆 judge 上下文。"""
+    text = str(value or "")
+    return text if len(text) <= limit else text[:limit] + "…（已截断）"
+
+
+def _extract_steps(rows, name_key: str, status_key: str | None,
+                    result_keys: tuple) -> tuple[list, list, int]:
+    """从消息行提取归一化动作序列与 OpenAI 格式轨迹。
+
+    助手消息的每个工具步骤还原为 assistant.tool_calls + tool 消息对
+    （OpenAI messages 格式），轨迹类评分器因此能拿到完整工具证据；
+    工具结果取 result_keys 中第一个非空字段，长度截断防爆上下文。
+    """
+    actions: list = []
+    openai_messages: list = []
     tool_error_count = 0
-    for row in rows:
-        openai_messages.append({"role": row.role, "content": row.content or ""})
+    for row_index, row in enumerate(rows):
         if row.role != "assistant":
+            openai_messages.append({"role": row.role, "content": row.content or ""})
             continue
-        for step in (row.steps or []):
+        tool_calls: list = []
+        tool_messages: list = []
+        for step_index, step in enumerate(row.steps or []):
             if not isinstance(step, dict):
                 continue
             name = str(step.get(name_key) or "")
@@ -88,24 +109,44 @@ def _extract_steps(rows: list, name_key: str, status_key: str | None,
             failed = bool(error) or status in {"error", "failed"}
             if failed:
                 tool_error_count += 1
-            preview = ""
-            for candidate in preview_keys:
+            result_text = ""
+            for candidate in result_keys:
                 value = step.get(candidate)
                 if value:
-                    preview = str(value)[:600]
+                    result_text = _truncate(value, _TOOL_CONTENT_LIMIT)
                     break
+            if not result_text:
+                result_text = f"调用失败：{error or status}" if failed else "（无结果）"
+            call_id = f"call_{row_index}_{step_index}"
+            tool_calls.append({
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": json.dumps(step.get("arguments") or {},
+                                            ensure_ascii=False),
+                },
+            })
+            tool_messages.append({"role": "tool", "tool_call_id": call_id,
+                                  "name": name, "content": result_text})
             actions.append({"name": name, "arguments": step.get("arguments") or {},
-                            "failed": failed, "status": status, "preview": preview})
+                            "failed": failed, "status": status,
+                            "preview": result_text[:600]})
+        assistant_msg: dict = {"role": "assistant", "content": row.content or ""}
+        if tool_calls:
+            assistant_msg["tool_calls"] = tool_calls
+        openai_messages.append(assistant_msg)
+        openai_messages.extend(tool_messages)
     return actions, openai_messages, tool_error_count
 
 
-def _finalize_trace(openai_messages: list[dict], actions: list[dict],
+def _finalize_trace(openai_messages: list, actions: list,
                     tool_error_count: int) -> Trace | None:
     """取最后一轮 user 提问与最后一条 assistant 答复组装 Trace。"""
     query = next((m["content"] for m in reversed(openai_messages)
                   if m["role"] == "user" and m.get("content")), "")
     response = next((m["content"] for m in reversed(openai_messages)
-                     if m["role"] == "assistant" and m.get("content")), "")
+                      if m["role"] == "assistant" and m.get("content")), "")
     if not query or not response:
         return None
     return Trace(query=query, response=response, openai_messages=openai_messages,
@@ -114,13 +155,19 @@ def _finalize_trace(openai_messages: list[dict], actions: list[dict],
 
 def _make_list(conv_model, msg_model, conv_field: str, title_col: str,
                order_col_name: str = "updated_at"):
-    """通用会话分页列表工厂：按时间倒序，附带消息计数。"""
+    """通用会话分页列表工厂：按时间倒序，附带消息计数；since 为可选窗口过滤。"""
 
-    def _list(db: Session, limit: int, offset: int) -> tuple[int, list[ConversationRef]]:
-        total = db.query(func.count(conv_model.id)).scalar() or 0
+    def _list(db: Session, limit: int, offset: int,
+              since=None) -> tuple[int, list[ConversationRef]]:
+        total_query = db.query(func.count(conv_model.id))
+        rows_query = db.query(conv_model)
+        if since is not None:
+            total_query = total_query.filter(conv_model.created_at >= since)
+            rows_query = rows_query.filter(conv_model.created_at >= since)
+        total = total_query.scalar() or 0
         order_col = getattr(conv_model, order_col_name)
         rows = (
-            db.query(conv_model)
+            rows_query
             .order_by(order_col.desc().nullslast(), conv_model.id.desc())
             .limit(limit).offset(offset).all()
         )
@@ -156,7 +203,7 @@ def _load_agent_runtime_trace(db: Session, conversation_id: str) -> Trace | None
         .all()
     )
     actions, msgs, errors = _extract_steps(rows, "tool", None,
-                                           ("summary", "result"))
+                                            ("result", "summary"))
     return _finalize_trace(msgs, actions, errors)
 
 

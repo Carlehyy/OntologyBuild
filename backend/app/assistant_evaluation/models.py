@@ -70,3 +70,26 @@ class AssistantEvalItem(Base):
     flags: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     root_cause: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+
+
+class AssistantEvalRubric(Base):
+    """自定义评分标准（rubric）：由 judge 模型按任务描述生成，供评估任务选用。
+
+    任务创建时会把 rubric 快照进 task.params，删除本记录不影响历史报告。
+    """
+
+    __tablename__ = "assistant_eval_rubrics"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    task_description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # "1. …\n\n2. …" 编号列表文本（OpenJudge rubric 格式）
+    rubrics: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    min_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    max_score: Mapped[float] = mapped_column(Float, nullable=False, default=5)
+    judge_model_config_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    judge_model_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    created_by: Mapped[str | None] = mapped_column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)

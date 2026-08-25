@@ -1,7 +1,9 @@
-"""评估任务服务 — 任务创建 / 后台执行 / 汇总 / 报告导出。
+"""评估任务服务 — 任务创建 / 后台执行 / 汇总 / 报告导出 / rubric 管理 / 恢复。
 
 执行模型：任务落库后由守护线程异步执行（与平台 runtime/reflection 的线程
-模式一致），前端轮询任务状态。单条会话的部分维度失败不影响整体报告。
+模式一致），前端轮询任务状态。任务内会话并发执行（TASK_CONCURRENCY=3），
+单条会话的部分维度失败不影响整体报告。进程重启后 queued 任务自动重排、
+running 任务标记中断（bootstrap 启动钩子调用 recover_interrupted_tasks）。
 """
 from __future__ import annotations
 
@@ -17,16 +19,27 @@ from app.assistant_evaluation.adapters import get_adapters
 from app.assistant_evaluation.dimensions import (
     BASE_DIMENSION_KEYS,
     DIMENSIONS,
+    RUBRIC_DIM_KEY,
     normalize,
     root_cause_of,
+    rubric_dimension,
 )
-from app.assistant_evaluation.engine import build_engine, openjudge_available
-from app.assistant_evaluation.models import AssistantEvalItem, AssistantEvalTask
+from app.assistant_evaluation.engine import (
+    build_engine,
+    generate_rubrics,
+    openjudge_available,
+)
+from app.assistant_evaluation.models import (
+    AssistantEvalItem,
+    AssistantEvalRubric,
+    AssistantEvalTask,
+)
 from app.shared.database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
 MAX_CONVERSATIONS_PER_TASK = 50
+TASK_CONCURRENCY = 3
 
 
 class ServiceError(ValueError):
@@ -37,9 +50,16 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
+def _start_worker(task_id: str) -> None:
+    thread = threading.Thread(target=_run_task, args=(task_id,), daemon=True,
+                              name=f"assistant-eval-{task_id[:8]}")
+    thread.start()
+
+
 def create_task(db: Session, *, assistant_key: str, conversation_ids: list[str] | None,
                 sample_size: int, sample_days: int, dimension_keys: list[str],
-                model_config_id: str | None, created_by: str | None) -> AssistantEvalTask:
+                model_config_id: str | None, rubric_id: str | None,
+                created_by: str | None) -> AssistantEvalTask:
     adapter = get_adapters().get(assistant_key)
     if not adapter:
         raise ServiceError(f"未知的助手类型：{assistant_key}")
@@ -50,22 +70,37 @@ def create_task(db: Session, *, assistant_key: str, conversation_ids: list[str] 
         sample_size = max(1, min(int(sample_size or 10), 30))
         sample_days = max(1, min(int(sample_days or 30), 180))
         since = _as_utc(datetime.now(timezone.utc)) - timedelta(days=sample_days)
-        _, refs = adapter.list_conversations(db, limit=200, offset=0)
-        recent = [r for r in refs if r.created_at and _as_utc(r.created_at) >= since]
-        if not recent:
+        # SQL 层窗口过滤，直接取窗口内最近 sample_size 条（消除"仅扫最近200条"偏差）
+        _, refs = adapter.list_conversations(db, limit=sample_size, offset=0, since=since)
+        conversation_ids = [r.id for r in refs]
+        if not conversation_ids:
             raise ServiceError(f"「{adapter.label}」在最近 {sample_days} 天内没有可评估的会话。")
-        conversation_ids = [r.id for r in recent[:sample_size]]
-    if not conversation_ids:
-        raise ServiceError("请至少选择一条要评估的会话。")
     if len(conversation_ids) > MAX_CONVERSATIONS_PER_TASK:
         raise ServiceError(f"单次评估最多 {MAX_CONVERSATIONS_PER_TASK} 条会话，当前 {len(conversation_ids)} 条。")
 
-    unknown = [k for k in dimension_keys if k not in DIMENSIONS]
+    unknown = [k for k in dimension_keys if k not in DIMENSIONS and k != RUBRIC_DIM_KEY]
     if unknown:
         raise ServiceError(f"未知评分维度：{', '.join(unknown)}")
     dimension_keys = list(dict.fromkeys(dimension_keys)) or list(BASE_DIMENSION_KEYS)
-    llm_dims = [k for k in dimension_keys if DIMENSIONS[k].kind == "llm"]
-    judge = _resolve_judge_model(db, model_config_id) if llm_dims else None
+
+    rubric = None
+    if rubric_id:
+        rubric_row = (
+            db.query(AssistantEvalRubric)
+            .filter(AssistantEvalRubric.id == rubric_id)
+            .first()
+        )
+        if rubric_row is None:
+            raise ServiceError("所选评分标准不存在或已被删除。")
+        rubric = {"name": rubric_row.name, "rubrics": rubric_row.rubrics,
+                  "min_score": rubric_row.min_score, "max_score": rubric_row.max_score}
+        if RUBRIC_DIM_KEY not in dimension_keys:
+            dimension_keys = list(dimension_keys) + [RUBRIC_DIM_KEY]
+
+    llm_dims = [k for k in dimension_keys
+                if DIMENSIONS.get(k) and DIMENSIONS[k].kind == "llm"]
+    needs_judge = bool(llm_dims) or rubric is not None
+    judge = _resolve_judge_model(db, model_config_id) if needs_judge else None
 
     task = AssistantEvalTask(
         assistant_key=assistant_key,
@@ -73,12 +108,14 @@ def create_task(db: Session, *, assistant_key: str, conversation_ids: list[str] 
         status="queued",
         params={
             "mode": mode,
-            "dimension_keys": dimension_keys,
-            "conversation_ids": list(conversation_ids)[:MAX_CONVERSATIONS_PER_TASK],
+            "dimension_keys": list(dimension_keys),
+            "conversation_ids": list(conversation_ids),
             "engine": "openjudge" if openjudge_available() else "builtin",
+            **({"rubric": rubric} if rubric else {}),
         },
         judge_model_config_id=(str(judge.id) if judge is not None else None),
-        judge_model_name=(getattr(judge, "name", "") or "") if judge is not None else "（仅代码型维度，无需 judge 模型）",
+        judge_model_name=(getattr(judge, "name", "") or "") if judge is not None
+        else "（仅代码型维度，无需 judge 模型）",
         conversation_count=len(conversation_ids),
         created_by=created_by,
     )
@@ -86,9 +123,7 @@ def create_task(db: Session, *, assistant_key: str, conversation_ids: list[str] 
     db.commit()
     db.refresh(task)
 
-    thread = threading.Thread(target=_run_task, args=(task.id,), daemon=True,
-                              name=f"assistant-eval-{task.id[:8]}")
-    thread.start()
+    _start_worker(task.id)
     return task
 
 
@@ -103,6 +138,11 @@ def _resolve_judge_model(db: Session, model_config_id: str | None):
 
 
 def _run_task(task_id: str) -> None:
+    """任务执行入口（守护线程上下文）：内联事件循环并发调度。"""
+    asyncio.run(_run_task_async(task_id))
+
+
+async def _run_task_async(task_id: str) -> None:
     started = time.monotonic()
     owns = SessionLocal()
     try:
@@ -126,55 +166,58 @@ def _run_task(task_id: str) -> None:
             engine = build_engine(config)
 
         adapter = get_adapters()[task.assistant_key]
-        conv_ids = list((task.params or {}).get("conversation_ids") or [])
-        base_dims = list((task.params or {}).get("dimension_keys") or BASE_DIMENSION_KEYS)
+        params = task.params or {}
+        conv_ids = list(params.get("conversation_ids") or [])
+        base_dims = list(params.get("dimension_keys") or BASE_DIMENSION_KEYS)
+        rubric = params.get("rubric")
 
-        items: list[AssistantEvalItem] = []
-        for index, conv_id in enumerate(conv_ids):
-            trace = adapter.load_trace(owns, conv_id)
-            item = AssistantEvalItem(
-                task_id=task.id, conversation_id=conv_id,
-                conversation_title=adapter.get_title(owns, conv_id) or conv_id[:8],
+        dims_map = dict(DIMENSIONS)
+        if rubric:
+            dims_map[RUBRIC_DIM_KEY] = rubric_dimension(
+                rubric["name"], rubric["min_score"], rubric["max_score"]
             )
-            if trace is None:
-                item.flags = {"engine_error": "会话内容为空或缺少完整的问答轮次"}
-            else:
-                dim_keys = _effective_dims(base_dims, trace)
-                try:
-                    raw_results = _evaluate_sync(engine, dim_keys, trace)
-                    scores, reasons = {}, {}
-                    for key in dim_keys:
-                        dim = DIMENSIONS[key]
-                        payload = raw_results.get(key) or {}
-                        raw = payload.get("raw")
-                        if raw is None:
-                            reasons[key] = {"score": None, "reason": payload.get("reason") or "该维度未产出分数"}
-                            continue
-                        scores[key] = normalize(dim, raw)
-                        reason_text = str(payload.get("reason") or "").strip()
-                        reasons[key] = {"score": scores[key],
-                                        "reason": f"{dim.label} {raw}/{dim.scale[1]}：{reason_text}".strip("：")}
-                    flags = {
-                        "loop_detected": bool(scores.get("action_loop") is not None and scores["action_loop"] < 80),
-                        "tool_error_count": trace.tool_error_count,
-                        "low_dims": [k for k, v in scores.items() if v < 60],
-                    }
-                    overall = _weighted_overall(dim_keys, scores)
-                    item.scores = scores
-                    item.reasons = reasons
-                    item.flags = flags
-                    item.overall_score = overall
-                    item.root_cause = root_cause_of(scores, flags)
-                except Exception as exc:  # 单会话失败不影响其余会话
-                    logger.exception("评估单条会话失败：%s", conv_id)
-                    item.flags = {"engine_error": str(exc)[:500]}
-            owns.add(item)
-            task.completed_conversations = index + 1
-            owns.commit()
-            items.append(item)
+
+        sem = asyncio.Semaphore(TASK_CONCURRENCY)
+
+        async def _process(conv_id: str):
+            async with sem:
+                # 数据库操作均为同步代码，事件循环内串行执行，会话共享安全
+                trace = adapter.load_trace(owns, conv_id)
+                item = AssistantEvalItem(
+                    task_id=task.id, conversation_id=conv_id,
+                    conversation_title=adapter.get_title(owns, conv_id) or conv_id[:8],
+                )
+                if trace is None:
+                    item.flags = {"engine_error": "会话内容为空或缺少完整的问答轮次"}
+                else:
+                    dim_keys = _effective_dims(base_dims, trace)
+                    try:
+                        raw_results = await _evaluate_async(engine, dim_keys, trace, rubric)
+                        scores, reasons = _assemble_scores(dim_keys, dims_map, raw_results)
+                        flags = {
+                            "loop_detected": bool(scores.get("action_loop") is not None
+                                                  and scores["action_loop"] < 80),
+                            "tool_error_count": trace.tool_error_count,
+                            "low_dims": [k for k, v in scores.items() if v < 60],
+                        }
+                        item.scores = scores
+                        item.reasons = reasons
+                        item.flags = flags
+                        item.overall_score = _weighted_overall(dim_keys, scores, dims_map)
+                        item.root_cause = root_cause_of(scores, flags)
+                    except Exception as exc:  # 单会话失败不影响其余会话
+                        logger.exception("评估单条会话失败：%s", conv_id)
+                        item.flags = {"engine_error": str(exc)[:500]}
+                owns.add(item)
+                task.completed_conversations = (task.completed_conversations or 0) + 1
+                owns.commit()
+                return item
+
+        items = await asyncio.gather(*[_process(c) for c in conv_ids])
 
         task.status = "success"
-        task.summary = _build_summary(items, engine_name=(engine.name if engine else "code-only"))
+        task.summary = _build_summary(items, engine_name=(engine.name if engine else "code-only"),
+                                      rubric=rubric)
         task.finished_at = datetime.now(timezone.utc)
         task.duration_ms = int((time.monotonic() - started) * 1000)
         owns.commit()
@@ -197,9 +240,9 @@ def _effective_dims(base_dims: list[str], trace) -> list[str]:
     has_actions = len(trace.actions) >= 1
     result: list[str] = []
     for key in base_dims:
-        if key not in DIMENSIONS:
+        if key not in DIMENSIONS and key != RUBRIC_DIM_KEY:
             continue
-        if key in {"trajectory", "action_loop"} and not has_actions:
+        if key in {"trajectory", "tool_call_success", "action_loop"} and not has_actions:
             continue
         if key == "action_loop" and len(trace.actions) < 2:
             continue
@@ -207,45 +250,77 @@ def _effective_dims(base_dims: list[str], trace) -> list[str]:
     return result
 
 
-def _evaluate_sync(engine, dim_keys: list[str], trace) -> dict:
+async def _evaluate_async(engine, dim_keys: list[str], trace, rubric: dict | None) -> dict:
     if engine is None:
         # 纯代码型维度的任务没有 judge 模型，直接本地确定性计算
         engine = _CodeOnlyEngine()
-    return asyncio.run(engine.evaluate(dim_keys, trace))
+    return await engine.evaluate(dim_keys, trace, rubric=rubric)
 
 
 class _CodeOnlyEngine:
     name = "code-only"
 
-    async def evaluate(self, dim_keys: list[str], trace) -> dict:  # noqa: ANN001
-        from app.assistant_evaluation.engine import detect_action_loop
+    async def evaluate(self, dim_keys: list[str], trace, rubric: dict | None = None) -> dict:
+        from app.assistant_evaluation import engine as eng
 
-        results = {}
+        results: dict = {}
         for key in dim_keys:
-            results[key] = {"raw": detect_action_loop(trace.actions), "reason": ""}
+            if key == "action_loop":
+                results[key] = {"raw": eng.detect_action_loop(trace.actions), "reason": ""}
+            elif key == "response_repetition":
+                results[key] = {"raw": eng.detect_ngram_repetition(trace.response),
+                                "reason": ""}
         return results
 
 
-def _weighted_overall(dim_keys: list[str], scores: dict[str, float]) -> float | None:
+def _assemble_scores(dim_keys: list[str], dims_map: dict, raw_results: dict):
+    """把引擎原始分归一化并组装 scores/reasons（含 rubric 维度）。"""
+    scores: dict = {}
+    reasons: dict = {}
+    for key in dim_keys:
+        dim = dims_map.get(key)
+        if dim is None:
+            continue
+        payload = raw_results.get(key) or {}
+        raw = payload.get("raw")
+        if raw is None:
+            reasons[key] = {"score": None,
+                            "reason": payload.get("reason") or "该维度未产出分数"}
+            continue
+        scores[key] = normalize(dim, raw)
+        reason_text = str(payload.get("reason") or "").strip()
+        reasons[key] = {"score": scores[key],
+                        "reason": f"{dim.label} {raw}/{dim.scale[1]}：{reason_text}".strip("：")}
+    return scores, reasons
+
+
+def _weighted_overall(dim_keys: list[str], scores: dict, dims_map: dict) -> float | None:
     weighted, total_weight = 0.0, 0.0
     for key in dim_keys:
         value = scores.get(key)
         if value is None:
             continue
-        weight = DIMENSIONS[key].weight
+        weight = dims_map[key].weight
         weighted += value * weight
         total_weight += weight
     return round(weighted / total_weight, 1) if total_weight else None
 
 
-def _build_summary(items: list[AssistantEvalItem], engine_name: str) -> dict:
+def _build_summary(items: list[AssistantEvalItem], engine_name: str,
+                   rubric: dict | None = None) -> dict:
     scored = [i for i in items if i.scores]
+    dims_map = dict(DIMENSIONS)
+    if rubric:
+        dims_map[RUBRIC_DIM_KEY] = rubric_dimension(
+            rubric["name"], rubric["min_score"], rubric["max_score"]
+        )
     dimensions: dict[str, dict] = {}
-    for key in DIMENSIONS:
+    stat_keys = list(DIMENSIONS.keys()) + ([RUBRIC_DIM_KEY] if rubric else [])
+    for key in stat_keys:
         values = [float(i.scores[key]) for i in scored if key in i.scores]
         if values:
             dimensions[key] = {
-                "label": DIMENSIONS[key].label,
+                "label": dims_map[key].label,
                 "avg": round(sum(values) / len(values), 1),
                 "min": min(values),
                 "max": max(values),
@@ -271,13 +346,13 @@ def _build_summary(items: list[AssistantEvalItem], engine_name: str) -> dict:
             1
             for i in items
             for k in (i.reasons or {})
-            if DIMENSIONS.get(k) and DIMENSIONS[k].kind == "llm"
+            if dims_map.get(k) and dims_map[k].kind == "llm"
         ),
         "engine": engine_name,
     }
 
 
-# ---------------------------------------------------------------- 查询 / 导出
+# ---------------------------------------------------------------- 查询 / 导出 / rubric / 恢复
 
 
 def list_tasks(db: Session, assistant_key: str | None, limit: int = 20):
@@ -300,13 +375,63 @@ def task_items(db: Session, task_id: str) -> list[AssistantEvalItem]:
     )
 
 
+def trend(db: Session, assistant_key: str, limit: int = 12) -> list[AssistantEvalTask]:
+    """同助手历次成功任务（时间升序，供前端趋势图与上次对比）。"""
+    return (
+        db.query(AssistantEvalTask)
+        .filter(AssistantEvalTask.assistant_key == assistant_key,
+                AssistantEvalTask.status == "success")
+        .order_by(AssistantEvalTask.created_at.asc())
+        .limit(min(max(1, int(limit or 12)), 24))
+        .all()
+    )
+
+
+def load_item_trace(db: Session, task: AssistantEvalTask,
+                    item: AssistantEvalItem) -> dict | None:
+    """会话归一化轨迹（下钻用，只读）：query/response/OpenAI 消息/工具动作。"""
+    adapter = get_adapters().get(task.assistant_key)
+    if adapter is None:
+        return None
+    trace = adapter.load_trace(db, item.conversation_id)
+    if trace is None:
+        return None
+    return {
+        "conversation_id": item.conversation_id,
+        "conversation_title": item.conversation_title,
+        "query": trace.query,
+        "response": trace.response,
+        "openai_messages": trace.openai_messages,
+        "actions": trace.actions,
+        "tool_error_count": trace.tool_error_count,
+    }
+
+
+def _dims_map_for(task: AssistantEvalTask) -> dict:
+    dims_map = dict(DIMENSIONS)
+    rubric = (task.params or {}).get("rubric")
+    if rubric:
+        dims_map[RUBRIC_DIM_KEY] = rubric_dimension(
+            rubric["name"], rubric["min_score"], rubric["max_score"]
+        )
+    return dims_map
+
+
 def export_markdown(task: AssistantEvalTask, items: list[AssistantEvalItem]) -> str:
+    params = task.params or {}
+    rubric = params.get("rubric")
+    dims_map = _dims_map_for(task)
     lines: list[str] = [
         f"# 助手质量报告 · {task.title}",
         "",
         f"- 任务状态：{task.status}",
-        f"- 评估引擎：{(task.summary or {}).get('engine') or task.params.get('engine', '')}"
+        f"- 评估引擎：{(task.summary or {}).get('engine') or params.get('engine', '')}"
         f" · judge 模型：{task.judge_model_name or '-'}",
+    ]
+    if rubric:
+        lines.append(f"- 自定义评分标准：{rubric.get('name') or '-'}"
+                     f"（{rubric.get('min_score')}-{rubric.get('max_score')} 分制）")
+    lines += [
         f"- 综合得分：**{(task.summary or {}).get('overall') if task.summary else '-'}** / 100",
         f"- 会话数：{task.completed_conversations}/{task.conversation_count}"
         f" · 产出评分 {(task.summary or {}).get('evaluated', 0)}"
@@ -338,7 +463,8 @@ def export_markdown(task: AssistantEvalTask, items: list[AssistantEvalItem]) -> 
         for key, reason in (item.reasons or {}).items():
             score = reason.get("score")
             text = reason.get("reason") or ""
-            lines.append(f"- {DIMENSIONS[key].label if key in DIMENSIONS else key}：{'' if score is None else score}分 {text}")
+            label = dims_map[key].label if key in dims_map else key
+            lines.append(f"- {label}：{'' if score is None else score}分 {text}")
         lines.append("")
     return "\n".join(lines)
 
@@ -352,3 +478,70 @@ def delete_task(db: Session, task_id: str) -> bool:
     db.delete(task)
     db.commit()
     return True
+
+
+# ---------------------------------------------------------------- rubric 管理
+
+
+def create_rubric(db: Session, *, name: str, task_description: str,
+                  sample_queries: list | None, min_score: float, max_score: float,
+                  model_config_id: str | None, created_by: str | None) -> AssistantEvalRubric:
+    name = (name or "").strip()
+    task_description = (task_description or "").strip()
+    if not name or not task_description:
+        raise ServiceError("评分标准名称与任务描述不能为空。")
+    try:
+        min_score = float(min_score)
+        max_score = float(max_score)
+    except (TypeError, ValueError):
+        raise ServiceError("分值区间必须是数字。")
+    if min_score < 0 or max_score <= min_score:
+        raise ServiceError("分值区间不合法：需满足 0 ≤ 最低分 < 最高分。")
+    judge = _resolve_judge_model(db, model_config_id)
+    rubrics_text = generate_rubrics(judge, name, task_description,
+                                    list(sample_queries or []), min_score, max_score)
+    row = AssistantEvalRubric(
+        name=name,
+        task_description=task_description,
+        rubrics=rubrics_text,
+        min_score=min_score,
+        max_score=max_score,
+        judge_model_config_id=str(judge.id),
+        judge_model_name=getattr(judge, "name", "") or "",
+        created_by=created_by,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_rubrics(db: Session) -> list[AssistantEvalRubric]:
+    return db.query(AssistantEvalRubric).order_by(AssistantEvalRubric.created_at.desc()).all()
+
+
+def delete_rubric(db: Session, rubric_id: str) -> bool:
+    row = db.query(AssistantEvalRubric).filter(AssistantEvalRubric.id == rubric_id).first()
+    if row is None:
+        return False
+    db.delete(row)
+    db.commit()
+    return True
+
+
+def recover_interrupted_tasks() -> dict:
+    """启动恢复：queued 任务重新调度，running 任务标记中断（进程重启语义）。"""
+    db = SessionLocal()
+    try:
+        queued = db.query(AssistantEvalTask).filter(AssistantEvalTask.status == "queued").all()
+        running = db.query(AssistantEvalTask).filter(AssistantEvalTask.status == "running").all()
+        for task in running:
+            task.status = "error"
+            task.error = "服务重启中断了评估任务，请重新发起。"
+            task.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        for task in queued:
+            _start_worker(task.id)
+        return {"requeued": len(queued), "interrupted": len(running)}
+    finally:
+        db.close()

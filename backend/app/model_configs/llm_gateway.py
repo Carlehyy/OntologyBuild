@@ -77,6 +77,14 @@ def chat(call_kwargs: dict, messages: list[dict], tools: list[dict]) -> dict[str
             pass  # 统计记录失败不影响主流程
 
 
+def record_llm_call(model_config_id: str, model_name: str, provider: str,
+                    status: str, latency_ms: int,
+                    error_message: str | None = None) -> None:
+    """公共调用记录入口：供不经 chat() 的直连调用方（如 OpenJudge 官方评分器）复用。"""
+    _record_call(model_config_id, model_name, provider, status, latency_ms,
+                 _safe_error_message(error_message))
+
+
 def _record_call(model_config_id: str, model_name: str, provider: str,
                  status: str, latency_ms: int, error_message: str | None) -> None:
     from app.database import SessionLocal
