@@ -319,6 +319,14 @@ app.include_router(
     dependencies=community_plugins_guard,
 )
 app.include_router(sentinel_router.router, prefix="/api/v1/ontologies/{ontology_id}/sentinels", tags=["sentinel"], dependencies=ontology_guard)
+# 助手评估（系统设置子项，仅 admin）— 基于 OpenJudge 的助手会话质量旁路评估
+from app.assistant_evaluation import router as assistant_evaluation_router
+app.include_router(
+    assistant_evaluation_router.router,
+    prefix="/api/v1",
+    tags=["assistant-evaluation"],
+    dependencies=admin_guard,
+)
 # 数据采集器 — AI HOT 等真实数据源接入
 app.include_router(collectors_router.router, prefix="/api/v2/collectors", tags=["collectors"])
 # 事件登记 — 智能助手↔数据通道之间的事件采集入口（平台录入 + 第三方 API Key 上传）

@@ -1,10 +1,11 @@
 import { useLocation, useParams } from 'react-router-dom'
 import UserManagementPanel from './UserManagementPanel'
+import AssistantEvalTab from './tabs/AssistantEvalTab'
 import { useDomainSettings } from './hooks/useDomainSettings'
 import DomainSettingsTab from './tabs/DomainSettingsTab'
 import MonitoringTab from './tabs/MonitoringTab'
 
-type ActiveTab = 'users' | 'domains' | 'monitoring'
+type ActiveTab = 'users' | 'domains' | 'monitoring' | 'assistant-eval'
 
 const TAB_FROM_PATH: Record<string, ActiveTab> = {
   '/settings': 'users',
@@ -12,12 +13,14 @@ const TAB_FROM_PATH: Record<string, ActiveTab> = {
   '/settings/users': 'users',
   '/settings/domains': 'domains',
   '/settings/monitoring': 'monitoring',
+  '/settings/assistant-eval': 'assistant-eval',
 }
 
 const TAB_PARAM_MAP: Record<string, ActiveTab> = {
   'users': 'users',
   'domains': 'domains',
   'monitoring': 'monitoring',
+  'assistant-eval': 'assistant-eval',
 }
 
 export default function SettingsPage() {
@@ -34,6 +37,7 @@ export default function SettingsPage() {
       {activeTab === 'users' && <UserManagementPanel />}
       {activeTab === 'domains' && <DomainSettingsTab settings={domainSettings} />}
       {activeTab === 'monitoring' && <MonitoringTab />}
+      {activeTab === 'assistant-eval' && <AssistantEvalTab />}
     </div>
   )
 }

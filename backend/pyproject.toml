@@ -49,6 +49,15 @@ dependencies = [
   "websocket-client==1.8.0",
   "nats-py>=2.15.0",
   "statsmodels==0.14.6",
+  # 助手评估（OpenJudge）运行时所需的轻量依赖；py-openjudge 本体在
+  # Dockerfile 中以 --no-deps 精确安装（见 backend/Dockerfile 注释）。
+  # dashscope：openjudge.models 包级 __init__ 聚合导入 QwenVLModel 所必需；
+  # scikit-learn：openjudge.graders.agent.utils 的 TfidfVectorizer 所必需
+  # （numpy/scipy 已随 statsmodels/pandas 在依赖树内）。
+  "loguru==0.7.3",
+  "tqdm==4.67.1",
+  "dashscope==1.23.6",
+  "scikit-learn==1.7.2",
 ]
 
 [dependency-groups]
