@@ -4,6 +4,8 @@ OntologyBuild 是一个“本体即服务（Ontology-as-a-Service）”平台：
 接入、清洗并映射为对象、关系、动作与规则，再由 Sentinel Engine 监听状态
 变化、评估条件并执行受治理的动作。
 
+![平台能力总览](./docs/images/platform-capabilities.png)
+
 ## 平台能力
 
 - 本体管理与治理：对象、关系、动作与规则建模，版本按
