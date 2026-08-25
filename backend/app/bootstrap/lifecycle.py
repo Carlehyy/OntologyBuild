@@ -138,6 +138,22 @@ async def application_lifespan(
                 ) from exc
             _main_logger.warning("SyncScheduler 启动失败: %s", exc)
 
+        # 助手评估任务恢复：queued 重排、running 标记中断（旁路能力，失败不阻断启动）
+        if settings.environment != "test":
+            try:
+                from app.assistant_evaluation.service import (
+                    recover_interrupted_tasks,
+                )
+
+                recovery = recover_interrupted_tasks()
+                if recovery.get("requeued") or recovery.get("interrupted"):
+                    _main_logger.info(
+                        "助手评估任务恢复：重排 %s 个、标记中断 %s 个",
+                        recovery.get("requeued"), recovery.get("interrupted"),
+                    )
+            except Exception as exc:
+                _main_logger.warning("助手评估任务恢复失败: %s", exc)
+
         from app.api_hub import mcp_server as api_hub_mcp
 
         # session manager 每实例只能 run 一次；重复进入 lifespan（如测试）需重建

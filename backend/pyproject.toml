@@ -58,6 +58,9 @@ dependencies = [
   "tqdm==4.67.1",
   "dashscope==1.23.6",
   "scikit-learn==1.7.2",
+  # tenacity：openjudge.generator（SimpleRubricsGenerator 评分标准生成）所必需；
+  # 约束与 py-openjudge 0.2.1 声明一致（>=9.1,<10）。
+  "tenacity==9.1.2",
 ]
 
 [dependency-groups]
