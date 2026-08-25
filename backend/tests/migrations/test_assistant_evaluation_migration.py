@@ -48,10 +48,13 @@ def test_downgrade_drops_assistant_eval_tables(tmp_path, monkeypatch):
     cfg = _alembic_config(backend, db_path)
 
     command.upgrade(cfg, "head")
-    command.downgrade(cfg, "-1")
+    # 0079 位于 0078 之上：先降 0079（rubrics），再降 0078（任务/明细），
+    # 验证 0078 自身的 downgrade 确实删除其两张表。
+    command.downgrade(cfg, "0077_merge_semantic_scenes_heads")
 
     engine = create_engine(f"sqlite:///{db_path}")
     tables = set(inspect(engine).get_table_names())
     assert "assistant_eval_tasks" not in tables
     assert "assistant_eval_items" not in tables
+    assert "assistant_eval_rubrics" not in tables
     engine.dispose()
