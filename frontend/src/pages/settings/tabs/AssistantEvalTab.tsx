@@ -11,6 +11,7 @@ import {
   Button,
   Checkbox,
   Drawer,
+  Input,
   InputNumber,
   Modal,
   Progress,
@@ -23,16 +24,22 @@ import {
   message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { Download, FlaskConical, Trash2 } from 'lucide-react'
+import { Download, Eye, FlaskConical, Plus, Trash2 } from 'lucide-react'
 import {
   assistantEvaluationApi,
   type AssistantMeta,
+  type EvalItemTrace,
   type EvalMeta,
+  type EvalRubric,
   type EvalTask,
   type EvalTaskDetail,
   type EvalTaskItem,
+  type TrendPoint,
 } from '@/api/assistantEvaluation'
 import { modelApi } from '@/api/ontologies'
+import ReactECharts from 'echarts-for-react'
+import type { EChartsOption } from 'echarts'
+import { CHART_AXIS, CHART_SERIES_PALETTE, CHART_SPLIT, CHART_TEXT } from '@/lib/echartsTheme'
 
 const { Text } = Typography
 
@@ -71,6 +78,9 @@ export default function AssistantEvalTab() {
   const [sampleDays, setSampleDays] = useState<number>(30)
   const [dimensionKeys, setDimensionKeys] = useState<string[]>([])
   const [modelConfigId, setModelConfigId] = useState<string | undefined>(undefined)
+  const [rubricId, setRubricId] = useState<string | undefined>(undefined)
+  const [rubricModalOpen, setRubricModalOpen] = useState(false)
+  const [traceItemId, setTraceItemId] = useState<string | null>(null)
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null)
 
   const metaQuery = useQuery({
@@ -124,6 +134,7 @@ export default function AssistantEvalTab() {
         sample_days: sampleDays,
         dimension_keys: effectiveDimensions,
         model_config_id: modelConfigId ?? null,
+        rubric_id: rubricId ?? null,
       }),
     onSuccess: (task) => {
       void queryClient.invalidateQueries({ queryKey: ['assistant-eval', 'tasks'] })
@@ -144,6 +155,23 @@ export default function AssistantEvalTab() {
     queryKey: ['assistant-eval', 'task', detailTaskId],
     queryFn: () => assistantEvaluationApi.taskDetail(detailTaskId!),
     enabled: !!detailTaskId,
+  })
+
+  const rubricsQuery = useQuery({
+    queryKey: ['assistant-eval', 'rubrics'],
+    queryFn: () => assistantEvaluationApi.rubrics(),
+  })
+
+  const trendQuery = useQuery({
+    queryKey: ['assistant-eval', 'trend', detailTaskId],
+    queryFn: () => assistantEvaluationApi.trend(detailQuery.data!.assistant_key, 12),
+    enabled: !!detailQuery.data && detailQuery.data.status === 'success',
+  })
+
+  const traceQuery = useQuery({
+    queryKey: ['assistant-eval', 'trace', detailTaskId, traceItemId],
+    queryFn: () => assistantEvaluationApi.itemTrace(detailTaskId!, traceItemId!),
+    enabled: !!detailTaskId && !!traceItemId,
   })
 
   const handleAssistantChange = (key: string) => {
@@ -280,6 +308,29 @@ export default function AssistantEvalTab() {
               notFoundContent={<Text type="secondary" style={{ fontSize: 12 }}>暂无可用 LLM 配置，请先到「模型配置」添加</Text>}
             />
           </div>
+          <div>
+            <div className="mb-1 text-xs text-gray-500">评分标准（可选，自定义 rubric 维度）</div>
+            <Space.Compact className="w-full">
+              <Select
+                className="flex-1"
+                placeholder="不使用自定义评分标准"
+                allowClear
+                value={rubricId}
+                onChange={setRubricId}
+                options={(rubricsQuery.data ?? []).map(r => ({
+                  value: r.id,
+                  label: r.name + '（' + r.min_score + '-' + r.max_score + ' 分）',
+                }))}
+                notFoundContent={<Text type="secondary" style={{ fontSize: 12 }}>暂无评分标准，点击右侧新建</Text>}
+              />
+              <Button icon={<Plus size={14} />} onClick={() => setRubricModalOpen(true)}>
+                新建
+              </Button>
+            </Space.Compact>
+            <div className="mt-1 text-[11px] text-gray-400">
+              基于任务描述由 judge 模型生成评分标准，评估时作为额外维度计入综合分
+            </div>
+          </div>
           <div className="md:col-span-2">
             <div className="mb-1 text-xs text-gray-500">会话范围</div>
             <Segmented
@@ -361,6 +412,17 @@ export default function AssistantEvalTab() {
         )}
       </section>
 
+      <RubricCreateModal
+        open={rubricModalOpen}
+        onClose={() => setRubricModalOpen(false)}
+        models={llmModels.map(m => ({ id: m.id, name: m.name, is_default: m.is_default }))}
+        onCreated={(rubric) => {
+          void queryClient.invalidateQueries({ queryKey: ['assistant-eval', 'rubrics'] })
+          setRubricId(rubric.id)
+          setRubricModalOpen(false)
+        }}
+      />
+
       {/* 任务列表 */}
       <section>
         <Table
@@ -416,14 +478,24 @@ export default function AssistantEvalTab() {
         ) : detail.status === 'error' ? (
           <Alert type="error" showIcon message="任务执行失败" description={detail.error} />
         ) : (
-          <EvalReportBody detail={detail} />
+          <>
+            <EvalReportBody detail={detail} onOpenTrace={(item) => setTraceItemId(item.id)} />
+            <EvalTrendChart trend={trendQuery.data ?? []} loading={trendQuery.isLoading} />
+          </>
         )}
       </Drawer>
+
+      <TraceModal
+        open={!!traceItemId}
+        onClose={() => setTraceItemId(null)}
+        loading={traceQuery.isLoading}
+        trace={traceQuery.data}
+      />
     </div>
   )
 }
 
-function EvalReportBody({ detail }: { detail: EvalTaskDetail }) {
+function EvalReportBody({ detail, onOpenTrace }: { detail: EvalTaskDetail; onOpenTrace?: (item: EvalTaskItem) => void }) {
   const itemColumns: ColumnsType<EvalTaskItem> = [
     { title: '会话', dataIndex: 'conversation_title', ellipsis: true },
     {
@@ -445,6 +517,17 @@ function EvalReportBody({ detail }: { detail: EvalTaskDetail }) {
         if (record.flags.engine_error) notes.push('评分执行异常')
         return notes.length ? <Tag color="warning">{notes.join('、')}</Tag> : <Text type="secondary">-</Text>
       },
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 70,
+      render: (_, record) =>
+        onOpenTrace ? (
+          <Button type="link" size="small" icon={<Eye size={13} />} onClick={() => onOpenTrace(record)}>
+            轨迹
+          </Button>
+        ) : null,
     },
   ]
 
@@ -529,5 +612,224 @@ function EvalReportBody({ detail }: { detail: EvalTaskDetail }) {
         />
       </div>
     </div>
+  )
+}
+
+function EvalTrendChart({ trend, loading }: { trend: TrendPoint[]; loading: boolean }) {
+  const option = useMemo<EChartsOption>(() => {
+    const latest = trend[trend.length - 1]
+    const seriesKeys: string[] = latest ? ['overall', ...Object.keys(latest.dimensions ?? {})] : []
+    const palette = CHART_SERIES_PALETTE
+    return {
+      tooltip: { trigger: 'axis' },
+      legend: { top: 0, textStyle: { color: CHART_TEXT, fontSize: 11 } },
+      grid: { left: 40, right: 16, top: 36, bottom: 28 },
+      xAxis: {
+        type: 'category',
+        data: trend.map(p => formatTime(p.created_at)),
+        axisLabel: { color: CHART_TEXT, fontSize: 10 },
+        axisLine: { lineStyle: { color: CHART_AXIS } },
+      },
+      yAxis: {
+        type: 'value',
+        min: 0,
+        max: 100,
+        axisLabel: { color: CHART_TEXT, fontSize: 10 },
+        splitLine: { lineStyle: { color: CHART_SPLIT } },
+      },
+      series: seriesKeys.map((key, idx) => ({
+        name: key === 'overall' ? '综合分' : (latest?.dimensions?.[key]?.label ?? key),
+        type: 'line',
+        smooth: true,
+        symbolSize: 5,
+        lineStyle: { width: key === 'overall' ? 2.5 : 1.5 },
+        color: palette[idx % palette.length],
+        data: trend.map(p =>
+          key === 'overall' ? p.overall : p.dimensions?.[key]?.avg ?? null,
+        ),
+      })),
+    }
+  }, [trend])
+
+  if (loading) {
+    return <Text type="secondary" style={{ fontSize: 12 }}>历史趋势加载中…</Text>
+  }
+  if (trend.length < 2) {
+    return null
+  }
+  return (
+    <div className="mt-5">
+      <div className="mb-2 text-sm font-medium text-gray-900">历史趋势（同助手）</div>
+      <ReactECharts option={option} style={{ height: 220 }} notMerge />
+    </div>
+  )
+}
+
+function TraceModal({ open, onClose, loading, trace }: {
+  open: boolean
+  onClose: () => void
+  loading: boolean
+  trace: EvalItemTrace | undefined
+}) {
+  return (
+    <Modal
+      title={'会话轨迹 · ' + (trace?.conversation_title ?? '')}
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width={760}
+    >
+      {loading ? (
+        <Text type="secondary">加载中…</Text>
+      ) : !trace ? (
+        <Text type="secondary">暂无轨迹数据</Text>
+      ) : (
+        <div className="space-y-4">
+          <div>
+            <div className="text-xs text-gray-500">用户问题</div>
+            <div className="mt-1 whitespace-pre-wrap rounded bg-gray-50 px-3 py-2 text-sm text-gray-800">
+              {trace.query}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500">助手答复</div>
+            <div className="mt-1 whitespace-pre-wrap rounded bg-gray-50 px-3 py-2 text-sm text-gray-800">
+              {trace.response}
+            </div>
+          </div>
+          {trace.actions.length > 0 && (
+            <div>
+              <div className="mb-1 text-xs text-gray-500">
+                工具调用（{trace.actions.length} · 失败 {trace.tool_error_count}）
+              </div>
+              <div className="space-y-1">
+                {trace.actions.map((a, i) => (
+                  <div key={i} className="rounded border border-gray-100 px-2 py-1 text-xs">
+                    <Space size={6}>
+                      <Tag color={a.failed ? 'error' : 'default'}>{String(a.name)}</Tag>
+                      <span className="text-gray-500">{a.failed ? '失败' : '成功'}</span>
+                    </Space>
+                    <div className="mt-1 whitespace-pre-wrap break-all text-gray-600">
+                      {String(a.preview ?? '')}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div>
+            <div className="mb-1 text-xs text-gray-500">消息轨迹（OpenAI 格式）</div>
+            <div className="max-h-64 space-y-1 overflow-y-auto">
+              {trace.openai_messages.map((m, i) => {
+                const toolCalls = Array.isArray(m.tool_calls) ? (m.tool_calls as unknown[]) : []
+                return (
+                  <div key={i} className="rounded bg-gray-50 px-2 py-1 text-xs">
+                    <span className="mr-1 font-medium">{String(m.role)}</span>
+                    <span className="text-gray-600">{String(m.content ?? '')}</span>
+                    {toolCalls.length > 0 && (
+                      <span className="ml-1 text-gray-400">（{toolCalls.length} 次工具调用）</span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+function RubricCreateModal({ open, onClose, onCreated, models }: {
+  open: boolean
+  onClose: () => void
+  onCreated: (rubric: EvalRubric) => void
+  models: Array<{ id: string; name: string; is_default?: boolean }>
+}) {
+  const [name, setName] = useState('')
+  const [taskDescription, setTaskDescription] = useState('')
+  const [samples, setSamples] = useState('')
+  const [minScore, setMinScore] = useState(0)
+  const [maxScore, setMaxScore] = useState(5)
+  const [modelId, setModelId] = useState<string | undefined>(undefined)
+  const [submitting, setSubmitting] = useState(false)
+
+  const handleCreate = async () => {
+    if (!name.trim() || !taskDescription.trim()) {
+      message.warning('请填写名称与任务描述')
+      return
+    }
+    setSubmitting(true)
+    try {
+      const rubric = await assistantEvaluationApi.createRubric({
+        name: name.trim(),
+        task_description: taskDescription.trim(),
+        sample_queries: samples.split('\n').map(s => s.trim()).filter(Boolean),
+        min_score: minScore,
+        max_score: maxScore,
+        model_config_id: modelId ?? null,
+      })
+      message.success('评分标准已生成')
+      setName('')
+      setTaskDescription('')
+      setSamples('')
+      setMinScore(0)
+      setMaxScore(5)
+      setModelId(undefined)
+      onCreated(rubric)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '生成失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Modal
+      title="新建评分标准（rubric）"
+      open={open}
+      onCancel={onClose}
+      onOk={() => void handleCreate()}
+      okText="生成"
+      cancelText="取消"
+      confirmLoading={submitting}
+    >
+      <div className="space-y-3">
+        <div>
+          <div className="mb-1 text-xs text-gray-500">名称</div>
+          <Input value={name} onChange={e => setName(e.target.value)} placeholder="如：本体构建质量" maxLength={200} />
+        </div>
+        <div>
+          <div className="mb-1 text-xs text-gray-500">任务描述（生成的评分标准将围绕它展开）</div>
+          <Input.TextArea
+            value={taskDescription}
+            onChange={e => setTaskDescription(e.target.value)}
+            rows={3}
+            placeholder="描述要评估的答复任务，例如：评估助手答复在构建本体时的准确性、完整性与规范性"
+          />
+        </div>
+        <div>
+          <div className="mb-1 text-xs text-gray-500">样例问题（可选，每行一条）</div>
+          <Input.TextArea value={samples} onChange={e => setSamples(e.target.value)} rows={2} />
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="text-xs text-gray-500">分值区间</div>
+          <InputNumber min={0} max={10} value={minScore} onChange={v => setMinScore(v ?? 0)} />
+          <span className="text-gray-400">-</span>
+          <InputNumber min={1} max={10} value={maxScore} onChange={v => setMaxScore(v ?? 5)} />
+        </div>
+        <div>
+          <div className="mb-1 text-xs text-gray-500">生成所用 judge 模型（默认：平台默认模型）</div>
+          <Select
+            className="w-full"
+            allowClear
+            value={modelId}
+            onChange={setModelId}
+            placeholder="默认：平台默认模型"
+            options={models.map(m => ({ value: m.id, label: m.is_default ? m.name + '（默认）' : m.name }))}
+          />
+        </div>
+      </div>
+    </Modal>
   )
 }

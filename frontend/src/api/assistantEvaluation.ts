@@ -63,13 +63,64 @@ export interface EvalSummary {
   engine: string
 }
 
+export interface EvalRubricSnapshot {
+  name: string
+  rubrics: string
+  min_score: number
+  max_score: number
+}
+
+export interface EvalRubric {
+  id: string
+  name: string
+  task_description: string
+  rubrics: string
+  min_score: number
+  max_score: number
+  judge_model_name: string
+  created_at: string | null
+}
+
+export interface CreateRubricBody {
+  name: string
+  task_description: string
+  sample_queries?: string[]
+  min_score: number
+  max_score: number
+  model_config_id?: string | null
+}
+
+export interface TrendPoint {
+  id: string
+  title: string
+  created_at: string | null
+  overall: number | null
+  dimensions: Record<string, EvalDimensionStat>
+  judge_model_name: string
+}
+
+export interface EvalItemTrace {
+  conversation_id: string
+  conversation_title: string
+  query: string
+  response: string
+  openai_messages: Array<Record<string, unknown>>
+  actions: Array<Record<string, unknown>>
+  tool_error_count: number
+}
+
 export interface EvalTask {
   id: string
   assistant_key: string
   assistant_label: string
   title: string
   status: EvalTaskStatus
-  params: { mode?: string; dimension_keys?: string[]; conversation_ids?: string[] }
+  params: {
+    mode?: string
+    dimension_keys?: string[]
+    conversation_ids?: string[]
+    rubric?: EvalRubricSnapshot
+  }
   judge_model_name: string
   conversation_count: number
   completed_conversations: number
@@ -108,10 +159,22 @@ export interface CreateEvalTaskBody {
   sample_days?: number
   dimension_keys: string[]
   model_config_id?: string | null
+  rubric_id?: string | null
 }
 
 export const assistantEvaluationApi = {
   meta: () => apiClient.get<EvalMeta>('/assistant-evaluation/meta'),
+  rubrics: () => apiClient.get<EvalRubric[]>('/assistant-evaluation/rubrics'),
+  createRubric: (body: CreateRubricBody) =>
+    apiClient.post<EvalRubric>('/assistant-evaluation/rubrics', body),
+  deleteRubric: (rubricId: string) =>
+    apiClient.delete(`/assistant-evaluation/rubrics/${rubricId}`),
+  trend: (assistantKey: string, limit = 12) =>
+    apiClient.get<TrendPoint[]>('/assistant-evaluation/trend', {
+      params: { assistant_key: assistantKey, limit },
+    }),
+  itemTrace: (taskId: string, itemId: string) =>
+    apiClient.get<EvalItemTrace>(`/assistant-evaluation/tasks/${taskId}/items/${itemId}/trace`),
   conversations: (assistantKey: string, limit = 50, offset = 0) =>
     apiClient.get<ConversationPage>(`/assistant-evaluation/${assistantKey}/conversations`, {
       params: { limit, offset },
