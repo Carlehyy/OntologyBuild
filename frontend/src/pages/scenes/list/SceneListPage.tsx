@@ -24,31 +24,24 @@ function formatChangedAt(value: string | null) {
   }).format(date)
 }
 
-function CreateSceneCard({ onCreate, onAssistant }: {
+function CreateSceneCard({ onCreate }: {
   onCreate: () => void
-  onAssistant: () => void
 }) {
   return (
-    <article className="group flex min-h-[256px] flex-col items-center justify-center rounded-2xl border border-dashed border-teal-300 bg-gradient-to-br from-teal-50/80 via-white to-cyan-50/60 p-6 text-center transition-all hover:-translate-y-0.5 hover:border-teal-500 hover:shadow-lg">
+    <article className="group flex min-h-[256px] flex-col items-center justify-center overflow-hidden rounded-2xl border border-dashed border-teal-300 bg-gradient-to-br from-teal-50/80 via-white to-cyan-50/60 px-4 py-6 text-center transition-all hover:-translate-y-0.5 hover:border-teal-500 hover:shadow-lg">
       <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-teal-600 text-white shadow-md shadow-teal-600/20 transition-transform group-hover:scale-105">
         <Plus size={25} />
       </div>
       <h3 className="text-base font-semibold text-slate-800">新建场景</h3>
-      <p className="mt-2 max-w-[210px] text-xs leading-5 text-slate-500">快速创建草稿态场景，或通过场景助手对话生成</p>
-      <div className="mt-5 flex items-center justify-center gap-2">
+      {/* 提示语保持单行：窄栏下负外边距吃掉左右内边距，字号降至 11px 保证不折行 */}
+      <p className="-mx-4 mt-2 whitespace-nowrap text-[11px] leading-5 text-slate-500 min-[1500px]:text-xs">快速创建草稿态场景，或通过场景助手对话生成</p>
+      <div className="mt-5 flex items-center justify-center">
         <button
           type="button"
           onClick={onCreate}
           className="rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm transition-colors hover:border-teal-300 hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
         >
           立即创建
-        </button>
-        <button
-          type="button"
-          onClick={onAssistant}
-          className="rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm transition-colors hover:border-teal-300 hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
-        >
-          <span className="inline-flex items-center gap-1"><Sparkles size={13} /> 场景助手</span>
         </button>
       </div>
     </article>
@@ -114,8 +107,9 @@ function SceneCard({ scene, onEdit, onDetail, onClone, onDelete }: {
         <div className="mt-3 grid grid-cols-4 gap-1.5">
           {[
             { label: '版本总数', value: scene.version_count ?? 0 },
-            { label: '最新草稿', value: scene.current_version_no },
-            { label: '已发布版次', value: scene.published_version_no ?? 0 },
+            { label: '最新草稿', value: scene.current_version_no > 0 ? 'v' + scene.current_version_no : '—' },
+            // 发布态只有唯一生效版本（重复发布覆盖指针），展示"哪个版本在生效"而非发布次数
+            { label: '生效版本', value: scene.published_version_no != null ? 'v' + scene.published_version_no : '—' },
             { label: '运行日志', value: scene.runtime_log_count ?? 0 },
           ].map(metric => (
             <div key={metric.label} className="min-w-0 rounded-xl bg-slate-50 px-0.5 py-2.5 text-center">
@@ -292,10 +286,7 @@ export default function SceneListPage() {
       </section>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        <CreateSceneCard
-          onCreate={() => setCreateOpen(true)}
-          onAssistant={() => navigate('/scenes/modeling')}
-        />
+        <CreateSceneCard onCreate={() => setCreateOpen(true)} />
 
         {isLoading ? (
           <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-slate-200 bg-white sm:col-span-1 lg:col-span-2 xl:col-span-3">
