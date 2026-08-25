@@ -311,6 +311,26 @@ async def test_openjudge_engine_falls_back_on_grader_error(monkeypatch):
     assert "内置评判" in out["relevance"]["reason"]
 
 
+@pytest.mark.skipif(
+    not __import__("app.assistant_evaluation.engine",
+                   fromlist=["openjudge_available"]).openjudge_available(),
+    reason="py-openjudge 未安装（CI 环境）",
+)
+def test_build_engine_falls_back_when_official_construction_fails():
+    """judge 模型配置缺少 API Key 时，官方引擎构造失败 → 降级内置引擎。
+
+    回归：OpenAIChatModel 构造即初始化 openai 客户端，空 API Key 会抛
+    OpenAIError；build_engine 必须兜底而不是让任务直接失败。
+    """
+    import app.assistant_evaluation.engine as eng
+
+    fake_cfg = SimpleNamespace(id="cfg", name="judge", provider="openai",
+                               api_base="https://example.invalid/v1",
+                               models=["stub-model"], api_key_encrypted=None, options={})
+    engine = eng.build_engine(fake_cfg)
+    assert engine.name == "builtin"
+
+
 # ---------------------------------------------------------------- 服务 / API
 
 

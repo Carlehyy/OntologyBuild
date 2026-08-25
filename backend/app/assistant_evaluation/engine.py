@@ -567,7 +567,18 @@ class FallbackEngine:
 
 
 def build_engine(model_config):
-    """构造评估引擎：OpenJudge 可用则优先。"""
+    """构造评估引擎：OpenJudge 可用则优先，官方引擎构造失败降级内置引擎。
+
+    OpenAIChatModel 在构造时即初始化 openai 客户端：模型配置缺少 API Key、
+    endpoint 不可达等场景会直接抛错。官方路径失败不能拖垮整个任务，
+    必须落到网关引擎（其错误在调用期以用户可读信息呈现）。
+    anthropic 等明确不支持的 provider 保留 ValueError 用户提示。
+    """
     if _OPENJUDGE_AVAILABLE:
-        return OpenJudgeEngine(model_config)
+        try:
+            return OpenJudgeEngine(model_config)
+        except ValueError:
+            raise
+        except Exception as exc:
+            logger.warning("OpenJudge 引擎初始化失败，降级内置引擎：%s", exc)
     return FallbackEngine(model_config)
