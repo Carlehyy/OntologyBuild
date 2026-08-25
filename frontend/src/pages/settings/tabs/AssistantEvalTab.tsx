@@ -476,10 +476,13 @@ function EvalReportBody({ detail }: { detail: EvalTaskDetail }) {
           </div>
         </div>
         <div className="rounded-lg border border-gray-200 px-4 py-3">
-          <div className="text-xs text-gray-500">成功 / 失败会话</div>
+          <div className="text-xs text-gray-500">产出评分 / 失败会话</div>
           <div className="text-2xl font-semibold leading-tight text-gray-900">
             {summary.evaluated}
             <span className="text-sm text-gray-400"> / {summary.failed}</span>
+            {!!(summary as { skipped?: number }).skipped && (
+              <span className="ml-1 text-[11px] text-gray-400">跳过 {(summary as { skipped?: number }).skipped}</span>
+            )}
           </div>
         </div>
         <div className="rounded-lg border border-gray-200 px-4 py-3">

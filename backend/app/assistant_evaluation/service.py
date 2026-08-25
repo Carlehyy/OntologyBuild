@@ -174,7 +174,7 @@ def _run_task(task_id: str) -> None:
             items.append(item)
 
         task.status = "success"
-        task.summary = _build_summary(items, engine_name=(engine.name if engine else "builtin"))
+        task.summary = _build_summary(items, engine_name=(engine.name if engine else "code-only"))
         task.finished_at = datetime.now(timezone.utc)
         task.duration_ms = int((time.monotonic() - started) * 1000)
         owns.commit()
@@ -256,12 +256,17 @@ def _build_summary(items: list[AssistantEvalItem], engine_name: str) -> dict:
         [i for i in scored if (i.overall_score or 0) < 60],
         key=lambda x: x.overall_score or 0,
     )
+    # failed 只统计真正执行出错（评分异常/引擎报错）的会话；
+    # 无工具步骤导致维度不适用、内容缺完整问答轮次的记为 skipped。
+    errored = [i for i in items if (i.flags or {}).get("engine_error")]
+    skipped = len(items) - len(scored) - len(errored)
     return {
         "overall": round(sum(overalls) / len(overalls), 1) if overalls else None,
         "dimensions": dimensions,
         "badcase_conversation_ids": [i.conversation_id for i in badcases][:20],
         "evaluated": len(scored),
-        "failed": len(items) - len(scored),
+        "failed": len(errored),
+        "skipped": skipped,
         "llm_calls": sum(
             1
             for i in items
@@ -304,7 +309,9 @@ def export_markdown(task: AssistantEvalTask, items: list[AssistantEvalItem]) -> 
         f" · judge 模型：{task.judge_model_name or '-'}",
         f"- 综合得分：**{(task.summary or {}).get('overall') if task.summary else '-'}** / 100",
         f"- 会话数：{task.completed_conversations}/{task.conversation_count}"
-        f" · 成功 {(task.summary or {}).get('evaluated', 0)} · 失败 {(task.summary or {}).get('failed', 0)}",
+        f" · 产出评分 {(task.summary or {}).get('evaluated', 0)}"
+        f" · 执行失败 {(task.summary or {}).get('failed', 0)}"
+        f" · 跳过（维度不适用）{(task.summary or {}).get('skipped', 0)}",
         "",
         "## 维度得分",
         "",

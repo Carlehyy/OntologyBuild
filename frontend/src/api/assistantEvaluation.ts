@@ -57,6 +57,8 @@ export interface EvalSummary {
   badcase_conversation_ids: string[]
   evaluated: number
   failed: number
+  /** 无适用维度或内容不完整的会话数（非失败） */
+  skipped?: number
   llm_calls: number
   engine: string
 }

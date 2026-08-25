@@ -305,8 +305,18 @@ def test_summary_aggregation():
                           scores={"relevance": 90}, reasons={}, flags={}),
         AssistantEvalItem(task_id="t", conversation_id="c2", overall_score=50,
                           scores={"relevance": 50}, reasons={}, flags={}),
+        # 无适用维度：不计入失败，记为跳过
+        AssistantEvalItem(task_id="t", conversation_id="c3", overall_score=None,
+                          scores={}, reasons={}, flags={"loop_detected": False,
+                                                       "tool_error_count": 0, "low_dims": []}),
+        # 评分执行异常：计入失败
+        AssistantEvalItem(task_id="t", conversation_id="c4", overall_score=None,
+                          scores={}, reasons={}, flags={"engine_error": "boom"}),
     ]
     summary = eval_service._build_summary(items, engine_name="builtin")
     assert summary["overall"] == 70.0
     assert summary["dimensions"]["relevance"]["avg"] == 70.0
     assert summary["badcase_conversation_ids"] == ["c2"]
+    assert summary["evaluated"] == 2
+    assert summary["failed"] == 1
+    assert summary["skipped"] == 1
