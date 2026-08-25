@@ -98,29 +98,29 @@ class TestDimensions:
 
 class TestFallbackParsing:
     def test_parse_tolerates_dirty_json(self):
-        from app.assistant_evaluation.engine import FallbackEngine
+        from app.assistant_evaluation.engine import _parse_judge_json
 
-        assert FallbackEngine._parse('前缀 {"score": 4, "reason": "r"} 后缀')["score"] == 4
-        assert FallbackEngine._parse(None) == {}
-        assert FallbackEngine._parse("完全不是 JSON") == {}
+        assert _parse_judge_json('前缀 {"score": 4, "reason": "r"} 后缀')["score"] == 4
+        assert _parse_judge_json(None) == {}
+        assert _parse_judge_json("完全不是 JSON") == {}
 
 
 @pytest.mark.asyncio
 async def test_fallback_engine_scores_trace(monkeypatch):
     """降级引擎走平台 llm_gateway 的桩，验证维度评分装配。"""
-    from app.assistant_evaluation.engine import FallbackEngine
+    import app.assistant_evaluation.engine as eng
 
-    engine = FallbackEngine.__new__(FallbackEngine)
+    engine = eng.FallbackEngine.__new__(eng.FallbackEngine)
     engine._kwargs = {}
 
-    def fake_chat(system: str, user: str):
+    def fake_gateway_judge(llm_kwargs, system, user):
         if "Agent 行为分析" in system:
             payload = {"score": 1, "reason": "路径高效"}
         else:
             payload = {"score": 5, "reason": "无问题"}
         return json.dumps(payload, ensure_ascii=False)
 
-    monkeypatch.setattr(engine, "_chat", fake_chat)
+    monkeypatch.setattr(eng, "_gateway_judge", fake_gateway_judge)
     trace = Trace(query="q", response="ans",
                   openai_messages=[{"role": "user", "content": "q"},
                                    {"role": "assistant", "content": "ans"}],
@@ -176,6 +176,49 @@ async def test_openjudge_engine_with_stub_model(monkeypatch):
     out = await engine.evaluate(["relevance", "action_loop"], trace)
     assert out["relevance"]["raw"] == 4
     assert out["action_loop"]["raw"] == 1.0
+
+
+@pytest.mark.skipif(
+    not __import__("app.assistant_evaluation.engine",
+                   fromlist=["openjudge_available"]).openjudge_available(),
+    reason="py-openjudge 未安装（CI 环境）",
+)
+@pytest.mark.asyncio
+async def test_openjudge_engine_falls_back_on_grader_error(monkeypatch):
+    """官方评分器返回 GraderError（如端点不支持结构化输出）→ 自动走网关降级。"""
+    import asyncio
+    from types import SimpleNamespace
+
+    import app.assistant_evaluation.engine as eng
+
+    class AlwaysErrorGrader:
+        async def aevaluate(self, **kwargs):
+            return GraderError(name="relevance", error="structured output unsupported",
+                               reason="endpoint rejected response_format")
+
+    from openjudge.graders.schema import GraderError
+
+    fake_cfg = SimpleNamespace(id="cfg", name="judge", provider="compatible",
+                               api_base="https://example.invalid/v1",
+                               models=["stub-model"], api_key_encrypted=None, options={})
+
+    engine = eng.OpenJudgeEngine.__new__(eng.OpenJudgeEngine)
+    engine._kwargs = {"provider": "compatible"}
+    engine._llm_graders = {"relevance": AlwaysErrorGrader()}
+    engine._trajectory_grader = None
+
+    def fake_gateway_judge(llm_kwargs, system, user):
+        return json.dumps({"score": 3, "reason": "降级评判"})
+
+    monkeypatch.setattr(eng, "_gateway_judge", fake_gateway_judge)
+
+    trace = Trace(query="q", response="ans",
+                  openai_messages=[{"role": "user", "content": "q"},
+                                   {"role": "assistant", "content": "ans"}],
+                  actions=[], tool_error_count=0)
+    out = await engine.evaluate(["relevance"], trace)
+    assert out["relevance"]["raw"] == 3
+    assert "内置评判" in out["relevance"]["reason"]
 
 
 # ---------------------------------------------------------------- 服务 / API
