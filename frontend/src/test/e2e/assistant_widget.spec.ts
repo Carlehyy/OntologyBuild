@@ -294,8 +294,10 @@ test('本体助手未选本体时悬浮窗盖过拓扑卡片轮播（层级回�
   await seedAuth(page)
   await mockPlatformShell(page)
   await mockSuperAssistant(page)
-  // 未选择本体时，本体助手右侧面板展示卡片轮播（居中卡 inline z-index 最高 100）。
-  // 轮播舞台未做层叠隔离时，卡片会压过全局悬浮窗（z-40）；隔离后悬浮窗保持最上层。
+  // MYW-51 左右互换后：未选本体时卡片轮播随本体拓扑卡位于左列（宽侧），
+  // 全局悬浮窗固定在视口右缘；两者仅在窄视口下水平相交（左列最小宽 560 +
+  // 右列最小宽 420 使更宽视口必然把悬浮窗挤进独立区域）。因此在 720px 宽度下
+  // 取交叠区域中心，断言该点最上层元素属于悬浮窗而非轮播卡（z-index 回归守卫）。
   await page.route(/\/api\/v1\/ontologies(\?|$)/, route => json(route, {
     items: [
       {
@@ -317,7 +319,7 @@ test('本体助手未选本体时悬浮窗盖过拓扑卡片轮播（层级回�
     page: 1,
     page_size: 1000,
   }))
-  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.setViewportSize({ width: 720, height: 900 })
 
   await page.goto('/#/agent')
   await expect(page.getByTestId('ontology-card-carousel')).toBeVisible()

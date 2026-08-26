@@ -403,10 +403,10 @@ export default function AgentWorkbenchPage() {
       <div
         ref={containerRef}
         className="scrollbar-none grid flex-1 min-h-0 overflow-x-auto overflow-y-hidden p-1"
-        style={{ gridTemplateColumns: `minmax(420px, ${sizes[0]}fr) 4px minmax(560px, ${sizes[1]}fr)` }}
+        style={{ gridTemplateColumns: `minmax(560px, ${sizes[0]}fr) 4px minmax(420px, ${sizes[1]}fr)` }}
       >
-        {/* 2. 本体结构 / 数据推演图谱 */}
-        <section data-testid="agent-ontology-panel" className={`${panelClass} col-start-3 row-start-1 flex flex-col`}>
+        {/* 左卡：本体结构 / 数据推演图谱 */}
+        <section data-testid="agent-ontology-panel" className={`${panelClass} col-start-1 row-start-1 flex flex-col`}>
           <div className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-white px-4">
             <div className="flex w-full min-w-0 items-center justify-between gap-3">
               <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -541,8 +541,8 @@ export default function AgentWorkbenchPage() {
 
         <SplitHandle onPointerDown={startResize} />
 
-        {/* 1. 智能对话 */}
-        <section data-testid="agent-chat-panel" className={`${panelClass} col-start-1 row-start-1 flex flex-col`}>
+        {/* 右卡：智能对话 */}
+        <section data-testid="agent-chat-panel" className={`${panelClass} col-start-3 row-start-1 flex flex-col`}>
           <div className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-white px-4">
             <div className="flex w-full min-w-0 items-center justify-between gap-2">
               <div className="flex min-w-0 flex-1 items-center gap-2">

@@ -355,6 +355,32 @@ test('智能对话与本体拓扑图沿用业务场景画布背景', async ({ pa
   await expect(chatRegion).toHaveCSS('background-image', 'none')
 })
 
+test('智能对话与本体拓扑图左右互换后本体拓扑图在左、智能对话在右', async ({ page }) => {
+  await mockAgentHeader(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/#/agent')
+  await page.getByLabel('选择本体').selectOption('ontology-1')
+
+  const ontologyPanel = page.getByTestId('agent-ontology-panel')
+  const chatPanel = page.getByTestId('agent-chat-panel')
+  await expect(ontologyPanel).toBeVisible()
+  await expect(chatPanel).toBeVisible()
+
+  // MYW-51：两个大卡片左右换位——本体拓扑图在左，智能对话在右
+  const ontologyBox = await ontologyPanel.boundingBox()
+  const chatBox = await chatPanel.boundingBox()
+  expect(ontologyBox).not.toBeNull()
+  expect(chatBox).not.toBeNull()
+  expect(ontologyBox!.x).toBeLessThan(chatBox!.x)
+
+  // 分隔拖拽手柄仍位于两卡之间
+  const separator = page.getByRole('separator')
+  const sepBox = await separator.boundingBox()
+  expect(sepBox).not.toBeNull()
+  expect(sepBox!.x).toBeGreaterThan(ontologyBox!.x + ontologyBox!.width - 8)
+  expect(sepBox!.x).toBeLessThan(chatBox!.x + 8)
+})
+
 test('多视图工作台可切换到可审计的决策推演结果', async ({ page }) => {
   await mockAgentHeader(page)
   await page.setViewportSize({ width: 1440, height: 900 })

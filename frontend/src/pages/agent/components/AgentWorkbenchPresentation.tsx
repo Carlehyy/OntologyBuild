@@ -75,7 +75,10 @@ export function downloadJson(value: unknown, filename: string): void {
 
 export function useAssistantLayout() {
   const containerRef = useRef<HTMLDivElement>(null)
-  const [sizes, setSizes] = useState<[number, number]>([40, 60])
+  // MYW-51 左右互换后：左卡为本体拓扑图（宽侧），右卡为智能对话（窄侧）。
+  // 初始比例与最小占比同步镜像（左 60%/最小 42%，右 40%/最小 28%），
+  // 保证两卡各自保持互换前的宽度量级。
+  const [sizes, setSizes] = useState<[number, number]>([60, 40])
 
   const startResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault()
@@ -84,7 +87,7 @@ export function useAssistantLayout() {
 
     const startX = event.clientX
     const start = sizes
-    const min: [number, number] = [28, 42]
+    const min: [number, number] = [42, 28]
     const pairTotal = start[0] + start[1]
     const prevCursor = document.body.style.cursor
     const prevUserSelect = document.body.style.userSelect
