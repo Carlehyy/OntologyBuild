@@ -363,6 +363,14 @@
 
 /* ═══ 数据供给全景节点卡（@xyflow/react 自定义节点，与治理链路全景同一设计语言） ═══ */
 .dmo-chain-canvas { border: 1px solid var(--dmo-line-soft); border-radius: 12px; overflow: hidden; background: var(--dmo-cell-bg); }
+/* 连线流动动画逐帧重绘；fitView 缩放(<1)时悬停检视卡片，卡片边缘抗锯齿像素会随
+   之抖动，观感即“一直在闪”。检视期间（悬停节点卡 / 清单行联动 / 血缘弹窗）经
+   data-still 暂停流动动画，离开后恢复；减弱动态偏好下始终静止。 */
+.dmo-chain-canvas[data-still="true"] .react-flow__edge.animated path { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  .dmo-chain-canvas .react-flow__edge.animated path { animation-play-state: paused; }
+}
+
 .dmo-chain-node { border: 1px solid var(--dmo-line); border-radius: 12px; padding: 8px 10px; color: var(--dmo-text); background: var(--dmo-panel); box-shadow: 0 1px 3px rgba(15,23,42,.06); cursor: pointer; transition: opacity .22s ease, box-shadow .22s ease, border-color .22s ease; }
 .dmo-chain-node:hover { border-color: var(--dmo-teal-line); box-shadow: 0 4px 14px rgba(13,148,136,.12); }
 .dmo-chain-node-dim { opacity: .22; }

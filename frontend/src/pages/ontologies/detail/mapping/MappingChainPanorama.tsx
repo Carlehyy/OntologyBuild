@@ -1,6 +1,7 @@
 /* 数据供给全景画布(@xyflow/react):
    「来源数据资产 → 本体元素」两列链路节点卡,与治理推演页链路全景同一设计语言;
-   连线流动动画;节点卡可拖拽调整布局,位置按本体持久化到 localStorage;
+   连线流动动画,悬停/清单联动/详情弹窗检视期间暂停(data-still),避免缩放下闪烁;
+   节点卡可拖拽调整布局,位置按本体持久化到 localStorage;
    点选节点高亮整条直接上下游、其余压暗,点画布空白复位;
    数据资产节点点击打开数据预览,本体元素节点点击打开血缘详情弹窗。 */
 import { useCallback, useMemo, useState } from 'react'
@@ -144,6 +145,9 @@ export default function MappingChainPanorama({
   const [highlightSet, setHighlightSet] = useState<Set<string> | null>(null)
   // 节点拖拽位置按本体持久化：重进/刷新后保持手动调整的布局
   const [dragPositions, setDragPositions] = useState<Record<string, { x: number; y: number }>>(() => readChainPositions(ontologyId))
+  // 指针悬停在图内节点卡上时置真：检视期间经 data-still 暂停连线流动动画，
+  // 避免 dash 动画在 fitView 缩放(<1)下逐帧重绘使卡片边缘闪烁（见 mapping-overview.css）。
+  const [hoveringNode, setHoveringNode] = useState(false)
 
   const datasetCards = useMemo(() => {
     const cards = new Map<string, { title: string; sub: string; badge: ChainCardData['badge'] }>()
@@ -236,7 +240,12 @@ export default function MappingChainPanorama({
   }, [model])
 
   return (
-    <div className="dmo-flow-canvas dmo-chain-canvas" data-testid="mapping-chain-panorama" style={{ height }}>
+    <div
+      className="dmo-flow-canvas dmo-chain-canvas"
+      data-testid="mapping-chain-panorama"
+      data-still={hoveringNode || hoverKey != null || selectedKey != null ? 'true' : undefined}
+      style={{ height }}
+    >
       <ReactFlow
         nodes={flowNodes}
         edges={flowEdges}
@@ -263,8 +272,15 @@ export default function MappingChainPanorama({
           })
         }}
         onPaneClick={() => setHighlightSet(null)}
-        onNodeMouseEnter={(_, node) => { if (node.type === 'mappingChainNode') onHoverNode(node.id) }}
-        onNodeMouseLeave={() => onHoverNode(null)}
+        onNodeMouseEnter={(_, node) => {
+          if (node.type !== 'mappingChainNode') return
+          setHoveringNode(true)
+          onHoverNode(node.id)
+        }}
+        onNodeMouseLeave={() => {
+          setHoveringNode(false)
+          onHoverNode(null)
+        }}
         proOptions={{ hideAttribution: true }}
       >
         <Background gap={22} size={1} color="var(--dmo-line-soft)" />

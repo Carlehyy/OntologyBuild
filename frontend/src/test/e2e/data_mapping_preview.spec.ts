@@ -506,3 +506,28 @@ test('KPI 首个数据帧直出终值：进页不再从 0 重放', async ({ page
   expect(kpiText).toContain('1 /')
   expect(kpiText).toContain('100%')
 })
+
+test('悬停全景节点卡时暂停连线流动动画（data-still），移开后恢复', async ({ page }) => {
+  // MYW-51：流动动画逐帧重绘，缩放悬停检视时卡片边缘闪烁；悬停期间必须静止。
+  await mockMappingPreview(page)
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  const canvas = page.getByTestId('mapping-chain-panorama')
+  await expect(canvas).toBeVisible()
+  const nodeCard = canvas.locator('.react-flow__node-mappingChainNode').first()
+  await expect(nodeCard).toBeVisible()
+
+  // 悬停前无 data-still 属性
+  await expect(canvas).not.toHaveAttribute('data-still')
+  await nodeCard.hover()
+  await expect(canvas).toHaveAttribute('data-still', 'true')
+  // CSS 规则命中：dash 流动动画确实处于暂停态（跳过无动画的 interaction 路径）
+  const edgePath = canvas.locator('.react-flow__edge.animated path.react-flow__edge-path').first()
+  await expect(edgePath).toHaveCSS('animation-play-state', 'paused')
+
+  // 离开节点卡后恢复流动
+  const canvasBox = await canvas.boundingBox()
+  expect(canvasBox).not.toBeNull()
+  await page.mouse.move(canvasBox!.x + 8, canvasBox!.y - 10)
+  await expect(canvas).not.toHaveAttribute('data-still')
+})
