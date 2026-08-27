@@ -12,7 +12,7 @@ function validDefinition() {
   return {
     meta: { id: 'supply-park', name: '供应链园区', version: '1.0.0' },
     objects: [
-      { id: 'warehouse', label: '仓库管理', type: 'warehouse', layout: { x: 26, z: -10, w: 14, d: 20, h: 18 } },
+      { id: 'warehouse', label: '仓库管理', type: 'warehouse', layout: { x: 26, z: -10, w: 14, d: 20, h: 18 }, ontology_concept_id: 'ont-warehouse' },
       { id: 'production', label: '生产管理', type: 'tower', layout: { x: 26, z: -34, w: 13, d: 11, h: 24 }, extras: ['solar'] },
     ],
     relations: [{ from: 'warehouse', to: 'production', kind: 'flow' }],
@@ -28,6 +28,9 @@ function validDefinition() {
           { when: 'else', status: 'normal' },
         ],
       },
+    ],
+    events: [
+      { key: 'temp-alarm', label: '库温告警', objectId: 'warehouse', description: '库内温度超限时触发' },
     ],
     sources: { client: { type: 'client' } },
   }
@@ -173,5 +176,77 @@ describe('scene definition validator', () => {
     assert.ok(issues.some(i => i.path === 'objects[0].layout' && i.message === '缺少 layout 布局信息'))
     assert.ok(issues.some(i => i.path === 'objects[1].layout.h' && i.message === '必须是正数'))
     assert.ok(issues.some(i => i.path.startsWith('objects[1].extras') && i.message.includes('fountain')))
+  })
+
+  it('events 与 ontology_concept_id 均合法时通过（空 issue 列表）', () => {
+    assert.deepEqual(validateDefinition(validDefinition()), [])
+  })
+
+  it('事件 key 非 kebab-case 报错', () => {
+    const def = validDefinition()
+    ;(def.events![0] as Record<string, unknown>).key = 'Bad Key'
+    const issues = validateDefinition(def)
+    assert.ok(issues.some(i => i.path === 'events[0].key' && i.message.includes('kebab-case')))
+  })
+
+  it('事件 key 重复与未知 objectId 报错', () => {
+    const def = validDefinition() as Record<string, unknown>
+    def.events = [
+      { key: 'first-hit', label: '首个事件', objectId: 'warehouse' },
+      { key: 'first-hit', label: '重复事件', objectId: 'ghost' },
+    ]
+    const issues = validateDefinition(def)
+    assert.ok(issues.some(i =>
+      i.path === 'events[1].key' && i.message === '事件 key 重复：first-hit'))
+    assert.ok(issues.some(i =>
+      i.path === 'events[1].objectId' && i.message === '引用了不存在的对象 id：ghost'))
+  })
+
+  it('事件 label 非空且不超过 80；description 不超过 200', () => {
+    const def = validDefinition()
+    const event = def.events![0] as Record<string, unknown>
+    event.label = ''
+    let issues = validateDefinition(def)
+    assert.ok(issues.some(i => i.path === 'events[0].label' && i.message === '必须是非空字符串'))
+
+    event.label = 'a'.repeat(81)
+    event.description = 'b'.repeat(201)
+    issues = validateDefinition(def)
+    assert.ok(issues.some(i => i.path === 'events[0].label' && i.message === '长度不能超过 80'))
+    assert.ok(issues.some(i =>
+      i.path === 'events[0].description' && i.message === '长度不能超过 200'))
+
+    event.label = '库温告警'
+    event.description = 123
+    issues = validateDefinition(def)
+    assert.ok(issues.some(i =>
+      i.path === 'events[0].description' && i.message === '必须是字符串'))
+  })
+
+  it('events 非数组报错；超过 50 条报错', () => {
+    const def = validDefinition() as Record<string, unknown>
+    def.events = 'oops'
+    let issues = validateDefinition(def)
+    assert.ok(issues.some(i => i.path === 'events' && i.message === '必须是数组'))
+
+    def.events = Array.from({ length: 51 }, (_, index) => ({ key: 'ev-' + index, label: '事件' + index }))
+    issues = validateDefinition(def)
+    assert.ok(issues.some(i => i.path === 'events' && i.message === '事件数量不能超过 50'))
+  })
+
+  it('ontology_concept_id 空串/超长报错，合法值通过', () => {
+    const def = validDefinition()
+    ;(def.objects[0] as Record<string, unknown>).ontology_concept_id = ''
+    let issues = validateDefinition(def)
+    assert.ok(issues.some(i =>
+      i.path === 'objects[0].ontology_concept_id' && i.message === '必须是非空字符串'))
+
+    ;(def.objects[0] as Record<string, unknown>).ontology_concept_id = 'c'.repeat(129)
+    issues = validateDefinition(def)
+    assert.ok(issues.some(i =>
+      i.path === 'objects[0].ontology_concept_id' && i.message === '长度不能超过 128'))
+
+    ;(def.objects[0] as Record<string, unknown>).ontology_concept_id = 'ont-warehouse'
+    assert.deepEqual(validateDefinition(def), [])
   })
 })
