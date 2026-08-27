@@ -8,14 +8,14 @@ import {
 import '@xyflow/react/dist/style.css'
 import {
   AlertCircle, ArrowLeftRight, ArrowRight, Box, Braces, Check, ChevronDown, ChevronRight,
-  Focus, FunctionSquare, GitBranch, KeyRound, Layers3, Loader2,
+  FileText, Focus, FunctionSquare, GitBranch, KeyRound, Layers3, Loader2,
   Maximize2, Route, Search, ShieldCheck, Sparkles, X, ZoomIn, ZoomOut,
   Bolt, Clock3, Database,
 } from 'lucide-react'
 import { agentApi, type DynamicSentinel } from '@/api/agent'
 import { apiClientV2 } from '@/api/client'
-import { ConfirmModal } from '@/components/ui/Modal'
 import { saveCanvasLayout } from '@/palantir-graph/api/formalApi'
+import StructureDocDialog from './StructureDocDialog'
 import { StructureGraphEdge, StructureGraphNode } from './StructureGraphElements'
 import {
   actionNodeId, buildStructureGraph, findPaths, functionUsage, propertyNodeId,
@@ -451,7 +451,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
   const [saveCountdown, setSaveCountdown] = useState(3)
   const [saveCountdownNonce, setSaveCountdownNonce] = useState(0)
   const [saveError, setSaveError] = useState('')
-  const [organizeConfirmOpen, setOrganizeConfirmOpen] = useState(false)
+  const [structureDocOpen, setStructureDocOpen] = useState(false)
   const [toolbarMoreRight, setToolbarMoreRight] = useState(false)
   const groupDrag = useRef<{
     objectId: string
@@ -819,15 +819,6 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     window.setTimeout(() => void fitView({ padding: 0.2, maxZoom: 0.88, duration: 280 }), 30)
   }, [fitView])
 
-  const organizeGraph = useCallback(() => {
-    const organized = buildStructureGraph(workspace, level, { ignoreSaved: true })
-    setAllNodes(organized.nodes)
-    schedulePositionSave(Object.fromEntries(organized.nodes.map(node => [node.id, node.position])))
-    groupDrag.current = null
-    setDetail(null)
-    window.setTimeout(() => void fitView({ padding: level === 1 ? 0.26 : 0.14, minZoom: level === 1 ? 0.24 : 0.34, maxZoom: level === 1 ? 1.05 : 0.86, duration: 420 }), 40)
-  }, [fitView, level, schedulePositionSave, workspace])
-
   const saveLabel = saveStatusLabel(saveState, saveCountdown)
 
   return (
@@ -886,7 +877,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1 border-l border-slate-200 bg-white px-2">
-          <button type="button" onClick={() => setOrganizeConfirmOpen(true)} aria-label="智能整理图谱" title="按实体关系力导向展开，并将属性与动作分层排列" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:translate-y-px"><Sparkles size={13} />智能整理</button>
+          <button type="button" onClick={() => setStructureDocOpen(true)} aria-label="结构说明" title="查看当前本体结构关联的需求文档" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:translate-y-px"><FileText size={13} />结构说明</button>
           <button type="button" onClick={() => void zoomOut({ duration: 160 })} aria-label="缩小" title="缩小" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomOut size={14} /></button>
           <button type="button" onClick={() => void zoomIn({ duration: 160 })} aria-label="放大" title="放大" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomIn size={14} /></button>
           <button type="button" onClick={() => void fitView({ padding: 0.2, minZoom: level === 2 ? 0.32 : 0.24, maxZoom: 0.92, duration: 260 })} aria-label="适应画布" title="适应画布" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><Maximize2 size={14} /></button>
@@ -986,17 +977,12 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
         <DetailPanel workspace={workspace} selection={detail} onClose={() => setDetail(null)} />
       </div>
 
-      <ConfirmModal
-        open={organizeConfirmOpen}
-        onClose={() => setOrganizeConfirmOpen(false)}
-        onConfirm={() => {
-          setOrganizeConfirmOpen(false)
-          organizeGraph()
-        }}
-        title="重新整理画布布局？"
-        description="将按实体关系力导向重新排列全部节点并覆盖当前布局，之后仍可继续手动微调每个节点的位置。"
-        confirmText="整理并覆盖布局"
-        variant="warning"
+      <StructureDocDialog
+        open={structureDocOpen}
+        ontologyId={ontologyId}
+        versionId={workspace.versionId}
+        versionLabel={workspace.version}
+        onClose={() => setStructureDocOpen(false)}
       />
     </div>
   )
