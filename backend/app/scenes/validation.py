@@ -9,7 +9,9 @@ manifest(meta) / scene(objects+relations) / bindings(dataBindings)，
     extras 枚举两种（parking/solar）；动效不开放自由字段——
     由引擎装饰系统按开关消费，保证 AI/人工产物可控；
   - 关系引用对象 id，接受旧写法 flows:[[a,b]] 并归一为 relations；
-  - 数据绑定禁函数，规则仅支持比较表达式 + else 兜底，status 三态。
+  - 数据绑定禁函数，规则仅支持比较表达式 + else 兜底，status 三态；
+  - 事件维度预留：可选 events 承载业务事件（key 全局唯一、可引用对象），
+    对象可选 ontology_concept_id 作为本体概念锚点（暂存不联动）。
 
 校验结果统一为 issue 列表 [{"path": "...", "message": "..."}]，
 空列表即合法。归一化（normalize_definition）在保存前执行，
@@ -31,6 +33,7 @@ BETWEEN_RE = re.compile(r"^between\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)$")
 
 MAX_OBJECTS = 200
 MAX_BINDINGS = 200
+MAX_EVENTS = 50
 
 
 def _is_number(value) -> bool:
@@ -138,6 +141,12 @@ def validate_definition(definition) -> list[dict]:
                         issues.append(
                             _issue(f"{base}.extras",
                                    f"未知装饰项 {extra}，可选：{'/'.join(OBJECT_EXTRAS)}"))
+        concept = obj.get("ontology_concept_id")
+        if concept is not None:
+            if not isinstance(concept, str) or not concept.strip():
+                issues.append(_issue(f"{base}.ontology_concept_id", "必须是非空字符串"))
+            elif len(concept) > 128:
+                issues.append(_issue(f"{base}.ontology_concept_id", "长度不能超过 128"))
 
     # —— relations（兼容旧 flows 写法）——
     relations = definition.get("relations")
@@ -208,6 +217,46 @@ def validate_definition(definition) -> list[dict]:
                 if rules and isinstance(rules[-1], dict) and rules[-1].get("when") != "else":
                     issues.append(_issue(
                         f"{base}.rules", "最后一条规则必须是 else 兜底"))
+
+    # —— events（可选）——
+    events = definition.get("events")
+    if events is not None:
+        if not isinstance(events, list):
+            issues.append(_issue("events", "必须是数组"))
+        elif len(events) > MAX_EVENTS:
+            issues.append(
+                _issue("events", f"事件数量不能超过 {MAX_EVENTS}"))
+        else:
+            seen_event_keys: set[str] = set()
+            for index, event in enumerate(events):
+                base = f"events[{index}]"
+                if not isinstance(event, dict):
+                    issues.append(_issue(base, "必须是 JSON 对象"))
+                    continue
+                event_key = event.get("key")
+                if not isinstance(event_key, str) or not KEBAB_RE.match(event_key or ""):
+                    issues.append(
+                        _issue(f"{base}.key", "必须是非空 kebab-case 字符串"))
+                elif event_key in seen_event_keys:
+                    issues.append(_issue(f"{base}.key", f"事件 key 重复：{event_key}"))
+                else:
+                    seen_event_keys.add(event_key)
+                label = event.get("label")
+                if not isinstance(label, str) or not label.strip():
+                    issues.append(_issue(f"{base}.label", "必须是非空字符串"))
+                elif len(label) > 80:
+                    issues.append(_issue(f"{base}.label", "长度不能超过 80"))
+                obj_ref = event.get("objectId")
+                if obj_ref is not None and obj_ref not in seen_ids:
+                    issues.append(_issue(
+                        f"{base}.objectId",
+                        f"引用了不存在的对象 id：{obj_ref}"))
+                description = event.get("description")
+                if description is not None:
+                    if not isinstance(description, str):
+                        issues.append(_issue(f"{base}.description", "必须是字符串"))
+                    elif len(description) > 200:
+                        issues.append(_issue(f"{base}.description", "长度不能超过 200"))
 
     # —— sources（可选）——
     sources = definition.get("sources")

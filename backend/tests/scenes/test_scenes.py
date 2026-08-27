@@ -265,6 +265,95 @@ def test_clone_requires_existing_definition(client, auth_headers):
     assert resp.json()["detail"]["code"] == "scene_not_clonable"
 
 
+# —— 扩展词汇：events 与 ontology_concept_id ——
+
+def test_valid_events_saved_and_clone_carries_extension(client, auth_headers):
+    scene = _create_scene(client, auth_headers)
+    definition = dict(VALID_DEFINITION)
+    definition["objects"] = [
+        {
+            "id": "office",
+            "label": "办公楼",
+            "type": "office",
+            "layout": {"x": -20, "z": 0, "w": 12, "d": 10, "h": 16},
+            "ontology_concept_id": "concept-office-building",
+        },
+        VALID_DEFINITION["objects"][1],
+    ]
+    definition["events"] = [
+        {"key": "inventory-alarm", "label": "库位告急",
+         "objectId": "warehouse", "description": "库位利用率超过阈值"},
+    ]
+    saved = _save_definition(
+        client, auth_headers, scene["id"], definition=definition)
+    assert saved.status_code == 200
+
+    cloned = client.post(
+        f"/api/v2/scenes/{scene['id']}/clone", headers=auth_headers)
+    assert cloned.status_code == 201
+    snapshot = client.get(
+        f"/api/v2/scenes/{cloned.json()['data']['id']}/versions/1",
+        headers=auth_headers,
+    ).json()["data"]
+    # 克隆取当前生效定义快照，扩展词汇原样随行
+    assert snapshot["definition"]["events"] == definition["events"]
+    assert (
+        snapshot["definition"]["objects"][0]["ontology_concept_id"]
+        == "concept-office-building"
+    )
+
+
+def test_invalid_events_rejected_with_expected_issues(client, auth_headers):
+    scene = _create_scene(client, auth_headers)
+
+    def save_bad(events):
+        resp = _save_definition(
+            client, auth_headers, scene["id"],
+            definition=dict(VALID_DEFINITION, events=events))
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert detail["code"] == "invalid_scene_definition"
+        return {issue["path"]: issue["message"] for issue in detail["issues"]}
+
+    # key 重复（第二个事件）
+    dup = save_bad([
+        {"key": "stock-short", "label": "库存不足", "objectId": "office"},
+        {"key": "stock-short", "label": "库存告急", "objectId": "office"},
+    ])
+    assert dup["events[1].key"] == "事件 key 重复：stock-short"
+
+    # objectId 引用不存在的对象
+    ghost = save_bad([
+        {"key": "ghost-event", "label": "幽灵事件", "objectId": "no-such-object"},
+    ])
+    assert ghost["events[0].objectId"] == "引用了不存在的对象 id：no-such-object"
+
+    # label 超长（>80）
+    long_label = save_bad([{"key": "long-label-event", "label": "长" * 81}])
+    assert long_label["events[0].label"] == "长度不能超过 80"
+
+    # 缺少 label
+    missing_label = save_bad([{"key": "no-label-event"}])
+    assert missing_label["events[0].label"] == "必须是非空字符串"
+
+
+def test_invalid_ontology_concept_id_rejected(client, auth_headers):
+    scene = _create_scene(client, auth_headers)
+    bad_objects = [
+        dict(VALID_DEFINITION["objects"][0], ontology_concept_id=""),
+        VALID_DEFINITION["objects"][1],
+    ]
+    resp = _save_definition(
+        client, auth_headers, scene["id"],
+        definition=dict(VALID_DEFINITION, objects=bad_objects))
+    assert resp.status_code == 400
+    issues = {
+        (issue["path"], issue["message"])
+        for issue in resp.json()["detail"]["issues"]
+    }
+    assert ("objects[0].ontology_concept_id", "必须是非空字符串") in issues
+
+
 # —— 运行日志 ——
 
 def test_runtime_logs_append_query_and_atomic_validation(client, auth_headers):
@@ -311,6 +400,48 @@ def test_runtime_logs_append_query_and_atomic_validation(client, auth_headers):
         headers=auth_headers)
     assert overflow.status_code == 400
     assert overflow.json()["detail"]["code"] == "too_many_log_entries"
+
+
+def test_runtime_logs_pruned_to_keep_limit(client, auth_headers, db):
+    from datetime import datetime, timedelta, timezone
+
+    from app.scenes import models as scenes_models
+
+    scene = _create_scene(client, auth_headers)
+    base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    history = [
+        scenes_models.SceneRuntimeLog(
+            scene_id=scene["id"],
+            level="info",
+            event_key="seed.history",
+            message=f"历史日志 {index}",
+            occurred_at=base_time + timedelta(minutes=index),
+        )
+        for index in range(scenes_models.RUNTIME_LOG_KEEP + 200)
+    ]
+    db.add_all(history)
+    db.commit()
+
+    # 再走一次服务端上报：当前批次入库后触发保留上限裁剪
+    newest_time = base_time + timedelta(days=365)
+    resp = client.post(
+        f"/api/v2/scenes/{scene['id']}/runtime-logs",
+        json={"entries": [{
+            "level": "alarm", "message": "最新日志",
+            "occurred_at": newest_time.isoformat(),
+        }]},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201
+
+    remaining = db.query(scenes_models.SceneRuntimeLog).filter(
+        scenes_models.SceneRuntimeLog.scene_id == scene["id"],
+    ).all()
+    assert len(remaining) == scenes_models.RUNTIME_LOG_KEEP
+    messages = [row.message for row in remaining]
+    assert "历史日志 0" not in messages      # 超限的最老记录被物理删除
+    assert "历史日志 201" in messages        # 保留窗口内的边界行仍在
+    assert "最新日志" in messages            # 最新上报必被保留
 
 
 def test_get_unknown_scene_returns_structured_404(client, auth_headers):

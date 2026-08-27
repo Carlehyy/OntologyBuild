@@ -48,6 +48,7 @@ LOG_LEVELS = ("info", "normal", "warning", "alarm")
 # 版本保留上限：与 world_model.SCRIPT_VERSION_KEEP 同一纪律
 CHAT_HISTORY_KEEP = 20  # 送入 LLM 的历史消息条数上限
 DEFINITION_VERSION_KEEP = 20
+RUNTIME_LOG_KEEP = 1000  # 运行日志每场景保留上限
 
 
 class Scene(Base):
