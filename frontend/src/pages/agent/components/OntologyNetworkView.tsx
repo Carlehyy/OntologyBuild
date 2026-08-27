@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dagre from '@dagrejs/dagre'
 import { useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import * as XLSX from 'xlsx'
 import {
   Boxes,
@@ -15,6 +16,7 @@ import {
   FunctionSquare,
   KeyRound,
   Link2,
+  Loader2,
   Maximize2,
   Minus,
   Network,
@@ -29,6 +31,7 @@ import type {
   ObjectType,
   OntologyFunction,
 } from '../../../palantir-graph/types/ontology'
+import { listInstances } from '../../../palantir-graph/api/formalApi'
 import { objectTypeIconGlyph } from '../../../palantir-graph/utils/objectTypeIcon'
 import { clamp } from './AgentWorkbenchPresentation'
 
@@ -45,7 +48,13 @@ const NETWORK_PALETTE = [
 
 const trimLabel = (text: string, max = 16) => text.length > max ? `${text.slice(0, max - 1)}…` : text
 const NETWORK_CARD_WIDTH = 316
-const NETWORK_CARD_HEIGHT = 368
+/**
+ * 卡片设计高度。内容自上而下：头部 / 属性区（至多 4 行，见 visibleProperties）/
+ * 底部关系·动作·函数三行。368 时代属性区满配时内容实测溢出约 10px，
+ * 底部「激活函数」行被 overflow-hidden 裁掉；392 给真实环境字体度量差异留出余量，
+ * dagre 布局消费同一常量，间距自动跟随。
+ */
+const NETWORK_CARD_HEIGHT = 392
 const NETWORK_NODE_GAP = 104
 const NETWORK_RANK_GAP = 164
 const NETWORK_MARGIN_X = 96
@@ -71,7 +80,7 @@ export function OntologyNetworkView({
   actions,
   functions,
   instancesCount,
-  instances,
+  releaseId,
   oid,
 }: {
   objectTypes: ObjectType[]
@@ -79,7 +88,8 @@ export function OntologyNetworkView({
   actions: Action[]
   functions: OntologyFunction[]
   instancesCount: (objectTypeId: string) => number
-  instances: any[]
+  /** 当前发布版 id：实例徽标弹层按它读取运行投影（versions workspace 不携带实例）。 */
+  releaseId: string
   oid: string
 }) {
   const navigate = useNavigate()
@@ -89,6 +99,15 @@ export function OntologyNetworkView({
   const dragging = useRef(false)
   const lastPos = useRef({ x: 0, y: 0 })
   const [instanceModal, setInstanceModal] = useState<{ open: boolean; objectTypeId: string; objectTypeLabel: string }>({ open: false, objectTypeId: '', objectTypeLabel: '' })
+  // 实例行来自运行投影（发布版隔离），按需拉取：release workspace 载荷只携带
+  // 试跑隔离数据，不携带生产实例（MYW-61 徽标「0 实例」的根源）。
+  const instanceRowsQuery = useQuery({
+    queryKey: ['agent-topo-instance-rows', oid, releaseId, instanceModal.objectTypeId],
+    queryFn: () => listInstances(oid, instanceModal.objectTypeId, releaseId),
+    enabled: instanceModal.open && !!instanceModal.objectTypeId && !!releaseId,
+    staleTime: 30_000,
+  })
+  const instanceRows = instanceRowsQuery.data || []
   const [instanceModalPage, setInstanceModalPage] = useState(0)
   const [instanceModalPageSize, setInstanceModalPageSize] = useState(20)
   const [instanceModalFilterCol, setInstanceModalFilterCol] = useState('')
@@ -407,7 +426,10 @@ export function OntologyNetworkView({
             const iconGlyph = objectTypeIconGlyph(objectType.icon)
             const degree = degreeByObject.get(objectType.id) || 0
             const instances = instancesCount(objectType.id)
-            const visibleProperties = objectType.properties.slice(0, 4)
+            // 属性区至多占 4 行：超过 4 个属性时展示 3 行 + 「+N 更多」，属性块高度
+            // 恒定有界（MYW-61：4 行 + 更多行的满配内容曾把底部「激活函数」行挤出卡片）。
+            const propertyLineCap = objectType.properties.length > 4 ? 3 : 4
+            const visibleProperties = objectType.properties.slice(0, propertyLineCap)
             const remainingProperties = objectType.properties.length - visibleProperties.length
             const relatedLinks = linksByObject.get(objectType.id) || []
             const actionItems = actionsByObject.get(objectType.id) || []
@@ -456,7 +478,9 @@ export function OntologyNetworkView({
                     </div>
                   </div>
 
-                  <div className="flex-1 px-4 py-3">
+                  {/* min-h-0：内容超限时由本区收缩吸收（内部裁切），绝不把底部
+                      关系/动作/函数三行推出卡片（MYW-61 裁切缺陷的结构性护栏）。 */}
+                  <div className="min-h-0 flex-1 overflow-hidden px-4 py-3">
                     <div className="mb-2 flex items-center justify-between">
                       <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">实体属性</span>
                       <span className="text-[10px] font-medium text-slate-400">{objectType.properties.length} 项</span>
@@ -553,7 +577,7 @@ export function OntologyNetworkView({
                 setInstanceModalPage(0)
               }
 
-              let filteredInstances = instances.filter((i: any) => i.objectTypeId === instanceModal.objectTypeId)
+              let filteredInstances = instanceRows
               if (instanceModalFilterCol && instanceModalFilterKw) {
                 const kw = instanceModalFilterKw.toLowerCase()
                 filteredInstances = filteredInstances.filter((i: any) => {
@@ -642,7 +666,19 @@ export function OntologyNetworkView({
                     onMouseUp={() => { resizeRef.current = null }}
                     onMouseLeave={() => { resizeRef.current = null }}
                   >
-                    {filteredInstances.length === 0 ? (
+                    {instanceRowsQuery.isPending ? (
+                      <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-400">
+                        <Loader2 size={16} className="animate-spin text-teal-600" />正在加载实例数据…
+                      </div>
+                    ) : instanceRowsQuery.isError ? (
+                      <div className="rounded-lg border border-dashed border-red-200 bg-red-50/60 px-4 py-8 text-center text-sm text-red-500">
+                        实例数据加载失败：{String((instanceRowsQuery.error as any)?.detail || (instanceRowsQuery.error as any)?.message || '未知错误')}
+                        <button
+                          onClick={() => instanceRowsQuery.refetch()}
+                          className="ml-2 rounded-md border border-red-200 bg-white px-2 py-0.5 text-xs text-red-500 transition-colors hover:bg-red-50"
+                        >重试</button>
+                      </div>
+                    ) : filteredInstances.length === 0 ? (
                       <div className="rounded-lg border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
                         {instanceModalFilterKw ? '无匹配实例' : '暂无实例数据'}
                       </div>
