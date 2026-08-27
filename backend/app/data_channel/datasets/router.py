@@ -4,9 +4,10 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
-from app.data_channel.datasets import mutation_service, query_service
+from app.data_channel.datasets import migration_service, mutation_service, query_service
 from app.data_channel.datasets.consumers import (
     dataset_consumer_map as _consumer_map,
     dataset_consumers as _dataset_consumers,
@@ -121,6 +122,46 @@ def commit_dataset_import_job(
         build_manual_schema_fn=_build_manual_schema,
         dispatch_dataset_import_task_fn=_dispatch_dataset_import_task,
     )
+
+
+# ── 成品数据集 → 人工数据集 异步迁移 ─────────────────────────────
+class StartMigrationRequest(BaseModel):
+    curated_dataset_id: str
+
+
+@router.post("/migrations", status_code=202)
+def start_dataset_migration(
+    body: StartMigrationRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """把一个成品数据集异步拷贝为人工数据集（结构与最新版本数据一致）。
+
+    返回 202 与迁移任务状态；进度通过 GET /migrations 列表或单任务端点
+    轮询，任务详情亦可见于成品数据集页的「迁移任务」弹窗。
+    """
+    return migration_service.start_migration(
+        db,
+        body.curated_dataset_id,
+        current_user,
+    )
+
+
+@router.get("/migrations")
+def list_dataset_migrations(
+    limit: int = Query(20, ge=1, le=100),
+    current_user=Depends(get_current_user),
+):
+    """当前用户最近创建的成品→人工迁移任务列表。"""
+    return migration_service.list_migrations(current_user, limit=limit)
+
+
+@router.get("/migrations/{job_id}")
+def get_dataset_migration(
+    job_id: str,
+    current_user=Depends(get_current_user),
+):
+    return migration_service.get_migration(job_id, current_user)
 
 @router.post("/create-table", status_code=201)
 def create_online_table(body: CreateTableRequest, db: Session = Depends(get_db)):

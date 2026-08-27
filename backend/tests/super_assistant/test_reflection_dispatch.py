@@ -16,13 +16,13 @@ from app.super_assistant import reflection_tasks
 
 
 def test_reflect_subjects_appended_to_stream_subjects():
-    # 扩容只能追加：三条反思 subject 在流末尾，旧 subject 不受影响
+    # 扩容只能追加：三条反思 subject 紧随既有主题，旧 subject 不受影响
     assert PIPELINE_STREAM_SUBJECTS[:3] == (
         "pipeline.task.execute",
         "task.pipeline.run",
         "task.dataset.import",
     )
-    assert PIPELINE_STREAM_SUBJECTS[3:] == (
+    assert PIPELINE_STREAM_SUBJECTS[3:6] == (
         SUPER_ASSISTANT_REFLECT_MICRO_SUBJECT,
         SUPER_ASSISTANT_REFLECT_FULL_SUBJECT,
         SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT,
