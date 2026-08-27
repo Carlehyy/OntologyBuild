@@ -169,11 +169,13 @@ function MappingChainPanoramaInner({
   // 测量完成后（以及模型/容器尺寸变化时）重新 fitView 居中，保证列抬头与卡片
   // 列整体水平居中。拖拽布局不触发 refit（模型未变），手动布局不被打断。
   const containerRef = useRef<HTMLDivElement>(null)
-  const [containerWidth, setContainerWidth] = useState(0)
+  // 容器宽高都参与 refit 依赖：双栏布局下画布随左栏高度拉伸（flex 填充），
+  // 只观察宽度会漏掉高度变化后的重新适配。
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
   useEffect(() => {
     const element = containerRef.current
     if (!element) return
-    const update = () => setContainerWidth(element.clientWidth)
+    const update = () => setContainerSize({ width: element.clientWidth, height: element.clientHeight })
     update()
     const observer = new ResizeObserver(update)
     observer.observe(element)
@@ -184,7 +186,7 @@ function MappingChainPanoramaInner({
   useEffect(() => {
     if (!nodesInitialized) return
     void flowInstance.fitView({ padding: 0.15, maxZoom: 1 })
-  }, [flowInstance, nodesInitialized, model, containerWidth])
+  }, [flowInstance, nodesInitialized, model, containerSize])
 
   const datasetCards = useMemo(() => {
     const cards = new Map<string, { title: string; sub: string; badge: ChainCardData['badge'] }>()
@@ -282,7 +284,9 @@ function MappingChainPanoramaInner({
     else if (action?.type === 'select-element') onSelectElement(action.key)
   }, [model, onPreviewDataset, onSelectElement])
 
-  const height = useMemo(() => {
+  // 内容高度下限仍按节点规模计算；双栏布局下左栏若有富余高度，画布经 CSS
+  // flex 拉伸填满（minHeight 只是下限，不设固定高度），更大的图区对全景更有利。
+  const minHeight = useMemo(() => {
     const datasets = model.nodes.filter(node => node.kind === 'dataset').length
     const elements = model.nodes.length - datasets
     return Math.min(400, Math.max(240, Math.max(datasets, elements) * (NODE_H + NODE_GAP) + FIRST_NODE_Y))
@@ -294,48 +298,52 @@ function MappingChainPanoramaInner({
       className="dmo-flow-canvas dmo-chain-canvas"
       data-testid="mapping-chain-panorama"
       data-still={hoveringNode || hoverKey != null || selectedKey != null ? 'true' : undefined}
-      style={{ height }}
+      style={{ minHeight }}
     >
-      <ReactFlow
-        nodes={flowNodes}
-        edges={flowEdges}
-        nodeTypes={nodeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
-        minZoom={0.3}
-        nodesConnectable={false}
-        elementsSelectable
-        zoomOnScroll={false}
-        panOnScroll={false}
-        // 节点可拖拽后恢复左键全景交互：拖节点=调整布局，拖空白=平移画布；
-        // 静止点按不会被识别为拖拽，节点 click 不受影响
-        panOnDrag
-        zoomOnPinch
-        preventScrolling={false}
-        onNodeClick={handleNodeClick}
-        onNodeDragStop={(_, node) => {
-          if (node.type !== 'mappingChainNode') return
-          setDragPositions(prev => {
-            const next = { ...prev, [node.id]: { x: node.position.x, y: node.position.y } }
-            writeChainPositions(ontologyId, next)
-            return next
-          })
-        }}
-        onPaneClick={() => setHighlightSet(null)}
-        onNodeMouseEnter={(_, node) => {
-          if (node.type !== 'mappingChainNode') return
-          setHoveringNode(true)
-          onHoverNode(node.id)
-        }}
-        onNodeMouseLeave={() => {
-          setHoveringNode(false)
-          onHoverNode(null)
-        }}
-        proOptions={{ hideAttribution: true }}
-      >
-        <Background gap={22} size={1} color="var(--dmo-line-soft)" />
-        <Controls showInteractive={false} position="bottom-right" />
-      </ReactFlow>
+      {/* 绝对定位填充层：画布盒只有 minHeight 下限（无确定高度）时，
+          React Flow 根节点的 height:100% 内联样式会塌缩为 0 */}
+      <div style={{ position: 'absolute', inset: 0 }}>
+        <ReactFlow
+          nodes={flowNodes}
+          edges={flowEdges}
+          nodeTypes={nodeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
+          minZoom={0.3}
+          nodesConnectable={false}
+          elementsSelectable
+          zoomOnScroll={false}
+          panOnScroll={false}
+          // 节点可拖拽后恢复左键全景交互：拖节点=调整布局，拖空白=平移画布；
+          // 静止点按不会被识别为拖拽，节点 click 不受影响
+          panOnDrag
+          zoomOnPinch
+          preventScrolling={false}
+          onNodeClick={handleNodeClick}
+          onNodeDragStop={(_, node) => {
+            if (node.type !== 'mappingChainNode') return
+            setDragPositions(prev => {
+              const next = { ...prev, [node.id]: { x: node.position.x, y: node.position.y } }
+              writeChainPositions(ontologyId, next)
+              return next
+            })
+          }}
+          onPaneClick={() => setHighlightSet(null)}
+          onNodeMouseEnter={(_, node) => {
+            if (node.type !== 'mappingChainNode') return
+            setHoveringNode(true)
+            onHoverNode(node.id)
+          }}
+          onNodeMouseLeave={() => {
+            setHoveringNode(false)
+            onHoverNode(null)
+          }}
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background gap={22} size={1} color="var(--dmo-line-soft)" />
+          <Controls showInteractive={false} position="bottom-right" />
+        </ReactFlow>
+      </div>
     </div>
   )
 }

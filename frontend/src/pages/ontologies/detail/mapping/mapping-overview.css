@@ -101,8 +101,9 @@
   border-radius: 14px;
   display: flex;
   flex-direction: column;
-  /* 自然文档流：卡片高度由内容决定，页面级滚动（对齐治理推演页），
-     不再做卡片/清单内嵌滚动；overflow:hidden 仅用于圆角裁切 */
+  /* 卡片高度由内容决定，页面级滚动（对齐治理推演页）；唯一例外是
+     .dmo-workspace 双栏区：宽屏下限高在一屏内（见该规则注释），
+     清单行数多时在右栏内部滚动，保证“全景+清单”同屏一页读完 */
   overflow: hidden;
   color: var(--dmo-ink);
   background: var(--dmo-surface);
@@ -149,30 +150,68 @@
 .dmo-primary-button:hover { transform: translateY(-1px); background: var(--dmo-teal-strong); box-shadow: 0 8px 17px rgba(11,143,131,.23); }
 .dmo-primary-button:active { transform: translateY(0); }
 
-/* ═══ 数据供给全景（节点卡链路画布） ═══ */
-.dmo-flow { flex: none; padding: 14px 18px 8px; border-bottom: 1px solid var(--dmo-line); background: var(--dmo-panel); }
-.dmo-flow-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; }
+/* ═══ 数据供给全景（双栏布局下的左栏面板） ═══ */
+.dmo-flow {
+  min-width: 0;
+  min-height: 0;
+  flex: 11 1 0%;
+  padding: 14px 18px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-right: 1px solid var(--dmo-line);
+  background: var(--dmo-panel);
+}
+.dmo-flow-head { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; }
 .dmo-flow-title { min-width: 0; display: flex; flex-direction: column; }
 .dmo-flow-title b { color: var(--dmo-ink); font-size: 15px; font-weight: 700; letter-spacing: .01em; }
 .dmo-flow-title small { margin-top: 3px; color: var(--dmo-subtle); font-size: 12px; }
 .dmo-flow-caption { flex: none; color: var(--dmo-faint); font-size: 11px; }
-.dmo-flow-canvas { min-height: 200px; }
-.dmo-flow-skeleton { height: 240px; border-radius: 12px; background: linear-gradient(100deg, var(--dmo-line-soft) 38%, var(--dmo-hover-bg) 50%, var(--dmo-line-soft) 62%); background-size: 200% 100%; }
+/* 画布随左栏富余高度拉伸（组件侧只给 minHeight 下限），图区越大全景越可读。
+   画布盒在堆叠模式下只有 minHeight 而无确定高度，React Flow 根节点自带的
+   height:100% 内联样式会塌缩为 0——组件侧用绝对定位填充层包住画布，
+   两种模式下都成立 */
+.dmo-flow-canvas { flex: 1 1 auto; min-height: 200px; position: relative; }
+.dmo-flow-skeleton { flex: 1 1 auto; min-height: 240px; border-radius: 12px; background: linear-gradient(100deg, var(--dmo-line-soft) 38%, var(--dmo-hover-bg) 50%, var(--dmo-line-soft) 62%); background-size: 200% 100%; }
 @media (prefers-reduced-motion: no-preference) {
   .dmo-flow-skeleton { animation: dmoShimmer 1.4s linear infinite; }
 }
 @keyframes dmoShimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-.dmo-flow-empty { min-height: 200px; margin: 10px 0 8px; border: 1px dashed var(--dmo-line); border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: var(--dmo-faint); text-align: center; }
+.dmo-flow-empty { flex: 1 1 auto; min-height: 200px; border: 1px dashed var(--dmo-line); border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: var(--dmo-faint); text-align: center; }
 .dmo-flow-empty b { color: var(--dmo-muted); font-size: 13px; }
 .dmo-flow-empty span { max-width: 460px; color: var(--dmo-faint); font-size: 12px; line-height: 1.6; }
 
-.dmo-workspace { display: flex; background: var(--dmo-workspace-bg); }
-.dmo-register { min-width: 0; flex: 1 1 0%; display: flex; flex-direction: column; background: var(--dmo-panel); }
-.dmo-register-head { min-height: 64px; padding: 12px 16px 9px; border-bottom: 1px solid var(--dmo-line-soft); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.dmo-register-title { min-width: 0; display: flex; flex: 1; flex-direction: column; }
+/* ═══ 同屏双栏：全景（左）+ 清单（右） ═══
+   相对宽度：全景是横向链路（两列节点 + 连线），宽度收益更高 → grow 11；
+   清单是六列定宽网格 → grow 9 且 min-width 560px 保底（再窄状态列装不下），
+   窄窗口先压缩全景、清单不塌缩（两侧 basis 0，占比恒约 55% / 45%）。
+   单页展示：限高到「视口 − 头部/KPI 带」的估约值（max() 兜底极矮视口）。
+   用 flex 行布局 + stretch 是因为限高生效时两栏能等高收缩（max-height 约束
+   不进 grid 轨道尺寸，只会溢出）；清单行数多时在 .dmo-row-list 内部滚动，
+   行表头与筛选行保持可见。窄屏（≤1020px）回退上下堆叠并解除限高。 */
+.dmo-workspace {
+  display: flex;
+  align-items: stretch;
+  max-height: max(460px, calc(100dvh - 296px));
+  background: var(--dmo-workspace-bg);
+}
+/* 清单是容器查询的容器：行网格的紧凑档位跟「栏宽」走而不是跟视口走
+   （1600px 视口下右栏也只有 ~580px，视口媒体查询对此无能为力）。
+   窄屏 ≤700px 的整行换版式仍由视口媒体查询负责（见文件末尾，声明在后优先）。 */
+.dmo-register {
+  container: dmoRegister / inline-size;
+  min-width: 560px;
+  min-height: 0;
+  flex: 9 1 0%;
+  display: flex;
+  flex-direction: column;
+  background: var(--dmo-panel);
+}
+.dmo-register-head { min-height: 64px; padding: 12px 16px 9px; border-bottom: 1px solid var(--dmo-line-soft); display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 9px 16px; }
+.dmo-register-title { min-width: 180px; display: flex; flex: 1 1 200px; flex-direction: column; }
 .dmo-register-head b { color: var(--dmo-ink); font-size: 15px; font-weight: 700; letter-spacing: .01em; }
 .dmo-register-head small { margin-top: 3px; color: var(--dmo-subtle); font-size: 12px; }
-.dmo-register-actions { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.dmo-register-actions { min-width: 0; flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .dmo-search { width: 240px; height: 34px; padding: 0 10px; border: 1px solid var(--dmo-line); border-radius: 8px; display: flex; align-items: center; gap: 7px; color: var(--dmo-faint); background: var(--dmo-workspace-bg); transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease; }
 .dmo-search:focus-within { border-color: var(--dmo-teal); background: var(--dmo-cell-bg); box-shadow: 0 0 0 3px rgba(11,143,131,.07); }
 .dmo-search input { min-width: 0; width: 100%; border: 0; outline: 0; color: var(--dmo-text); background: transparent; font-size: 12px; }
@@ -182,12 +221,24 @@
 .dmo-filters button:hover { color: var(--dmo-text); background: var(--dmo-hover-bg); }
 .dmo-filters button[data-active="true"] { border-color: var(--dmo-teal-line); color: var(--dmo-teal-ink); background: var(--dmo-teal-bg); }
 .dmo-table-head, .dmo-map-row { display: grid; grid-template-columns: minmax(190px,1.25fr) minmax(155px,1fr) 100px 82px 108px 18px; align-items: center; gap: 10px; }
-.dmo-table-head { min-height: 36px; padding: 0 15px; border-bottom: 1px solid var(--dmo-line-soft); color: var(--dmo-subtle); background: var(--dmo-workspace-bg); font-size: 11px; font-weight: 700; }
+.dmo-table-head { min-height: 36px; padding: 0 15px; border-bottom: 1px solid var(--dmo-line-soft); flex: none; color: var(--dmo-subtle); background: var(--dmo-workspace-bg); font-size: 11px; font-weight: 700; }
+/* 清单滚动容器：双栏限高时行列表在栏内滚动，表头与筛选行保持可见 */
+.dmo-row-list { min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: #c7d1d6 transparent; scrollbar-width: thin; }
+.dark .dmo-row-list { scrollbar-color: #2a3342 transparent; }
 .dmo-table-head span:nth-child(3), .dmo-table-head span:nth-child(4) { text-align: center; }
 .dmo-map-row { width: 100%; min-height: 68px; padding: 8px 15px; border: 0; border-bottom: 1px solid var(--dmo-line-soft); color: inherit; text-align: left; background: var(--dmo-cell-bg); cursor: pointer; transition: background-color .16s ease, box-shadow .16s ease; }
 .dmo-map-row:hover, .dmo-map-row[data-chart-hover="true"] { background: var(--dmo-hover-bg); }
 .dmo-map-row[data-selected="true"] { position: relative; background: var(--dmo-selected-bg); box-shadow: inset 3px 0 var(--dmo-teal); }
 .dmo-map-row[data-selected="true"]::after { content: ''; position: absolute; inset: 0 0 0 auto; width: 1px; background: var(--dmo-teal-line); }
+/* 清单行网格随栏宽降档（容器查询）：声明位于视口媒体查询之前，
+   ≤700px 的换列版式（见文件末尾）在两者同时命中时仍然优先 */
+@container dmoRegister (max-width: 880px) {
+  .dmo-table-head, .dmo-map-row { grid-template-columns: minmax(170px,1.2fr) minmax(128px,.85fr) 84px 64px 96px 16px; gap: 8px; }
+}
+@container dmoRegister (max-width: 660px) {
+  .dmo-table-head, .dmo-map-row { grid-template-columns: minmax(145px,1.1fr) minmax(110px,.8fr) 72px 56px 92px 14px; gap: 6px; }
+  .dmo-field-cell > i { width: 46px; }
+}
 .dmo-target-cell { min-width: 0; display: flex; align-items: center; gap: 9px; }
 .dmo-target-cell > i { width: 32px; height: 32px; flex: none; border-radius: 9px; display: grid; place-items: center; color: var(--dmo-icon-teal); background: var(--dmo-icon-teal-bg); font-style: normal; }
 .dmo-target-cell > span, .dmo-dataset-cell { min-width: 0; display: flex; flex-direction: column; }
@@ -402,15 +453,16 @@
   .dmo-register-head { align-items: flex-start; flex-direction: column; }
   .dmo-register-actions { width: 100%; }
   .dmo-search { margin-left: auto; }
-  .dmo-table-head, .dmo-map-row { grid-template-columns: minmax(175px,1.2fr) minmax(135px,.9fr) 86px 68px 98px 16px; gap: 8px; }
 }
 @media (max-width: 1020px) {
   .dmo-summary { grid-template-columns: 1fr auto; }
   .dmo-kpis { grid-column: 1/-1; grid-row: 2; padding-top: 12px; border-top: 1px solid var(--dmo-line-soft); }
   .dmo-summary { min-height: 150px; }
-  /* 窄屏纵向堆叠 */
-  .dmo-workspace { flex-direction: column; }
-  .dmo-register { border-right: 0; border-bottom: 1px solid var(--dmo-line); }
+  /* 窄屏回退上下堆叠：解除宽度配比与同屏限高，两栏恢复内容自然高度；
+     全景在上（分隔线回到底部），清单随页面滚动 */
+  .dmo-workspace { flex-direction: column; max-height: none; }
+  .dmo-flow { flex: none; border-right: 0; border-bottom: 1px solid var(--dmo-line); }
+  .dmo-register { min-width: 0; flex: none; }
 }
 @media (max-width: 700px) {
   .dmo-summary { padding: 13px; position: static; }
