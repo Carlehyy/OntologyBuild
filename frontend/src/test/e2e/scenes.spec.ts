@@ -259,7 +259,31 @@ test('建模页从零新建：对话应用定义生成版本并绑定场景', as
   await page.getByPlaceholder('描述要从零构建的场景…').fill('建一个园区场景')
   await page.getByRole('button', { name: /发送/ }).click()
   await expect(page.getByText('已应用 v3 · 初版布局')).toBeVisible()
-  await expect(page.getByText('v2 · 手动')).toBeVisible()
+  // 版本管理收进画布卡顶栏「版本管理」按钮，点开浮层查看历史版本（MYW-64）
+  await page.getByRole('button', { name: '版本管理' }).click()
+  const panel = page.getByRole('dialog', { name: '版本管理' })
+  await expect(panel).toBeVisible()
+  await expect(panel.getByText('v2 · 手动')).toBeVisible()
+  // 关闭浮层再验证右下角命中：edge-to-edge 后输入区贴视口右下角，
+  // 悬浮助手球必须整体让位（aboveComposer 锚点 + elementFromPoint 命中检测）。
+  // 先输入内容让「发送」处于可点态——禁用态按钮带 disabled:pointer-events-none，不会成为命中目标。
+  await page.getByRole('button', { name: '关闭版本历史' }).click()
+  await page.getByPlaceholder('描述对当前场景的调整…').fill('再加一栋办公楼')
+  const sendHit = await page.evaluate(() => {
+    const sendButton = [...document.querySelectorAll('button')]
+      .find(node => node.textContent?.trim() === '发送')
+    if (!sendButton) return 'send-missing'
+    const rect = sendButton.getBoundingClientRect()
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+    if (!hit) return 'no-hit'
+    if (sendButton.contains(hit)) return 'ok'
+    const owner = hit.closest('[data-testid]')
+    const label = owner
+      ? owner.getAttribute('data-testid')
+      : hit.tagName + '.' + String(hit.className).slice(0, 80)
+    return 'covered-by:' + label
+  })
+  expect(sendHit).toBe('ok')
 })
 
 test('建模页 error 事件展示告警条', async ({ page }) => {
@@ -294,8 +318,9 @@ test('建模页历史会话切换与消息回放', async ({ page }) => {
   // 消息回放：用户消息 + 版本应用系统条
   await expect(page.getByText('建一个仓库场景')).toBeVisible()
   await expect(page.getByText('已应用 v2 · 初版布局')).toBeVisible()
-  // 会话绑定场景后，版本管理条可见
-  await expect(page.getByText('v2 · 手动')).toBeVisible()
+  // 会话绑定场景后，顶栏「版本管理」浮层可打开查看版本行
+  await page.getByRole('button', { name: '版本管理' }).click()
+  await expect(page.getByRole('dialog', { name: '版本管理' }).getByText('v2 · 手动')).toBeVisible()
 })
 
 // —— 建模页搜索式草稿选择器与版本回滚（阶段三）——
@@ -379,7 +404,7 @@ test('建模页搜索式选择器过滤与切换', async ({ page }) => {
   await expect(page.getByRole('button', { name: '清除已选场景' })).toHaveCount(0)
 })
 
-test('版本条回滚生成新版本', async ({ page }) => {
+test('版本浮层回滚生成新版本', async ({ page }) => {
   await seedAuth(page)
   await mockPlatformShell(page)
   await mockScenesApi(page)
@@ -427,6 +452,8 @@ test('版本条回滚生成新版本', async ({ page }) => {
   await page.getByText('旧会话').click()
   await expect(page.getByText('已应用 v2 · 初版布局')).toBeVisible()
 
+  // 版本管理在画布卡顶栏按钮内：先打开浮层（MYW-64）
+  await page.getByRole('button', { name: '版本管理' }).click()
   // 打开确认弹窗，确认语义文案
   await page.getByRole('button', { name: '回滚为当前' }).click()
   await expect(page.getByRole('heading', { name: '回滚到 v2？' })).toBeVisible()
@@ -446,4 +473,43 @@ test('版本条回滚生成新版本', async ({ page }) => {
   const chipV3 = page.getByRole('button', { name: 'v3 · 手动' })
   await expect(chipV3).toBeVisible()
   await expect(chipV3).toHaveAttribute('aria-pressed', 'true')
+})
+
+test('版本浮层切换版本并在顶栏提示当前预览，未绑定时展示空态', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+  await mockScenesApi(page)
+  // 复用历史会话绑定 scn-1：免 SSE 流程直接进入有版本的画布态
+  await page.route(/\/api\/v2\/scenes\/conversations(\?.*)?$/, route => json(route, {
+    items: [{ id: 'sc-8', scene_id: 'scn-1', title: '旧会话', model_config_id: null, created_at: now, updated_at: now }],
+    total: 1,
+  }))
+  await page.route(/\/api\/v2\/scenes\/conversations\/sc-8\/messages(\?.*)?$/, route => json(route, {
+    items: [
+      { id: 'm1', conversation_id: 'sc-8', role: 'user', content: '建一个仓库场景', status: 'complete', version_no: null, created_at: now },
+      { id: 'm2', conversation_id: 'sc-8', role: 'assistant', content: '初版布局', status: 'complete', version_no: 2, created_at: now },
+    ],
+    total: 2,
+  }))
+
+  await page.goto('/#/scenes/modeling')
+  // 未绑定/未回放：浮层展示空态引导
+  await page.getByRole('button', { name: '版本管理' }).click()
+  await expect(page.getByRole('dialog', { name: '版本管理' })).toBeVisible()
+  await expect(page.locator('[data-testid="scene-canvas-subtitle"]')).toHaveText(/从零新建/)
+  await expect(page.getByText('尚未绑定场景：助手生成首个版本后，即可在此回看。')).toBeVisible()
+  await page.getByRole('button', { name: '关闭版本历史' }).click()
+
+  // 回放会话绑定 scn-1：默认选中最新版 v2，顶栏副标题跟随
+  await page.getByRole('button', { name: '历史会话' }).click()
+  await page.getByText('旧会话').click()
+  await expect(page.getByRole('dialog', { name: '版本管理' })).not.toBeAttached()
+  await expect(page.locator('[data-testid="scene-canvas-subtitle"]')).toHaveText(/供应链园区 · 共 2 个版本 · 预览 v2/)
+  await page.getByRole('button', { name: '版本管理' }).click()
+  const panel = page.getByRole('dialog', { name: '版本管理' })
+  // 切换到 v1：行选中态切换且顶栏预览提示更新（行名含备注/时间，按前缀子串定位）
+  await panel.getByRole('button', { name: /^v1 · 手动/ }).click()
+  await expect(panel.getByRole('button', { name: /^v1 · 手动/ })).toHaveAttribute('aria-pressed', 'true')
+  await expect(panel.getByRole('button', { name: /^v2 · 手动/ })).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.locator('[data-testid="scene-canvas-subtitle"]')).toHaveText(/预览 v1/)
 })

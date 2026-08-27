@@ -1,22 +1,28 @@
 /**
- * 场景建模页 — 参照数据管家页：左侧与场景助手对话（草稿态场景 / 从零新建），
- * 支持会话历史切换与消息回放；右侧白模画布实时渲染 + 版本管理条。
- * 对话应用的定义以 source=assistant 冻结新版本，版本条可回看任意历史版本。
+ * 场景助手（对话式建模）— 布局对齐本体网络页（MYW-64）：左卡片为三维场景
+ * 可视化，右卡片为场景助手对话框，中间可拖拽分栏；本路由在 Layout 中为
+ * edge-to-edge 全高页，卡片间距与本体网络页保持一致（容器 p-1 + 卡片圆角边框）。
+ *
+ * 版本管理收进左卡白色顶栏右侧的「版本管理」按钮：点开浮层回看历史版本
+ * （版本号 / 来源 / 备注 / 时间），选中任意版本即在画布预览，浮层内保留
+ * 「回滚为当前」入口。目标场景与对话模型作为发送上下文放在右侧对话框的
+ * 工具条上；历史会话仍在对话框顶栏。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, ArrowLeft, History, Send, Sparkles, Square } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Axis3d, Check, History, Send, Sparkles, Square, X } from 'lucide-react'
 import { scenesApi } from '@/api/scenes'
 import { createConversation, listConversations, listMessages, streamSceneChat } from '@/api/sceneAssistant'
 import type { ConversationMessage, ConversationSummary, SceneSseEvent } from '@/types/sceneAssistant'
-import type { SceneDefinition, SceneSummary } from '@/types/scene'
+import type { SceneDefinition, SceneSummary, SceneVersionMeta } from '@/types/scene'
 import { modelApi } from '@/api/ontologies'
 import { Button } from '@/components/ui/Button'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { ConfirmModal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
 import SessionHistoryPopover, { type SessionHistoryItem } from '@/components/SessionHistoryPopover'
+import { SplitHandle, useSplitLayout } from '@/hooks/useSplitLayout'
 import TargetSceneSelector from './TargetSceneSelector'
 import { SceneCanvas } from '@/lib/scene3d/SceneCanvas'
 
@@ -29,6 +35,22 @@ type TimelineItem =
 let seq = 0
 const nextId = () => 'tl-' + Date.now() + '-' + (seq++)
 const NEW_SCENE = '__new__'
+
+/** 与本体网络页两卡一致的卡片外观（内边距由分栏容器 p-1 统一提供）。 */
+const panelClass = 'min-h-0 min-w-0 overflow-hidden rounded-lg border border-[var(--color-border)] shadow-[0_1px_2px_rgba(15,23,42,0.05),0_12px_32px_-16px_rgba(15,23,42,0.18)]'
+
+function versionSourceLabel(source: string): string {
+  return source === 'assistant' ? '助手' : source === 'clone' ? '克隆' : '手动'
+}
+
+function formatVersionTime(value: string | null): string {
+  if (!value) return '时间未知'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '时间未知'
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  })
+}
 
 function messagesToTimeline(messages: ConversationMessage[]): TimelineItem[] {
   const items: TimelineItem[] = []
@@ -53,6 +75,7 @@ function messagesToTimeline(messages: ConversationMessage[]): TimelineItem[] {
 export default function SceneModelingPage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
+  const { containerRef, sizes, startResize } = useSplitLayout([72, 28])
 
   const draftsQuery = useQuery({
     queryKey: ['scenes', 'drafts-for-steward'],
@@ -76,6 +99,7 @@ export default function SceneModelingPage() {
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
+  const [showVersions, setShowVersions] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -89,7 +113,7 @@ export default function SceneModelingPage() {
     [conversations],
   )
 
-  // 右侧：绑定场景的版本与定义
+  // 左卡：绑定场景的版本与定义
   const boundSceneId =
     targetSceneId !== NEW_SCENE ? targetSceneId : liveBoundSceneId(timeline)
   const versionsQuery = useQuery({
@@ -138,6 +162,17 @@ export default function SceneModelingPage() {
 
   const draftScenes: SceneSummary[] = useMemo(
     () => draftsQuery.data?.items ?? [], [draftsQuery.data])
+  const boundSceneName = draftScenes.find(scene => scene.id === boundSceneId)?.name
+
+  // 左卡顶栏副标题：绑定状态 + 版本概览
+  const canvasSubtitle = !boundSceneId
+    ? '从零新建 · 助手生成的白模将在此实时渲染'
+    : [
+        boundSceneName ?? '已绑定场景',
+        versionList.length > 0
+          ? `共 ${versionList.length} 个版本${selectedVersionNo != null ? ` · 预览 v${selectedVersionNo}` : ''}`
+          : '暂无版本',
+      ].join(' · ')
 
   function resetChat() {
     setConversationId(null)
@@ -216,53 +251,148 @@ export default function SceneModelingPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-8.5rem)] flex-col gap-2 px-6 py-4">
-      {modelsQuery.isSuccess && llmModels.length === 0 && (
-        <div className="flex shrink-0 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
-          <AlertTriangle size={15} className="shrink-0" />
-          <span className="flex-1">尚未配置对话模型：场景助手需要一个 LLM 才能工作。</span>
-          <Link to="/models" className="flex items-center gap-1 rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-xs hover:bg-amber-100">去模型配置</Link>
-        </div>
-      )}
+    <div className="relative flex h-full min-h-[560px] overflow-hidden bg-[var(--color-bg-base)]">
+      <div
+        ref={containerRef}
+        className="scrollbar-none grid min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-1"
+        style={{ gridTemplateColumns: `minmax(560px, ${sizes[0]}fr) 4px minmax(320px, ${sizes[1]}fr)` }}
+      >
+        {/* 左卡片：三维场景可视化 */}
+        <section className={`${panelClass} flex flex-col`} aria-label="三维场景可视化" data-testid="scene-canvas-card">
+          {/* 顶栏白色框：返回 / 标题信息 + 右侧「版本管理」按钮 */}
+          <header className="relative flex h-14 shrink-0 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-white px-4">
+            <div className="flex min-w-0 items-center gap-2">
+              <Link
+                to="/scenes"
+                aria-label="返回三维场景列表"
+                title="返回三维场景列表"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+              >
+                <ArrowLeft size={16} />
+              </Link>
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-teal-50 text-teal-600">
+                <Axis3d size={18} />
+              </div>
+              <div className="min-w-0">
+                <h3 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">三维场景可视化</h3>
+                <p className="truncate text-[11px] text-[var(--color-text-tertiary)]" data-testid="scene-canvas-subtitle">
+                  {canvasSubtitle}
+                </p>
+              </div>
+            </div>
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowVersions(open => !open)}
+                aria-expanded={showVersions}
+                aria-haspopup="dialog"
+                data-testid="version-history-button"
+                title="查看历史版本"
+                className={['inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors',
+                  showVersions
+                    ? 'bg-slate-900 text-white shadow-sm hover:bg-slate-800'
+                    : 'border border-[var(--color-border)] bg-white text-slate-600 hover:bg-slate-100'].join(' ')}
+              >
+                <History size={13} /> 版本管理
+              </button>
+              {showVersions && (
+                <>
+                  <div className="fixed inset-0 z-20" onClick={() => setShowVersions(false)} aria-hidden="true" />
+                  <section
+                    role="dialog"
+                    aria-label="版本管理"
+                    data-testid="version-panel"
+                    className="absolute right-0 top-full z-30 mt-2 w-[min(340px,calc(100vw-32px))] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_18px_52px_rgba(15,23,42,0.16)] animate-slide-up"
+                  >
+                    <header className="flex items-center justify-between gap-2 border-b border-[var(--color-border)] px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-slate-800">版本历史</p>
+                        <p className="truncate text-[10.5px] text-slate-400">选择任一版本即可在画布预览</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowVersions(false)}
+                        aria-label="关闭版本历史"
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100"
+                      >
+                        <X size={13} />
+                      </button>
+                    </header>
+                    <div className="scrollbar-thin max-h-72 overflow-y-auto p-1.5">
+                      {!boundSceneId ? (
+                        <p className="px-2 py-4 text-center text-[11px] leading-5 text-slate-400">
+                          尚未绑定场景：助手生成首个版本后，即可在此回看。
+                        </p>
+                      ) : versionsQuery.isLoading ? (
+                        <LoadingState className="py-6" />
+                      ) : versionList.length === 0 ? (
+                        <p className="px-2 py-4 text-center text-[11px] leading-5 text-slate-400">暂无版本</p>
+                      ) : versionList.map(version => (
+                        <VersionRow
+                          key={version.id}
+                          version={version}
+                          selected={selectedVersionNo === version.version_no}
+                          onSelect={() => setSelectedVersionNo(version.version_no)}
+                        />
+                      ))}
+                    </div>
+                    {!!boundSceneId && versionList.length >= 1 && definition && (
+                      <footer className="border-t border-[var(--color-border)] px-3 py-2">
+                        <Button
+                          variant="outline"
+                          className="h-7 w-full justify-center px-2.5 text-xs"
+                          title="将该版本定义整体保存为一个新草稿版本（当前最新版保留）"
+                          onClick={() => setRollbackOpen(true)}
+                        >
+                          回滚为当前
+                        </Button>
+                      </footer>
+                    )}
+                  </section>
+                </>
+              )}
+            </div>
+          </header>
 
-      <div className="flex shrink-0 items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Link to="/scenes" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-teal-700">
-            <ArrowLeft size={13} /> 返回三维场景列表
-          </Link>
-          <h1 className="text-base font-semibold text-slate-800">场景助手 · 对话式建模</h1>
-        </div>
-        <div className="flex items-center gap-2">
-          <TargetSceneSelector
-            targetSceneId={targetSceneId === NEW_SCENE ? null : targetSceneId}
-            drafts={draftScenes}
-            onChange={id => { resetChat(); setTargetSceneId(id ?? NEW_SCENE) }}
-          />
-          <select
-            value={modelId}
-            aria-label="选择对话模型"
-            onChange={event => setModelId(event.target.value)}
-            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
-          >
-            <option value="">选择对话模型</option>
-            {llmModels.map(model => (
-              <option key={model.id} value={model.id}>{model.name}</option>
-            ))}
-          </select>
-        </div>
-      </div>
+          <div className="relative min-h-0 flex-1 overflow-hidden">
+            {definition
+              ? <SceneCanvas definition={definition} className="absolute inset-0" />
+              : (
+                <div className="flex h-full items-center justify-center p-6">
+                  <div className="max-w-sm rounded-lg border border-dashed border-slate-300 bg-white/90 px-5 py-6 text-center">
+                    <Axis3d size={22} className="mx-auto mb-2 text-slate-300" />
+                    <p className="text-sm font-medium text-slate-700">
+                      {boundSceneId ? '该场景还没有版本定义' : '尚未绑定场景'}
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                      {boundSceneId
+                        ? '在右侧描述需求，助手将生成第一个版本'
+                        : '在右侧选择草稿场景或从零新建，助手生成的白模将实时呈现在这里'}
+                    </p>
+                  </div>
+                </div>
+              )}
+          </div>
+        </section>
 
-      <div className="flex min-h-0 flex-1 gap-4">
-        {/* 左侧对话面板 */}
-        <section className="flex w-[400px] shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm/50">
-          <div className="relative flex shrink-0 items-center justify-between border-b border-slate-100 px-4 py-2">
-            <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-800">
-              <Sparkles size={14} className="text-teal-600" /> 场景助手
-            </span>
+        <SplitHandle onPointerDown={startResize} label="调整三维画布与对话区宽度" />
+
+        {/* 右卡片：场景助手对话框 */}
+        <aside className={`${panelClass} flex flex-col`} aria-label="场景助手对话框" data-testid="scene-chat-card">
+          <header className="relative flex h-14 shrink-0 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-white px-4">
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-teal-50 text-teal-600">
+                <Sparkles size={16} />
+              </div>
+              <div className="min-w-0">
+                <h3 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">场景助手</h3>
+                <p className="truncate text-[11px] text-[var(--color-text-tertiary)]">对话式建模 · 定义变更自动冻结为版本</p>
+              </div>
+            </div>
             <button
               type="button"
               onClick={() => setShowHistory(true)}
-              className="inline-flex h-8 items-center gap-1 rounded-lg bg-slate-100 px-2.5 text-xs font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
+              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-lg bg-slate-100 px-2.5 text-xs font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
               title="历史会话"
             >
               <History size={13} /> 历史会话
@@ -277,8 +407,39 @@ export default function SceneModelingPage() {
               renderItemIcon={() => <Sparkles size={16} />}
               emptyDescription="新建会话后，可随时回到之前的场景建设过程。"
             />
+          </header>
+
+          {/* 发送上下文工具条：目标场景 + 对话模型 */}
+          <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-white px-3 py-2">
+            <TargetSceneSelector
+              targetSceneId={targetSceneId === NEW_SCENE ? null : targetSceneId}
+              drafts={draftScenes}
+              onChange={id => { resetChat(); setTargetSceneId(id ?? NEW_SCENE) }}
+            />
+            <select
+              value={modelId}
+              aria-label="选择对话模型"
+              onChange={event => setModelId(event.target.value)}
+              className="h-8 min-w-0 flex-1 truncate rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+            >
+              <option value="">选择对话模型</option>
+              {llmModels.map(model => (
+                <option key={model.id} value={model.id}>{model.name}</option>
+              ))}
+            </select>
           </div>
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+
+          {modelsQuery.isSuccess && llmModels.length === 0 && (
+            <div className="shrink-0 px-3 pt-3">
+              <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <AlertTriangle size={14} className="shrink-0" />
+                <span className="flex-1">尚未配置对话模型：场景助手需要一个 LLM 才能工作。</span>
+                <Link to="/models" className="flex items-center gap-1 rounded-lg border border-amber-300 bg-white px-2 py-1 text-xs hover:bg-amber-100">去模型配置</Link>
+              </div>
+            </div>
+          )}
+
+          <div className="scrollbar-thin min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
             {timeline.length === 0 && (
               <div className="mt-10 space-y-2 text-center text-xs leading-5 text-slate-400">
                 <Sparkles size={22} className="mx-auto text-teal-500" />
@@ -329,7 +490,7 @@ export default function SceneModelingPage() {
             })}
             <div ref={bottomRef} />
           </div>
-          <div className="border-t border-slate-100 p-3">
+          <div className="border-t border-[var(--color-border)] p-3">
             <textarea
               value={input}
               onChange={event => setInput(event.target.value)}
@@ -356,64 +517,7 @@ export default function SceneModelingPage() {
               )}
             </div>
           </div>
-        </section>
-
-        {/* 右侧画布 + 版本管理 */}
-        <section className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm/50">
-            {definition
-              ? <SceneCanvas definition={definition} className="absolute inset-0" />
-              : (
-                <div className="flex h-full items-center justify-center px-6 text-center text-xs leading-5 text-slate-400">
-                  {boundSceneId
-                    ? '该场景还没有版本定义：在左侧描述需求，助手将生成第一个版本'
-                    : '选择或创建场景后，这里将实时渲染助手生成的白模场景'}
-                </div>
-              )}
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm/50">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <h3 className="text-xs font-semibold text-slate-800">版本管理</h3>
-              {!!boundSceneId && versionList.length >= 1 && definition && (
-                <Button
-                  variant="outline"
-                  className="h-7 px-2.5 text-xs"
-                  title="将该版本定义整体保存为一个新草稿版本（当前最新版保留）"
-                  onClick={() => setRollbackOpen(true)}
-                >
-                  回滚为当前
-                </Button>
-              )}
-            </div>
-            {!boundSceneId ? (
-              <p className="text-[11px] text-slate-400">尚未绑定场景</p>
-            ) : versionsQuery.isLoading ? (
-              <LoadingState />
-            ) : versionList.length === 0 ? (
-              <p className="text-[11px] text-slate-400">暂无版本</p>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {versionList.map(version => (
-                  <button
-                    key={version.id}
-                    type="button"
-                    aria-pressed={selectedVersionNo === version.version_no}
-                    onClick={() => setSelectedVersionNo(version.version_no)}
-                    className={
-                      'rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ' +
-                      (selectedVersionNo === version.version_no
-                        ? 'border-teal-500 bg-teal-50 text-teal-700'
-                        : 'border-slate-200 text-slate-500 hover:border-teal-300')
-                    }
-                    title={version.note}
-                  >
-                    v{version.version_no} · {version.source === 'assistant' ? '助手' : version.source === 'clone' ? '克隆' : '手动'}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
+        </aside>
       </div>
 
       <ConfirmModal
@@ -429,6 +533,37 @@ export default function SceneModelingPage() {
         loading={rollbackMutation.isPending}
       />
     </div>
+  )
+}
+
+/** 版本浮层的单行：首行文本固定为 “v{n} · 来源”，便于测试按名定位。 */
+function VersionRow({ version, selected, onSelect }: {
+  version: SceneVersionMeta
+  selected: boolean
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onSelect}
+      title={version.note}
+      className={'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors '
+        + (selected ? 'bg-teal-50' : 'hover:bg-slate-50')}
+    >
+      <span className="min-w-0 flex-1">
+        <span className={'block truncate text-xs font-medium ' + (selected ? 'text-teal-800' : 'text-slate-700')}>
+          v{version.version_no} · {versionSourceLabel(version.source)}
+        </span>
+        {version.note && (
+          <span className="mt-0.5 block truncate text-[11px] text-slate-500">{version.note}</span>
+        )}
+        <span className="mt-0.5 block text-[10px] tabular-nums text-slate-400">
+          {formatVersionTime(version.created_at)}
+        </span>
+      </span>
+      {selected && <Check size={14} className="mt-0.5 shrink-0 text-teal-600" />}
+    </button>
   )
 }
 

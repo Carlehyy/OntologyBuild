@@ -138,15 +138,18 @@ export function mapToolStepStatus(status: string): ChainStepStatus {
  *   需要同时“抬层级”（压过覆盖层）和“上移”（让开菜单按钮）→ overlay
  * - 同步任务（/data/pipelines/sync-tasks）：长表滚到底部时底部分页条位于右下角 → lifted
  * - 事件登记（/events）：移动端右下角新建 FAB（仅小屏）→ liftedMobileOnly
+ * - 场景助手（/scenes/modeling）：edge-to-edge 双卡布局，右卡对话输入区贴到视口
+ *   右下角，「发送」按钮正处悬浮球默认位 → aboveComposer（整体抬到输入区上方）
  * 其余页面保持 z-40：高于普通页面内容，但让抽屉/模态（z-50+）与 toast（z-500）正常覆盖，
  * 避免悬浮球遮挡它们的右下角控件。新增页面若在右下角放置固定控件导致点击被遮挡，在此登记。
  */
-export type WidgetAnchor = 'default' | 'overlay' | 'lifted' | 'liftedMobileOnly'
+export type WidgetAnchor = 'default' | 'overlay' | 'lifted' | 'liftedMobileOnly' | 'aboveComposer'
 
 export function widgetAnchor(pathname: string): WidgetAnchor {
   if (pathname === '/events' || pathname.startsWith('/events/')) return 'liftedMobileOnly'
   if (/^\/ontologies\/[^/]+\/graph$/.test(pathname)) return 'overlay'
   if (pathname === '/data/pipelines/sync-tasks' || pathname.startsWith('/data/pipelines/sync-tasks/')) return 'lifted'
+  if (pathname === '/scenes/modeling') return 'aboveComposer'
   return 'default'
 }
 
@@ -156,6 +159,8 @@ export const WIDGET_FAB_BOTTOM: Record<WidgetAnchor, string> = {
   overlay: 'bottom-20',
   lifted: 'bottom-20',
   liftedMobileOnly: 'bottom-20 md:bottom-5',
+  // 输入区高度 ≈ 输入框(≈78px) + 发送行(36px) + 内边距(24px) + 卡片间距(4px) ≈ 9.25rem
+  aboveComposer: 'bottom-[9.75rem]',
 }
 
 /** 面板 bottom 偏移 = 悬浮球 bottom + 球高(3rem) + 间距(0.5rem) */
@@ -164,6 +169,7 @@ export const WIDGET_PANEL_BOTTOM: Record<WidgetAnchor, string> = {
   overlay: 'bottom-[8.5rem]',
   lifted: 'bottom-[8.5rem]',
   liftedMobileOnly: 'bottom-[8.5rem] md:bottom-[4.75rem]',
+  aboveComposer: 'bottom-[13.25rem]',
 }
 
 /** 悬浮球/面板层级（见 widgetAnchor 注释） */
@@ -172,6 +178,7 @@ export const WIDGET_Z: Record<WidgetAnchor, string> = {
   overlay: 'z-[10000]',
   lifted: 'z-40',
   liftedMobileOnly: 'z-40',
+  aboveComposer: 'z-40',
 }
 
 /**
