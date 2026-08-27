@@ -38,8 +38,14 @@ const NODE_H = 72
 const NODE_GAP = 40
 const HEADER_Y = 0
 const FIRST_NODE_Y = 52
+/** 画布高度的保底值：节点极少时避免出现一条过扁的画布；上不封顶——高度跟着内容走。 */
 const MIN_CANVAS_H = 340
-const MAX_CANVAS_H = 660
+
+/** 按内容最多的列计算链路画布高度：内容多少就展示多少，不设人为上限。 */
+function chainCanvasHeight(maxColumnCount: number): number {
+  const needed = FIRST_NODE_Y + Math.max(1, maxColumnCount) * (NODE_H + NODE_GAP) + 28
+  return Math.max(MIN_CANVAS_H, needed)
+}
 
 interface ChainFlowData extends Record<string, unknown> {
   chainNode: ChainNode
@@ -195,12 +201,11 @@ export default function ChainPanorama({
     return grouped
   }, [nodes])
 
-  // 画布高度按内容最多的列自适应:卡片实际内容多少,就展示多少
-  const canvasHeight = useMemo(() => {
-    const maxCount = Math.max(1, ...[...byColumn.values()].map(list => list.length))
-    const needed = FIRST_NODE_Y + maxCount * (NODE_H + NODE_GAP) + 28
-    return Math.min(MAX_CANVAS_H, Math.max(MIN_CANVAS_H, needed))
-  }, [byColumn])
+  // 画布高度按内容最多的列自适应:卡片实际内容多少,就展示多少(不设上限)
+  const canvasHeight = useMemo(
+    () => chainCanvasHeight(Math.max(1, ...[...byColumn.values()].map(list => list.length))),
+    [byColumn],
+  )
 
   const flowNodes = useMemo<Node[]>(() => {
     const result: Node[] = CHAIN_COLUMNS.map(col => ({

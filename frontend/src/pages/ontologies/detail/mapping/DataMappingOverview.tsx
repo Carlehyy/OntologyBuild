@@ -578,7 +578,10 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
     return counts
   }, [data.linkInstances])
 
-  const objectRows: MappingRow[] = data.objectTypes.map(item => {
+  // 行模型按查询数据缓存：hover/弹窗等纯交互态变化不再重建行数组，
+  // 避免供给全景（依赖 rows 身份）随之整图重算——画布连线的反复卸载/重挂
+  // 会不断打断悬停命中测试，正是「悬停卡片一直在闪」的根源之一。
+  const objectRows: MappingRow[] = useMemo(() => data.objectTypes.map(item => {
     const mapping = data.mappings.find(candidate => mappingTargetId(candidate) === item.id)
     const fieldMapping = userFieldMapping(mapping)
     const targetFields = item.properties.filter(property => property.source !== 'computed' && !property.computed)
@@ -623,9 +626,9 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
       fieldPairs,
       missingFields,
     }
-  })
+  }), [data.objectTypes, data.mappings, data.datasets, objectInstanceCounts])
 
-  const relationRows: MappingRow[] = data.linkTypes.map(item => {
+  const relationRows: MappingRow[] = useMemo(() => data.linkTypes.map(item => {
     const mapping = linkMappingForType(item, data.linkMappings)
     const targetFields = (item.properties || []).filter(property => property.source !== 'computed' && !property.computed)
     const datasetIds = [...new Set([
@@ -689,9 +692,9 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
       fieldPairs,
       missingFields,
     }
-  })
+  }), [data.linkTypes, data.linkMappings, data.datasets, linkInstanceCounts])
 
-  const mappingRows = [...objectRows, ...relationRows]
+  const mappingRows = useMemo(() => [...objectRows, ...relationRows], [objectRows, relationRows])
   const issueRows = mappingRows.filter(row => row.status !== 'ready')
   // 血缘详情改为弹窗：仅显式选中（含 URL element 参数深链）才打开，不再默认回退首行
   const dialogRow = (selected

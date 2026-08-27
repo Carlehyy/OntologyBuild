@@ -531,3 +531,52 @@ test('悬停全景节点卡时暂停连线流动动画（data-still），移开�
   await page.mouse.move(canvasBox!.x + 8, canvasBox!.y - 10)
   await expect(canvas).not.toHaveAttribute('data-still')
 })
+
+test('供给全景连线不可命中，悬停节点卡无 enter/leave 振荡', async ({ page }) => {
+  // MYW-60：边线层重挂载/回流会打断节点卡悬停命中测试（enter/leave 高频振荡），
+  // 表现为「鼠标悬停画布卡片一直在闪」。连线改为纯视觉元素后必须保持零振荡。
+  await mockMappingPreview(page)
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  const canvas = page.getByTestId('mapping-chain-panorama')
+  await expect(canvas).toBeVisible()
+  await expect(canvas.locator('.react-flow__edge')).toHaveCount(1)
+
+  // 连线不再携带 20px 透明命中条，且路径禁用指针事件
+  await expect(canvas.locator('.react-flow__edge-interaction')).toHaveCount(0)
+  const edgePath = canvas.locator('.react-flow__edge path.react-flow__edge-path').first()
+  await expect(edgePath).toHaveCSS('pointer-events', 'none')
+
+  // 指针静止停在节点卡中心：进入/离开事件不得振荡
+  await page.evaluate(() => {
+    const host = document.querySelector('[data-testid="mapping-chain-panorama"]')
+    if (!host) return
+    host.setAttribute('data-probe-enter', '0')
+    host.setAttribute('data-probe-leave', '0')
+    const bump = (attribute: string) => () => {
+      host.setAttribute(attribute, String(Number(host.getAttribute(attribute) || 0) + 1))
+    }
+    document.querySelectorAll('.dmo-chain-node').forEach(node => {
+      node.addEventListener('mouseenter', bump('data-probe-enter'))
+      node.addEventListener('mouseleave', bump('data-probe-leave'))
+    })
+  })
+  const nodeCard = canvas.locator('.react-flow__node-mappingChainNode').first()
+  const cardBox = await nodeCard.boundingBox()
+  expect(cardBox).not.toBeNull()
+  await page.mouse.move(cardBox!.x - 40, cardBox!.y - 40)
+  await page.waitForTimeout(200)
+  await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2)
+  await page.waitForTimeout(1500)
+
+  const enter = Number(await canvas.getAttribute('data-probe-enter'))
+  const leave = Number(await canvas.getAttribute('data-probe-leave'))
+  expect(enter).toBeLessThanOrEqual(2)
+  expect(Math.abs(enter - leave)).toBeLessThanOrEqual(1)
+
+  // 离开后仍恢复流动动画（不破坏 MYW-51 的检视暂停语义）
+  const canvasBox = await canvas.boundingBox()
+  expect(canvasBox).not.toBeNull()
+  await page.mouse.move(canvasBox!.x + 8, canvasBox!.y - 10)
+  await expect(canvas).not.toHaveAttribute('data-still')
+})
