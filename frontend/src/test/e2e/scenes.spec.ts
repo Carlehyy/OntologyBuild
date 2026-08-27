@@ -270,8 +270,7 @@ test('建模页从零新建：对话应用定义生成版本并绑定场景', as
   await page.getByRole('button', { name: '关闭版本历史' }).click()
   await page.getByPlaceholder('描述对当前场景的调整…').fill('再加一栋办公楼')
   const sendHit = await page.evaluate(() => {
-    const sendButton = [...document.querySelectorAll('button')]
-      .find(node => node.textContent?.trim() === '发送')
+    const sendButton = document.querySelector<HTMLButtonElement>('button[aria-label="发送"]')
     if (!sendButton) return 'send-missing'
     const rect = sendButton.getBoundingClientRect()
     const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)

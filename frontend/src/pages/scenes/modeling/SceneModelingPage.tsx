@@ -490,30 +490,45 @@ export default function SceneModelingPage() {
             })}
             <div ref={bottomRef} />
           </div>
-          <div className="border-t border-[var(--color-border)] p-3">
-            <textarea
-              value={input}
-              onChange={event => setInput(event.target.value)}
-              onKeyDown={event => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault()
-                  void send()
-                }
-              }}
-              rows={3}
-              maxLength={4000}
-              placeholder={targetSceneId === NEW_SCENE ? '描述要从零构建的场景…' : '描述对当前场景的调整…'}
-              className="w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 placeholder:text-slate-400 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
-            />
-            <div className="mt-2 flex justify-end gap-2">
+          {/* 输入栏对齐本体助手页（MYW-64 反馈）：外层 pt/pb 2.5 + 内层单行胶囊，
+              发送/停止为胶囊内右侧的图标方钮。 */}
+          <div className="border-t border-[var(--color-border)] bg-white px-4 pb-2.5 pt-2.5">
+            <div className="relative flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-white py-1.5 pl-3 pr-1.5 transition-all focus-within:border-teal-400 focus-within:ring-2 focus-within:ring-teal-100">
+              <input
+                value={input}
+                onChange={event => setInput(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    void send()
+                  }
+                }}
+                maxLength={4000}
+                placeholder={targetSceneId === NEW_SCENE ? '描述要从零构建的场景…' : '描述对当前场景的调整…'}
+                className="min-w-0 flex-1 bg-transparent text-sm text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
+              />
               {streaming ? (
-                <Button variant="outline" onClick={() => abortRef.current?.abort()}>
-                  <Square size={13} /> 停止
-                </Button>
+                <button
+                  type="button"
+                  onClick={() => abortRef.current?.abort()}
+                  aria-label="停止生成"
+                  data-testid="scene-chat-stop"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-rose-600 text-white transition-all duration-200 hover:bg-rose-500"
+                >
+                  <Square size={13} fill="currentColor" />
+                </button>
               ) : (
-                <Button onClick={() => void send()} disabled={!input.trim() || (llmModels.length > 0 && !modelId)}>
-                  <Send size={13} /> 发送
-                </Button>
+                <button
+                  type="button"
+                  onClick={() => void send()}
+                  disabled={!input.trim() || (llmModels.length > 0 && !modelId)}
+                  aria-label="发送"
+                  data-testid="scene-chat-send"
+                  title="发送"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-teal-700 text-white transition-all duration-200 hover:bg-teal-600 disabled:cursor-not-allowed disabled:opacity-25"
+                >
+                  <Send size={14} />
+                </button>
               )}
             </div>
           </div>

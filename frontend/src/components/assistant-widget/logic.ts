@@ -159,8 +159,8 @@ export const WIDGET_FAB_BOTTOM: Record<WidgetAnchor, string> = {
   overlay: 'bottom-20',
   lifted: 'bottom-20',
   liftedMobileOnly: 'bottom-20 md:bottom-5',
-  // 输入区高度 ≈ 输入框(≈78px) + 发送行(36px) + 内边距(24px) + 卡片间距(4px) ≈ 9.25rem
-  aboveComposer: 'bottom-[9.75rem]',
+  // 输入栏已对齐本体助手页（单行胶囊，高 ≈67px）+ 卡片间距 4px ≈ 4.5rem
+  aboveComposer: 'bottom-[4.75rem]',
 }
 
 /** 面板 bottom 偏移 = 悬浮球 bottom + 球高(3rem) + 间距(0.5rem) */
@@ -169,7 +169,7 @@ export const WIDGET_PANEL_BOTTOM: Record<WidgetAnchor, string> = {
   overlay: 'bottom-[8.5rem]',
   lifted: 'bottom-[8.5rem]',
   liftedMobileOnly: 'bottom-[8.5rem] md:bottom-[4.75rem]',
-  aboveComposer: 'bottom-[13.25rem]',
+  aboveComposer: 'bottom-[8.25rem]',
 }
 
 /** 悬浮球/面板层级（见 widgetAnchor 注释） */
