@@ -222,6 +222,13 @@ describe('widgetAnchor', () => {
     assert.equal(widgetAnchor('/events/registry'), 'liftedMobileOnly')
   })
 
+  it('lifts the fab above the composer on the scene modeling page (MYW-64)', () => {
+    assert.equal(widgetAnchor('/scenes/modeling'), 'aboveComposer')
+    // 非建模路径不受影响
+    assert.equal(widgetAnchor('/scenes/modeling-archive'), 'default')
+    assert.equal(widgetAnchor('/scenes/scn-1'), 'default')
+  })
+
   it('does not over-match lookalike paths', () => {
     assert.equal(widgetAnchor('/ontologies/ontology-1/graphs'), 'default')
     assert.equal(widgetAnchor('/ontologies/ontology-1/graph/extra'), 'default')
