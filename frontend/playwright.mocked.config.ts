@@ -50,6 +50,7 @@ export default defineConfig({
     '**/ontology_semantic_gate.spec.ts',
     '**/overview.spec.ts',
     '**/pipeline_list_page.spec.ts',
+    '**/profile_modal.spec.ts',
     '**/python_script_page.spec.ts',
     '**/scenes.spec.ts',
     '**/sentinel_firing_delta.spec.ts',
