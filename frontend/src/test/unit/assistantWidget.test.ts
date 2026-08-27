@@ -9,6 +9,8 @@ import {
   pickInitialConversationId,
   reduceStreamEvent,
   widgetAnchor,
+  widgetNavLeafKey,
+  widgetVisibleOnPath,
 } from '../../components/assistant-widget/logic.ts'
 
 const baseMessage = () => ({
@@ -224,5 +226,102 @@ describe('widgetAnchor', () => {
     assert.equal(widgetAnchor('/ontologies/ontology-1/graphs'), 'default')
     assert.equal(widgetAnchor('/ontologies/ontology-1/graph/extra'), 'default')
     assert.equal(widgetAnchor('/data/pipelines/sync-tasks-archive'), 'default')
+  })
+})
+
+// 与 config/navigation 的可配置目录结构对齐的夹具（一级 + 二级菜单）
+const navFixture = [
+  { key: 'overview', to: '/overview' },
+  { key: 'super_assistant', to: '/super-assistant' },
+  { key: 'scenes', to: '/scenes' },
+  { key: 'agent', to: '/agent' },
+  {
+    key: 'ontology_model', to: '/ontology-model', subItems: [
+      { key: 'explore', to: '/explore' },
+      { key: 'ontologies', to: '/ontologies' },
+      { key: 'ontology_model.network', to: '/ontology-model/network' },
+    ],
+  },
+  {
+    key: 'data', to: '/data', subItems: [
+      { key: 'data.pipelines', to: '/data/pipelines' },
+      { key: 'data.sync_tasks', to: '/data/pipelines/sync-tasks' },
+      { key: 'data.structured', to: '/data/structured' },
+    ],
+  },
+  { key: 'events', to: '/events' },
+  { key: 'models', to: '/models' },
+  {
+    key: 'system_settings', to: '/settings', subItems: [
+      { key: 'settings.users', to: '/settings/users' },
+      { key: 'settings.assistant-widget', to: '/settings/assistant-widget' },
+    ],
+  },
+]
+
+describe('widgetNavLeafKey', () => {
+  it('resolves root-level pages and their detail paths to the root key', () => {
+    assert.equal(widgetNavLeafKey('/scenes', navFixture), 'scenes')
+    assert.equal(widgetNavLeafKey('/scenes/scene-1', navFixture), 'scenes')
+    assert.equal(widgetNavLeafKey('/agent/reports', navFixture), 'agent')
+    assert.equal(widgetNavLeafKey('/events', navFixture), 'events')
+  })
+
+  it('resolves children and inherits detail pages from the owning leaf', () => {
+    assert.equal(widgetNavLeafKey('/ontologies', navFixture), 'ontologies')
+    assert.equal(widgetNavLeafKey('/ontologies/ontology-1/graph', navFixture), 'ontologies')
+    assert.equal(widgetNavLeafKey('/ontology-model/network', navFixture), 'ontology_model.network')
+    assert.equal(widgetNavLeafKey('/settings/users', navFixture), 'settings.users')
+    assert.equal(widgetNavLeafKey('/settings/assistant-widget', navFixture), 'settings.assistant-widget')
+  })
+
+  it('prefers the deepest matching node', () => {
+    assert.equal(widgetNavLeafKey('/data/pipelines', navFixture), 'data.pipelines')
+    assert.equal(widgetNavLeafKey('/data/pipelines/sync-tasks', navFixture), 'data.sync_tasks')
+    assert.equal(widgetNavLeafKey('/data/pipelines/script/pipeline-1', navFixture), 'data.pipelines')
+  })
+
+  it('keeps parent keys for paths only matching the parent', () => {
+    assert.equal(widgetNavLeafKey('/data', navFixture), 'data')
+    assert.equal(widgetNavLeafKey('/settings', navFixture), 'system_settings')
+  })
+
+  it('returns null for paths outside the navigation tree', () => {
+    assert.equal(widgetNavLeafKey('/inbox', navFixture), null)
+    assert.equal(widgetNavLeafKey('/no-access', navFixture), null)
+  })
+
+  it('does not over-match lookalike prefixes', () => {
+    assert.equal(widgetNavLeafKey('/scenes-archive', navFixture), null)
+    assert.equal(widgetNavLeafKey('/ontologiesx', navFixture), null)
+  })
+})
+
+describe('widgetVisibleOnPath', () => {
+  it('hides the widget on hidden leaves including their detail pages', () => {
+    const hidden = new Set(['ontologies'])
+    assert.equal(widgetVisibleOnPath('/ontologies', navFixture, hidden), false)
+    assert.equal(widgetVisibleOnPath('/ontologies/ontology-1/graph', navFixture, hidden), false)
+    assert.equal(widgetVisibleOnPath('/explore', navFixture, hidden), true)
+    assert.equal(widgetVisibleOnPath('/scenes', navFixture, hidden), true)
+  })
+
+  it('treats sibling leaves independently', () => {
+    const hidden = new Set(['data.pipelines'])
+    assert.equal(widgetVisibleOnPath('/data/pipelines', navFixture, hidden), false)
+    assert.equal(widgetVisibleOnPath('/data/pipelines/sync-tasks', navFixture, hidden), true)
+    assert.equal(widgetVisibleOnPath('/data/structured', navFixture, hidden), true)
+  })
+
+  it('defaults to visible everywhere when nothing is hidden', () => {
+    const hidden = new Set<string>()
+    assert.equal(widgetVisibleOnPath('/events', navFixture, hidden), true)
+    assert.equal(widgetVisibleOnPath('/settings/users', navFixture, hidden), true)
+  })
+
+  it('keeps paths outside the navigation tree always visible', () => {
+    const hidden = new Set(['events', 'models'])
+    assert.equal(widgetVisibleOnPath('/inbox', navFixture, hidden), true)
+    assert.equal(widgetVisibleOnPath('/no-access', navFixture, hidden), true)
   })
 })

@@ -546,9 +546,10 @@ def test_super_assistant_openapi_matches_pre_extraction_baseline():
     ).encode()
     # 基线随契约演进而更新：0068 技能治理为 Skill 契约新增
     # always_active/use_count/last_used_at 字段；memory_distill 特性新增
-    # /memories/distill-report 与 /memories/distill 两个端点
-    assert len(paths) == 24
-    assert sum(len(item) for item in paths.values()) == 35
+    # /memories/distill-report 与 /memories/distill 两个端点；
+    # 0080 悬浮助手可见范围配置新增 /widget-config 的 GET/PUT
+    assert len(paths) == 25
+    assert sum(len(item) for item in paths.values()) == 37
     assert hashlib.sha256(payload).hexdigest() == (
-        "f0242f256442a3cb5f87d1fca8a7cbfc1652b2161362690659ed408481b4f653"
+        "07133dfc728bdd1fa00b274aa6b669f003735c711338ce24ee50b34e65a6d549"
     )

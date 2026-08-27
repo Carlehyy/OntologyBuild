@@ -73,14 +73,21 @@ async function mockPlatformShell(page: Page) {
   })
 }
 
-interface WidgetMockOptions { denyMenu?: boolean }
+interface WidgetMockOptions { denyMenu?: boolean; hiddenMenuKeys?: string[] }
 
 async function mockSuperAssistant(page: Page, options: WidgetMockOptions = {}) {
   let chatCompleted = false
+  const savedConfig = { hidden_menu_keys: options.hiddenMenuKeys ?? [], updated_at: now }
   await page.route('**/api/v2/super-assistant/**', route => {
     const request = route.request()
     const path = new URL(request.url()).pathname
 
+    if (path === '/api/v2/super-assistant/widget-config') {
+      if (request.method() === 'PUT') {
+        savedConfig.hidden_menu_keys = (request.postDataJSON() as { hidden_menu_keys?: string[] })?.hidden_menu_keys ?? []
+      }
+      return json(route, savedConfig)
+    }
     if (path === '/api/v2/super-assistant/conversations' && request.method() === 'GET') {
       if (options.denyMenu) {
         return route.fulfill({
@@ -349,4 +356,73 @@ test('本体助手未选本体时悬浮窗盖过拓扑卡片轮播（层级回�
     return 'other'
   }, { x, y })
   expect(topmost).toBe('panel')
+})
+
+test('管理员配置的隐藏目录不再渲染悬浮入口', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+  // 平台级配置：事件登记（一级）、模型配置（一级）、用户管理（二级）隐藏悬浮助手
+  await mockSuperAssistant(page, { hiddenMenuKeys: ['events', 'models', 'settings.users'] })
+  await page.setViewportSize({ width: 1280, height: 900 })
+
+  const fab = page.getByTestId('assistant-widget-fab')
+
+  // 先在未配置隐藏的页面确认悬浮入口已正常挂载
+  await page.goto('/#/overview')
+  await expect(fab).toBeVisible()
+
+  // 隐藏的一级目录下悬浮入口随路由切换被移除
+  await page.goto('/#/events')
+  await expect(fab).toHaveCount(0)
+  await page.goto('/#/models')
+  await expect(fab).toHaveCount(0)
+
+  // 隐藏的二级目录同样生效（其余系统设置页不受影响）
+  await page.goto('/#/settings/users')
+  await expect(fab).toHaveCount(0)
+
+  // 未隐藏目录照常显示（超级助手主页不在可配置目录内，始终可见）
+  await page.goto('/#/super-assistant')
+  await expect(fab).toBeVisible()
+
+  // 切回未隐藏页面时恢复显示
+  await page.goto('/#/overview')
+  await expect(fab).toBeVisible()
+})
+
+test('系统设置-超级助手页可勾选目录并保存显示范围', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+  await mockSuperAssistant(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+
+  await page.goto('/#/settings/assistant-widget')
+  await expect(page.getByText('悬浮 AI 助手的页面显示范围')).toBeVisible()
+
+  const tree = page.getByTestId('assistant-widget-visibility-tree')
+  await expect(tree).toBeVisible()
+  // 目录树与左侧导航一致：一级目录及其二级菜单都渲染出来
+  await expect(tree.getByRole('checkbox', { name: /事件登记/ })).toBeChecked()
+  await expect(tree.getByRole('checkbox', { name: '数据流水线' })).toBeChecked()
+
+  // 取消勾选 事件登记（叶子目录），保存后 PUT 携带隐藏名单
+  await tree.getByRole('checkbox', { name: /事件登记/ }).click()
+  const putRequest = page.waitForRequest(request =>
+    request.url().endsWith('/api/v2/super-assistant/widget-config') && request.method() === 'PUT')
+  await page.getByRole('button', { name: '保存配置' }).click()
+  const body = (await putRequest).postDataJSON() as { hidden_menu_keys: string[] }
+  expect(body.hidden_menu_keys).toEqual(['events'])
+  await expect(page.getByRole('status')).toContainText('已保存')
+
+  // 一级目录整体取消勾选 → 其全部二级菜单进入隐藏名单
+  await tree.getByRole('checkbox', { name: /数据集成/ }).click()
+  await expect(tree.getByRole('checkbox', { name: '数据流水线' })).not.toBeChecked()
+  await expect(tree.getByRole('checkbox', { name: '数据任务池' })).not.toBeChecked()
+  await expect(tree.getByRole('checkbox', { name: '数据资产湖' })).not.toBeChecked()
+
+  const putRequest2 = page.waitForRequest(request =>
+    request.url().endsWith('/api/v2/super-assistant/widget-config') && request.method() === 'PUT')
+  await page.getByRole('button', { name: '保存配置' }).click()
+  const body2 = (await putRequest2).postDataJSON() as { hidden_menu_keys: string[] }
+  expect(body2.hidden_menu_keys).toEqual(['events', 'data.pipelines', 'data.sync_tasks', 'data.structured'])
 })

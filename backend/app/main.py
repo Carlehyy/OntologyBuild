@@ -310,6 +310,14 @@ app.include_router(
     tags=["super-assistant"],
     dependencies=assistant_guard,
 )
+# 悬浮助手页面可见范围配置：GET 面向全体登录用户（不受 super_assistant 菜单权限约束），
+# PUT 仅管理员，鉴权在路由级声明，故此处不挂 menu_guard。
+from app.super_assistant import widget_config as super_assistant_widget_config
+app.include_router(
+    super_assistant_widget_config.router,
+    prefix="/api/v2/super-assistant",
+    tags=["super-assistant"],
+)
 # 开放社区复用超级助手的用户级 MCP 清单，但拥有独立菜单权限边界。
 from app.community import router as community_router
 app.include_router(

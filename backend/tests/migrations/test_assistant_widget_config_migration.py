@@ -1,4 +1,4 @@
-"""Migration coverage for assistant evaluation rubrics table (0079)."""
+"""Migration coverage for assistant widget config table (0080)."""
 
 from pathlib import Path
 
@@ -14,9 +14,9 @@ def _alembic_config(backend: Path, db_path: Path) -> Config:
     return cfg
 
 
-def test_upgrade_creates_rubrics_table(tmp_path, monkeypatch):
+def test_upgrade_creates_widget_config_table(tmp_path, monkeypatch):
     backend = Path(__file__).resolve().parents[2]
-    db_path = tmp_path / "assistant-eval-rubrics-migration.db"
+    db_path = tmp_path / "assistant-widget-config-migration.db"
     monkeypatch.delenv("DATABASE_URL", raising=False)
     cfg = _alembic_config(backend, db_path)
 
@@ -24,26 +24,22 @@ def test_upgrade_creates_rubrics_table(tmp_path, monkeypatch):
 
     engine = create_engine(f"sqlite:///{db_path}")
     tables = set(inspect(engine).get_table_names())
-    assert "assistant_eval_rubrics" in tables
+    assert "super_assistant_widget_config" in tables
 
-    columns = {c["name"] for c in inspect(engine).get_columns("assistant_eval_rubrics")}
-    assert {"id", "name", "task_description", "rubrics",
-            "min_score", "max_score", "judge_model_config_id",
-            "judge_model_name", "created_by", "created_at"} <= columns
+    columns = {c["name"] for c in inspect(engine).get_columns("super_assistant_widget_config")}
+    assert {"id", "hidden_menu_keys", "updated_by", "updated_at"} <= columns
     engine.dispose()
 
 
-def test_downgrade_drops_rubrics_table(tmp_path, monkeypatch):
+def test_downgrade_drops_widget_config_table(tmp_path, monkeypatch):
     backend = Path(__file__).resolve().parents[2]
-    db_path = tmp_path / "assistant-eval-rubrics-downgrade.db"
+    db_path = tmp_path / "assistant-widget-config-downgrade.db"
     monkeypatch.delenv("DATABASE_URL", raising=False)
     cfg = _alembic_config(backend, db_path)
 
     command.upgrade(cfg, "head")
-    # 显式目标版本而非 "-1"：head 随新迁移前移，相对步进会停错位置
-    command.downgrade(cfg, "0078_assistant_evaluation")
+    command.downgrade(cfg, "0079_assistant_evaluation_rubrics")
 
     engine = create_engine(f"sqlite:///{db_path}")
-    tables = set(inspect(engine).get_table_names())
-    assert "assistant_eval_rubrics" not in tables
+    assert "super_assistant_widget_config" not in set(inspect(engine).get_table_names())
     engine.dispose()

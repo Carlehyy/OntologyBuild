@@ -272,3 +272,27 @@ class ReflectionSettingsOut(BaseModel):
 
 class ReflectionSettingsUpdate(BaseModel):
     auto_accept_enabled: bool
+
+
+class WidgetConfigOut(ORMModel):
+    hidden_menu_keys: list[str]
+    # 未配置过（无配置行）时为 None，语义等同于空名单
+    updated_at: datetime | None
+
+
+class WidgetConfigUpdate(BaseModel):
+    # 隐藏名单语义见 models.SuperAssistantWidgetConfig；菜单键是前端 navigation.ts
+    # 的叶子菜单键（如 ontologies、data.pipelines、settings.users）
+    hidden_menu_keys: list[str] = Field(max_length=200)
+
+    @field_validator("hidden_menu_keys")
+    @classmethod
+    def _normalize_keys(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for raw in value:
+            key = raw.strip()
+            if not key or len(key) > 100:
+                raise ValueError("菜单键不能为空且长度不能超过 100")
+            if key not in normalized:
+                normalized.append(key)
+        return normalized

@@ -175,6 +175,57 @@ export const WIDGET_Z: Record<WidgetAnchor, string> = {
 }
 
 /**
+ * 页面可见范围配置（系统设置 → 超级助手）使用的导航节点结构。
+ * 与 config/navigation 的 PlatformNavItem 结构对齐，仅取判定所需字段；
+ * 本模块保持零运行时依赖，不能 import navigation.ts（它会加载 lucide 等运行时模块），
+ * 由调用方把 PLATFORM_NAV_ITEMS 传入。
+ */
+export interface WidgetNavNode {
+  key: string
+  to: string
+  subItems?: readonly WidgetNavNode[]
+}
+
+/**
+ * 解析路径命中的导航菜单键：取 `to` 与路径匹配（精确或 to + '/' 前缀）的最深节点，
+ * 使 /data/pipelines/sync-tasks 命中 data.sync_tasks 而非 data.pipelines，
+ * /ontologies/:id/graph 等详情页归属其所属的叶子菜单（ontologies）。
+ * 一级目录的 to（如 /data）是重定向页，天然在最深匹配中输给子节点。
+ * 未命中任何节点返回 null。
+ */
+export function widgetNavLeafKey(pathname: string, items: readonly WidgetNavNode[]): string | null {
+  let bestKey: string | null = null
+  let bestLength = -1
+  const visit = (nodes: readonly WidgetNavNode[]) => {
+    for (const node of nodes) {
+      const matched = pathname === node.to || pathname.startsWith(node.to + '/')
+      if (matched && node.to.length > bestLength) {
+        bestKey = node.key
+        bestLength = node.to.length
+      }
+      if (node.subItems) visit(node.subItems)
+    }
+  }
+  visit(items)
+  return bestKey
+}
+
+/**
+ * 悬浮助手在指定路径是否可见：命中导航目录的按隐藏名单判定；
+ * 未命中导航目录的路径（/inbox、/overview、公开分享页等）不在可配置范围内，
+ * 保持功能上线前行为——始终可见。
+ */
+export function widgetVisibleOnPath(
+  pathname: string,
+  items: readonly WidgetNavNode[],
+  hiddenMenuKeys: ReadonlySet<string>,
+): boolean {
+  const key = widgetNavLeafKey(pathname, items)
+  if (!key) return true
+  return !hiddenMenuKeys.has(key)
+}
+
+/**
  * 把一条助手消息的工具步骤映射为 ThoughtChain 视图项。
  * 流式进行中、尚无可见正文且没有正在执行/等待确认的工具时，
  * 末尾追加“正在思考”占位项（消费后端已发出但页面此前未使用的 thinking 事件轮次）。
