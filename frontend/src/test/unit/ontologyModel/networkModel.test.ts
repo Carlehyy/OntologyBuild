@@ -9,6 +9,7 @@ import {
   maxDegreeOf,
   mergeOverlay,
   NETWORK_VIEW_INSETS,
+  relaxForClearance,
   nodeSize,
   ontologyColorMap,
   ONTOLOGY_PALETTE,
@@ -142,6 +143,101 @@ describe('fitLayoutToViewport（视口归一化）', () => {
     // 同一输入永远得到同一结果（可快照回归）
     const again = fitLayoutToViewport(layout, width, height)
     assert.deepEqual([...fitted.positions], [...again.positions])
+  })
+})
+
+describe('relaxForClearance（确定性碰撞消解）', () => {
+  const bounds = { x: 28, y: 40, w: 924, h: 479 }
+
+  /** 节点占位盒（与实现同口径：圆 + 下方标签）。 */
+  function occupancy(positions: Map<string, { x: number; y: number }>, nodes: NetworkGraphNode[]) {
+    const boxes: { id: string; x1: number; y1: number; x2: number; y2: number }[] = []
+    for (const node of nodes) {
+      const p = positions.get(node.id)
+      if (!p) continue
+      const r = nodeSize(node, 0, 0) / 2
+      const w = Math.max(r * 2, 16 + node.label.length * 12)
+      boxes.push({ id: node.id, x1: p.x - w / 2, y1: p.y - r, x2: p.x + w / 2, y2: p.y + r + 24 })
+    }
+    return boxes
+  }
+
+  function overlapCount(nodes: NetworkGraphNode[], positions: Map<string, { x: number; y: number }>) {
+    const boxes = occupancy(positions, nodes)
+    let count = 0
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i], b = boxes[j]
+        const ox = Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1)
+        const oy = Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1)
+        if (ox > -8 && oy > -8) count += 1
+      }
+    }
+    return count
+  }
+
+  it('消解后占位盒互不侵入（净空是硬约束）', () => {
+    // 构造一个必然重叠的输入：所有节点挤在同一点
+    const nodes = [
+      makeNode({ id: 'type:a1', entityId: 'a1', kind: 'object_type', label: '客户', objectTypeId: 'a1' }),
+      makeNode({ id: 'type:a2', entityId: 'a2', kind: 'object_type', label: '订单', objectTypeId: 'a2' }),
+      makeNode({ id: 'instance:i1', entityId: 'i1', label: '华东制造', objectTypeId: 'a1' }),
+      makeNode({ id: 'instance:i2', entityId: 'i2', label: '华南贸易', objectTypeId: 'a1' }),
+    ]
+    const crowded = new Map(nodes.map(node => [node.id, { x: 500, y: 300 }]))
+    assert.ok(overlapCount(nodes, crowded) > 0, '前置条件：输入确实重叠')
+    const relaxed = relaxForClearance(crowded, nodes, [], { bounds, iterations: 120 })
+    assert.equal(overlapCount(nodes, relaxed), 0, '消解后不应存在占位盒重叠')
+  })
+
+  it('簇锚生效：节点不会被推离所属簇质心过远', () => {
+    const nodes = [
+      makeNode({ id: 'type:a1', entityId: 'a1', kind: 'object_type', label: '客户', objectTypeId: 'a1' }),
+      makeNode({ id: 'instance:i1', entityId: 'i1', label: '华东制造', objectTypeId: 'a1' }),
+      makeNode({ id: 'type:b1', entityId: 'b1', kind: 'object_type', label: '订单', ontologyId: 'o2', ontologyName: '本体二', objectTypeId: 'b1' }),
+    ]
+    // 同一本体的两个节点相距 300（迫使消解移动它们），另一本体在远处
+    const positions = new Map<string, { x: number; y: number }>([
+      ['type:a1', { x: 300, y: 300 }],
+      ['instance:i1', { x: 600, y: 300 }],
+      ['type:b1', { x: 300, y: 520 }],
+    ])
+    const relaxed = relaxForClearance(positions, nodes, [], { bounds, iterations: 90 })
+    const driftA = Math.hypot(relaxed.get('type:a1')!.x - 300, relaxed.get('type:a1')!.y - 300)
+    assert.ok(driftA < 200, `簇内节点位移应有限，实际 ${Math.round(driftA)}px`)
+  })
+
+  it('边界约束：所有节点锁在活动边界盒内', () => {
+    const nodes = [
+      makeNode({ id: 'type:a1', entityId: 'a1', kind: 'object_type', label: '客户', objectTypeId: 'a1' }),
+      makeNode({ id: 'instance:i1', entityId: 'i1', label: '华东制造', objectTypeId: 'a1' }),
+    ]
+    const crowded = new Map(nodes.map(node => [node.id, { x: bounds.x + 13, y: bounds.y + 13 }]))
+    const relaxed = relaxForClearance(crowded, nodes, [], { bounds, iterations: 60 })
+    for (const point of relaxed.values()) {
+      assert.ok(point.x >= bounds.x && point.x <= bounds.x + bounds.w, `x=${point.x} 越界`)
+      assert.ok(point.y >= bounds.y && point.y <= bounds.y + bounds.h, `y=${point.y} 越界`)
+    }
+  })
+
+  it('确定性：同一输入永远得到同一输出', () => {
+    const nodes = [
+      makeNode({ id: 'type:a1', entityId: 'a1', kind: 'object_type', label: '客户', objectTypeId: 'a1' }),
+      makeNode({ id: 'instance:i1', entityId: 'i1', label: '华东制造', objectTypeId: 'a1' }),
+      makeNode({ id: 'instance:i2', entityId: 'i2', label: '华南贸易', objectTypeId: 'a1' }),
+    ]
+    const crowded = new Map(nodes.map(node => [node.id, { x: 480, y: 300 }]))
+    const first = relaxForClearance(crowded, nodes, [], { bounds, iterations: 60 })
+    const second = relaxForClearance(crowded, nodes, [], { bounds, iterations: 60 })
+    assert.deepEqual([...first], [...second])
+  })
+
+  it('空图与缺失元数据安全', () => {
+    const empty = relaxForClearance(new Map(), [], [])
+    assert.equal(empty.size, 0)
+    const nodes = [makeNode({ id: 'instance:i1', entityId: 'i1', label: '孤立实例' })]
+    const single = relaxForClearance(new Map([['instance:i1', { x: 500, y: 300 }]]), nodes, [], { bounds })
+    assert.equal(single.get('instance:i1')!.x, 500)
   })
 })
 

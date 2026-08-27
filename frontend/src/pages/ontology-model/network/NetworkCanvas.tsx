@@ -23,7 +23,7 @@ import type { ECharts } from 'echarts'
 import type {
   NetworkGraphData,
 } from '@/api/ontologyNetwork'
-import { clusterLayout, fitLayoutToViewport, NETWORK_VIEW_INSETS } from './networkModel.ts'
+import { clusterLayout, fitLayoutToViewport, relaxForClearance, NETWORK_VIEW_INSETS } from './networkModel.ts'
 import {
   buildNetworkGraphOption,
   type NetworkCanvasHighlight,
@@ -91,13 +91,24 @@ export default function NetworkCanvas(
     callbacksRef.current = { onSelect, onBackgroundTap, onReady }
   }, [onSelect, onBackgroundTap, onReady])
 
-  // ---- 确定性分区布局 + 视口归一化（1 数据单位 = 1 物理像素） ----
+  // ---- 确定性分区布局 + 视口归一化 + 碰撞消解（1 数据单位 = 1 物理像素） ----
   const layout = useMemo(() => clusterLayout(nodes, edges), [nodes, edges])
   const fitted = useMemo(
     () => fitLayoutToViewport(layout, viewport.width, viewport.height),
     [layout, viewport])
-  const fittedNowRef = useRef(fitted)
-  fittedNowRef.current = fitted
+  // 碰撞消解在归一化后的像素坐标上进行：净空是真实像素，消解后节点锁回视图盒。
+  const arranged = useMemo(
+    () => relaxForClearance(fitted.positions, nodes, edges, {
+      bounds: {
+        x: NETWORK_VIEW_INSETS.left,
+        y: NETWORK_VIEW_INSETS.top,
+        w: Math.max(80, viewport.width - NETWORK_VIEW_INSETS.left - NETWORK_VIEW_INSETS.right),
+        h: Math.max(80, viewport.height - NETWORK_VIEW_INSETS.top - NETWORK_VIEW_INSETS.bottom),
+      },
+    }),
+    [fitted, nodes, edges, viewport])
+  const arrangedNowRef = useRef({ positions: arranged, center: fitted.center })
+  arrangedNowRef.current = { positions: arranged, center: fitted.center }
 
   const option = useMemo(
     () => buildNetworkGraphOption({
@@ -105,12 +116,12 @@ export default function NetworkCanvas(
       edges,
       sections,
       highlight,
-      positions: fitted.positions,
+      positions: arranged,
       center: userViewRef.current?.center ?? fitted.center,
       zoom: userViewRef.current?.zoom ?? 1,
       viewInsets: NETWORK_VIEW_INSETS,
     }),
-    [nodes, edges, sections, highlight, fitted])
+    [nodes, edges, sections, highlight, arranged, fitted])
 
   // 卸载清理：通知页面控制器失效。
   useEffect(() => () => {
@@ -169,11 +180,11 @@ export default function NetworkCanvas(
         applyView(instance, { zoom: clampZoom(readView(instance).zoom * factor) })
       },
       fit() {
-        applyView(instance, { zoom: 1, center: fittedNowRef.current.center })
+        applyView(instance, { zoom: 1, center: arrangedNowRef.current.center })
       },
       focusNode(nodeId) {
         if (!nodeId) return
-        const target = fittedNowRef.current.positions.get(nodeId)
+        const target = arrangedNowRef.current.positions.get(nodeId)
         if (!target) return
         applyView(instance, {
           center: [target.x, target.y],

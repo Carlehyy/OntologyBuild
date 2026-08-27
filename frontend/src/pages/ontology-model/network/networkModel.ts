@@ -77,7 +77,7 @@ export interface ClusterLayout {
 }
 
 const LEVEL_GAP_X = 210
-const LEVEL_CELL_Y = 92
+const LEVEL_CELL_Y = 104
 const NODE_CELL_W = 150
 const COMPONENT_GAP_X = 90
 const FLOW_ROW_GAP_Y = 48
@@ -458,6 +458,188 @@ export function fitLayoutToViewport(
   }
   // bbox 与视图盒重合时，视图盒中心对应的数据坐标即盒中心。
   return { positions, center: [box.x + box.w / 2, box.y + box.h / 2] }
+}
+
+// ── 确定性碰撞消解（净空松弛，MYW-58 二期）──
+//
+// 分区布局只保证"结构工整"，不保证任意两节点的占位互不侵入；归一化拉伸后
+// 密集簇（类型+环上实例+标签）会出现节点重叠、标签压盖。这里在归一化后的
+// 像素坐标上做一轮**确定性**松弛：
+// - 占位模型：节点 = 圆(直径 symbolSize) + 下方标签胶囊 的外接矩形；
+// - 碰撞推开：占位盒相交的节点对沿最小穿透轴各推开一半（+minGap 间隙），
+//   完全重合时用节点 id 哈希角决定分离方向（无随机数）；
+// - 簇锚弹簧：每轮把节点小比例拉回所属本体簇的初始质心，保证净空换来的
+//   位移不破坏"本体=分区"结构感，实例也被轻微拴在类型附近；
+// - 边界：每轮把节点钳回活动边界盒内。
+// 固定迭代 + 稳定遍历序 + 确定性 tie-break ⇒ 同一输入永远同一输出。
+
+export interface RelaxBounds {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export interface RelaxOptions {
+  /** 迭代轮数，默认 90。 */
+  iterations?: number
+  /** 占位盒之间的最小间隙（px），默认 8。 */
+  minGap?: number
+  /** 每轮向簇质心回拉的比例（0~1），默认 0.05。 */
+  anchorStiffness?: number
+  /** 节点活动边界盒（一般传视图盒内缩后的区域）。 */
+  bounds?: RelaxBounds
+}
+
+/** 节点占位盒（以节点中心为锚：水平居中、顶部在圆心上缘）。 */
+interface Occupancy {
+  halfW: number
+  halfH: number
+  /** 盒中心相对节点中心的纵向偏移（圆心在上、标签在下，盒中心略低于节点中心）。 */
+  offsetY: number
+}
+
+function occupancyOf(node: NetworkGraphNode, radius: number): Occupancy {
+  const labelW = 16 + (node.label?.length ?? 0) * 12
+  const labelH = 20
+  const w = Math.max(radius * 2, labelW)
+  const h = radius * 2 + 4 + labelH
+  return { halfW: w / 2, halfH: h / 2, offsetY: h / 2 - radius }
+}
+
+function hashAngle(id: string): number {
+  let hash = 0
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0
+  return (hash % 3600) / 3600 * Math.PI * 2
+}
+
+/** 占位盒中心（像素）。 */
+function occupancyCenter(point: Point, occ: Occupancy): Point {
+  return { x: point.x, y: point.y + occ.offsetY }
+}
+
+export function relaxForClearance(
+  positions: Map<string, Point>,
+  nodes: NetworkGraphNode[],
+  edges: NetworkGraphEdge[],
+  options: RelaxOptions = {},
+): Map<string, Point> {
+  const iterations = options.iterations ?? 90
+  const minGap = options.minGap ?? 8
+  const anchorStiffness = options.anchorStiffness ?? 0.05
+  const bounds = options.bounds
+
+  const relaxed = new Map<string, Point>()
+  for (const [id, point] of positions) relaxed.set(id, { x: point.x, y: point.y })
+
+  // 参与消解的节点（有坐标、有元数据的），保持稳定遍历序
+  const degrees = degreeMap(edges)
+  const maxDegree = maxDegreeOf(edges)
+  const byId = new Map(nodes.map(node => [node.id, node]))
+  const entries: { id: string; occ: Occupancy; clusterId: string }[] = []
+  for (const [id, point] of relaxed) {
+    const node = byId.get(id)
+    if (!node) continue
+    const radius = nodeSize(node, degrees.get(id) || 0, maxDegree) / 2
+    entries.push({ id, occ: occupancyOf(node, radius), clusterId: node.ontologyId })
+  }
+
+  // 簇质心（初始位置）
+  const centroidSum = new Map<string, { x: number; y: number; n: number }>()
+  for (const entry of entries) {
+    const point = relaxed.get(entry.id)!
+    const bucket = centroidSum.get(entry.clusterId) || { x: 0, y: 0, n: 0 }
+    bucket.x += point.x
+    bucket.y += point.y
+    bucket.n += 1
+    centroidSum.set(entry.clusterId, bucket)
+  }
+  const centroids = new Map<string, Point>()
+  for (const [clusterId, bucket] of centroidSum) {
+    centroids.set(clusterId, { x: bucket.x / bucket.n, y: bucket.y / bucket.n })
+  }
+  // 不在 sections 里的 clusterId（理论不出现）也已在 centroids 中，无需特判。
+
+  const boundsBox = bounds ?? null
+  const clampToBounds = (point: Point) => {
+    if (!boundsBox) return
+    point.x = Math.min(boundsBox.x + boundsBox.w - 12, Math.max(boundsBox.x + 12, point.x))
+    point.y = Math.min(boundsBox.y + boundsBox.h - 12, Math.max(boundsBox.y + 12, point.y))
+  }
+  for (const entry of entries) clampToBounds(relaxed.get(entry.id)!)
+
+  for (let iter = 0; iter < iterations; iter++) {
+    let moved = false
+
+    // 1) 碰撞推开（稳定序成对遍历）
+    moved = resolveCollisionsOnce()
+
+    // 2) 簇锚回拉
+    for (const entry of entries) {
+      const centroid = centroids.get(entry.clusterId)
+      if (!centroid) continue
+      const point = relaxed.get(entry.id)!
+      point.x += (centroid.x - point.x) * anchorStiffness
+      point.y += (centroid.y - point.y) * anchorStiffness
+      clampToBounds(point)
+    }
+
+    if (!moved) break
+  }
+
+  // 3) 收尾阶段：关闭簇锚，纯碰撞迭代直至完全无重叠（有界），保证净空是
+  //    硬约束而不是"与锚力平衡后的残差"。位移被边界盒钳住，不会飘出分区。
+  for (let iter = 0; iter < iterations; iter++) {
+    if (!resolveCollisionsOnce()) break
+  }
+
+  return relaxed
+
+  function resolveCollisionsOnce(): boolean {
+    let moved = false
+    for (let i = 0; i < entries.length; i++) {
+      const a = entries[i]
+      const pa = relaxed.get(a.id)!
+      const ca = occupancyCenter(pa, a.occ)
+      for (let j = i + 1; j < entries.length; j++) {
+        const b = entries[j]
+        const pb = relaxed.get(b.id)!
+        const cb = occupancyCenter(pb, b.occ)
+        const needX = a.occ.halfW + b.occ.halfW + minGap - Math.abs(ca.x - cb.x)
+        const needY = a.occ.halfH + b.occ.halfH + minGap - Math.abs(ca.y - cb.y)
+        if (needX <= 0 || needY <= 0) continue
+        moved = true
+        if (needX <= needY) {
+          const sign = ca.x === cb.x ? 0 : Math.sign(cb.x - ca.x)
+          if (sign === 0) {
+            const angle = hashAngle(a.id < b.id ? a.id + b.id : b.id + a.id)
+            pa.x -= Math.cos(angle) * needX / 2
+            pb.x += Math.cos(angle) * needX / 2
+            pa.y -= Math.sin(angle) * needX / 2
+            pb.y += Math.sin(angle) * needX / 2
+          } else {
+            pa.x -= sign * needX / 2
+            pb.x += sign * needX / 2
+          }
+        } else {
+          const sign = ca.y === cb.y ? 0 : Math.sign(cb.y - ca.y)
+          if (sign === 0) {
+            const angle = hashAngle(a.id < b.id ? a.id + b.id : b.id + a.id)
+            pa.x -= Math.cos(angle) * needY / 2
+            pb.x += Math.cos(angle) * needY / 2
+            pa.y -= Math.sin(angle) * needY / 2
+            pb.y += Math.sin(angle) * needY / 2
+          } else {
+            pa.y -= sign * needY / 2
+            pb.y += sign * needY / 2
+          }
+        }
+        clampToBounds(pa)
+        clampToBounds(pb)
+      }
+    }
+    return moved
+  }
 }
 
 const overlayNodeId = (id: string) => 'instance:' + id

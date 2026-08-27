@@ -214,6 +214,25 @@ test('本体网络画布渲染全局图：默认结构层、统计、图例与�
     visibleInstances.length >= 2,
     ['实例标签至少 2/4 可见，实际可见：', visibleInstances.join('、') || '无'].join(''),
   )
+
+  // MYW-58 二期：碰撞消解后节点符号之间应无深重叠（取节点圆包围盒两两判定）
+  const deepOverlaps = await page.evaluate(() => {
+    const rects = [...document.querySelectorAll('[data-testid="network-chart-host"] svg circle')]
+      .map(circle => circle.getBoundingClientRect())
+      .filter(rect => rect.width > 4 && rect.height > 4)
+    let hits = 0
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const a = rects[i], b = rects[j]
+        const ox = Math.min(a.right, b.right) - Math.max(a.left, b.left)
+        const oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+        // 允许 1px 级渲染误差：任一轴侵入超过较小直径 25% 才计为深重叠
+        if (ox > Math.min(a.width, b.width) * 0.25 && oy > Math.min(a.height, b.height) * 0.25) hits += 1
+      }
+    }
+    return hits
+  })
+  assert.equal(deepOverlaps, 0, `节点符号深重叠应为 0，实际 ${deepOverlaps}`)
 })
 
 test('点击实例节点打开详情抽屉，可关闭', async ({ page }) => {
