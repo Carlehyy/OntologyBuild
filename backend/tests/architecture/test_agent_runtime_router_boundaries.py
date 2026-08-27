@@ -92,6 +92,7 @@ ROUTE_PARAMETERS = {
     "get_report_html": ("ontology_id", "run_id", "db", "current_user"),
     "chat": ("ontology_id", "body", "db", "current_user"),
     "cancel_chat": ("ontology_id", "body", "db", "current_user"),
+    "get_chat_run": ("ontology_id", "run_id", "db", "current_user"),
     "list_conversations": (
         "ontology_id", "db", "release_id", "current_user",
     ),
@@ -127,7 +128,7 @@ BODY_TYPES = {
 
 
 def test_agent_runtime_route_signatures_remain_stable():
-    assert len(agent_router.router.routes) == 32
+    assert len(agent_router.router.routes) == 33
     for name, expected in ROUTE_PARAMETERS.items():
         parameters = inspect.signature(
             getattr(agent_router, name), eval_str=True
@@ -450,7 +451,8 @@ def test_agent_runtime_modules_stay_bounded():
         "profile_service.py": 100,
         "graph_queries.py": 130,
         "dynamic_workflow.py": 200,
-        "chat_service.py": 110,
+        # 130: stream_events 桥接执行线程与 SSE 推送（MYW-71 断开不中断回合）
+        "chat_service.py": 130,
         "proposal_service.py": 100,
         "report_service.py": 350,
         "conversation_service.py": 240,
@@ -487,14 +489,14 @@ def test_agent_runtime_openapi_contract_is_stable():
         sort_keys=True,
         separators=(",", ":"),
     )
-    assert len(paths) == 27
+    assert len(paths) == 28
     assert sum(
         method in {"get", "post", "put", "patch", "delete"}
         for operations in paths.values()
         for method in operations
-    ) == 35
+    ) == 36
     assert hashlib.sha256(payload.encode()).hexdigest() == (
-        "035a864f14d544fc657e9e9da0f03bfd626a3846693ff004c52483450a03e4ad"
+        "6d131eb117b8cbdbc1b11de9d055ad1062641854146527205a565e4d9d98457a"
     )
     normalized_payload = json.dumps(
         normalize(paths),
@@ -503,5 +505,5 @@ def test_agent_runtime_openapi_contract_is_stable():
         separators=(",", ":"),
     )
     assert hashlib.sha256(normalized_payload.encode()).hexdigest() == (
-        "6ad326f3adb457d1d7b702d8fb5898f9a5a14053dc98bfb05119b4a31ce63911"
+        "23c6afcf09809bb141426a833f858a1d99e9f055537904e50715fdcb712ddb97"
     )
