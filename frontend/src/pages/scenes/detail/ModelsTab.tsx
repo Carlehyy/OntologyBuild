@@ -1,5 +1,5 @@
 /**
- * 场景模型标签 — 构成三维场景的元素清单：对象 / 关系 / 数据绑定。
+ * 场景模型标签 — 构成三维场景的元素清单：对象 / 关系 / 事件 / 数据绑定。
  * 与渲染引擎 DSL 一一对应（白模三件套），本标签只读。
  */
 import type { SceneDefinition } from '@/types/scene'
@@ -34,6 +34,7 @@ export function ModelsTab({ definition }: { definition: SceneDefinition | null |
   }
   const objects = definition.objects ?? []
   const relations = definition.relations ?? []
+  const events = definition.events ?? []
   const bindings = definition.dataBindings ?? []
   return (
     <div className="space-y-4">
@@ -48,7 +49,8 @@ export function ModelsTab({ definition }: { definition: SceneDefinition | null |
                 <th className="pb-2 pr-4 font-medium">名称</th>
                 <th className="pb-2 pr-4 font-medium">类型</th>
                 <th className="pb-2 pr-4 font-medium">尺寸 W×D×H</th>
-                <th className="pb-2 font-medium">装饰</th>
+                <th className="pb-2 pr-4 font-medium">装饰</th>
+                <th className="pb-2 font-medium">概念</th>
               </tr>
             </thead>
             <tbody>
@@ -60,7 +62,8 @@ export function ModelsTab({ definition }: { definition: SceneDefinition | null |
                   <td className="py-2 pr-4 font-mono text-[11px]">
                     {obj.layout.w}×{obj.layout.d}×{obj.layout.h}
                   </td>
-                  <td className="py-2">{(obj.extras ?? []).join('、') || '—'}</td>
+                  <td className="py-2 pr-4">{(obj.extras ?? []).join('、') || '—'}</td>
+                  <td className="py-2 font-mono text-[11px]">{obj.ontology_concept_id ?? '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -84,6 +87,33 @@ export function ModelsTab({ definition }: { definition: SceneDefinition | null |
               </li>
             ))}
           </ul>
+        )}
+      </Section>
+
+      <Section title={'事件（' + events.length + '）'}>
+        {events.length === 0 ? (
+          <p className="text-xs text-[var(--color-text-tertiary)]">暂无事件</p>
+        ) : (
+          <table className="w-full text-left text-xs">
+            <thead className="text-[var(--color-text-tertiary)]">
+              <tr>
+                <th className="pb-2 pr-4 font-medium">Key</th>
+                <th className="pb-2 pr-4 font-medium">名称</th>
+                <th className="pb-2 pr-4 font-medium">关联对象</th>
+                <th className="pb-2 font-medium">描述</th>
+              </tr>
+            </thead>
+            <tbody>
+              {events.map((event, index) => (
+                <tr key={index} className="border-t border-[var(--color-border)]">
+                  <td className="py-2 pr-4 font-mono text-[11px]">{event.key}</td>
+                  <td className="py-2 pr-4">{event.label}</td>
+                  <td className="py-2 pr-4 font-mono text-[11px]">{event.objectId || '—'}</td>
+                  <td className="py-2">{event.description || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </Section>
 

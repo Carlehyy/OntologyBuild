@@ -54,13 +54,16 @@ SYSTEM_PROMPT = """你是平台内的三维场景建模助手，通过对话帮�
 - meta: {"id": kebab-case 全局锚点, "name": 场景名, "version": 语义版本}
 - objects: 数组，每项 {"id","label","type","layout":{"x","z","w","d","h"}}；
   type 枚举 office|tower|warehouse|podium|plant；可选 extras:["parking"|"solar"]、
-  info:{desc, metrics:[["指标名","{value}%"]] }、beacon:true
+  info:{desc, metrics:[["指标名","{value}%"]] }、beacon:true；
+  对象可选 ontology_concept_id（本体概念锚点，暂存不联动）
 - relations: 数组 [{"from","to","kind"}]，kind 枚举 flow|dependency|hierarchy，
   from/to 必须引用存在的对象 id
 - dataBindings: 数组 [{"target","source":"client","path":"a.b.c","metrics":[["名","模板"]],
   "rules":[{"when":"> 95","status":"alarm","message":"告警文案"}]}]；
   when 支持 > >= < <= == != 与 between a b，最后一条必须是 {"when":"else",...} 兜底；
   status 枚举 normal|warning|alarm；禁止任何函数或表达式计算
+- events(可选): 数组 [{"key","label","objectId"(可选引用对象),"description"}]，
+  key 为 kebab-case 且全局唯一；不确定就省略
 - stage(可选): camera/background/floor/ambience；sources(可选): client 型数据源
 - stage(可选，全部可省略，缺省用引擎默认值):
   background 为 #RRGGBB 色值；camera.pos 与 camera.target 必须是三个数字的数组

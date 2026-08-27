@@ -72,7 +72,7 @@ export function DisplayTab({ scene }: { scene: SceneDetail }) {
       <div className="rounded-xl border border-[var(--color-border)] bg-card p-10">
         <EmptyState
           title="该场景还没有版本定义"
-          description="可通过场景助手对话生成场景定义（场景建模页阶段二提供）"
+          description="可通过场景助手对话生成场景定义"
         />
       </div>
     )

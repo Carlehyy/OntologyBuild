@@ -4,7 +4,8 @@
  * 完整镜像 backend/app/scenes/validation.py 的规则与文案：
  * 词汇基线来自三维白模技能包（threejs-white-twin）的三件套 Schema，
  * 在此之上做平台化收敛（meta.id kebab-case、对象/装饰枚举、
- * relations 兼容旧 flows 写法、绑定规则仅比较表达式 + else 兜底）。
+ * relations 兼容旧 flows 写法、绑定规则仅比较表达式 + else 兜底、
+ * 可选 events 事件清单与对象 ontology_concept_id 挂载）。
  *
  * 校验结果统一为 issue 列表 [{path, message}]，空列表即合法。
  * normalizeDefinition 在保存前执行，保证库内定义形态唯一。
@@ -28,6 +29,7 @@ const BG_RE = /^#[0-9a-fA-F]{6}$/
 
 const MAX_OBJECTS = 200
 const MAX_BINDINGS = 200
+const MAX_EVENTS = 50
 
 type Json = Record<string, unknown>
 
@@ -168,6 +170,14 @@ export function validateDefinition(definition: unknown): ValidationIssue[] {
         }
       }
     }
+    const conceptId = obj.ontology_concept_id
+    if (conceptId !== null && conceptId !== undefined) {
+      if (!isNonEmptyStr(conceptId)) {
+        issues.push(issue(`${base}.ontology_concept_id`, '必须是非空字符串'))
+      } else if (conceptId.length > 128) {
+        issues.push(issue(`${base}.ontology_concept_id`, '长度不能超过 128'))
+      }
+    }
   })
 
   // —— relations（兼容旧 flows 写法）——
@@ -251,6 +261,54 @@ export function validateDefinition(definition: unknown): ValidationIssue[] {
         const lastRule = rules[rules.length - 1]
         if (isPlainObject(lastRule) && lastRule.when !== 'else') {
           issues.push(issue(`${base}.rules`, '最后一条规则必须是 else 兜底'))
+        }
+      })
+    }
+  }
+
+  // —— events（可选）——
+  const events = def.events
+  if (events !== null && events !== undefined) {
+    if (!Array.isArray(events)) {
+      issues.push(issue('events', '必须是数组'))
+    } else if (events.length > MAX_EVENTS) {
+      issues.push(issue('events', `事件数量不能超过 ${MAX_EVENTS}`))
+    } else {
+      const seenEventKeys = new Set<string>()
+      events.forEach((event, index) => {
+        const base = `events[${index}]`
+        if (!isPlainObject(event)) {
+          issues.push(issue(base, '必须是 JSON 对象'))
+          return
+        }
+        const key = event.key
+        if (!isKebab(key)) {
+          issues.push(issue(`${base}.key`, '必须是非空 kebab-case 字符串'))
+        } else if (seenEventKeys.has(key)) {
+          issues.push(issue(`${base}.key`, `事件 key 重复：${key}`))
+        } else {
+          seenEventKeys.add(key)
+        }
+        if (!isNonEmptyStr(event.label)) {
+          issues.push(issue(`${base}.label`, '必须是非空字符串'))
+        } else if (event.label.length > 80) {
+          issues.push(issue(`${base}.label`, '长度不能超过 80'))
+        }
+        const objectId = event.objectId
+        if (objectId !== null && objectId !== undefined &&
+            !seenIds.has(objectId as string)) {
+          issues.push(issue(
+            `${base}.objectId`,
+            `引用了不存在的对象 id：${String(objectId)}`))
+        }
+        const description = event.description
+        if (description !== null && description !== undefined) {
+          // 与后端镜像一致：非字符串先报类型，再校验长度上限
+          if (typeof description !== 'string') {
+            issues.push(issue(`${base}.description`, '必须是字符串'))
+          } else if (description.length > 200) {
+            issues.push(issue(`${base}.description`, '长度不能超过 200'))
+          }
         }
       })
     }

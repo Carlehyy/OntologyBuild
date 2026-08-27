@@ -4,7 +4,7 @@
  * 对话应用的定义以 source=assistant 冻结新版本，版本条可回看任意历史版本。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, ArrowLeft, History, Send, Sparkles, Square } from 'lucide-react'
 import { scenesApi } from '@/api/scenes'
@@ -14,8 +14,10 @@ import type { SceneDefinition, SceneSummary } from '@/types/scene'
 import { modelApi } from '@/api/ontologies'
 import { Button } from '@/components/ui/Button'
 import { LoadingState } from '@/components/ui/LoadingState'
+import { ConfirmModal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
 import SessionHistoryPopover, { type SessionHistoryItem } from '@/components/SessionHistoryPopover'
+import TargetSceneSelector from './TargetSceneSelector'
 import { SceneCanvas } from '@/lib/scene3d/SceneCanvas'
 
 type TimelineItem =
@@ -111,6 +113,24 @@ export default function SceneModelingPage() {
     enabled: !!boundSceneId && selectedVersionNo != null,
   })
   const definition = (versionQuery.data?.definition ?? null) as SceneDefinition | null
+
+  // 手动回滚：将当前查看的版本定义整体复制冻结为一个新草稿版本（历史不动、发布指针不受影响）。
+  // 冻结成功即选中该新版本；后续 SSE scene_updated 仍会自动跟随最新版。
+  const [rollbackOpen, setRollbackOpen] = useState(false)
+  const nextVersionNo = versionList.reduce((max, v) => Math.max(max, v.version_no), 0) + 1
+  const rollbackMutation = useMutation({
+    mutationFn: () => scenesApi.saveDefinition(
+      boundSceneId ?? '',
+      definition as SceneDefinition,
+      { note: '回滚自 v' + selectedVersionNo, source: 'manual' }),
+    onSuccess: result => {
+      void queryClient.invalidateQueries({ queryKey: ['scenes'] })
+      setSelectedVersionNo(result.version.version_no)
+      setRollbackOpen(false)
+      toast({ tone: 'success', title: '已回滚并生成新版本 v' + result.version.version_no })
+    },
+    onError: () => toast({ tone: 'error', title: '回滚失败，请稍后重试' }),
+  })
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -213,17 +233,11 @@ export default function SceneModelingPage() {
           <h1 className="text-base font-semibold text-slate-800">场景助手 · 对话式建模</h1>
         </div>
         <div className="flex items-center gap-2">
-          <select
-            value={targetSceneId}
-            aria-label="选择草稿场景"
-            onChange={event => { resetChat(); setTargetSceneId(event.target.value) }}
-            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
-          >
-            <option value={NEW_SCENE}>从零新建</option>
-            {draftScenes.map(scene => (
-              <option key={scene.id} value={scene.id}>{scene.name}</option>
-            ))}
-          </select>
+          <TargetSceneSelector
+            targetSceneId={targetSceneId === NEW_SCENE ? null : targetSceneId}
+            drafts={draftScenes}
+            onChange={id => { resetChat(); setTargetSceneId(id ?? NEW_SCENE) }}
+          />
           <select
             value={modelId}
             aria-label="选择对话模型"
@@ -358,7 +372,19 @@ export default function SceneModelingPage() {
               )}
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm/50">
-            <h3 className="mb-2 text-xs font-semibold text-slate-800">版本管理</h3>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold text-slate-800">版本管理</h3>
+              {!!boundSceneId && versionList.length >= 1 && definition && (
+                <Button
+                  variant="outline"
+                  className="h-7 px-2.5 text-xs"
+                  title="将该版本定义整体保存为一个新草稿版本（当前最新版保留）"
+                  onClick={() => setRollbackOpen(true)}
+                >
+                  回滚为当前
+                </Button>
+              )}
+            </div>
             {!boundSceneId ? (
               <p className="text-[11px] text-slate-400">尚未绑定场景</p>
             ) : versionsQuery.isLoading ? (
@@ -389,6 +415,19 @@ export default function SceneModelingPage() {
           </div>
         </section>
       </div>
+
+      <ConfirmModal
+        open={rollbackOpen}
+        onClose={() => { if (!rollbackMutation.isPending) setRollbackOpen(false) }}
+        onConfirm={() => rollbackMutation.mutate()}
+        title={'回滚到 v' + selectedVersionNo + '？'}
+        description={
+          '将把 v' + selectedVersionNo + ' 的定义复制冻结为新版本 v' + nextVersionNo
+          + '（source=manual、备注 “回滚自 v' + selectedVersionNo + '”），'
+          + '不会改动任何历史版本，也不会影响已发布指针。'}
+        confirmText="确认回滚"
+        loading={rollbackMutation.isPending}
+      />
     </div>
   )
 }

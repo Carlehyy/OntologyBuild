@@ -77,6 +77,8 @@ export interface SceneObjectDef {
   type: SceneObjectType
   layout: SceneObjectLayout
   extras?: string[]
+  /** 可选：该对象挂载的本体概念 id */
+  ontology_concept_id?: string
   info?: {
     desc?: string
     metrics?: [string, string][]
@@ -104,6 +106,14 @@ export interface DataBindingDef {
   rules: BindingRuleDef[]
 }
 
+/** 场景事件：key 为 kebab-case 且全场景唯一，可关联一个对象。 */
+export interface SceneEventDef {
+  key: string
+  label: string
+  objectId?: string
+  description?: string
+}
+
 export interface SceneDefinition {
   meta: { id: string; name: string; version: string }
   stage?: {
@@ -115,6 +125,8 @@ export interface SceneDefinition {
   objects: SceneObjectDef[]
   relations?: SceneRelationDef[]
   dataBindings?: DataBindingDef[]
+  /** 可选事件清单（≤50 条） */
+  events?: SceneEventDef[]
   sources?: Record<string, unknown>
 }
 

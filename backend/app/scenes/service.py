@@ -58,6 +58,25 @@ def _prune_versions(db: Session, scene: m.Scene, latest_no: int) -> None:
     ).delete(synchronize_session=False)
 
 
+def _prune_runtime_logs(db: Session, scene: m.Scene) -> None:
+    """运行日志保留上限：按 occurred_at 保留最新 RUNTIME_LOG_KEEP 条，其余删除。"""
+    stale_ids = [
+        row.id for row in db.query(m.SceneRuntimeLog.id)
+        .filter(m.SceneRuntimeLog.scene_id == scene.id)
+        .order_by(
+            m.SceneRuntimeLog.occurred_at.desc().nullslast(),
+            m.SceneRuntimeLog.id.desc(),
+        )
+        .offset(m.RUNTIME_LOG_KEEP)
+        .all()
+    ]
+    if not stale_ids:
+        return
+    db.query(m.SceneRuntimeLog).filter(
+        m.SceneRuntimeLog.id.in_(stale_ids),
+    ).delete(synchronize_session=False)
+
+
 def create_scene(db: Session, body: SceneCreate, user) -> m.Scene:
     scene = m.Scene(
         name=body.name.strip(),
@@ -214,5 +233,6 @@ def append_runtime_logs(db: Session, scene: m.Scene, body: RuntimeLogAppend) -> 
             payload=entry.payload,
             occurred_at=entry.occurred_at or now,
         ))
+    _prune_runtime_logs(db, scene)
     db.commit()
     return len(entries)
