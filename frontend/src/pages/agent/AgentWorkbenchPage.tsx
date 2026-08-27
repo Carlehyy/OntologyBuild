@@ -10,8 +10,8 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  AlertTriangle, ArrowLeftRight, BadgeCheck, BellRing, Bot, FileSearch,
-  FileText, History, List, Loader2, Network, PenLine, Scale, Send, Shield,
+  AlertTriangle, ArrowLeftRight, BadgeCheck, BellRing, Bot, CircleOff, FileSearch,
+  FileText, Highlighter, History, List, Loader2, Network, PenLine, Scale, Send, Shield,
   Sparkles, Square, User, Workflow, X,
 } from 'lucide-react'
 import { LoadingState } from '@/components/ui/LoadingState'
@@ -273,8 +273,10 @@ export default function AgentWorkbenchPage() {
         setDecisionRunId(String((lastDecision.result as any)?.runId || '') || null)
         setWorkspaceView('decision')
       } else {
+        // MYW-65：恢复历史会话只还原 path/impact 可视化（restore 语义），不自动高亮引用；
+        // 引用节点是否高亮由用户在引用行主动触发。
         setWorkspaceView('data')
-        setGraphSignal({ sequence: Date.now(), steps: lastVisual.steps, citations: lastVisual.citations })
+        setGraphSignal({ sequence: Date.now(), steps: lastVisual.steps, citations: [], intent: 'restore' })
       }
     }
     setShowHistory(false)
@@ -359,13 +361,12 @@ export default function AgentWorkbenchPage() {
             setWorkspaceView('decision')
           } else if (kind === 'path' || kind === 'impact') {
             setWorkspaceView('data')
-            setGraphSignal({ sequence: Date.now(), steps: [...turnSteps], citations: [] })
+            setGraphSignal({ sequence: Date.now(), steps: [...turnSteps], citations: [], intent: 'analyze' })
           }
         } else if (ev.type === 'answer') {
           patch({ content: ev.content, citations: ev.citations || [], proposals: ev.proposals || [], loading: false })
-          if ((ev.citations || []).length > 0 || turnSteps.some(step => ['path', 'impact'].includes((step.result as any)?.kind))) {
-            setGraphSignal({ sequence: Date.now(), steps: [...turnSteps], citations: ev.citations || [] })
-          }
+          // MYW-65：回答完成后不再自动高亮引用节点（原先会一直常亮）；
+          // 引用高亮改由用户点击引用行右侧的「高亮 / 取消高亮」按钮或引用角标触发。
         } else if (ev.type === 'cancelled') {
           patch({ content: '（已停止）', loading: false })
         } else if (ev.type === 'error') {
@@ -722,7 +723,7 @@ export default function AgentWorkbenchPage() {
                               type="button"
                               onClick={() => {
                                 setWorkspaceView('data')
-                                setGraphSignal({ sequence: Date.now(), steps: msg.steps, citations: [c] })
+                                setGraphSignal({ sequence: Date.now(), steps: msg.steps, citations: [c], intent: 'highlight' })
                               }}
                               title={c.snippet
                                 ? `${c.sourceLabel || `${c.objectType} · ${c.label}`} — ${c.snippet}`
@@ -732,6 +733,33 @@ export default function AgentWorkbenchPage() {
                               <span className="font-medium text-[var(--color-text-primary)]">{c.label}</span>
                             </button>
                           ))}
+                          {/* MYW-65：引用行最右侧的高亮控制 —— 手动高亮当前引用节点 / 取消高亮 */}
+                          <span className="ml-auto flex shrink-0 items-center gap-1 pl-1" data-testid="citation-actions">
+                            <button
+                              type="button"
+                              disabled={msg.loading}
+                              onClick={() => {
+                                setWorkspaceView('data')
+                                setGraphSignal({ sequence: Date.now(), steps: msg.steps, citations: msg.citations, intent: 'highlight' })
+                              }}
+                              aria-label="高亮引用节点"
+                              title="在数据推演图谱中高亮本条回答引用的节点"
+                              data-testid="citation-highlight-button"
+                              className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--color-border)] bg-white text-[var(--color-text-tertiary)] transition-colors hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <Highlighter size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setGraphSignal({ sequence: Date.now(), steps: [], citations: [], intent: 'clear-highlight' })}
+                              aria-label="取消引用高亮"
+                              title="取消数据推演图谱中的引用节点高亮"
+                              data-testid="citation-clear-button"
+                              className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--color-border)] bg-white text-[var(--color-text-tertiary)] transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700"
+                            >
+                              <CircleOff size={12} />
+                            </button>
+                          </span>
                         </div>
                       )}
                       {msg.proposals.map(p => p.kind === 'sentinel'

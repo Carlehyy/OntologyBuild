@@ -16,11 +16,22 @@ import {
   type AgentInstanceDetail,
   type AgentStep,
 } from '@/api/agent'
+import { layoutKnowledgeGraph } from './components/instanceGraphLayout'
+
+export type GraphAssistantIntent = 'analyze' | 'highlight' | 'clear-highlight' | 'restore'
 
 export interface GraphAssistantSignal {
   sequence: number
   steps: AgentStep[]
   citations: AgentCitation[]
+  /**
+   * 助手信号意图（缺省按 analyze 处理，兼容旧调用）：
+   * - analyze：助手检索到路径/影响等可视化结果，重放覆盖层并联动引用；
+   * - highlight：用户主动要求高亮引用节点（引用行按钮 / 引用角标），只做高亮与补载；
+   * - clear-highlight：用户主动取消引用高亮；
+   * - restore：恢复历史会话时还原 path/impact 覆盖层，但不自动高亮引用。
+   */
+  intent?: GraphAssistantIntent
 }
 
 interface Props {
@@ -66,57 +77,6 @@ const errorMessage = (error: unknown) => {
 }
 
 const instanceNodeId = (id: string) => 'instance:' + id
-
-function deterministicPositions(nodes: AgentGraphNode[]) {
-  const positions = new Map<string, { x: number; y: number }>()
-  const types = nodes.filter(node => node.kind === 'object_type')
-  const instances = nodes.filter(node => node.kind === 'instance')
-  const properties = nodes.filter(node => node.kind === 'property')
-  const typeCenters = new Map<string, { x: number; y: number }>()
-  const columns = Math.max(1, Math.ceil(Math.sqrt(types.length)))
-  const gapX = 430
-  const gapY = 330
-
-  types.forEach((node, index) => {
-    const column = index % columns
-    const row = Math.floor(index / columns)
-    const center = { x: 180 + column * gapX, y: 150 + row * gapY }
-    positions.set(node.id, center)
-    if (node.objectTypeId) typeCenters.set(node.objectTypeId, center)
-  })
-
-  const instancesByType = new Map<string, AgentGraphNode[]>()
-  instances.forEach(node => {
-    const key = node.objectTypeId || ''
-    instancesByType.set(key, [...(instancesByType.get(key) || []), node])
-  })
-  instancesByType.forEach((items, typeId) => {
-    const center = typeCenters.get(typeId) || { x: 180, y: 150 }
-    items.forEach((node, index) => {
-      const ring = Math.floor(index / 10)
-      const itemInRing = index % 10
-      const countInRing = Math.min(10, items.length - ring * 10)
-      const angle = -Math.PI / 2 + (itemInRing / Math.max(1, countInRing)) * Math.PI * 2
-      const radiusX = 145 + ring * 75
-      const radiusY = 105 + ring * 55
-      positions.set(node.id, {
-        x: center.x + Math.cos(angle) * radiusX,
-        y: center.y + Math.sin(angle) * radiusY,
-      })
-    })
-  })
-
-  properties.forEach((node, index) => {
-    const anchor = positions.get(instanceNodeId(node.instanceId || '')) || { x: 180, y: 150 }
-    const angle = -Math.PI / 2 + (index / Math.max(1, properties.length)) * Math.PI * 2
-    const radius = 155 + Math.floor(index / 14) * 70
-    positions.set(node.id, {
-      x: anchor.x + Math.cos(angle) * radius,
-      y: anchor.y + Math.sin(angle) * radius,
-    })
-  })
-  return positions
-}
 
 function mergeGraph(
   base: AgentGraphData,
@@ -233,12 +193,26 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
   }, [oid, releaseId, selectedNode])
 
   useEffect(() => {
-    if (!assistantSignal) return
-    setCitedIds(assistantSignal.citations.map(citation => citation.instanceId))
-    const visualStep = [...assistantSignal.steps].reverse().find(step => {
-      const kind = (step.result as any)?.kind
-      return kind === 'path' || kind === 'impact'
-    })
+    if (!assistantSignal) {
+      // 会话重置 / 切换时清掉引用高亮，避免上一会话的高亮残留到新画布
+      setCitedIds(previous => (previous.length ? [] : previous))
+      return
+    }
+    const intent = assistantSignal.intent ?? 'analyze'
+    if (intent === 'clear-highlight') {
+      setCitedIds([])
+      return
+    }
+    // restore 语义只还原 path/impact 覆盖层，不自动高亮引用（MYW-65：
+    // 引用高亮一律由用户在引用行主动触发，不再“回答完就常亮”）
+    const citations = intent === 'restore' ? [] : assistantSignal.citations
+    setCitedIds(citations.map(citation => citation.instanceId))
+    const visualStep = intent === 'highlight'
+      ? undefined
+      : [...assistantSignal.steps].reverse().find(step => {
+          const kind = (step.result as any)?.kind
+          return kind === 'path' || kind === 'impact'
+        })
     const result = visualStep?.result as any
     if (result?.kind === 'path' && Array.isArray(result.nodes)) {
       setMode('path')
@@ -253,7 +227,7 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
       ...graphRef.current.nodes.map(node => node.entityId),
       ...(Array.isArray(result?.nodes) ? result.nodes.map((node: AgentGraphNode) => node.entityId) : []),
     ])
-    const missingCitation = assistantSignal.citations.find(citation => !visibleIds.has(citation.instanceId))
+    const missingCitation = citations.find(citation => !visibleIds.has(citation.instanceId))
     if (!missingCitation || !oid) return
 
     // 默认 L2 只取每类前 20 条；助手引用落在窗口外时，按实例 id 精确补载，确保引用真的可见。
@@ -313,10 +287,17 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
   const citedNodeIds = useMemo(() => new Set(citedIds.map(instanceNodeId)), [citedIds])
   const changeNodeId = impactResult ? instanceNodeId(impactResult.change.instanceId) : ''
 
+  // 布局只在节点集合变化时重算（确定性防重叠布局，MYW-65）；
+  // 高亮/选中这类仅改 class 的交互直接复用缓存坐标，不重复计算。
+  const nodePositions = useMemo(
+    () => layoutKnowledgeGraph(displayGraph.nodes),
+    [displayGraph.nodes],
+  )
+
   useEffect(() => {
     const host = graphHostRef.current
     if (!host) return
-    const positions = deterministicPositions(displayGraph.nodes)
+    const positions = nodePositions
     const hasAnalysis = !!activePath || !!impactResult || citedNodeIds.size > 0
     const elements: ElementDefinition[] = [
       ...displayGraph.nodes.map((node, index) => {
@@ -555,7 +536,7 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
     }
   }, [
     activePath, changeNodeId, citedNodeIds, directImpactIds, displayGraph.edges,
-    displayGraph.nodes, impactResult, indirectImpactIds, pathEdgeIds, pathNodeIds,
+    displayGraph.nodes, impactResult, indirectImpactIds, nodePositions, pathEdgeIds, pathNodeIds,
   ])
 
   const switchDepth = (nextDepth: 1 | 2 | 3) => {
@@ -833,6 +814,7 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
             <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full border-2 border-teal-500 bg-white" />实例</span>
             {(pathResult || impactResult || citedIds.length > 0) && (
               <>
+                <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full border-2 border-cyan-600 bg-cyan-50" />助手引用</span>
                 <span className="flex items-center gap-1"><i className="h-0.5 w-3 bg-blue-600" />查询路径</span>
                 <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full border-2 border-violet-600 bg-violet-50" />拟议变更</span>
                 <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full border-2 border-orange-600 bg-orange-50" />直接关联</span>
@@ -855,8 +837,24 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
           {graph.meta.truncated && <span className="rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700">已按预算截断</span>}
         </div>
 
-        {(pathResult || impactResult) && (
-          <div className="absolute bottom-3 left-1/2 z-10 w-[min(560px,calc(100%-24px))] -translate-x-1/2 rounded-lg border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur" data-testid="analysis-summary">
+        {(citedIds.length > 0 || pathResult || impactResult) && (
+          <div className="absolute bottom-3 left-1/2 z-10 flex w-[min(560px,calc(100%-24px))] -translate-x-1/2 flex-col gap-2">
+            {citedIds.length > 0 && (
+              <div className="flex items-center gap-2 rounded-lg border border-cyan-200 bg-cyan-50/95 px-3 py-2 shadow-sm backdrop-blur" data-testid="citation-highlight-summary">
+                <Sparkles size={14} className="shrink-0 text-cyan-600" />
+                <p className="min-w-0 flex-1 text-xs font-medium text-cyan-800">已高亮 {citedIds.length} 个助手引用节点</p>
+                <button
+                  type="button"
+                  onClick={() => setCitedIds([])}
+                  aria-label="取消引用高亮"
+                  title="取消引用高亮"
+                  data-testid="graph-clear-citation-button"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-cyan-500 transition-colors hover:bg-cyan-100 hover:text-cyan-700"
+                ><X size={13} /></button>
+              </div>
+            )}
+            {(pathResult || impactResult) && (
+              <div className="rounded-lg border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur" data-testid="analysis-summary">
             {pathResult && (
               <>
                 <div className="flex items-start gap-2">
@@ -924,6 +922,8 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
                   <MessageSquareText size={13} />让助手分析影响与建议
                 </button>
               </>
+            )}
+              </div>
             )}
           </div>
         )}
