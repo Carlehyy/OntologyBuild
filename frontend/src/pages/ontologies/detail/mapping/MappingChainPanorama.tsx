@@ -1,16 +1,22 @@
 /* 数据供给全景画布(@xyflow/react):
    「来源数据资产 → 本体元素」两列链路节点卡,与治理推演页链路全景同一设计语言;
-   连线流动动画,悬停/清单联动/详情弹窗检视期间暂停(data-still),避免缩放下闪烁;
+   连线为纯视觉元素(interactionWidth=0 + pointer-events:none),不参与命中测试,
+   避免边线层重挂载/回流打断节点卡悬停——那正是「悬停卡片一直在闪」的根源;
+   高亮集合经稳定字符串参与依赖,hover 状态变化不再重建连线数组;
+   流动动画在悬停/清单联动/详情弹窗检视期间仍经 data-still 暂停(缩放下观感);
    节点卡可拖拽调整布局,位置按本体持久化到 localStorage;
    点选节点高亮整条直接上下游、其余压暗,点画布空白复位;
    数据资产节点点击打开数据预览,本体元素节点点击打开血缘详情弹窗。 */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Background,
   Controls,
   Handle,
   Position,
   ReactFlow,
+  ReactFlowProvider,
+  useNodesInitialized,
+  useReactFlow,
   type Edge,
   type Node,
   type NodeProps,
@@ -132,7 +138,16 @@ function collectNeighborhood(nodeId: string, links: Array<{ source: string; targ
   return ids
 }
 
-export default function MappingChainPanorama({
+/** 外层仅提供 ReactFlow 上下文（useReactFlow/useNodesInitialized 需在 Provider 内使用）。 */
+export default function MappingChainPanorama(props: MappingChainPanoramaProps) {
+  return (
+    <ReactFlowProvider>
+      <MappingChainPanoramaInner {...props} />
+    </ReactFlowProvider>
+  )
+}
+
+function MappingChainPanoramaInner({
   rows,
   hoverKey,
   selectedKey,
@@ -148,6 +163,28 @@ export default function MappingChainPanorama({
   // 指针悬停在图内节点卡上时置真：检视期间经 data-still 暂停连线流动动画，
   // 避免 dash 动画在 fitView 缩放(<1)下逐帧重绘使卡片边缘闪烁（见 mapping-overview.css）。
   const [hoveringNode, setHoveringNode] = useState(false)
+
+  // 内容水平居中：fitView 只在初始化时执行一次，彼时节点尺寸尚未测量完成，
+  // 生产页面上常得到「整块内容靠左、右侧大片留白」的陈旧视口；这里在全部节点
+  // 测量完成后（以及模型/容器尺寸变化时）重新 fitView 居中，保证列抬头与卡片
+  // 列整体水平居中。拖拽布局不触发 refit（模型未变），手动布局不被打断。
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [containerWidth, setContainerWidth] = useState(0)
+  useEffect(() => {
+    const element = containerRef.current
+    if (!element) return
+    const update = () => setContainerWidth(element.clientWidth)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  const flowInstance = useReactFlow()
+  const nodesInitialized = useNodesInitialized()
+  useEffect(() => {
+    if (!nodesInitialized) return
+    void flowInstance.fitView({ padding: 0.15, maxZoom: 1 })
+  }, [flowInstance, nodesInitialized, model, containerWidth])
 
   const datasetCards = useMemo(() => {
     const cards = new Map<string, { title: string; sub: string; badge: ChainCardData['badge'] }>()
@@ -208,22 +245,34 @@ export default function MappingChainPanorama({
     return result
   }, [model, rows, datasetCards, highlightSet, hoverKey, selectedKey, dragPositions])
 
-  const flowEdges = useMemo<Edge[]>(() => model.links.map((link, index) => {
-    const highlighted = Boolean(highlightSet?.has(link.source) && highlightSet?.has(link.target))
-    const dimmed = Boolean(highlightSet) && !highlighted
-    return {
-      id: `edge:${index}:${link.source}->${link.target}`,
-      source: link.source,
-      target: link.target,
-      type: 'bezier',
-      animated: !dimmed,
-      style: {
-        stroke: 'var(--dmo-teal)',
-        strokeWidth: highlighted ? 2.2 : 1.3,
-        opacity: dimmed ? 0.12 : highlighted ? 0.95 : 0.5,
-      },
-    }
-  }), [model, highlightSet])
+  // 高亮集合以稳定字符串参与依赖：成员不变时重建的 Set 不再触发连线数组重算
+  const highlightSetKey = useMemo(
+    () => (highlightSet ? Array.from(highlightSet).sort().join('|') : ''),
+    [highlightSet],
+  )
+  const flowEdges = useMemo<Edge[]>(() => {
+    const members = highlightSetKey ? new Set(highlightSetKey.split('|')) : null
+    return model.links.map((link, index) => {
+      const highlighted = Boolean(members?.has(link.source) && members?.has(link.target))
+      const dimmed = Boolean(members) && !highlighted
+      return {
+        id: `edge:${index}:${link.source}->${link.target}`,
+        source: link.source,
+        target: link.target,
+        type: 'bezier',
+        animated: !dimmed,
+        // 连线不承载任何点击/悬停交互：interactionWidth=0 去掉 20px 宽的透明
+        // 命中条，配合样式层 pointer-events:none，杜绝边线层反复卸载/重挂时
+        // 打断节点卡悬停命中测试（悬停卡片闪烁问题的根源）
+        interactionWidth: 0,
+        style: {
+          stroke: 'var(--dmo-teal)',
+          strokeWidth: highlighted ? 2.2 : 1.3,
+          opacity: dimmed ? 0.12 : highlighted ? 0.95 : 0.5,
+        },
+      }
+    })
+  }, [model, highlightSetKey])
 
   const handleNodeClick = useCallback((_: unknown, node: Node) => {
     if (node.type !== 'mappingChainNode') return
@@ -241,6 +290,7 @@ export default function MappingChainPanorama({
 
   return (
     <div
+      ref={containerRef}
       className="dmo-flow-canvas dmo-chain-canvas"
       data-testid="mapping-chain-panorama"
       data-still={hoveringNode || hoverKey != null || selectedKey != null ? 'true' : undefined}

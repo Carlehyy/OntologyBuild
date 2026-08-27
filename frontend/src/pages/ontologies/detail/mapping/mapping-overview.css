@@ -46,7 +46,6 @@
   --dmo-flow-dataset: #0f8f83;
   --dmo-flow-object: #5b7ec9;
   --dmo-flow-relation: #cf8b2e;
-  --dmo-shadow: 0 12px 36px rgba(34,52,70,.07);
   --dmo-focus-ring: rgba(11,143,131,.38);
 }
 .dark .dmo-card, .dark .dmo-preview-backdrop, .dark .dmo-lineage-backdrop {
@@ -91,14 +90,15 @@
   --dmo-flow-dataset: #2dd4bf;
   --dmo-flow-object: #7aa2f7;
   --dmo-flow-relation: #e0af68;
-  --dmo-shadow: 0 12px 36px rgba(0,0,0,.4);
   --dmo-focus-ring: rgba(45,212,191,.45);
 }
 
 .dmo-card {
   width: 100%;
+  /* 对齐「本体总览·本体概况」卡片的观感语言（overview-panel）：
+     细边框、14px 圆角、无投影、近白底 */
   border: 1px solid var(--dmo-line);
-  border-radius: 18px;
+  border-radius: 14px;
   display: flex;
   flex-direction: column;
   /* 自然文档流：卡片高度由内容决定，页面级滚动（对齐治理推演页），
@@ -106,7 +106,6 @@
   overflow: hidden;
   color: var(--dmo-ink);
   background: var(--dmo-surface);
-  box-shadow: var(--dmo-shadow);
 }
 .dmo-card button, .dmo-card input, .dmo-preview-dialog button, .dmo-preview-dialog select { font: inherit; }
 .dmo-card button:focus-visible, .dmo-card a:focus-visible, .dmo-card [role="button"]:focus-visible { outline: 2px solid var(--dmo-focus-ring); outline-offset: 2px; }
@@ -154,7 +153,7 @@
 .dmo-flow { flex: none; padding: 14px 18px 8px; border-bottom: 1px solid var(--dmo-line); background: var(--dmo-panel); }
 .dmo-flow-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; }
 .dmo-flow-title { min-width: 0; display: flex; flex-direction: column; }
-.dmo-flow-title b { color: var(--dmo-ink); font-size: 13px; font-weight: 700; }
+.dmo-flow-title b { color: var(--dmo-ink); font-size: 15px; font-weight: 700; letter-spacing: .01em; }
 .dmo-flow-title small { margin-top: 3px; color: var(--dmo-subtle); font-size: 12px; }
 .dmo-flow-caption { flex: none; color: var(--dmo-faint); font-size: 11px; }
 .dmo-flow-canvas { min-height: 200px; }
@@ -171,7 +170,7 @@
 .dmo-register { min-width: 0; flex: 1 1 0%; display: flex; flex-direction: column; background: var(--dmo-panel); }
 .dmo-register-head { min-height: 64px; padding: 12px 16px 9px; border-bottom: 1px solid var(--dmo-line-soft); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .dmo-register-title { min-width: 0; display: flex; flex: 1; flex-direction: column; }
-.dmo-register-head b { color: var(--dmo-ink); font-size: 13px; font-weight: 700; }
+.dmo-register-head b { color: var(--dmo-ink); font-size: 15px; font-weight: 700; letter-spacing: .01em; }
 .dmo-register-head small { margin-top: 3px; color: var(--dmo-subtle); font-size: 12px; }
 .dmo-register-actions { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .dmo-search { width: 240px; height: 34px; padding: 0 10px; border: 1px solid var(--dmo-line); border-radius: 8px; display: flex; align-items: center; gap: 7px; color: var(--dmo-faint); background: var(--dmo-workspace-bg); transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease; }
@@ -370,6 +369,10 @@
 @media (prefers-reduced-motion: reduce) {
   .dmo-chain-canvas .react-flow__edge.animated path { animation-play-state: paused; }
 }
+/* 连线是纯视觉元素：组件层已 interactionWidth=0，这里兜底禁用命中，
+   确保边线层重挂载/回流永远不会打断节点卡的悬停命中测试
+   （悬停卡片时 enter/leave 反复振荡致闪烁的机制根源）。 */
+.dmo-chain-canvas .react-flow__edge path { pointer-events: none; }
 
 .dmo-chain-node { border: 1px solid var(--dmo-line); border-radius: 12px; padding: 8px 10px; color: var(--dmo-text); background: var(--dmo-panel); box-shadow: 0 1px 3px rgba(15,23,42,.06); cursor: pointer; transition: opacity .22s ease, box-shadow .22s ease, border-color .22s ease; }
 .dmo-chain-node:hover { border-color: var(--dmo-teal-line); box-shadow: 0 4px 14px rgba(13,148,136,.12); }
@@ -390,7 +393,7 @@
 .dmo-chain-badge[data-tone="warn"] { color: var(--dmo-note-warn-ink); background: var(--dmo-note-warn-bg); }
 .dmo-chain-badge[data-tone="danger"] { color: var(--dmo-danger-ink); background: var(--dmo-danger-bg); }
 .dmo-chain-badge[data-tone="muted"] { color: var(--dmo-muted); background: var(--dmo-unmapped-bg); }
-.dmo-chain-colhead { display: flex; align-items: center; gap: 6px; color: var(--dmo-faint); font-size: 10px; font-weight: 700; letter-spacing: .04em; pointer-events: none; }
+.dmo-chain-colhead { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--dmo-faint); font-size: 10px; font-weight: 700; letter-spacing: .04em; pointer-events: none; }
 .dmo-chain-colhead em { padding: 1px 6px; border-radius: 999px; color: var(--dmo-faint); background: var(--dmo-unmapped-bg); font-size: 9.5px; font-style: normal; font-variant-numeric: tabular-nums; }
 
 @media (max-width: 1280px) {

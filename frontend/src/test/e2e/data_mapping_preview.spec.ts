@@ -531,3 +531,98 @@ test('悬停全景节点卡时暂停连线流动动画（data-still），移开�
   await page.mouse.move(canvasBox!.x + 8, canvasBox!.y - 10)
   await expect(canvas).not.toHaveAttribute('data-still')
 })
+
+test('供给全景连线不可命中，悬停节点卡无 enter/leave 振荡', async ({ page }) => {
+  // MYW-60：边线层重挂载/回流会打断节点卡悬停命中测试（enter/leave 高频振荡），
+  // 表现为「鼠标悬停画布卡片一直在闪」。连线改为纯视觉元素后必须保持零振荡。
+  await mockMappingPreview(page)
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  const canvas = page.getByTestId('mapping-chain-panorama')
+  await expect(canvas).toBeVisible()
+  await expect(canvas.locator('.react-flow__edge')).toHaveCount(1)
+
+  // 连线不再携带 20px 透明命中条，且路径禁用指针事件
+  await expect(canvas.locator('.react-flow__edge-interaction')).toHaveCount(0)
+  const edgePath = canvas.locator('.react-flow__edge path.react-flow__edge-path').first()
+  await expect(edgePath).toHaveCSS('pointer-events', 'none')
+
+  // 指针静止停在节点卡中心：进入/离开事件不得振荡
+  await page.evaluate(() => {
+    const host = document.querySelector('[data-testid="mapping-chain-panorama"]')
+    if (!host) return
+    host.setAttribute('data-probe-enter', '0')
+    host.setAttribute('data-probe-leave', '0')
+    const bump = (attribute: string) => () => {
+      host.setAttribute(attribute, String(Number(host.getAttribute(attribute) || 0) + 1))
+    }
+    document.querySelectorAll('.dmo-chain-node').forEach(node => {
+      node.addEventListener('mouseenter', bump('data-probe-enter'))
+      node.addEventListener('mouseleave', bump('data-probe-leave'))
+    })
+  })
+  const nodeCard = canvas.locator('.react-flow__node-mappingChainNode').first()
+  const cardBox = await nodeCard.boundingBox()
+  expect(cardBox).not.toBeNull()
+  await page.mouse.move(cardBox!.x - 40, cardBox!.y - 40)
+  await page.waitForTimeout(200)
+  await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2)
+  await page.waitForTimeout(1500)
+
+  const enter = Number(await canvas.getAttribute('data-probe-enter'))
+  const leave = Number(await canvas.getAttribute('data-probe-leave'))
+  expect(enter).toBeLessThanOrEqual(2)
+  expect(Math.abs(enter - leave)).toBeLessThanOrEqual(1)
+
+  // 离开后仍恢复流动动画（不破坏 MYW-51 的检视暂停语义）
+  const canvasBox = await canvas.boundingBox()
+  expect(canvasBox).not.toBeNull()
+  await page.mouse.move(canvasBox!.x + 8, canvasBox!.y - 10)
+  await expect(canvas).not.toHaveAttribute('data-still')
+})
+
+test('供给全景列抬头居中于卡片列，且整块内容水平居中于画布', async ({ page }) => {
+  // MYW-60：fitView 仅在初始化执行一次，节点测量未完成时常得到靠左的陈旧视口；
+  // 节点测量完成后必须重新 fitView 居中，抬头也要水平居中于自己的卡片列。
+  await mockMappingPreview(page)
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  const canvas = page.getByTestId('mapping-chain-panorama')
+  await expect(canvas).toBeVisible()
+  await expect(canvas.locator('.react-flow__node')).not.toHaveCount(0)
+  // 等测量后的 refit 生效：布局稳定两个采样点一致
+  let anchor = await canvas.boundingBox()
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await page.waitForTimeout(150)
+    const next = await canvas.boundingBox()
+    if (anchor && next && Math.abs(next.y - anchor.y) < 1) break
+    anchor = next
+  }
+
+  const layout = await page.evaluate(() => {
+    const canvasEl = document.querySelector('[data-testid="mapping-chain-panorama"]') as HTMLElement
+    const a = canvasEl.getBoundingClientRect()
+    const rel = (el: Element) => {
+      const b = el.getBoundingClientRect()
+      return { left: b.left - a.left, right: b.right - a.left, cx: b.left - a.left + b.width / 2 }
+    }
+    const cards = Array.from(canvasEl.querySelectorAll('.dmo-chain-node')).map(rel)
+    const heads = Array.from(canvasEl.querySelectorAll('.dmo-chain-colhead')).map(rel)
+    return { canvasW: a.width, cards, heads }
+  })
+  expect(layout.cards.length).toBeGreaterThan(0)
+  expect(layout.heads.length).toBe(2)
+
+  // 整块内容水平居中：左右留白差 ≤ 24px
+  const minX = Math.min(...layout.cards.map(c => c.left))
+  const maxX = Math.max(...layout.cards.map(c => c.right))
+  expect(Math.abs(minX - (layout.canvasW - maxX))).toBeLessThanOrEqual(24)
+
+  // 每列抬头中心与该列卡片中心一致（≤ 8px）：左列 / 右列按画布中线分簇
+  for (const head of layout.heads) {
+    const inCol = layout.cards.filter(c => (c.cx < layout.canvasW / 2) === (head.cx < layout.canvasW / 2))
+    expect(inCol.length).toBeGreaterThan(0)
+    const colCenter = inCol.reduce((sum, c) => sum + (c.left + c.right) / 2, 0) / inCol.length
+    expect(Math.abs(head.cx - colCenter)).toBeLessThanOrEqual(8)
+  }
+})
