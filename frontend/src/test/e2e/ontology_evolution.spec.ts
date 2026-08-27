@@ -698,12 +698,16 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page.getByTestId('published-structure-readonly')).toHaveText('发布快照 · 结构只读')
   await expect(page.getByRole('button', { name: '打开图谱编辑器修改模型' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '查看当前发布图谱' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '智能整理图谱' })).toBeVisible()
-  const l1LayoutSaved = page.waitForResponse(response => response.request().method() === 'PUT' && response.url().endsWith('/layout'))
-  await page.getByRole('button', { name: '智能整理图谱' }).click()
-  // 智能整理前先弹出确认弹窗（仅覆盖布局、不动模型），确认后才提交布局保存
-  await page.getByRole('button', { name: '整理并覆盖布局' }).click()
-  expect((await l1LayoutSaved).ok()).toBeTruthy()
+  // 「结构说明」弹窗：读取当前发布版本语义层的需求文档。该本体由 API 直接
+  // 建模产生、未经需求文档生成，语义层为空 —— 查不到文档是允许的空态。
+  await expect(page.getByRole('button', { name: '结构说明' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '智能整理图谱' })).toHaveCount(0)
+  const semanticLoaded = page.waitForResponse(response => response.request().method() === 'GET' && response.url().includes('/semantic'))
+  await page.getByRole('button', { name: '结构说明' }).click()
+  expect((await semanticLoaded).ok()).toBeTruthy()
+  await expect(page.getByTestId('structure-doc-empty')).toContainText('当前版本没有关联的需求文档')
+  await page.getByLabel('关闭结构说明').click()
+  await expect(page.getByTestId('structure-doc-empty')).toHaveCount(0)
 
   // L2 追加属性和动作；函数/哨兵保持为分析选择器，不成为常驻节点。
   await page.getByRole('button', { name: 'L2 结构展开', exact: true }).click()

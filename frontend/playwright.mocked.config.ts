@@ -45,6 +45,7 @@ export default defineConfig({
     '**/ontology_domain_source.spec.ts',
     '**/ontology_network_canvas.spec.ts',
     '**/ontology_overview_responsive.spec.ts',
+    '**/ontology_structure_doc_dialog.spec.ts',
     '**/ontology_structure_initial_view.spec.ts',
     '**/ontology_runtime_state_conflict.spec.ts',
     '**/ontology_safe_recovery.spec.ts',
