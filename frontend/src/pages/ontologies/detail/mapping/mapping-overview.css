@@ -393,7 +393,7 @@
 .dmo-chain-badge[data-tone="warn"] { color: var(--dmo-note-warn-ink); background: var(--dmo-note-warn-bg); }
 .dmo-chain-badge[data-tone="danger"] { color: var(--dmo-danger-ink); background: var(--dmo-danger-bg); }
 .dmo-chain-badge[data-tone="muted"] { color: var(--dmo-muted); background: var(--dmo-unmapped-bg); }
-.dmo-chain-colhead { display: flex; align-items: center; gap: 6px; color: var(--dmo-faint); font-size: 10px; font-weight: 700; letter-spacing: .04em; pointer-events: none; }
+.dmo-chain-colhead { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--dmo-faint); font-size: 10px; font-weight: 700; letter-spacing: .04em; pointer-events: none; }
 .dmo-chain-colhead em { padding: 1px 6px; border-radius: 999px; color: var(--dmo-faint); background: var(--dmo-unmapped-bg); font-size: 9.5px; font-style: normal; font-variant-numeric: tabular-nums; }
 
 @media (max-width: 1280px) {

@@ -7,13 +7,16 @@
    节点卡可拖拽调整布局,位置按本体持久化到 localStorage;
    点选节点高亮整条直接上下游、其余压暗,点画布空白复位;
    数据资产节点点击打开数据预览,本体元素节点点击打开血缘详情弹窗。 */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Background,
   Controls,
   Handle,
   Position,
   ReactFlow,
+  ReactFlowProvider,
+  useNodesInitialized,
+  useReactFlow,
   type Edge,
   type Node,
   type NodeProps,
@@ -135,7 +138,16 @@ function collectNeighborhood(nodeId: string, links: Array<{ source: string; targ
   return ids
 }
 
-export default function MappingChainPanorama({
+/** 外层仅提供 ReactFlow 上下文（useReactFlow/useNodesInitialized 需在 Provider 内使用）。 */
+export default function MappingChainPanorama(props: MappingChainPanoramaProps) {
+  return (
+    <ReactFlowProvider>
+      <MappingChainPanoramaInner {...props} />
+    </ReactFlowProvider>
+  )
+}
+
+function MappingChainPanoramaInner({
   rows,
   hoverKey,
   selectedKey,
@@ -151,6 +163,28 @@ export default function MappingChainPanorama({
   // 指针悬停在图内节点卡上时置真：检视期间经 data-still 暂停连线流动动画，
   // 避免 dash 动画在 fitView 缩放(<1)下逐帧重绘使卡片边缘闪烁（见 mapping-overview.css）。
   const [hoveringNode, setHoveringNode] = useState(false)
+
+  // 内容水平居中：fitView 只在初始化时执行一次，彼时节点尺寸尚未测量完成，
+  // 生产页面上常得到「整块内容靠左、右侧大片留白」的陈旧视口；这里在全部节点
+  // 测量完成后（以及模型/容器尺寸变化时）重新 fitView 居中，保证列抬头与卡片
+  // 列整体水平居中。拖拽布局不触发 refit（模型未变），手动布局不被打断。
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [containerWidth, setContainerWidth] = useState(0)
+  useEffect(() => {
+    const element = containerRef.current
+    if (!element) return
+    const update = () => setContainerWidth(element.clientWidth)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  const flowInstance = useReactFlow()
+  const nodesInitialized = useNodesInitialized()
+  useEffect(() => {
+    if (!nodesInitialized) return
+    void flowInstance.fitView({ padding: 0.15, maxZoom: 1 })
+  }, [flowInstance, nodesInitialized, model, containerWidth])
 
   const datasetCards = useMemo(() => {
     const cards = new Map<string, { title: string; sub: string; badge: ChainCardData['badge'] }>()
@@ -256,6 +290,7 @@ export default function MappingChainPanorama({
 
   return (
     <div
+      ref={containerRef}
       className="dmo-flow-canvas dmo-chain-canvas"
       data-testid="mapping-chain-panorama"
       data-still={hoveringNode || hoverKey != null || selectedKey != null ? 'true' : undefined}
