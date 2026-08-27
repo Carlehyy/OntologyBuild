@@ -50,6 +50,101 @@ def ontology_overview(ontology_id: str, db: Session):
     )
 
 
+def runtime_daily_summary(ontology_id: str, start_iso: str, end_iso: str, db: Session):
+    """运行汇总按日聚合（显式时间窗），供总览「运行汇总」时间维度下拉使用。
+
+    口径与 ``ontology_overview`` 完全一致：只统计当前发布血缘
+    （``ontology_release_id``）且不早于发布时间的哨兵评估与动作执行，
+    请求窗口中早于发布时间的桶如实记 0。窗口跨度与参数合法性由路由层校验。
+    """
+    from app.config import settings
+    from app.ontologies import cache as ontology_cache
+    return ontology_cache.cached_call(
+        ontology_cache.runtime_summary_cache_key(ontology_id, start_iso, end_iso),
+        settings.ontology_overview_cache_ttl_seconds,
+        lambda: _runtime_daily_summary_uncached(ontology_id, start_iso, end_iso, db),
+    )
+
+
+def _runtime_daily_summary_uncached(ontology_id: str, start_iso: str, end_iso: str, db: Session):
+    from datetime import timedelta
+    project = _require_ontology(db, ontology_id)
+    release, snapshot = _current_release_view(db, project)
+    start_day = datetime.fromisoformat(start_iso)
+    end_day = datetime.fromisoformat(end_iso)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    window_start = start_day
+    window_end = end_day + timedelta(days=1)  # 右开区间：末日的全天都计入
+    release_started_at = _naive_utc(release.published_at or release.created_at)
+    effective_start = max(
+        [value for value in (window_start, release_started_at) if value is not None]
+    )
+    effective_end = min(window_end, now)
+    span_days = (end_day - start_day).days + 1
+    days = [
+        {
+            "date": (start_day + timedelta(days=offset)).date().isoformat(),
+            "firings": {"fired": 0, "error": 0},
+            "actionRuns": {"success": 0, "failed": 0},
+        }
+        for offset in range(span_days)
+    ]
+    runtime_by_date = {item["date"]: item for item in days}
+
+    # 哨兵评估：与 overview 相同——只认当前发布快照内仍存在的哨兵 + 发布血缘
+    sentinel_ids = {
+        str(item.get("id")) for item in snapshot["sentinels"] if item.get("id")
+    }
+    if sentinel_ids and effective_start < effective_end:
+        try:
+            from app.models.sentinel import SentinelFiring
+            firings = db.query(SentinelFiring).filter(
+                SentinelFiring.ontology_id == ontology_id,
+                SentinelFiring.ontology_release_id == release.id,
+                SentinelFiring.sentinel_id.in_(sentinel_ids),
+                SentinelFiring.created_at >= effective_start,
+                SentinelFiring.created_at < effective_end,
+            ).all()
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            logger.warning("运行汇总哨兵统计失败,已降级为空统计(ontology=%s)", ontology_id, exc_info=True)
+            firings = []
+        for firing in firings:
+            day = runtime_by_date.get(firing.created_at.date().isoformat())
+            if day and firing.status in ("fired", "error"):
+                day["firings"][firing.status] += 1
+
+    # 动作执行：显式发布版本血缘 + 非 dry-run + 已出结果
+    action_ids = {
+        str(item.get("id")) for item in snapshot["actions"] if item.get("id")
+    }
+    if action_ids and effective_start < effective_end:
+        runs = db.query(ActionExecutionLog).filter(
+            ActionExecutionLog.ontology_id == ontology_id,
+            ActionExecutionLog.ontology_release_id == release.id,
+            ActionExecutionLog.action_id.in_(action_ids),
+            ActionExecutionLog.dry_run == False,  # noqa: E712
+            ActionExecutionLog.executed_at >= effective_start,
+            ActionExecutionLog.executed_at < effective_end,
+            ActionExecutionLog.status.in_(("success", "failed")),
+        ).all()
+        for log in runs:
+            day = runtime_by_date.get(log.executed_at.date().isoformat())
+            if day:
+                day["actionRuns"][log.status] += 1
+
+    return _ok({
+        "start": start_iso,
+        "end": end_iso,
+        "release": {
+            "id": release.id,
+            "version": release.version_number,
+            "publishedAt": release.published_at.isoformat() if release.published_at else None,
+        },
+        "days": days,
+    })
+
+
 def _ontology_overview_uncached(ontology_id: str, db: Session):
     from datetime import timedelta
     project = _require_ontology(db, ontology_id)
