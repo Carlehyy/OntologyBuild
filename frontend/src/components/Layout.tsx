@@ -9,6 +9,7 @@ import FloatingAssistantWidget from '@/components/assistant-widget/FloatingAssis
 import InboxPopover from '@/components/inbox/InboxPopover'
 import NavTabs from '@/components/NavTabs'
 import PreferencesModal from '@/components/preferences/PreferencesModal'
+import ProfileModal from '@/components/profile/ProfileModal'
 import { PLATFORM_NAV_ITEMS, visibleNavigation, type PlatformNavItem } from '@/config/navigation'
 
 export default function Layout({ children }: { children: React.ReactNode }) {
@@ -23,6 +24,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [inboxOpen, setInboxOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [preferencesOpen, setPreferencesOpen] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
   const inboxRef = useRef<HTMLDivElement>(null)
   const userMenuRef = useRef<HTMLDivElement>(null)
 
@@ -274,7 +276,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     {/* 菜单项 */}
                     <div className="py-1">
                       {[
-                        { icon: User, label: '个人资料', desc: '查看和修改个人信息', action: undefined as (() => void) | undefined },
+                        { icon: User, label: '个人资料', desc: '查看和修改个人信息', action: () => { setUserMenuOpen(false); setProfileOpen(true) } },
                         { icon: Settings, label: '偏好设置', desc: '主题、语言、通知设置', action: () => { setUserMenuOpen(false); setPreferencesOpen(true) } },
                       ].map(item => {
                         const Icon = item.icon
@@ -319,6 +321,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </main>
 
       <PreferencesModal open={preferencesOpen} onClose={() => setPreferencesOpen(false)} />
+      <ProfileModal open={profileOpen} onClose={() => setProfileOpen(false)} />
       <FloatingAssistantWidget />
     </div>
   )

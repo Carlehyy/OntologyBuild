@@ -40,7 +40,9 @@ def test_downgrade_drops_rubrics_table(tmp_path, monkeypatch):
     cfg = _alembic_config(backend, db_path)
 
     command.upgrade(cfg, "head")
-    command.downgrade(cfg, "-1")
+    # 显式目标版本（仓库惯例，见 0073/0077/0068 各 downgrade 测试）：
+    # 追加新迁移后 "-1" 只会回退最新一个，而非本表所属的 0079。
+    command.downgrade(cfg, "0078_assistant_evaluation")
 
     engine = create_engine(f"sqlite:///{db_path}")
     tables = set(inspect(engine).get_table_names())
