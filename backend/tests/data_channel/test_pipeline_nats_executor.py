@@ -314,6 +314,7 @@ def test_handler_registry_covers_all_stream_subjects():
         "pipeline-executor",
         "pipeline-run-executor",
         "dataset-import-executor",
+        "dataset-migrate-executor",
         "super-assistant-reflect-micro",
         "super-assistant-reflect-full",
         "super-assistant-reflect-focused",
@@ -423,7 +424,7 @@ async def test_run_subscribes_each_subject_with_own_durable(
 
     run_task = asyncio.ensure_future(executor.run())
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and len(subscriptions) < 6:
+    while time.monotonic() < deadline and len(subscriptions) < 7:
         await asyncio.sleep(0.02)
     executor.request_shutdown()
     await asyncio.wait_for(run_task, timeout=5)
@@ -435,6 +436,7 @@ async def test_run_subscribes_each_subject_with_own_durable(
         ("super_assistant.reflect.micro", "super-assistant-reflect-micro"),
         ("super_assistant.reflect.full", "super-assistant-reflect-full"),
         ("super_assistant.reflect.focused", "super-assistant-reflect-focused"),
+        ("task.dataset.migrate", "dataset-migrate-executor"),
     ]
     assert all(stream == "PIPELINE_TASKS" for _s, _d, stream, _c in subscriptions)
     # ack_wait=30s 与 20s 续约间隔配套；max_deliver 兜底 poison 消息
@@ -442,6 +444,27 @@ async def test_run_subscribes_each_subject_with_own_durable(
         config.ack_wait == 30 and config.max_deliver == 5
         for _s, _d, _stream, config in subscriptions
     )
+
+
+@pytest.mark.asyncio
+async def test_dataset_migrate_handler_invokes_task_with_source_id(executor, monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        "app.tasks.v2.dataset_migration.migrate_curated_to_manual",
+        lambda job_id, source_dataset_id: calls.append((job_id, source_dataset_id)),
+    )
+
+    msg = _FakeMsg(json.dumps({
+        "job_id": "mig-1",
+        "source_dataset_id": "ds-curated-1",
+    }).encode())
+    await executor._process_message(
+        msg, nats_executor._run_dataset_migrate_message, "task.dataset.migrate"
+    )
+
+    assert calls == [("mig-1", "ds-curated-1")]
+    assert msg.acked == 1
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,7 @@ import {
   CheckCircle, AlertTriangle, Clock,
   X, Loader2, Trash2, Table2, RefreshCw,
   Eye, Workflow, ListChecks, Database,
-  Boxes, Network, ArrowRight, BarChart3, ChevronLeft, ChevronRight,
+  Boxes, Network, ArrowRight, ArrowRightLeft, BarChart3, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import pipelinesApi, { type Pipeline } from '@/api/v2/pipelines'
 import curatedApi from '@/api/v2/curated'
@@ -13,6 +13,7 @@ import { pipelineTasksApi, type PipelineTask } from '@/api/v2/pipeline-tasks'
 import datasetsApi from '@/api/v2/datasets'
 import CuratedDetailPanel from './CuratedDetailPanel'
 import RawDatasetsView from './RawDatasetsView'
+import MigrationTasksModal from './MigrationTasksModal'
 import ConfirmDialog from '@/components/ConfirmDialog'
 
 interface Row {
@@ -351,6 +352,12 @@ function CuratedView({ focusDatasetId }: { focusDatasetId?: string | null }) {
   const [deleteRow, setDeleteRow] = useState<Row | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteErr, setDeleteErr] = useState('')
+  // 成品 → 人工数据集异步迁移
+  const [migrateRow, setMigrateRow] = useState<Row | null>(null)
+  const [migrating, setMigrating] = useState(false)
+  const [migrateErr, setMigrateErr] = useState('')
+  const [migrationNotice, setMigrationNotice] = useState('')
+  const [tasksOpen, setTasksOpen] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -534,6 +541,24 @@ function CuratedView({ focusDatasetId }: { focusDatasetId?: string | null }) {
     }
   }
 
+  const handleQuickMigrate = async () => {
+    if (!migrateRow?.curatedId) return
+    setMigrating(true)
+    setMigrateErr('')
+    try {
+      await datasetsApi.migrateCurated(migrateRow.curatedId)
+      setMigrationNotice(
+        `已提交「${migrateRow.curatedName}」的迁移任务，完成后副本将出现在人工数据集页签，可在“迁移任务”中查看进度`)
+      setMigrateRow(null)
+    } catch (error: unknown) {
+      const raw = errorText(error, '迁移任务提交失败')
+      setMigrateErr(String(raw))
+      setMigrateRow(null)
+    } finally {
+      setMigrating(false)
+    }
+  }
+
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm/50 h-full flex flex-col">
       {/* 筛选 */}
@@ -587,6 +612,14 @@ function CuratedView({ focusDatasetId }: { focusDatasetId?: string | null }) {
         <button onClick={load} className="ml-auto flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 px-2 py-1.5">
           <RefreshCw size={12} /> 刷新
         </button>
+        <button
+          type="button"
+          onClick={() => setTasksOpen(true)}
+          className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 px-2 py-1.5"
+          title="查看成品数据集迁移到人工数据集的异步任务进度"
+        >
+          <ListChecks size={12} /> 迁移任务
+        </button>
       </div>
 
       {(loadError || actionError) && (
@@ -597,6 +630,17 @@ function CuratedView({ focusDatasetId }: { focusDatasetId?: string | null }) {
             <button type="button" onClick={load} className="rounded border border-red-200 bg-white px-2 py-0.5 hover:bg-red-100">重试</button>
           )}
           {actionError && <button type="button" onClick={() => setActionError('')} className="text-red-400 hover:text-red-700" aria-label="关闭错误提示">×</button>}
+        </div>
+      )}
+
+      {migrationNotice && (
+        <div className="mx-5 mt-3 flex shrink-0 items-start gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700" data-testid="migration-submitted-banner">
+          <CheckCircle size={14} className="mt-0.5 shrink-0" />
+          <span className="flex-1">{migrationNotice}</span>
+          <button type="button" onClick={() => setTasksOpen(true)} className="shrink-0 font-medium underline decoration-green-300 underline-offset-2 hover:text-green-900">
+            查看迁移任务
+          </button>
+          <button type="button" onClick={() => setMigrationNotice('')} className="text-green-400 hover:text-green-700" aria-label="关闭成功提示">×</button>
         </div>
       )}
 
@@ -711,6 +755,17 @@ function CuratedView({ focusDatasetId }: { focusDatasetId?: string | null }) {
                       {row.curatedId && (
                         <button
                           type="button"
+                          onClick={() => { setMigrateErr(''); setMigrationNotice(''); setMigrateRow(row) }}
+                          disabled={migrating}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 disabled:cursor-wait disabled:opacity-50"
+                          title="异步拷贝为人工数据集（结构与当前数据一致）"
+                        >
+                          <ArrowRightLeft size={12} /> 迁移
+                        </button>
+                      )}
+                      {row.curatedId && (
+                        <button
+                          type="button"
                           onClick={() => setDeleteRow(row)}
                           className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-500 transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30 active:scale-[0.98]"
                           title="完整删除数据集"
@@ -774,10 +829,36 @@ function CuratedView({ focusDatasetId }: { focusDatasetId?: string | null }) {
         onCancel={() => setDeleteRow(null)}
       />
 
+      {/* 迁移确认：异步拷贝，不改动源成品数据集 */}
+      <ConfirmDialog
+        open={!!migrateRow}
+        tone="primary"
+        title="迁移到人工数据集"
+        message={`确认把成品数据集「${migrateRow?.curatedName}」迁移到人工数据集？平台将在后台拷贝当前最新数据的结构与全部行，生成「${migrateRow?.curatedName}（人工副本）」；源成品数据集与审核状态保持不变，完成后可在人工数据集页签在线维护。`}
+        confirmLabel={migrating ? '提交中...' : '确认迁移'}
+        onConfirm={handleQuickMigrate}
+        onCancel={() => { if (!migrating) setMigrateRow(null) }}
+      />
+
+      {/* 迁移任务进度弹窗 */}
+      {tasksOpen && (
+        <MigrationTasksModal
+          onClose={() => setTasksOpen(false)}
+          onSwitchToManual={() => navigate('/data/structured?tab=raw')}
+        />
+      )}
+
       {deleteErr && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] max-w-md px-4 py-2.5 bg-red-600 text-white text-sm rounded-lg shadow-lg flex items-start gap-2">
           <span className="flex-1">{deleteErr}</span>
           <button onClick={() => setDeleteErr('')} className="text-white/70 hover:text-white shrink-0">×</button>
+        </div>
+      )}
+
+      {migrateErr && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] max-w-md px-4 py-2.5 bg-red-600 text-white text-sm rounded-lg shadow-lg flex items-start gap-2">
+          <span className="flex-1">{migrateErr}</span>
+          <button onClick={() => setMigrateErr('')} className="text-white/70 hover:text-white shrink-0">×</button>
         </div>
       )}
     </div>

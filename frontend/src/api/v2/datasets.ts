@@ -131,6 +131,37 @@ export interface UploadVersionResult {
   consumers: DatasetConsumer[]
 }
 
+export type DatasetMigrationStatus = 'queued' | 'running' | 'completed' | 'failed'
+
+export interface DatasetMigrationResult {
+  id: string
+  name: string
+  kind: string
+  columns: string[]
+  primary_key: string
+  version_no: number
+  rowcount: number
+  source_dataset_id: string
+  source: 'upload' | 'manual'
+}
+
+/** 成品数据集 → 人工数据集 异步迁移任务状态 */
+export interface DatasetMigrationJob {
+  job_id: string
+  status: DatasetMigrationStatus
+  /** 成品数据集源名称 */
+  source_dataset_name?: string
+  /** 生成的目标人工数据集副本名 */
+  target_name?: string
+  progress?: number
+  phase?: string
+  error?: string | null
+  execution_mode?: 'celery' | 'local' | 'nats'
+  result?: DatasetMigrationResult
+  created_at?: string
+  updated_at?: string
+}
+
 const datasetsApi = {
   list: (kind?: string) => apiClientV2.get<Dataset[]>('/datasets', { params: kind ? { kind } : {} }),
   get: (id: string) => apiClientV2.get<Dataset>(`/datasets/${id}`),
@@ -256,6 +287,20 @@ const datasetsApi = {
     deletes?: RowEditOp[]
   }): Promise<RowEditsResult> =>
     apiClientV2.post(`/datasets/${datasetId}/rows/edit`, payload),
+
+  /** 把成品数据集异步拷贝为人工数据集（结构与最新版本数据一致） */
+  migrateCurated: (
+    curatedDatasetId: string,
+  ): Promise<{ job_id: string } & DatasetMigrationJob> =>
+    apiClientV2.post('/datasets/migrations', { curated_dataset_id: curatedDatasetId }),
+
+  /** 当前用户最近的成品→人工迁移任务列表 */
+  migrations: (limit = 20): Promise<DatasetMigrationJob[]> =>
+    apiClientV2.get('/datasets/migrations', { params: { limit } }),
+
+  /** 单个迁移任务状态 */
+  migrationStatus: (jobId: string): Promise<DatasetMigrationJob> =>
+    apiClientV2.get(`/datasets/migrations/${jobId}`),
 }
 
 export default datasetsApi

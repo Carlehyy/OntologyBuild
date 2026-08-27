@@ -676,3 +676,87 @@ test('待审核详情按真实主键保存行级修正，并保留三视角与�
   await expect(dialog.locator('tbody input')).toHaveCount(0)
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
 })
+
+test('成品数据集迁移：二次确认提交异步任务，迁移任务弹窗可查进度', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 })
+
+  let migrationSubmitted = false
+  const migrationJob = {
+    job_id: 'mig-e2e',
+    source_dataset_name: '订单明细',
+    target_name: '订单明细（人工副本）',
+    created_at: '2026-08-27T10:00:00+08:00',
+  }
+  const runningJob = {
+    ...migrationJob,
+    status: 'running' as const,
+    progress: 45,
+    phase: '正在读取数据（已加载 1000 行）',
+  }
+  const completedJob = {
+    ...migrationJob,
+    status: 'completed' as const,
+    progress: 100,
+    result: {
+      id: 'ds-copy', name: '订单明细（人工副本）', kind: 'structured',
+      columns: ['order_id', 'amount'], primary_key: 'order_id',
+      version_no: 1, rowcount: 1000, source_dataset_id: 'ds-mig-source', source: 'upload' as const,
+    },
+  }
+
+  await mockAssetLake(page, {
+    curated: [{
+      id: 'ds-mig-source', name: '订单明细', status: 'approved',
+      producer_pipeline_id: null, output_key: null,
+      row_count: 1000, quality_score: 0.98, primary_key: 'order_id',
+      has_review_evidence: false, created_at: '2026-08-26T09:00:00Z', updated_at: '2026-08-26T09:00:00Z',
+    }],
+  })
+  // axios 会追加 ?limit=20，glob 尾部对不上，改用正则精确截获该资源
+  await page.route(/\/api\/v2\/datasets\/migrations/, async route => {
+    if (route.request().method() === 'POST') {
+      migrationSubmitted = true
+      return route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: { ...runningJob } }),
+      })
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: migrationSubmitted ? [completedJob] : [] }),
+    })
+  })
+  await page.goto('/#/data/structured?tab=curated', { waitUntil: 'domcontentloaded' })
+
+  // 打开弹窗时还没有任何迁移任务
+  await page.getByRole('button', { name: '迁移任务' }).click()
+  const tasksDialog = page.getByRole('dialog', { name: '迁移任务' })
+  await expect(tasksDialog).toBeVisible()
+  await expect(tasksDialog.getByText('暂无迁移任务')).toBeVisible()
+  await tasksDialog.getByRole('button', { name: '关闭', exact: true }).click()
+
+  // 行内「迁移」按钮位于查看与删除之间，点击后二次确认
+  const sourceRow = page.getByRole('row').filter({ hasText: '订单明细' }).first()
+  const actions = sourceRow.locator('button')
+  await expect(actions.filter({ hasText: '查看' })).toHaveCount(1)
+  await expect(actions.filter({ hasText: '迁移' })).toHaveCount(1)
+  await expect(actions.filter({ hasText: '删除' })).toHaveCount(1)
+  await sourceRow.getByRole('button', { name: '迁移', exact: true }).click()
+
+  const confirm = page.getByRole('heading', { name: '迁移到人工数据集' })
+  await expect(confirm).toBeVisible()
+  await page.getByRole('button', { name: '确认迁移' }).click()
+
+  const banner = page.getByTestId('migration-submitted-banner')
+  await expect(banner).toContainText('已提交「订单明细」的迁移任务')
+
+  // 从成功提示进入迁移任务弹窗，看到已完成任务并可跳转人工数据集
+  await banner.getByRole('button', { name: '查看迁移任务' }).click()
+  await expect(tasksDialog).toBeVisible()
+  await expect(tasksDialog.getByText('订单明细（人工副本）')).toBeVisible()
+  await expect(tasksDialog.getByText('已完成')).toBeVisible()
+  await tasksDialog.getByRole('button', { name: '前往人工数据集' }).click()
+  await expect(page).toHaveURL(/tab=raw/)
+})

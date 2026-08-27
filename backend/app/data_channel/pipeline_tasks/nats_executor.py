@@ -11,6 +11,7 @@
 - ``pipeline.task.execute``：数据任务池的调度/手动单任务触发；
 - ``task.pipeline.run``：UI 手动运行整条流水线（不带 write_opts）；
 - ``task.dataset.import``：数据集导入的解析（inspect）/提交（commit）；
+- ``task.dataset.migrate``：成品数据集异步迁移为人工数据集；
 - ``super_assistant.reflect.micro/full/focused``：超级助手三种自我进化
   反思任务（micro 每轮后 / full 手动 / focused 定向技能）。
 
@@ -47,6 +48,7 @@ _HEARTBEAT_INTERVAL_SECONDS = 5
 _CONSUMER_DURABLE = "pipeline-executor"
 _PIPELINE_RUN_DURABLE = "pipeline-run-executor"
 _DATASET_IMPORT_DURABLE = "dataset-import-executor"
+_DATASET_MIGRATE_DURABLE = "dataset-migrate-executor"
 _SUPER_ASSISTANT_REFLECT_MICRO_DURABLE = "super-assistant-reflect-micro"
 _SUPER_ASSISTANT_REFLECT_FULL_DURABLE = "super-assistant-reflect-full"
 _SUPER_ASSISTANT_REFLECT_FOCUSED_DURABLE = "super-assistant-reflect-focused"
@@ -118,10 +120,26 @@ async def _run_dataset_import_message(payload: dict) -> None:
     logger.info("数据集导入任务 %s（%s）执行完成", job_id, kind)
 
 
+async def _run_dataset_migrate_message(payload: dict) -> None:
+    """task.dataset.migrate：成品数据集异步迁移为人工数据集。"""
+    job_id = str(payload["job_id"])
+    source_dataset_id = str(payload["source_dataset_id"])
+
+    from app.tasks.v2 import dataset_migration
+
+    await asyncio.to_thread(
+        dataset_migration.migrate_curated_to_manual,
+        job_id,
+        source_dataset_id,
+    )
+    logger.info("数据集迁移任务 %s 执行完成", job_id)
+
+
 def _handler_registry():
     """subject → (durable, handler)：每 subject 独立 durable pull consumer。"""
     from app.data_channel.pipeline_tasks.dispatch import (
         DATASET_IMPORT_SUBJECT,
+        DATASET_MIGRATE_SUBJECT,
         PIPELINE_EXECUTE_SUBJECT,
         PIPELINE_RUN_SUBJECT,
         SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT,
@@ -148,6 +166,11 @@ def _handler_registry():
             SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT,
             _SUPER_ASSISTANT_REFLECT_FOCUSED_DURABLE,
             reflection_tasks.run_focused_reflection_message,
+        ),
+        (
+            DATASET_MIGRATE_SUBJECT,
+            _DATASET_MIGRATE_DURABLE,
+            _run_dataset_migrate_message,
         ),
     )
 
