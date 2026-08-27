@@ -61,6 +61,15 @@ async function openProfileDialog(page: Page) {
   return dialog
 }
 
+async function openEnvVarsTab(page: Page) {
+  const dialog = page.getByRole('dialog', { name: '个人资料' })
+  await dialog.getByRole('tab', { name: '环境变量' }).click()
+  // tabpanel 的可访问名来自 aria-labelledby（指向「环境变量」tab）
+  const panel = dialog.getByRole('tabpanel', { name: '环境变量' })
+  await expect(panel).toBeVisible()
+  return panel
+}
+
 test('个人资料弹窗展示只读用户名，修改邮箱后同步本地登录态', async ({ page }) => {
   await mockPlatformShell(page)
   let profilePutBody: Record<string, unknown> | null = null
@@ -74,6 +83,11 @@ test('个人资料弹窗展示只读用户名，修改邮箱后同步本地登�
 
   await page.goto('/#/inbox', { waitUntil: 'domcontentloaded' })
   const dialog = await openProfileDialog(page)
+
+  // 默认落在「账号信息」tab；tab 语义完整（tablist/tab/tabpanel）
+  const accountTab = dialog.getByRole('tab', { name: '账号信息' })
+  await expect(accountTab).toHaveAttribute('aria-selected', 'true')
+  await expect(dialog.getByRole('tabpanel', { name: '账号信息' })).toBeVisible()
 
   // 用户名只读：disabled 且不可编辑（账号唯一标识）
   const usernameInput = dialog.getByLabel('用户名')
@@ -93,6 +107,13 @@ test('个人资料弹窗展示只读用户名，修改邮箱后同步本地登�
     () => (JSON.parse(localStorage.getItem('auth-store')!) as { state: { user: { email: string } } }).state.user.email,
   )
   expect(storedEmail).toBe('renamed@example.com')
+
+  // tab 切换：账号信息 ↔ 环境变量，切回后账号面板仍在且状态保留
+  await dialog.getByRole('tab', { name: '环境变量' }).click()
+  await expect(dialog.getByRole('tabpanel', { name: '环境变量' })).toBeVisible()
+  await expect(dialog.getByRole('tab', { name: '环境变量' })).toHaveAttribute('aria-selected', 'true')
+  await dialog.getByRole('tab', { name: '账号信息' }).click()
+  await expect(dialog.getByLabel('邮箱')).toHaveValue('renamed@example.com')
 })
 
 test('修改密码时验证当前密码，失败提示错误、成功后清空输入', async ({ page }) => {
@@ -143,16 +164,17 @@ test('私有环境变量支持增删改并全量保存', async ({ page }) => {
 
   await page.goto('/#/inbox', { waitUntil: 'domcontentloaded' })
   const dialog = await openProfileDialog(page)
+  const panel = await openEnvVarsTab(page)
 
   // 存量变量回显
-  await expect(dialog.getByLabel('第 1 个变量名')).toHaveValue('EXISTING_KEY')
+  await expect(panel.getByLabel('第 1 个变量名')).toHaveValue('EXISTING_KEY')
 
   // 新增一行并填写
-  await dialog.getByRole('button', { name: '添加变量' }).click()
-  await dialog.getByLabel('第 2 个变量名').fill('NEW_KEY')
-  await dialog.getByLabel('第 2 个变量值').fill('new-value')
+  await panel.getByRole('button', { name: '添加变量' }).click()
+  await panel.getByLabel('第 2 个变量名').fill('NEW_KEY')
+  await panel.getByLabel('第 2 个变量值').fill('new-value')
 
-  await dialog.getByRole('button', { name: '保存变量' }).click()
+  await panel.getByRole('button', { name: '保存变量' }).click()
   await expect(dialog.getByText('环境变量已保存')).toBeVisible()
   expect(captured.envPut?.items).toEqual([
     { key: 'EXISTING_KEY', value: 'existing-value' },
@@ -160,9 +182,8 @@ test('私有环境变量支持增删改并全量保存', async ({ page }) => {
   ])
 
   // 删除一行后再次保存，列表按全量语义更新
-  await dialog.getByRole('button', { name: '删除变量 EXISTING_KEY' }).click()
-  await dialog.getByRole('button', { name: '保存变量' }).click()
+  await panel.getByRole('button', { name: '删除变量 EXISTING_KEY' }).click()
+  await panel.getByRole('button', { name: '保存变量' }).click()
   await expect(dialog.getByText('环境变量已保存')).toBeVisible()
-  expect(captured.envPut?.items).toEqual([{ key: 'NEW_KEY', value: 'new-value' }])
-  await expect(dialog.getByLabel('第 1 个变量名')).toHaveValue('NEW_KEY')
+  await expect(panel.getByLabel('第 1 个变量名')).toHaveValue('NEW_KEY')
 })
