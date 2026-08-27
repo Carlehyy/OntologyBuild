@@ -1,5 +1,5 @@
 /**
- * 本体网络页的纯数据模型工具：本体配色、聚类布局、结果叠加合并。
+ * 本体网络页的纯数据模型工具：本体配色、确定性分区布局、结果叠加合并。
  *
  * 全部是纯函数（无 DOM / React 依赖），供页面组件与单元测试共用。
  * 配色唯一来源是平台共享图表主题（DESIGN.md §5.1），本模块不再维护页域色板。
@@ -37,9 +37,9 @@ export function degreeMap(edges: NetworkGraphEdge[]): Map<string, number> {
   return degrees
 }
 
-const TYPE_BASE_SIZE = 26
-const TYPE_SIZE_RANGE = 18
-const INSTANCE_BASE_SIZE = 13
+const TYPE_BASE_SIZE = 30
+const TYPE_SIZE_RANGE = 20
+const INSTANCE_BASE_SIZE = 14
 const INSTANCE_SIZE_RANGE = 8
 
 /** 节点直径（px）：对象类型显著大于实例，同 kind 内按度数归一化放大。 */
@@ -61,133 +61,403 @@ export function maxDegreeOf(edges: NetworkGraphEdge[]): number {
   return max
 }
 
-function hashAngle(left: string, right: string): number {
-  let hash = 0
-  const text = left + '\u0000' + right
-  for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) >>> 0
-  return (hash % 3600) / 3600 * Math.PI * 2
+// ── 确定性本体分区布局（ECharts graph layout:'none' 专用）──
+//
+// 设计目标（MYW-58）：结构层一屏可读、本体之间分区清晰、不再依赖力导向收敛：
+// - 簇内：对象类型按"关系层级"分列（BFS 层次，根列在左、下游列在右），
+//   无关系的类型归入簇尾的整齐网格区，孤立类型不再漂到画布边缘；
+// - 实例：围绕所属类型节点成环（仅 L2 出现）；
+// - 簇块：按行装箱，行数取"最贴近目标宽高比"的那一档，减少归一化压缩量。
+// 全程无随机数：同一输入永远得到同一布局，可快照回归。
+
+/** 布局抽象坐标与外接框（归一化到视口前的中间产物）。 */
+export interface ClusterLayout {
+  positions: Map<string, { x: number; y: number }>
+  bbox: { minX: number; minY: number; width: number; height: number }
 }
 
-/**
- * 重叠消解（确定性后处理）：力导向收敛后，把仍然贴得太近的节点对沿连线
- * 方向推开，保证任意两节点间隙 ≥ minGap。完全重合的节点用 id 哈希决定
- * 分离方向，同一输入永远得到同一结果。返回是否有位置被调整。
- */
-export function separateOverlaps(
-  positions: Map<string, { x: number; y: number }>,
-  diameters: Map<string, number>,
-  options: { iterations?: number; minGap?: number } = {},
-): boolean {
-  const iterations = options.iterations ?? 90
-  const minGap = options.minGap ?? 8
-  const ids = [...positions.keys()]
-  let adjusted = false
-  for (let iter = 0; iter < iterations; iter++) {
-    let movedThisRound = false
-    for (let i = 0; i < ids.length; i++) {
-      for (let j = i + 1; j < ids.length; j++) {
-        const a = positions.get(ids[i])!
-        const b = positions.get(ids[j])!
-        const need = (diameters.get(ids[i]) ?? 20) / 2 + (diameters.get(ids[j]) ?? 20) / 2 + minGap
-        let dx = b.x - a.x
-        let dy = b.y - a.y
-        let dist = Math.hypot(dx, dy)
-        if (dist >= need) continue
-        if (dist < 1e-6) {
-          const angle = hashAngle(ids[i], ids[j])
-          dx = Math.cos(angle)
-          dy = Math.sin(angle)
-          dist = 1
-        }
-        const push = (need - dist) / 2
-        a.x -= (dx / dist) * push
-        a.y -= (dy / dist) * push
-        b.x += (dx / dist) * push
-        b.y += (dy / dist) * push
-        movedThisRound = true
+const LEVEL_GAP_X = 210
+const LEVEL_CELL_Y = 92
+const NODE_CELL_W = 150
+const COMPONENT_GAP_X = 90
+const FLOW_ROW_GAP_Y = 48
+const CLUSTER_FLOW_WIDTH = 980
+/** 孤立类型网格每行个数：行数尽量少，避免簇尾网格过高被图例浮层遮挡。 */
+const GRID_COLS = 8
+const CLUSTER_GAP_X = 150
+const CLUSTER_GAP_Y = 130
+const INSTANCE_RING_RX = 122
+const INSTANCE_RING_RY = 88
+const INSTANCE_PER_RING = 8
+const INSTANCE_RING_STEP_X = 74
+const INSTANCE_RING_STEP_Y = 56
+/** 簇块装箱的目标宽高比：贴近常见画布比例，减少 fit 归一化的横向压缩。 */
+const TARGET_ASPECT = 1.5
+
+type Point = { x: number; y: number }
+
+/** 类型间结构邻接：两端都是对象类型的非桥接边（schema 关系）。 */
+function structureAdjacency(
+  typeIds: Set<string>,
+  edges: NetworkGraphEdge[],
+): Map<string, string[]> {
+  const adjacency = new Map<string, string[]>([...typeIds].map(id => [id, []]))
+  for (const edge of edges) {
+    if (edge.kind === 'bridge') continue
+    if (!typeIds.has(edge.source) || !typeIds.has(edge.target)) continue
+    if (edge.source === edge.target) continue
+    adjacency.get(edge.source)!.push(edge.target)
+    adjacency.get(edge.target)!.push(edge.source)
+  }
+  return adjacency
+}
+
+/** 连通组件拆分：种子按度数降序、原始顺序定平局，组件按规模降序。 */
+function ontologyTypeComponents(
+  typeNodes: NetworkGraphNode[],
+  adjacency: Map<string, string[]>,
+): NetworkGraphNode[][] {
+  const degreeOf = (id: string) => adjacency.get(id)?.length ?? 0
+  const orderIndex = new Map(typeNodes.map((node, index) => [node.id, index]))
+  const seeds = [...typeNodes].sort((a, b) =>
+    degreeOf(b.id) - degreeOf(a.id) || (orderIndex.get(a.id)! - orderIndex.get(b.id)!))
+  const visited = new Set<string>()
+  const components: NetworkGraphNode[][] = []
+  for (const seed of seeds) {
+    if (visited.has(seed.id)) continue
+    const component: NetworkGraphNode[] = []
+    const queue = [seed.id]
+    visited.add(seed.id)
+    while (queue.length > 0) {
+      const id = queue.shift()!
+      component.push(typeNodes[orderIndex.get(id)!])
+      const neighbors = [...(adjacency.get(id) ?? [])].filter(peer => !visited.has(peer))
+      neighbors.sort((a, b) =>
+        degreeOf(b) - degreeOf(a) || (orderIndex.get(a)! - orderIndex.get(b)!))
+      for (const peer of neighbors) {
+        visited.add(peer)
+        queue.push(peer)
       }
     }
-    if (!movedThisRound) break
-    adjusted = true
+    components.push(component)
   }
-  return adjusted
+  components.sort((a, b) => b.length - a.length
+    || (orderIndex.get(a[0].id)! - orderIndex.get(b[0].id)!))
+  return components
+}
+
+/** 组件内 BFS 分层：返回逐层节点列（根层在最左）。 */
+function componentLevels(
+  component: NetworkGraphNode[],
+  adjacency: Map<string, string[]>,
+  orderIndex: Map<string, number>,
+): NetworkGraphNode[][] {
+  const degreeOf = (id: string) => adjacency.get(id)?.length ?? 0
+  const levels: NetworkGraphNode[][] = []
+  const levelOf = new Map<string, number>()
+  const root = component[0]
+  levels.push([root])
+  levelOf.set(root.id, 0)
+  for (let depth = 0; depth < levels.length; depth++) {
+    const next: NetworkGraphNode[] = []
+    for (const node of levels[depth]) {
+      for (const peer of adjacency.get(node.id) ?? []) {
+        if (levelOf.has(peer)) continue
+        levelOf.set(peer, depth + 1)
+        next.push(component[orderIndex.get(peer)!])
+      }
+    }
+    if (next.length > 0) {
+      next.sort((a, b) => degreeOf(b.id) - degreeOf(a.id)
+        || (orderIndex.get(a.id)! - orderIndex.get(b.id)!))
+      levels.push(next)
+    }
+  }
+  return levels
+}
+
+interface BlockPlacement {
+  width: number
+  height: number
+  points: Map<string, Point>
+}
+
+/** 层次组件块：第 i 层一列，列内垂直居中。 */
+function placeComponent(levels: NetworkGraphNode[][]): BlockPlacement {
+  const height = Math.max(...levels.map(column => column.length)) * LEVEL_CELL_Y
+  const points = new Map<string, Point>()
+  levels.forEach((column, columnIndex) => {
+    const x = columnIndex * LEVEL_GAP_X
+    const yOffset = (height - column.length * LEVEL_CELL_Y) / 2
+    column.forEach((node, rowIndex) => {
+      points.set(node.id, { x, y: yOffset + rowIndex * LEVEL_CELL_Y + LEVEL_CELL_Y / 2 })
+    })
+  })
+  const width = (levels.length - 1) * LEVEL_GAP_X + NODE_CELL_W
+  return { width, height: Math.max(height, LEVEL_CELL_Y), points }
+}
+
+/** 孤立类型网格块：每行 GRID_COLS 个，紧凑排在簇尾。 */
+function placeIsolatedGrid(isolated: NetworkGraphNode[]): BlockPlacement {
+  const columns = Math.min(isolated.length, GRID_COLS)
+  const rows = Math.ceil(isolated.length / columns)
+  const points = new Map<string, Point>()
+  isolated.forEach((node, index) => {
+    points.set(node.id, {
+      x: (index % columns) * NODE_CELL_W + NODE_CELL_W / 2,
+      y: Math.floor(index / columns) * LEVEL_CELL_Y + LEVEL_CELL_Y / 2,
+    })
+  })
+  return {
+    width: columns * NODE_CELL_W,
+    height: rows * LEVEL_CELL_Y,
+    points,
+  }
+}
+
+/** 簇内流式装箱：组件块从左到右摆放，超宽换行。 */
+function flowPlace(
+  blocks: BlockPlacement[],
+  cursor: { x: number; y: number },
+  rowHeight: { value: number },
+): void {
+  for (const block of blocks) {
+    if (cursor.x > 0 && cursor.x + block.width > CLUSTER_FLOW_WIDTH) {
+      cursor.x = 0
+      cursor.y += rowHeight.value + FLOW_ROW_GAP_Y
+      rowHeight.value = 0
+    }
+    for (const point of block.points.values()) {
+      point.x += cursor.x
+      point.y += cursor.y
+    }
+    cursor.x += block.width + COMPONENT_GAP_X
+    rowHeight.value = Math.max(rowHeight.value, block.height)
+  }
+}
+
+/** 单个本体的簇块（局部坐标）。 */
+function ontologyBlock(
+  typeNodes: NetworkGraphNode[],
+  edges: NetworkGraphEdge[],
+): BlockPlacement {
+  const orderIndex = new Map(typeNodes.map((node, index) => [node.id, index]))
+  const typeIds = new Set(typeNodes.map(node => node.id))
+  const adjacency = structureAdjacency(typeIds, edges)
+  const components = ontologyTypeComponents(typeNodes, adjacency)
+  const connected = components.filter(component => component.length > 1)
+  const isolated = components.filter(component => component.length === 1)
+    .sort((a, b) => orderIndex.get(a[0].id)! - orderIndex.get(b[0].id)!)
+    .flat()
+
+  const blocks = connected.map(component => placeComponent(componentLevels(component, adjacency, orderIndex)))
+  if (isolated.length > 0) blocks.push(placeIsolatedGrid(isolated))
+
+  const cursor = { x: 0, y: 0 }
+  const rowHeight = { value: 0 }
+  flowPlace(blocks, cursor, rowHeight)
+  return {
+    width: Math.max(...blocks.map(block => block.width), 1),
+    height: cursor.y + rowHeight.value,
+    points: new Map(blocks.flatMap(block => [...block.points])),
+  }
+}
+
+/** 簇块按行装箱：在候选行数里选外接框宽高比最贴近 TARGET_ASPECT 的一档。 */
+function packClusterRows(
+  blocks: BlockPlacement[],
+): { rows: BlockPlacement[][]; width: number; height: number } {
+  if (blocks.length === 0) return { rows: [], width: 1, height: 1 }
+  const totalWidth = blocks.reduce((sum, block) => sum + block.width, 0)
+    + CLUSTER_GAP_X * Math.max(0, blocks.length - 1)
+  let best: { rows: BlockPlacement[][]; width: number; height: number; score: number } | null = null
+  for (let rowCount = 1; rowCount <= blocks.length; rowCount++) {
+    const budget = totalWidth / rowCount
+    const rows: BlockPlacement[][] = [[]]
+    for (const block of blocks) {
+      const current = rows[rows.length - 1]
+      const currentWidth = current.reduce((sum, item) => sum + item.width, 0)
+        + CLUSTER_GAP_X * Math.max(0, current.length - 1)
+      if (current.length > 0 && currentWidth + CLUSTER_GAP_X + block.width > budget
+        && rows.length < rowCount) {
+        rows.push([block])
+      } else {
+        current.push(block)
+      }
+    }
+    const width = Math.max(...rows.map(row => row.reduce((sum, item) => sum + item.width, 0)
+      + CLUSTER_GAP_X * Math.max(0, row.length - 1)))
+    const height = rows.reduce((sum, row) => {
+      const rowHeight = Math.max(...row.map(item => item.height))
+      return sum + (sum > 0 ? CLUSTER_GAP_Y : 0) + rowHeight
+    }, 0)
+    const aspect = width / Math.max(1, height)
+    const score = Math.abs(aspect - TARGET_ASPECT)
+    if (!best || score < best.score) best = { rows, width, height, score }
+  }
+  return best!
 }
 
 /**
- * 确定性聚类布局：每个本体一个簇，簇内对象类型摆网格、实例围绕类型成环。
- * 同一输入永远得到同一布局（无随机力导向），便于测试与回归对比。
+ * 确定性本体分区布局：本体 = 簇块（层次分列 + 孤立网格 + 实例环），
+ * 簇块按行装箱。edges 传入全量边（函数内部只取"两端同为对象类型"的结构边）。
  */
-export function clusterPositions(nodes: NetworkGraphNode[]): Map<string, { x: number; y: number }> {
-  const positions = new Map<string, { x: number; y: number }>()
+export function clusterLayout(
+  nodes: NetworkGraphNode[],
+  edges: NetworkGraphEdge[],
+): ClusterLayout {
+  const positions = new Map<string, Point>()
+  const instanceNodes = nodes.filter(node => node.kind !== 'object_type')
 
-  const ontologyIds = [...new Set(nodes.map(node => node.ontologyId))]
-  const columns = Math.max(1, Math.ceil(Math.sqrt(ontologyIds.length)))
-  const clusterGapX = 1500
-  const clusterGapY = 1100
+  const byOntology = new Map<string, { types: NetworkGraphNode[]; instances: NetworkGraphNode[] }>()
+  for (const node of nodes) {
+    const bucket = byOntology.get(node.ontologyId) || { types: [], instances: [] }
+    if (node.kind === 'object_type') bucket.types.push(node)
+    else bucket.instances.push(node)
+    byOntology.set(node.ontologyId, bucket)
+  }
 
-  ontologyIds.forEach((ontologyId, clusterIndex) => {
-    const column = clusterIndex % columns
-    const row = Math.floor(clusterIndex / columns)
-    const originX = 300 + column * clusterGapX
-    const originY = 240 + row * clusterGapY
+  const blocks = [...byOntology.entries()].map(([ontologyId, bucket]) => ({
+    ontologyId,
+    block: ontologyBlock(bucket.types, edges),
+  }))
+  const packed = packClusterRows(blocks.map(item => item.block))
 
-    const typeNodes = nodes.filter(
-      node => node.ontologyId === ontologyId && node.kind === 'object_type')
-    const instanceNodes = nodes.filter(
-      node => node.ontologyId === ontologyId && node.kind === 'instance')
-    const propertyNodes = nodes.filter(
-      node => node.ontologyId === ontologyId && node.kind === 'property')
-
-    // 簇标题占位：类型网格从簇原点铺开
-    const typeColumns = Math.max(1, Math.ceil(Math.sqrt(typeNodes.length)))
-    const gapX = 430
-    const gapY = 330
-    const typeCenters = new Map<string, { x: number; y: number }>()
-    typeNodes.forEach((node, index) => {
-      const center = {
-        x: originX + (index % typeColumns) * gapX,
-        y: originY + Math.floor(index / typeColumns) * gapY,
+  let offsetY = 0
+  packed.rows.forEach(row => {
+    const rowHeight = Math.max(...row.map(item => item.height))
+    let offsetX = 0
+    row.forEach(block => {
+      for (const [id, point] of block.points) {
+        positions.set(id, { x: offsetX + point.x, y: offsetY + point.y })
       }
-      positions.set(node.id, center)
-      if (node.objectTypeId) typeCenters.set(node.objectTypeId, center)
+      offsetX += block.width + CLUSTER_GAP_X
     })
+    offsetY += rowHeight + CLUSTER_GAP_Y
+  })
 
-    // 实例围绕所属类型节点成环；找不到类型时退回簇原点附近
-    const instancesByType = new Map<string, NetworkGraphNode[]>()
-    instanceNodes.forEach(node => {
-      const key = node.objectTypeId || ''
-      instancesByType.set(key, [...(instancesByType.get(key) || []), node])
-    })
-    instancesByType.forEach((items, typeId) => {
-      const anchor = typeCenters.get(typeId) || { x: originX, y: originY }
-      items.forEach((node, index) => {
-        const ring = Math.floor(index / 10)
-        const itemInRing = index % 10
-        const countInRing = Math.min(10, items.length - ring * 10)
-        const angle = -Math.PI / 2 + (itemInRing / Math.max(1, countInRing)) * Math.PI * 2
-        const radiusX = 145 + ring * 75
-        const radiusY = 105 + ring * 55
-        positions.set(node.id, {
-          x: anchor.x + Math.cos(angle) * radiusX,
-          y: anchor.y + Math.sin(angle) * radiusY,
-        })
-      })
-    })
+  // 实例的 objectTypeId 是业务类型 id，而布局坐标以图节点 id（type:*）为键，
+  // 这里建一份映射再取锚点（entityId 兜底：类型节点可能不带 objectTypeId）。
+  const objectTypeIdToNodeId = new Map<string, string>()
+  for (const node of nodes) {
+    if (node.kind !== 'object_type') continue
+    if (node.objectTypeId) objectTypeIdToNodeId.set(node.objectTypeId, node.id)
+    else if (node.entityId) objectTypeIdToNodeId.set(node.entityId, node.id)
+  }
 
-    // 属性节点围绕所属实例（全局视图默认不展开属性层，保留以备 L3）
-    propertyNodes.forEach((node, index) => {
-      const anchor = node.objectTypeId
-        ? typeCenters.get(node.objectTypeId) || { x: originX, y: originY }
-        : { x: originX, y: originY }
-      const angle = -Math.PI / 2 + (index / Math.max(1, propertyNodes.length)) * Math.PI * 2
+  // 实例围绕所属类型成环（全局坐标）；找不到所属类型锚点时退回同本体首个
+  // 类型节点，避免实例因无坐标而消失。
+  const instancesByType = new Map<string, NetworkGraphNode[]>()
+  for (const node of instanceNodes) {
+    const key = objectTypeIdToNodeId.get(node.objectTypeId || '')
+      || objectTypeIdToNodeId.get(node.entityId || '')
+      || ''
+    if (!key) continue
+    instancesByType.set(key, [...(instancesByType.get(key) || []), node])
+  }
+  instancesByType.forEach((items, typeId) => {
+    const anchor = positions.get(typeId)
+    if (!anchor) return
+    items.forEach((node, index) => {
+      const ring = Math.floor(index / INSTANCE_PER_RING)
+      const itemInRing = index % INSTANCE_PER_RING
+      const countInRing = Math.min(INSTANCE_PER_RING, items.length - ring * INSTANCE_PER_RING)
+      const angle = -Math.PI / 2 + (itemInRing / Math.max(1, countInRing)) * Math.PI * 2
       positions.set(node.id, {
-        x: anchor.x + Math.cos(angle) * 160,
-        y: anchor.y + Math.sin(angle) * 120,
+        x: anchor.x + Math.cos(angle) * (INSTANCE_RING_RX + ring * INSTANCE_RING_STEP_X),
+        y: anchor.y + Math.sin(angle) * (INSTANCE_RING_RY + ring * INSTANCE_RING_STEP_Y),
       })
     })
   })
 
-  return positions
+  // 仍未落位的实例（所属类型不在图中）：退回同本体首个类型节点为锚，保证可见。
+  const firstTypeByOntology = new Map<string, Point>()
+  for (const node of nodes) {
+    if (node.kind !== 'object_type') continue
+    const anchor = positions.get(node.id)
+    if (anchor && !firstTypeByOntology.has(node.ontologyId)) {
+      firstTypeByOntology.set(node.ontologyId, anchor)
+    }
+  }
+  for (const node of instanceNodes) {
+    if (positions.has(node.id)) continue
+    const anchor = firstTypeByOntology.get(node.ontologyId)
+    if (!anchor) continue
+    positions.set(node.id, {
+      x: anchor.x + INSTANCE_RING_RX,
+      y: anchor.y + INSTANCE_RING_RY,
+    })
+  }
+
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const point of positions.values()) {
+    minX = Math.min(minX, point.x)
+    minY = Math.min(minY, point.y)
+    maxX = Math.max(maxX, point.x)
+    maxY = Math.max(maxY, point.y)
+  }
+  if (!Number.isFinite(minX)) return { positions, bbox: { minX: 0, minY: 0, width: 1, height: 1 } }
+  return {
+    positions,
+    bbox: { minX, minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) },
+  }
+}
+
+export interface FittedLayout {
+  /** 归一化到视口像素的坐标（zoom=1 时 1 数据单位 = 1 物理像素）。 */
+  positions: Map<string, Point>
+  /** 数据坐标系下的视图中心（即 ECharts series.center）。 */
+  center: [number, number]
+}
+
+/** 视图盒参数：与 option 里 series.left/top/right/bottom 必须保持一致。 */
+export interface ViewInsets {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
+/** 本页视图盒默认留白：下方加大避开左下角图例浮层，左右收窄利用横向空间。 */
+export const NETWORK_VIEW_INSETS: ViewInsets = { top: 40, right: 28, bottom: 172, left: 28 }
+
+/**
+ * 把抽象布局归一化到视口：**非等比**拉伸，使节点坐标外接框恰好填满视图盒。
+ *
+ * 为什么是非等比：ECharts 6 对 layout:'none' 的 graph series 会在创建视图
+ * 坐标系时把数据 bbox 等比适配进视图盒（createViewCoordSys），等效缩放 =
+ * 适配倍数 × series.zoom。若我方归一化后的 bbox 宽高比与视图盒不一致，
+ * 适配倍数 ≠ 1，节点符号/字号会被同步放大或缩小，字号不可控。让数据
+ * bbox 与视图盒**完全重合**（宽高比一致且尺寸一致）后，适配倍数恰为 1，
+ * series.zoom=1 即 1 数据单位 = 1 物理像素，符号与字号保持设定值。
+ * 非等比拉伸只移动坐标（连线随之伸缩），不改变圆形符号本身。
+ */
+export function fitLayoutToViewport(
+  layout: ClusterLayout,
+  width: number,
+  height: number,
+  insets: ViewInsets = NETWORK_VIEW_INSETS,
+): FittedLayout {
+  const box = {
+    x: insets.left,
+    y: insets.top,
+    w: Math.max(80, width - insets.left - insets.right),
+    h: Math.max(80, height - insets.top - insets.bottom),
+  }
+  const spanX = Math.max(1e-6, layout.bbox.width)
+  const spanY = Math.max(1e-6, layout.bbox.height)
+  const positions = new Map<string, Point>()
+  for (const [id, point] of layout.positions) {
+    positions.set(id, {
+      x: box.x + ((point.x - layout.bbox.minX) / spanX) * box.w,
+      y: box.y + ((point.y - layout.bbox.minY) / spanY) * box.h,
+    })
+  }
+  // bbox 与视图盒重合时，视图盒中心对应的数据坐标即盒中心。
+  return { positions, center: [box.x + box.w / 2, box.y + box.h / 2] }
 }
 
 const overlayNodeId = (id: string) => 'instance:' + id

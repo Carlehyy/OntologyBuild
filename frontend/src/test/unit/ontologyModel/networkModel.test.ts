@@ -2,15 +2,16 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
-  clusterPositions,
+  clusterLayout,
   degreeMap,
+  fitLayoutToViewport,
   legendItems,
   maxDegreeOf,
   mergeOverlay,
+  NETWORK_VIEW_INSETS,
   nodeSize,
   ontologyColorMap,
   ONTOLOGY_PALETTE,
-  separateOverlaps,
   toGraphNodeId,
 } from '../../../pages/ontology-model/network/networkModel.ts'
 import type {
@@ -58,29 +59,89 @@ describe('ontologyColorMap', () => {
   })
 })
 
-describe('clusterPositions', () => {
-  it('为每个节点给出确定性坐标，不同本体的簇互不重叠', () => {
+describe('clusterLayout（确定性本体分区布局）', () => {
+  const typeA1 = makeNode({ id: 'type:a1', entityId: 'a1', kind: 'object_type', objectTypeId: 'a1' })
+  const typeA2 = makeNode({ id: 'type:a2', entityId: 'a2', kind: 'object_type', objectTypeId: 'a2' })
+  const typeALost = makeNode({ id: 'type:a3', entityId: 'a3', kind: 'object_type', objectTypeId: 'a3' })
+  const typeB1 = makeNode({
+    id: 'type:b1', entityId: 'b1', kind: 'object_type',
+    ontologyId: 'o2', ontologyName: '本体二', objectTypeId: 'b1',
+  })
+  const instanceI1 = makeNode({ id: 'instance:i1', entityId: 'i1', objectTypeId: 'a1' })
+  const nodes = [typeA1, typeA2, typeALost, typeB1, instanceI1]
+  const edges: NetworkGraphEdge[] = [{
+    id: 'schema:s1', kind: 'schema_relation', source: 'type:a1', target: 'type:a2', label: '下游',
+  }]
+
+  /** 某本体全部节点的外接框。 */
+  const bboxOf = (positions: Map<string, { x: number; y: number }>, ontologyId: string) => {
+    const points = [...positions.entries()]
+      .filter(([id]) => nodes.find(node => node.id === id)?.ontologyId === ontologyId)
+      .map(([, point]) => point)
+    return {
+      minX: Math.min(...points.map(p => p.x)),
+      maxX: Math.max(...points.map(p => p.x)),
+      minY: Math.min(...points.map(p => p.y)),
+      maxY: Math.max(...points.map(p => p.y)),
+    }
+  }
+
+  it('为每个节点给出确定性坐标；层级边下游在根的右侧', () => {
+    const first = clusterLayout(nodes, edges)
+    const second = clusterLayout(nodes, edges)
+    assert.equal(first.positions.size, nodes.length)
+    for (const [id, pos] of first.positions) {
+      assert.deepEqual(second.positions.get(id), pos, '同一输入必须得到同一布局')
+      assert.ok(Number.isFinite(pos.x) && Number.isFinite(pos.y))
+    }
+    assert.ok(first.positions.get('type:a2')!.x > first.positions.get('type:a1')!.x,
+      '有结构边的下游类型应排在根类型右侧（层次分列）')
+  })
+
+  it('不同本体的簇外接框互不重叠；孤立类型仍在所属本体簇内', () => {
+    const { positions } = clusterLayout(nodes, edges)
+    const o1 = bboxOf(positions, 'o1')
+    const o2 = bboxOf(positions, 'o2')
+    const separated = o1.maxX < o2.minX || o2.maxX < o1.minX
+      || o1.maxY < o2.minY || o2.maxY < o1.minY
+    assert.ok(separated, '两个本体的簇外接框不应重叠')
+    const lost = positions.get('type:a3')!
+    assert.ok(lost.x >= o1.minX && lost.x <= o1.maxX && lost.y >= o1.minY && lost.y <= o1.maxY,
+      '无关系的类型应留在所属本体簇内（簇尾网格），而不是漂到画布边缘')
+  })
+
+  it('实例围绕所属类型成环', () => {
+    const { positions } = clusterLayout(nodes, edges)
+    const type = positions.get('type:a1')!
+    const instance = positions.get('instance:i1')!
+    const distance = Math.hypot(instance.x - type.x, instance.y - type.y)
+    assert.ok(distance > 0 && distance < 260, `实例应环绕类型中心，实际距离 ${distance}`)
+  })
+})
+
+describe('fitLayoutToViewport（视口归一化）', () => {
+  it('把布局拉伸到恰好填满视图盒：中心即盒中心，节点都落在留白内', () => {
     const nodes = [
       makeNode({ id: 'type:a1', entityId: 'a1', kind: 'object_type', objectTypeId: 'a1' }),
       makeNode({ id: 'type:b1', entityId: 'b1', kind: 'object_type', ontologyId: 'o2', ontologyName: '本体二', objectTypeId: 'b1' }),
-      makeNode({ id: 'instance:i1', entityId: 'i1', objectTypeId: 'a1' }),
     ]
-    const first = clusterPositions(nodes)
-    const second = clusterPositions(nodes)
-    assert.equal(first.size, 3)
-    for (const [id, pos] of first) {
-      assert.deepEqual(second.get(id), pos, '同一输入必须得到同一布局')
-      assert.ok(Number.isFinite(pos.x) && Number.isFinite(pos.y))
+    const layout = clusterLayout(nodes, [])
+    const width = 800
+    const height = 600
+    const fitted = fitLayoutToViewport(layout, width, height)
+    const insets = NETWORK_VIEW_INSETS
+    // bbox 与视图盒重合时，视图中心对应的数据坐标 = 盒中心
+    assert.deepEqual(fitted.center, [
+      insets.left + (width - insets.left - insets.right) / 2,
+      insets.top + (height - insets.top - insets.bottom) / 2,
+    ])
+    for (const point of fitted.positions.values()) {
+      assert.ok(point.x >= insets.left && point.x <= width - insets.right, `x=${point.x} 应落在视图盒内`)
+      assert.ok(point.y >= insets.top && point.y <= height - insets.bottom, `y=${point.y} 应落在视图盒内`)
     }
-    // 实例围绕所属类型：距离类型中心在第一环半径范围内
-    const type = first.get('type:a1')!
-    const instance = first.get('instance:i1')!
-    const distance = Math.hypot(instance.x - type.x, instance.y - type.y)
-    assert.ok(distance > 0 && distance < 260, `实例应环绕类型中心，实际距离 ${distance}`)
-    // 两个本体的簇中心相距足够远
-    const other = first.get('type:b1')!
-    const clusterDistance = Math.hypot(other.x - type.x, other.y - type.y)
-    assert.ok(clusterDistance > 600, `不同本体簇应分开，实际距离 ${clusterDistance}`)
+    // 同一输入永远得到同一结果（可快照回归）
+    const again = fitLayoutToViewport(layout, width, height)
+    assert.deepEqual([...fitted.positions], [...again.positions])
   })
 })
 
@@ -146,36 +207,7 @@ describe('nodeSize（graphify 度数映射）', () => {
     // 无边图（maxDegree=0）时退化为基准尺寸而非 NaN
     assert.ok(Number.isFinite(nodeSize({ kind: 'instance' }, 0, 0)))
     // 直径上限受控：防止枢纽节点过大导致相邻节点挤压重叠（MYW-28 验收意见）
-    assert.ok(nodeSize({ kind: 'object_type' }, 4, 4) <= 46)
+    assert.ok(nodeSize({ kind: 'object_type' }, 4, 4) <= 50)
     assert.ok(nodeSize({ kind: 'instance' }, 4, 4) <= 24)
-  })
-})
-
-describe('separateOverlaps（重叠消解后处理）', () => {
-  const diameter = (d: number) => new Map([['a', d], ['b', d]])
-
-  it('贴得太近的节点对被推开到至少 minGap 间隙', () => {
-    const positions = new Map([['a', { x: 0, y: 0 }], ['b', { x: 20, y: 0 }]])
-    separateOverlaps(positions, diameter(30), { minGap: 8 })
-    const gap = Math.hypot(positions.get('b')!.x - positions.get('a')!.x, positions.get('b')!.y - positions.get('a')!.y) - 30
-    assert.ok(gap >= 8 - 1e-6, `实际间隙 ${gap}`)
-  })
-
-  it('已经足够远的节点保持原位', () => {
-    const positions = new Map([['a', { x: 0, y: 0 }], ['b', { x: 500, y: 0 }]])
-    const before = structuredClone(positions)
-    assert.equal(separateOverlaps(positions, diameter(30), { minGap: 8 }), false)
-    assert.deepEqual(positions, before)
-  })
-
-  it('完全重合的节点确定性分离（同输入同结果）', () => {
-    const run = () => {
-      const positions = new Map([['a', { x: 10, y: 10 }], ['b', { x: 10, y: 10 }]])
-      separateOverlaps(positions, diameter(30), { iterations: 40 })
-      return [positions.get('a'), positions.get('b')]
-    }
-    const first = run()
-    assert.deepEqual(run(), first)
-    assert.ok(Math.hypot(first[1]!.x - first[0]!.x, first[1]!.y - first[0]!.y) > 20)
   })
 })

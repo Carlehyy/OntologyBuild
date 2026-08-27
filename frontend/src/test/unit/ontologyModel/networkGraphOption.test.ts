@@ -4,8 +4,6 @@ import { describe, it } from 'node:test'
 import {
   baseEdgeStyle,
   buildNetworkGraphOption,
-  forceEdgeLength,
-  forceRepulsion,
   hasActiveAnalysis,
   soften,
   withAlpha,
@@ -43,29 +41,26 @@ describe('颜色工具', () => {
   })
 })
 
-describe('forceRepulsion / forceEdgeLength / baseEdgeStyle', () => {
-  it('斥力随规模自适应并有上下界', () => {
-    assert.equal(forceRepulsion(0), 400)
-    assert.equal(forceRepulsion(10), 340)
-    assert.equal(forceRepulsion(60), Math.min(1600, Math.max(340, 960)))
-    assert.equal(forceRepulsion(500), 1600)
-  })
+describe('baseEdgeStyle', () => {
+  it('五类边各有线型/箭头/曲率语义：结构关系实线+曲率，桥接虚线', () => {
+    const relation = baseEdgeStyle('relation')
+    assert.equal(relation.arrow, true)
+    assert.equal(relation.lineType, 'solid')
+    assert.ok(relation.curveness > 0)
 
+    const schema = baseEdgeStyle('schema_relation')
+    assert.equal(schema.lineType, 'solid', '结构边应是实线（MYW-58：结构层主角必须可读）')
+    assert.equal(schema.arrow, true)
+    assert.ok(schema.curveness > 0)
+    assert.ok(schema.width >= relation.width - 0.1, '结构边线宽不低于实例关系边')
 
-  it('边长途经随规模增长且有上界', () => {
-    assert.equal(forceEdgeLength(0), 100)
-    assert.equal(forceEdgeLength(100), 106)
-    assert.equal(forceEdgeLength(800), 148)
-    assert.equal(forceEdgeLength(5000), 160)
-  })
+    const contains = baseEdgeStyle('contains')
+    assert.deepEqual(contains.lineType, [2, 4])
+    assert.equal(contains.arrow, false)
 
-  it('五类边各有线型与箭头语义', () => {
-    assert.equal(baseEdgeStyle('relation').arrow, true)
-    assert.equal(baseEdgeStyle('relation').lineType, 'solid')
-    assert.deepEqual(baseEdgeStyle('schema_relation').lineType, [5, 4])
-    assert.deepEqual(baseEdgeStyle('contains').lineType, [2, 4])
-    assert.equal(baseEdgeStyle('contains').arrow, false)
-    assert.deepEqual(baseEdgeStyle('bridge').lineType, [7, 5])
+    const bridge = baseEdgeStyle('bridge')
+    assert.deepEqual(bridge.lineType, [6, 5])
+    assert.equal(bridge.arrow, false)
   })
 })
 
@@ -105,7 +100,8 @@ function seriesOf(option: ReturnType<typeof build>) {
   return series[0] as unknown as {
     type: string
     layout: string
-    force: { initLayout: string; repulsion: number }
+    zoom?: number
+    center?: [number, number]
     data: Record<string, unknown>[]
     links: Record<string, unknown>[]
     categories: { name: string }[]
@@ -113,14 +109,16 @@ function seriesOf(option: ReturnType<typeof build>) {
 }
 
 describe('buildNetworkGraphOption', () => {
-  it('构建 graph force series：类目按本体、类型节点排前、种子坐标注入', () => {
+  it('构建确定性布局 graph series：layout=none、坐标直读、视图中心注入', () => {
     const option = build({
       positions: new Map([['type:t1', { x: 500, y: 300 }]]),
+      center: [480, 310],
     })
     const series = seriesOf(option)
     assert.equal(series.type, 'graph')
-    assert.equal(series.layout, 'force')
-    assert.equal(series.force.initLayout, 'none')
+    assert.equal(series.layout, 'none', 'MYW-58：确定性分区布局，不再依赖力导向收敛')
+    assert.equal(series.zoom, 1)
+    assert.deepEqual(series.center, [480, 310])
     assert.deepEqual(series.categories.map(category => category.name), ['供应链', '设备台账'])
     assert.equal(series.data.length, nodes.length)
     // 对象类型排前：labelLayout.hideOverlap 依序占位，类型标签优先显示
@@ -130,14 +128,22 @@ describe('buildNetworkGraphOption', () => {
     assert.equal(positioned.y, 300)
   })
 
-  it('关系边用端点类别色的低饱和渐变，其余边用主题常量色', () => {
+  it('关系边用端点类别色的低饱和渐变，结构边用更深的端点渐变', () => {
     const series = seriesOf(build())
-    const relation = series.links.find(link => link.id === 'e1') as { lineStyle: { color: { type: string; colorStops: unknown[] } } }
+    const relation = series.links.find(link => link.id === 'e1') as {
+      lineStyle: { color: { type: string; colorStops: { color: string }[] }; curveness: number }
+    }
     assert.equal(relation.lineStyle.color.type, 'linear')
     assert.equal(relation.lineStyle.color.colorStops.length, 2)
+    assert.ok(relation.lineStyle.curveness > 0)
 
-    const schema = series.links.find(link => link.id === 'e2') as { lineStyle: { color: string } }
-    assert.match(schema.lineStyle.color, /^rgba\(/)
+    const schema = series.links.find(link => link.id === 'e2') as {
+      lineStyle: { color: { type?: string; colorStops?: { color: string }[] } }
+    }
+    assert.equal(schema.lineStyle.color.type, 'linear')
+    // 结构边渐变比实例关系边更深（soften 比例更小、更接近端点本体色）
+    assert.equal(schema.lineStyle.color.colorStops?.length, 2)
+    assert.ok(schema.lineStyle.color.colorStops![0].color !== relation.lineStyle.color.colorStops[0].color)
 
     const contains = series.links.find(link => link.id === 'e3') as { lineStyle: { color: string } }
     assert.equal(contains.lineStyle.color, withAlpha(CHART_AXIS, 0.85))
@@ -148,8 +154,8 @@ describe('buildNetworkGraphOption', () => {
     const sizeOf = (id: string) => (series.data.find(datum => datum.id === id) as { symbolSize: number }).symbolSize
     const typeSize = sizeOf('type:t1')
     const instanceSize = sizeOf('instance:i1')
-    assert.ok(typeSize >= 26 && typeSize <= 46, `type size ${typeSize}`)
-    assert.ok(instanceSize >= 13 && instanceSize <= 21, `instance size ${instanceSize}`)
+    assert.ok(typeSize >= 30 && typeSize <= 50, `type size ${typeSize}`)
+    assert.ok(instanceSize >= 14 && instanceSize <= 22, `instance size ${instanceSize}`)
     assert.ok(typeSize > instanceSize)
   })
 
@@ -205,11 +211,13 @@ describe('buildNetworkGraphOption', () => {
     assert.equal(neighbor.itemStyle.opacity, 0.12)
   })
 
-  it('标签降噪：对象类型胶囊、实例纯文本小号', () => {
+  it('标签降噪：统一挂节点下方，对象类型胶囊大号、实例纯文本小号', () => {
     const series = seriesOf(build())
     const byId = new Map(series.data.map(datum => [datum.id as string, datum]))
-    const typeLabel = (byId.get('type:t1') as { label: { backgroundColor: string; borderWidth: number; fontSize: number } }).label
-    const instanceLabel = (byId.get('instance:i1') as { label: { backgroundColor: string; borderWidth: number; fontSize: number } }).label
+    const typeLabel = (byId.get('type:t1') as { label: { position: string; backgroundColor: string; borderWidth: number; fontSize: number } }).label
+    const instanceLabel = (byId.get('instance:i1') as { label: { position: string; backgroundColor: string; borderWidth: number; fontSize: number } }).label
+    assert.equal(typeLabel.position, 'bottom')
+    assert.equal(instanceLabel.position, 'bottom')
     assert.equal(typeLabel.backgroundColor, CHART_TOOLTIP_BG)
     assert.ok(typeLabel.borderWidth >= 1)
     assert.equal(instanceLabel.backgroundColor, 'transparent')

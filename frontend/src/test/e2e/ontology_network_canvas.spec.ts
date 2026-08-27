@@ -3,16 +3,17 @@ import assert from 'node:assert/strict'
 import { expect, test, type Page, type Route } from '@playwright/test'
 
 /**
- * 本体网络画布（ECharts graph 内核）mocked E2E。
+ * 本体网络画布（ECharts graph 内核，MYW-58 起为确定性分区布局）mocked E2E。
  *
- * 覆盖：图数据渲染（svg 文本级断言）、头部统计、图例、节点点击打开详情、
- * 工具条缩放按钮、搜索触发的新图请求。全部请求本地 mock，不依赖后端。
+ * 覆盖：图数据渲染（svg 文本级断言）、默认结构层（L1）、头部统计、图例、
+ * 节点点击打开详情、工具条缩放按钮、搜索触发的新图请求。全部请求本地 mock，
+ * 不依赖后端。布局确定性后无力导向收敛期，节点标签位置稳定可点击。
  */
 
 /**
- * 力导向布局在动画收敛期间节点会持续微移：读取任一可见实例标签的屏幕坐标，
- * 等其连续两次采样位置稳定后再点击标签上方偏移命中节点圆心；若因漂移点空，
- * 自动重试。返回前确保详情抽屉已打开。
+ * 确定性布局下标签位置稳定：读取任一可见实例标签的屏幕坐标，等其连续两次
+ * 采样位置一致后点击标签上方偏移命中节点圆心；若命中偏移点空，自动重试。
+ * 返回前确保详情抽屉已打开。
  */
 async function clickVisibleInstanceNode(page: Page, card: ReturnType<Page['getByTestId']>) {
   const instanceLabels = ['华东制造', '华南贸易', 'SO-2026-001', '设备-77']
@@ -83,9 +84,9 @@ const overview = [
 
 const graphNodes = [
   { id: 'type:t-customer', entityId: 't-customer', kind: 'object_type', label: '客户', technicalName: 'customer',
-    ontologyId: 'o-supply', ontologyName: '供应链', count: 2 },
+    objectTypeId: 't-customer', ontologyId: 'o-supply', ontologyName: '供应链', count: 2 },
   { id: 'type:t-order', entityId: 't-order', kind: 'object_type', label: '订单', technicalName: 'sales_order',
-    ontologyId: 'o-supply', ontologyName: '供应链', count: 1 },
+    objectTypeId: 't-order', ontologyId: 'o-supply', ontologyName: '供应链', count: 1 },
   { id: 'instance:c1', entityId: 'c1', kind: 'instance', label: '华东制造', objectTypeId: 't-customer',
     objectTypeLabel: '客户', ontologyId: 'o-supply', ontologyName: '供应链' },
   { id: 'instance:c2', entityId: 'c2', kind: 'instance', label: '华南贸易', objectTypeId: 't-customer',
@@ -93,7 +94,7 @@ const graphNodes = [
   { id: 'instance:o9', entityId: 'o9', kind: 'instance', label: 'SO-2026-001', objectTypeId: 't-order',
     objectTypeLabel: '订单', ontologyId: 'o-supply', ontologyName: '供应链' },
   { id: 'type:d-customer', entityId: 'd-customer', kind: 'object_type', label: '客户', technicalName: 'customer',
-    ontologyId: 'o-device', ontologyName: '设备台账', count: 1 },
+    objectTypeId: 'd-customer', ontologyId: 'o-device', ontologyName: '设备台账', count: 1 },
   { id: 'instance:d1', entityId: 'd1', kind: 'instance', label: '设备-77', objectTypeId: 'd-customer',
     objectTypeLabel: '客户', ontologyId: 'o-device', ontologyName: '设备台账' },
 ]
@@ -181,12 +182,16 @@ async function mockNetworkApi(page: Page) {
   return { graphQueries }
 }
 
-test('本体网络画布渲染全局图：统计、图例与节点标签可见', async ({ page }) => {
-  await mockNetworkApi(page)
+test('本体网络画布渲染全局图：默认结构层、统计、图例与节点标签可见', async ({ page }) => {
+  const { graphQueries } = await mockNetworkApi(page)
   await page.goto('/#/ontology-model/network', { waitUntil: 'domcontentloaded' })
 
   const card = page.getByTestId('network-canvas-card')
+  const opsCard = page.getByTestId('network-ops-card')
   await expect(card).toBeVisible()
+  // MYW-58：默认进入结构层（L1），首个图请求应携带 level=1
+  await expect(opsCard.getByRole('button', { name: 'L1' })).toHaveAttribute('aria-pressed', 'true')
+  await expect.poll(() => graphQueries.some(query => query.includes('level=1'))).toBe(true)
   await expect(card.getByText('2 个本体 · 7 节点 / 4 边')).toBeVisible()
 
   // 图例（按本体着色）+ 桥接提示
@@ -195,8 +200,8 @@ test('本体网络画布渲染全局图：统计、图例与节点标签可见',
   await expect(legend.getByText('设备台账')).toBeVisible()
   await expect(legend.getByText('同名类型桥接（启发式）')).toBeVisible()
 
-  // ECharts svg 渲染：节点标签以 <text> 呈现。力导向坐标存在时序抖动，
-  // labelLayout.hideOverlap 会按收敛结果隐藏少量重叠标签，因此断言
+  // ECharts svg 渲染：节点标签以 <text> 呈现。确定性布局下坐标稳定，
+  // labelLayout.hideOverlap 仍可能隐藏少量重叠标签，因此断言
   // 「标签总数下限 + 至少两个实例标签」，不对具体标签逐字强断言。
   const chartTexts = card.getByTestId('network-chart-host').locator('svg text')
   await expect(chartTexts.first()).toBeVisible()
@@ -216,7 +221,7 @@ test('点击实例节点打开详情抽屉，可关闭', async ({ page }) => {
   await page.goto('/#/ontology-model/network', { waitUntil: 'domcontentloaded' })
 
   const card = page.getByTestId('network-canvas-card')
-  // 力导向布局下具体哪个实例标签可见存在时序抖动：自适应命中任一可见实例标签，
+  // 确定性布局下实例标签均应可见，自适应命中任一实例标签即可；
   // 详情接口由 mock 返回统一实例载荷。
   const inspector = await clickVisibleInstanceNode(page, card)
   await expect(inspector.getByText('华东制造')).toBeVisible()

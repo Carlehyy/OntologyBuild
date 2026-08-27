@@ -2,10 +2,12 @@
  * 本体网络画布的纯 option 构建（ECharts graph series）：与组件解耦，
  * 可在 node:test 中验证——与治理页 charts.ts 同一范式。
  *
- * 渲染语言对齐 ECharts 官方 graph 示例的力导向观感，取值纪律见 DESIGN.md：
+ * 渲染语言（MYW-58 起为确定性分区布局），取值纪律见 DESIGN.md：
+ * - 布局 layout:'none'：坐标由 networkModel.clusterLayout + fitLayoutToViewport
+ *   归一化进视口（组件按实测画布尺寸传入），首屏即完整可读、不依赖力导向收敛；
  * - 固定浅色作用域（§5.4）：全部颜色来自 @/lib/echartsTheme 共享常量，
  *   不在页域新造色板、不写裸 hex；
- * - 类别色按本体顺序轮转平台十色板；关系边做两端类别色的低饱和渐变；
+ * - 类别色按本体顺序轮转平台十色板；结构边做两端类别色的低饱和渐变；
  * - 节点默认极浅投影，悬停发光只作为交互信号（克制 chrome）；
  * - 标签胶囊化 + labelLayout.hideOverlap 低缩放防重叠；
  * - 悬停联动直接用 ECharts 原生 emphasis.focus='adjacency' + blur 淡出：
@@ -109,23 +111,30 @@ const NODE_STATE_STYLE: Record<NodeVisualState, { borderColor: string; borderWid
   normal: { borderColor: CHART_SPLIT, borderWidth: 1.2 },
 }
 
-/** 关系边的基准样式（kind → 线型/箭头/透明度），颜色由调用方按端点注入。 */
+/** 常态节点描边：白色隔离描边让彩色节点在浅底与浅色边上保持轮廓（对象类型更粗）。 */
+function normalBorderStyle(isType: boolean): { borderColor: string; borderWidth: number } {
+  return { borderColor: CHART_TOOLTIP_BG, borderWidth: isType ? 2 : 1.4 }
+}
+
+/** 关系边的基准样式（kind → 线型/箭头/曲率/透明度），颜色由调用方按端点注入。 */
 export function baseEdgeStyle(kind: NetworkGraphEdge['kind']): {
   width: number
   lineType: 'solid' | number[]
   arrow: boolean
   opacity: number
+  curveness: number
 } {
   switch (kind) {
     case 'relation':
-      return { width: 1.6, lineType: 'solid', arrow: true, opacity: 0.9 }
+      return { width: 1.8, lineType: 'solid', arrow: true, opacity: 0.9, curveness: 0.12 }
     case 'schema_relation':
-      return { width: 1.1, lineType: [5, 4], arrow: true, opacity: 0.75 }
+      // 结构层的主角：实线 + 曲率，保证类型间关系一屏可读（MYW-58）。
+      return { width: 1.9, lineType: 'solid', arrow: true, opacity: 0.85, curveness: 0.16 }
     case 'contains':
     case 'attribute':
-      return { width: 0.9, lineType: [2, 4], arrow: false, opacity: 0.55 }
+      return { width: 1, lineType: [2, 4], arrow: false, opacity: 0.5, curveness: 0.1 }
     case 'bridge':
-      return { width: 1.6, lineType: [7, 5], arrow: false, opacity: 0.8 }
+      return { width: 1.4, lineType: [6, 5], arrow: false, opacity: 0.7, curveness: 0 }
   }
 }
 
@@ -136,18 +145,14 @@ export interface BuildNetworkGraphOptionInput {
   edges: NetworkGraphEdge[]
   sections: NetworkGraphData['ontologies']
   highlight?: NetworkCanvasHighlight
-  /** 确定性初始坐标（缓存优先、clusterPositions 兜底），供 force initLayout:none 使用。 */
+  /** 视口像素坐标（clusterLayout → fitLayoutToViewport 归一化结果），layout:'none' 直读。 */
   positions?: Map<string, { x: number; y: number }>
-}
-
-/** 力导向参数随规模自适应：节点越多斥力越大，避免挤成一团（MYW-28 教训）。 */
-export function forceRepulsion(nodeCount: number): number {
-  return nodeCount <= 0 ? 400 : Math.round(Math.min(1600, Math.max(340, nodeCount * 16)))
-}
-
-/** 理想边长途经随规模增长，超大图保持簇间呼吸感；始终有界。 */
-export function forceEdgeLength(nodeCount: number): number {
-  return Math.round(Math.min(160, 100 + Math.max(0, nodeCount) * 0.06))
+  /** 视图中心（数据坐标，即归一化后的外接框中心）。 */
+  center?: [number, number]
+  /** 初始缩放，默认 1（坐标已按画布尺寸归一化，1 即恰好铺满）。 */
+  zoom?: number
+  /** 视图盒留白：必须与 fitLayoutToViewport 使用的 NETWORK_VIEW_INSETS 一致。 */
+  viewInsets?: { top: number; right: number; bottom: number; left: number }
 }
 
 
@@ -159,8 +164,9 @@ const CAPSULE_LABEL_BASE = {
 
 /** 构建完整的 graph series option；同一输入永远得到同一输出（可快照回归）。 */
 export function buildNetworkGraphOption(input: BuildNetworkGraphOptionInput): EChartsOption {
-  const { nodes, edges, sections, highlight, positions } = input
+  const { nodes, edges, sections, highlight, positions, center, zoom, viewInsets } = input
   const analysisActive = hasActiveAnalysis(highlight)
+  const insets = viewInsets ?? { top: 10, right: 10, bottom: 10, left: 10 }
 
   const colorByOntology = ontologyColorMap(sections)
   const degrees = degreeMap(edges)
@@ -189,6 +195,7 @@ export function buildNetworkGraphOption(input: BuildNetworkGraphOptionInput): EC
 
     const isType = node.kind === 'object_type'
     const position = positions?.get(node.id)
+    const border = state === 'normal' ? normalBorderStyle(isType) : stateStyle
     return {
       id: node.id,
       name: node.id,
@@ -198,9 +205,9 @@ export function buildNetworkGraphOption(input: BuildNetworkGraphOptionInput): EC
       symbolSize: size,
       itemStyle: {
         color: baseColor,
-        borderColor: stateStyle.borderColor,
-        borderWidth: stateStyle.borderWidth,
-        borderType: stateStyle.borderType ?? 'solid',
+        borderColor: border.borderColor,
+        borderWidth: border.borderWidth,
+        borderType: ('borderType' in border ? border.borderType : undefined) ?? 'solid',
         opacity,
         shadowBlur: 5,
         shadowColor: withAlpha(CHART_TEXT_STRONG, 0.14),
@@ -209,12 +216,14 @@ export function buildNetworkGraphOption(input: BuildNetworkGraphOptionInput): EC
       label: {
         show: true,
         formatter: node.label,
-        fontSize: isType ? 11 : 9.5,
+        // 标签统一挂节点下方：胶囊给对象类型，实例纯文本小号，密集画布不吵。
+        position: 'bottom',
+        distance: isType ? 6 : 4,
+        fontSize: isType ? 12 : 10,
         fontWeight: isType ? 600 : 400,
         color: isType ? CHART_TEXT_STRONG : CHART_TEXT,
-        // 胶囊只给对象类型：实例标签纯文本小号，密集画布不吵（对齐官方示例）。
         borderWidth: isType ? 1 : 0,
-        padding: isType ? [3, 6] : [0, 1],
+        padding: isType ? [3, 8] : [0, 1],
         ...(isType ? CAPSULE_LABEL_BASE : { backgroundColor: 'transparent', borderColor: 'transparent' }),
       },
       // 自定义负载：tooltip 展示用。
@@ -249,6 +258,26 @@ export function buildNetworkGraphOption(input: BuildNetworkGraphOptionInput): EC
     const targetColor = colorByOntology.get(
       nodes.find(node => node.id === edge.target)?.ontologyId ?? '') || CHART_AXIS
 
+    // 结构边（schema_relation）用更深的端点渐变——它是结构层的主角，必须可读；
+    // contains/attribute 维持浅灰弱化；实例关系边维持原低饱和渐变。
+    const edgeGradient = (ratio: number) => ({
+      type: 'linear' as const,
+      x: 0, y: 0, x2: 1, y2: 0,
+      colorStops: [
+        { offset: 0, color: soften(sourceColor, CHART_AXIS, ratio) },
+        { offset: 1, color: soften(targetColor, CHART_AXIS, ratio) },
+      ],
+    })
+    const edgeColor: string | { type: 'linear'; x: number; y: number; x2: number; y2: number; colorStops: { offset: number; color: string }[] } = flatColor ?? (
+      edge.kind === 'relation'
+        ? edgeGradient(0.55)
+        : edge.kind === 'schema_relation'
+          ? edgeGradient(0.25)
+          : edge.kind === 'bridge'
+            ? withAlpha(CHART_VIOLET, 0.66)
+            : withAlpha(CHART_AXIS, 0.85)
+    )
+
     return {
       id: edge.id,
       source: edge.source,
@@ -257,20 +286,8 @@ export function buildNetworkGraphOption(input: BuildNetworkGraphOptionInput): EC
         width,
         opacity,
         type: style.lineType,
-        color: flatColor ?? (
-          edge.kind === 'relation'
-            ? {
-              type: 'linear',
-              x: 0, y: 0, x2: 1, y2: 0,
-              colorStops: [
-                { offset: 0, color: soften(sourceColor) },
-                { offset: 1, color: soften(targetColor) },
-              ],
-            }
-            : edge.kind === 'bridge'
-              ? withAlpha(CHART_VIOLET, 0.62)
-              : withAlpha(CHART_AXIS, 0.85)
-        ),
+        curveness: style.curveness,
+        color: edgeColor,
       },
       label: {
         show: false,
@@ -312,20 +329,16 @@ export function buildNetworkGraphOption(input: BuildNetworkGraphOptionInput): EC
     series: [
       {
         type: 'graph',
-        layout: 'force',
+        // 确定性分区布局：坐标来自 clusterLayout → fitLayoutToViewport 的归一化
+        // 视口像素值（layout:'none' 直读 x/y，zoom=1 即恰好铺满画布）。
+        layout: 'none',
+        zoom: zoom ?? 1,
+        ...(center ? { center } : {}),
         roam: true,
         draggable: true,
         categories,
         data: nodeData,
         links: linkData,
-        force: {
-          repulsion: forceRepulsion(nodes.length),
-          gravity: 0.22,
-          edgeLength: forceEdgeLength(nodes.length),
-          layoutAnimation: true,
-          // 初始坐标来自确定性聚类种子/位置缓存（initLayout:'none' 时吃数据 x/y）。
-          initLayout: 'none',
-        },
         // 悬停联动：原生 adjacency——一跳邻接强亮、其余进入 blur 淡出，
         // 零 option 重建 + 自带过渡动画；分析态下关闭让位给烘培压暗。
         emphasis: {
@@ -348,10 +361,12 @@ export function buildNetworkGraphOption(input: BuildNetworkGraphOptionInput): EC
         edgeSymbol: ['none', 'arrow'],
         edgeSymbolSize: 6.5,
         labelLayout: { hideOverlap: true },
-        top: 10,
-        bottom: 10,
-        left: 10,
-        right: 10,
+        // 视图盒留白与 fitLayoutToViewport 的归一化盒严格一致：
+        // 数据 bbox == 视图盒 ⇒ ECharts 的等比适配倍数 = 1，zoom=1 即 1:1 像素。
+        top: insets.top,
+        bottom: insets.bottom,
+        left: insets.left,
+        right: insets.right,
       },
     ],
   }

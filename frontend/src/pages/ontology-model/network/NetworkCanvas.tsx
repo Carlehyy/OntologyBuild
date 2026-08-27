@@ -2,36 +2,38 @@
  * 本体网络画布：ECharts graph 渲染跨本体全局图（固定浅色作用域，取值口径
  * 见根目录 DESIGN.md §5，颜色全部来自 @/lib/echartsTheme）。
  *
- * 引擎由 cytoscape 切换为 ECharts（官方 graph 示例的力导向观感）：
- * - 布局：force + 确定性聚类种子坐标（clusterPositions）+ 跨重建位置缓存，
- *   数据刷新时已有节点不重新飞位；力参数随规模自适应防挤团；
- * - 悬停：ECharts 原生 emphasis.focus='adjacency'——一跳邻接强亮、其余 blur 淡出，
- *   零 option 重建、自带过渡动画（分析态激活时让位给分析高亮）；
- * - 标签：胶囊化白底衬 + labelLayout.hideOverlap，低缩放下自动隐藏重叠标签；
- * - 高亮契约与旧版一致：路径蓝 / 变更紫 / 直接影响橙 / 间接影响红虚线 /
+ * MYW-58 起采用确定性分区布局（layout:'none'）：
+ * - 坐标由 networkModel.clusterLayout 产出、fitLayoutToViewport 按实测画布
+ *   尺寸归一化（只压缩间距，不缩放符号/字号），首屏即完整可读；
+ * - 数据变化自动回到适应视图（zoom=1 + 外接框居中）；仅高亮/选中变化时
+ *   保留用户当前的 roam 视图，不发生跳变；
+ * - 悬停：ECharts 原生 emphasis.focus='adjacency'——一跳邻接强亮、其余 blur
+ *   淡出，零 option 重建、自带过渡动画（分析态激活时让位给分析高亮）；
+ * - 标签：胶囊化白底衬 + labelLayout.hideOverlap 防重叠；
+ * - 高亮契约：路径蓝 / 变更紫 / 直接影响橙 / 间接影响红虚线 /
  *   非参与元素压暗 / 选中深描边，全部由页面 props 注入。
  *
  * 组件本身无业务状态，onReady 暴露轻量控制器（缩放/适应/聚焦）供工具条使用。
  * 渲染器自适应：节点数超过阈值切 canvas（大图性能），小图保持 svg 以支持
  * mocked E2E 的 DOM 级文本断言。
  */
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { ECharts } from 'echarts'
 import type {
   NetworkGraphData,
 } from '@/api/ontologyNetwork'
-import { clusterPositions } from './networkModel.ts'
+import { clusterLayout, fitLayoutToViewport, NETWORK_VIEW_INSETS } from './networkModel.ts'
 import {
   buildNetworkGraphOption,
   type NetworkCanvasHighlight,
 } from './networkGraphOption.ts'
 
-/** 工具条用的最小控制器：替代旧版直接暴露 cytoscape Core 实例。 */
+/** 工具条用的最小控制器。 */
 export interface NetworkCanvasController {
   /** 相对缩放（>1 放大）。 */
   zoom(factor: number): void
-  /** 回到初始适应视图（首帧布局完成后的 zoom/center 快照）。 */
+  /** 回到适应视图（zoom=1 + 外接框居中）。 */
   fit(): void
   /** 居中并适度放大到指定节点。 */
   focusNode(nodeId: string): void
@@ -46,8 +48,6 @@ interface Props {
   onBackgroundTap?: () => void
   /** 暴露控制器给页面（缩放/聚焦工具条）；卸载或重建时回调 null。 */
   onReady?: (controller: NetworkCanvasController | null) => void
-  /** 跨重建的位置缓存：数据刷新（搜索/层级切换）时已有节点不重新飞位。 */
-  positionsRef?: React.MutableRefObject<Map<string, { x: number; y: number }>>
 }
 
 const ZOOM_MIN = 0.04
@@ -68,79 +68,22 @@ function readView(chart: ECharts): { zoom: number; center?: [number, number] } {
   return { zoom: typeof series?.zoom === 'number' ? series.zoom : 1, center }
 }
 
-/** 尽力读取内部布局结果写回位置缓存；内部 API 变化时静默降级为不写回。 */
-function readLayoutPositions(chart: ECharts): Map<string, { x: number; y: number }> {
-  const out = new Map<string, { x: number; y: number }>()
-  try {
-    const model = (chart as unknown as {
-      getModel?: () => {
-        getSeriesByIndex?: (index: number) => {
-          getGraph?: () => {
-            eachNode?: (visit: (node: {
-              id?: string
-              getLayout?: () => unknown
-            }) => void) => void
-          }
-        }
-      }
-    }).getModel?.()
-    const graph = model?.getSeriesByIndex?.(0)?.getGraph?.()
-    graph?.eachNode?.(node => {
-      if (!node.id) return
-      const layout = node.getLayout?.()
-      if (Array.isArray(layout) && layout.length === 2
-        && Number.isFinite(layout[0]) && Number.isFinite(layout[1])) {
-        out.set(node.id, { x: layout[0], y: layout[1] })
-        return
-      }
-      const point = layout as { x?: unknown; y?: unknown } | null
-      if (point && typeof point.x === 'number' && typeof point.y === 'number') {
-        out.set(node.id, { x: point.x, y: point.y })
-      }
-    })
-  } catch {
-    // 内部模型不可用时保持旧缓存即可，仅损失"刷新不飞位"的一部分体验。
-  }
-  return out
-}
-
-/** 在内部布局里查节点坐标（聚焦用），失败退回种子坐标。 */
-function readNodePosition(chart: ECharts, nodeId: string): { x: number; y: number } | null {
-  try {
-    const model = (chart as unknown as {
-      getModel?: () => {
-        getSeriesByIndex?: (index: number) => {
-          getGraph?: () => {
-            getNodeById?: (id: string) => { getLayout?: () => unknown } | null
-          }
-        }
-      }
-    }).getModel?.()
-    const node = model?.getSeriesByIndex?.(0)?.getGraph?.()?.getNodeById?.(nodeId)
-    const layout = node?.getLayout?.()
-    if (Array.isArray(layout) && layout.length === 2
-      && Number.isFinite(layout[0]) && Number.isFinite(layout[1])) {
-      return { x: layout[0], y: layout[1] }
-    }
-    const point = layout as { x?: unknown; y?: unknown } | null
-    if (point && typeof point.x === 'number' && typeof point.y === 'number') {
-      return { x: point.x, y: point.y }
-    }
-  } catch {
-    // 交给调用方的种子坐标兜底。
-  }
-  return null
-}
-
 export default function NetworkCanvas(
-  { nodes, edges, sections, highlight, onSelect, onBackgroundTap, onReady, positionsRef }: Props,
+  { nodes, edges, sections, highlight, onSelect, onBackgroundTap, onReady }: Props,
 ) {
   const chartRef = useRef<ReactECharts | null>(null)
   const instanceRef = useRef<ECharts | null>(null)
-  const controllerRef = useRef<NetworkCanvasController | null>(null)
-  const initialViewRef = useRef<{ zoom: number; center?: [number, number] } | null>(null)
-  const capturedInitialRef = useRef(false)
-  const writeBackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 画布实测尺寸：layout 归一化的目标视口（首帧用常见尺寸兜底，ready 后校正）。 */
+  const [viewport, setViewport] = useState({ width: 960, height: 620 })
+  const [readyTick, setReadyTick] = useState(0)
+  /** 用户 roam 后的当前视图：高亮/选中重建 option 时回填，避免视图跳变。 */
+  const userViewRef = useRef<{ zoom: number; center?: [number, number] } | null>(null)
+  /** 数据身份追踪：仅当 nodes/edges 引用变化时重置视图（高亮变化不重置）。 */
+  const prevDataRef = useRef<{ nodes: unknown; edges: unknown }>({ nodes: null, edges: null })
+  if (prevDataRef.current.nodes !== nodes || prevDataRef.current.edges !== edges) {
+    prevDataRef.current = { nodes, edges }
+    userViewRef.current = null
+  }
 
   // 回调经 ref 转发，保证传给 echarts-for-react 的 handler 身份稳定。
   const callbacksRef = useRef({ onSelect, onBackgroundTap, onReady })
@@ -148,19 +91,13 @@ export default function NetworkCanvas(
     callbacksRef.current = { onSelect, onBackgroundTap, onReady }
   }, [onSelect, onBackgroundTap, onReady])
 
-  // ---- 确定性种子 + 缓存合并（与旧版语义一致：已有节点不重新飞位） ----
-  const positions = useMemo(() => {
-    const seeded = clusterPositions(nodes)
-    const cache = positionsRef?.current
-    if (!cache) return seeded
-    const merged = new Map(seeded)
-    for (const [id, position] of cache) merged.set(id, position)
-    return merged
-  }, [nodes, positionsRef])
-
-  // focusNode 的种子兜底坐标取最新值，避免闭包过期。
-  const positionsNowRef = useRef(positions)
-  positionsNowRef.current = positions
+  // ---- 确定性分区布局 + 视口归一化（1 数据单位 = 1 物理像素） ----
+  const layout = useMemo(() => clusterLayout(nodes, edges), [nodes, edges])
+  const fitted = useMemo(
+    () => fitLayoutToViewport(layout, viewport.width, viewport.height),
+    [layout, viewport])
+  const fittedNowRef = useRef(fitted)
+  fittedNowRef.current = fitted
 
   const option = useMemo(
     () => buildNetworkGraphOption({
@@ -168,20 +105,50 @@ export default function NetworkCanvas(
       edges,
       sections,
       highlight,
-      positions,
+      positions: fitted.positions,
+      center: userViewRef.current?.center ?? fitted.center,
+      zoom: userViewRef.current?.zoom ?? 1,
+      viewInsets: NETWORK_VIEW_INSETS,
     }),
-    [nodes, edges, sections, highlight, positions])
+    [nodes, edges, sections, highlight, fitted])
 
-  // 数据变化后重置"首帧快照未采集"标记，fit 语义始终对应当前数据的适应视图。
-  useEffect(() => {
-    capturedInitialRef.current = false
-  }, [nodes, edges])
-
-  // 卸载清理：定时器 + 通知页面控制器失效。
+  // 卸载清理：通知页面控制器失效。
   useEffect(() => () => {
-    if (writeBackTimerRef.current) clearTimeout(writeBackTimerRef.current)
     callbacksRef.current.onReady?.(null)
   }, [])
+
+  // 画布尺寸测量：ready 后与窗口 resize 时校正归一化视口。
+  // getWidth 在实例被 dispose 的瞬间可能抛错（_zr 置空），静默跳过本次测量。
+  useEffect(() => {
+    if (!readyTick) return
+    const measure = () => {
+      const instance = instanceRef.current
+      if (!instance) return
+      let width = 0
+      let height = 0
+      try {
+        width = instance.getWidth()
+        height = instance.getHeight()
+      } catch {
+        return
+      }
+      if (width > 0 && height > 0) {
+        setViewport(previous => previous.width === width && previous.height === height
+          ? previous
+          : { width, height })
+      }
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [readyTick])
+
+  const applyView = (instance: ECharts, view: { zoom: number; center?: [number, number] }) => {
+    userViewRef.current = view
+    instance.setOption({
+      series: [{ zoom: view.zoom, ...(view.center ? { center: view.center } : {}) }],
+    })
+  }
 
   const handleReady = (instance: ECharts | undefined) => {
     if (!instance) return
@@ -192,47 +159,30 @@ export default function NetworkCanvas(
       if (!event.target) callbacksRef.current.onBackgroundTap?.()
     })
 
-    // 布局收敛后写回位置缓存 + 采集初始视图快照（fit 的回退目标）。
+    // roam / 缩放后记录用户视图（重建 option 时回填，避免跳变）。
     instance.on('finished', () => {
-      if (!capturedInitialRef.current) {
-        capturedInitialRef.current = true
-        initialViewRef.current = readView(instance)
-      }
-      if (!positionsRef?.current) return
-      if (writeBackTimerRef.current) clearTimeout(writeBackTimerRef.current)
-      writeBackTimerRef.current = setTimeout(() => {
-        const latest = readLayoutPositions(instance)
-        if (latest.size === 0) return
-        const cache = positionsRef.current!
-        cache.clear()
-        for (const [id, position] of latest) cache.set(id, position)
-      }, 260)
+      userViewRef.current = readView(instance)
     })
 
     const controller: NetworkCanvasController = {
       zoom(factor) {
-        const next = clampZoom(readView(instance).zoom * factor)
-        instance.setOption({ series: [{ zoom: next }] })
+        applyView(instance, { zoom: clampZoom(readView(instance).zoom * factor) })
       },
       fit() {
-        const snapshot = initialViewRef.current
-        if (!snapshot) return
-        instance.setOption({
-          series: [{ zoom: snapshot.zoom, ...(snapshot.center ? { center: snapshot.center } : {}) }],
-        })
+        applyView(instance, { zoom: 1, center: fittedNowRef.current.center })
       },
       focusNode(nodeId) {
         if (!nodeId) return
-        const target = readNodePosition(instance, nodeId) ?? positionsNowRef.current.get(nodeId) ?? null
+        const target = fittedNowRef.current.positions.get(nodeId)
         if (!target) return
-        const current = readView(instance).zoom
-        instance.setOption({
-          series: [{ center: [target.x, target.y], zoom: Math.max(current, 1.35) }],
+        applyView(instance, {
+          center: [target.x, target.y],
+          zoom: Math.max(readView(instance).zoom, 1.35),
         })
       },
     }
-    controllerRef.current = controller
     callbacksRef.current.onReady?.(controller)
+    setReadyTick(tick => tick + 1)
   }
 
   const handleEvents = useMemo(() => ({
@@ -242,6 +192,12 @@ export default function NetworkCanvas(
       if (id) callbacksRef.current.onSelect?.(id)
     },
   }), [])
+
+  // opts 必须引用稳定：inline 字面量会让 echarts-for-react 在每次渲染时
+  // dispose + 重建实例（componentDidUpdate 按引用比较 opts），导致视图与
+  // 已存实例句柄失效。
+  const renderer: 'canvas' | 'svg' = nodes.length > RENDERER_CANVAS_THRESHOLD ? 'canvas' : 'svg'
+  const chartOpts = useMemo(() => ({ renderer }), [renderer])
 
   return (
     <div
@@ -258,7 +214,7 @@ export default function NetworkCanvas(
           option={option}
           notMerge={false}
           lazyUpdate
-          opts={{ renderer: nodes.length > RENDERER_CANVAS_THRESHOLD ? 'canvas' : 'svg' }}
+          opts={chartOpts}
           style={{ width: '100%', height: '100%' }}
           onEvents={handleEvents}
           onChartReady={handleReady}

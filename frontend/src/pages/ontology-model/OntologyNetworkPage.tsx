@@ -1,7 +1,8 @@
 /**
  * 本体网络 — 跨本体全局网络可视化（只读）
  *
- * 左卡片：ECharts 全局画布（各本体子图叠加、按本体着色、同名类型虚线桥接）
+ * 左卡片：ECharts 全局画布（各本体子图分区排布、按本体着色、同名类型虚线桥接），
+ * 默认展示结构层（L1：对象类型 + 类型间关系），实例层可切换（L2）；
  * 右卡片：操作区（数据范围 / 层级与预算 / 搜索 / 路径与影响分析 / 节点详情）
  * 布局复用本体建模页的可拖拽左右分栏；数据基座是 PG fo_* 表 / 发布快照，
  * 不依赖 Neo4j 投影就绪。本页不提供任何增删改，编辑仍在本体建模/详情页完成。
@@ -80,8 +81,6 @@ const DEFAULT_SELECTED_MAX = 8
 
 export default function OntologyNetworkPage() {
   const { containerRef, sizes, startResize } = useSplitLayout([72, 28])
-  // 跨数据刷新保留力导向布局位置：搜索/层级切换时已布局节点不重飞
-  const positionsRef = useRef(new Map<string, { x: number; y: number }>())
   // 画布控制器（缩放/适应/聚焦），由 NetworkCanvas onReady 注入。
   const canvasRef = useRef<NetworkCanvasController | null>(null)
 
@@ -103,7 +102,9 @@ export default function OntologyNetworkPage() {
   }, [overview])
 
   // -- 展示控制 --
-  const [level, setLevel] = useState<1 | 2>(2)
+  // 默认结构层（L1：对象类型 + 类型间关系）：本体网络的核心语义是"看结构"，
+  // 实例层（L2）按需切换，避免首屏被实例淹没（MYW-58）。
+  const [level, setLevel] = useState<1 | 2>(1)
   const [limitPerType, setLimitPerType] = useState(10)
   const [bridgeEnabled, setBridgeEnabled] = useState(true)
   const [queryInput, setQueryInput] = useState('')
@@ -371,7 +372,6 @@ export default function OntologyNetworkPage() {
               onSelect={setSelectedNodeId}
               onBackgroundTap={() => setSelectedNodeId('')}
               onReady={controller => { canvasRef.current = controller }}
-              positionsRef={positionsRef}
             />
 
             {(graphFetching || overviewLoading) && (
