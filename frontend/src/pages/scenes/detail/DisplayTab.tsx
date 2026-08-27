@@ -79,7 +79,7 @@ export function DisplayTab({ scene }: { scene: SceneDetail }) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-2 p-3">
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)]">
           渲染版本

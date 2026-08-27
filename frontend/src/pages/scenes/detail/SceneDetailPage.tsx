@@ -1,13 +1,17 @@
 /**
- * 三维场景详情页 — 参照本体详情页：白色玻璃卡头部 + 滑块式标签栏 +
- * 版本徽章与图标操作组；三标签（场景展示/场景模型/运行日志）由 ?tab= 深链驱动。
+ * 三维场景详情页 — 2026-08 版式重排：
+ * 顶部一张「场景基本信息卡」（名称/状态/版本/描述 + 右侧操作按钮组），
+ * 下方左右双卡：左=三维可视化（SceneCanvas 常驻，含版本与模拟推送工具行），
+ * 右=操作栏卡（参考超级助手助手配置卡片：圆角浮层式白卡 + 两标签滑动指示器，
+ * 「场景模型 / 运行日志」）。?tab= 深链保留：models 直达模型、logs 直达日志，
+ * 旧 display 值归一为默认（左画布常驻可见）。
  */
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Boxes, Copy, Pencil, Rocket, Trash2 } from 'lucide-react'
 import { scenesApi } from '@/api/scenes'
-import type { SceneDefinition } from '@/types/scene'
+import type { SceneDefinition, SceneDetail } from '@/types/scene'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { ConfirmModal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
@@ -16,15 +20,20 @@ import { DisplayTab } from './DisplayTab'
 import { LogsTab } from './LogsTab'
 import { ModelsTab } from './ModelsTab'
 
-const GROUPS = [
-  { key: 'display', label: '场景展示' },
+const PANEL_GROUPS = [
   { key: 'models', label: '场景模型' },
   { key: 'logs', label: '运行日志' },
 ] as const
 
-type GroupKey = (typeof GROUPS)[number]['key']
+type PanelKey = (typeof PANEL_GROUPS)[number]['key']
 
 const HEADER_ICON_BUTTON_CLASS = 'inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2'
+
+/** 旧深链值归一：display 已并入左侧常驻画布，映射到默认面板。 */
+function normalizePanelKey(raw: string | null): PanelKey {
+  if (raw === 'logs') return 'logs'
+  return 'models'
+}
 
 export default function SceneDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -33,37 +42,27 @@ export default function SceneDetailPage() {
   const { toast } = useToast()
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const requestedTab = searchParams.get('tab')
-  const activeTab: GroupKey = GROUPS.some(group => group.key === requestedTab)
-    ? (requestedTab as GroupKey)
-    : 'display'
+  const activePanel: PanelKey = normalizePanelKey(searchParams.get('tab'))
 
-  const groupTabsRef = useRef<HTMLDivElement>(null)
+  const tabsRef = useRef<HTMLDivElement>(null)
   const [indicatorPos, setIndicatorPos] = useState({ left: 0, width: 0 })
 
   useEffect(() => {
-    const container = groupTabsRef.current
+    const container = tabsRef.current
     if (!container) return
-    const activeButton = container.querySelector('[data-tab-value="' + activeTab + '"]') as HTMLElement | null
+    const activeButton = container.querySelector('[data-tab-value="' + activePanel + '"]') as HTMLElement | null
     if (!activeButton) return
     activeButton.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     const containerRect = container.getBoundingClientRect()
     const buttonRect = activeButton.getBoundingClientRect()
     setIndicatorPos({ left: buttonRect.left - containerRect.left, width: buttonRect.width })
-  }, [activeTab])
+  }, [activePanel])
 
   const sceneQuery = useQuery({
     queryKey: ['scenes', id],
     queryFn: () => scenesApi.get(id ?? ''),
     enabled: !!id,
   })
-  const activeVersionNo = sceneQuery.data?.published_version_no ?? sceneQuery.data?.current_version_no ?? 0
-  const versionQuery = useQuery({
-    queryKey: ['scenes', id, 'version', activeVersionNo],
-    queryFn: () => scenesApi.version(id ?? '', activeVersionNo),
-    enabled: !!id && activeVersionNo >= 1 && activeTab !== 'display',
-  })
-  const modelsDefinition = (versionQuery.data?.definition ?? null) as SceneDefinition | null
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['scenes'] })
   const publishMutation = useMutation({
@@ -111,78 +110,44 @@ export default function SceneDetailPage() {
   if (sceneQuery.isLoading || !sceneQuery.data || !id) {
     return <div className="p-6"><LoadingState /></div>
   }
-  const scene = sceneQuery.data
+  const scene: SceneDetail = sceneQuery.data
   const canPublish =
     scene.current_version_no >= 1 &&
     !(scene.status === 'published' && scene.published_version_no === scene.current_version_no)
 
-  const selectTab = (key: GroupKey) => setSearchParams(key === 'display' ? {} : { tab: key }, { replace: true })
+  // URL 同步：models 视为默认态清空参数，logs 写入 tab；旧 display 深链自然落回默认。
+  const selectPanel = (key: PanelKey) =>
+    setSearchParams(key === 'models' ? {} : { tab: key }, { replace: true })
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
-      {/* ═══ 标题区 ═══ */}
-      <header className="flex shrink-0 items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm/50">
-        <div className="flex min-w-0 items-start gap-3">
+      {/* ═══ 场景基本信息卡（右上角操作组） ═══ */}
+      <header className="flex shrink-0 items-center justify-between gap-3 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-5 py-4 shadow-[0_8px_28px_rgba(15,23,42,0.06)]">
+        <div className="flex min-w-0 items-center gap-3">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-teal-500 to-cyan-500 text-white shadow-sm">
             <Boxes size={22} />
           </span>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="truncate text-lg font-semibold text-slate-800">{scene.name}</h1>
+              <h1 className="truncate text-lg font-semibold text-slate-800 dark:text-[var(--color-text-primary)]">{scene.name}</h1>
               <span className={
                 'inline-flex shrink-0 rounded-md border px-2 py-0.5 text-[11px] font-medium leading-4 ' +
                 (scene.status === 'published'
-                  ? 'border-teal-100 bg-teal-50 text-teal-700'
-                  : 'border-slate-200 bg-slate-50 text-slate-500')
+                  ? 'border-teal-100 bg-teal-50 text-teal-700 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-300'
+                  : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300')
               }>
                 {scene.status === 'published' ? '已发布' : '草稿'}
               </span>
             </div>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 truncate text-xs text-slate-400 dark:text-[var(--color-text-tertiary)]" title={scene.description || undefined}>
               当前 v{scene.current_version_no}
-              {scene.published_version_no != null ? ' · 已发布 v' + scene.published_version_no : ' · 从未发布'}
+              {scene.published_version_no != null ? ' · 生效 v' + scene.published_version_no : ' · 从未发布'}
               {scene.description ? ' · ' + scene.description : ''}
             </p>
           </div>
         </div>
-        <Link to="/scenes" className="inline-flex shrink-0 items-center gap-1 text-xs text-slate-500 transition-colors hover:text-teal-700">
-          <ArrowLeft size={13} /> 返回列表
-        </Link>
-      </header>
-
-      {/* ═══ 标签栏 + 操作组 ═══ */}
-      <div className="flex shrink-0 items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-2.5 shadow-sm/50">
-        <div ref={groupTabsRef} className="relative flex w-max items-center gap-1 rounded-xl border border-slate-200 bg-slate-50/70 p-1">
-          <div
-            aria-hidden="true"
-            className="absolute top-1 h-[calc(100%-8px)] rounded-lg bg-teal-600 shadow-sm transition-all duration-300 ease-out"
-            style={{ left: indicatorPos.left + 'px', width: indicatorPos.width + 'px' }}
-          />
-          {GROUPS.map(group => {
-            const isActive = activeTab === group.key
-            return (
-              <button
-                key={group.key}
-                type="button"
-                role="tab"
-                data-tab-value={group.key}
-                aria-selected={isActive}
-                onClick={() => selectTab(group.key)}
-                className={
-                  'relative z-10 whitespace-nowrap rounded-lg px-4 py-2 text-sm font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-1 ' +
-                  (isActive ? 'text-white' : 'text-slate-500 hover:text-slate-700')
-                }
-              >
-                {group.label}
-              </button>
-            )
-          })}
-        </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          <span className="inline-flex h-10 items-center rounded-lg border border-teal-100 bg-teal-50 px-3 font-mono text-sm font-semibold tabular-nums text-teal-700" title="当前生效版本">
-            {scene.published_version_no != null ? 'v' + scene.published_version_no : 'v' + scene.current_version_no}
-          </span>
           {canPublish && (
             <button
               type="button"
@@ -193,6 +158,9 @@ export default function SceneDetailPage() {
               <Rocket size={15} /> 发布
             </button>
           )}
+          <Link to="/scenes" className="inline-flex h-10 shrink-0 items-center gap-1 rounded-lg border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)] transition-colors hover:border-teal-300 hover:text-teal-700">
+            <ArrowLeft size={13} /> 返回列表
+          </Link>
           <button type="button" onClick={() => setEditOpen(true)} className={HEADER_ICON_BUTTON_CLASS} title="编辑场景信息" aria-label="编辑场景信息">
             <Pencil size={18} />
           </button>
@@ -203,17 +171,51 @@ export default function SceneDetailPage() {
             <Trash2 size={18} />
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* ═══ 内容 ═══ */}
-      <div className="min-h-0 flex-1 overflow-hidden">
-        {activeTab === 'display' && <DisplayTab scene={scene} />}
-        {activeTab === 'models' && (
-          <div className="h-full overflow-y-auto"><ModelsTab definition={modelsDefinition} /></div>
-        )}
-        {activeTab === 'logs' && (
-          <div className="h-full overflow-y-auto"><LogsTab sceneId={scene.id} everPublished={scene.published_version_no != null} /></div>
-        )}
+      {/* ═══ 左右双卡：三维可视化 / 操作栏 ═══ */}
+      <div className="flex min-h-0 flex-1 gap-4 overflow-hidden">
+        {/* 左：三维场景可视化（常驻画布 + 工具行） */}
+        <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_8px_28px_rgba(15,23,42,0.06)]" aria-label="三维场景可视化">
+          <DisplayTab scene={scene} />
+        </section>
+
+        {/* 右：操作栏卡（场景模型 / 运行日志）——参考超级助手助手配置卡片 */}
+        <aside className="flex w-[400px] shrink-0 flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_8px_28px_rgba(15,23,42,0.06)]" aria-label="场景操作栏">
+          <div className="shrink-0 border-b border-[var(--color-border)] p-3">
+            <div ref={tabsRef} className="relative flex w-max items-center gap-1 rounded-xl border border-[var(--color-border)] bg-slate-50/70 p-1 dark:bg-slate-900/60">
+              <div
+                aria-hidden="true"
+                className="absolute top-1 h-[calc(100%-8px)] rounded-lg bg-teal-600 shadow-sm transition-all duration-300 ease-out"
+                style={{ left: indicatorPos.left + 'px', width: indicatorPos.width + 'px' }}
+              />
+              {PANEL_GROUPS.map(group => {
+                const isActive = activePanel === group.key
+                return (
+                  <button
+                    key={group.key}
+                    type="button"
+                    role="tab"
+                    data-tab-value={group.key}
+                    aria-selected={isActive}
+                    onClick={() => selectPanel(group.key)}
+                    className={
+                      'relative z-10 whitespace-nowrap rounded-lg px-4 py-2 text-sm font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-1 ' +
+                      (isActive ? 'text-white' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200')
+                    }
+                  >
+                    {group.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {activePanel === 'models'
+              ? <PanelModelsBody id={id} scene={scene} />
+              : <LogsTab sceneId={scene.id} everPublished={scene.published_version_no != null} />}
+          </div>
+        </aside>
       </div>
 
       <SceneFormModal
@@ -258,4 +260,26 @@ export default function SceneDetailPage() {
       />
     </div>
   )
+}
+
+/**
+ * 场景模型面板体 — 从当前生效版本拉定义只读展示；
+ * 与旧三标签时代逻辑一致：已发布指针优先，其次最新草稿版本。
+ */
+function PanelModelsBody({ id, scene }: { id: string; scene: SceneDetail }) {
+  const activeVersionNo = scene.published_version_no ?? scene.current_version_no ?? 0
+  const versionQuery = useQuery({
+    queryKey: ['scenes', id, 'version', activeVersionNo],
+    queryFn: () => scenesApi.version(id, activeVersionNo),
+    enabled: activeVersionNo >= 1,
+  })
+  if (activeVersionNo < 1) {
+    return (
+      <div className="rounded-xl border border-[var(--color-border)] bg-card p-8 text-center text-xs leading-5 text-slate-400 dark:text-slate-500">
+        该场景还没有版本定义：先在建模页或列表页创建第一个版本
+      </div>
+    )
+  }
+  if (versionQuery.isLoading) return <LoadingState message="加载场景定义…" />
+  return <ModelsTab definition={(versionQuery.data?.definition ?? null) as SceneDefinition | null} />
 }
