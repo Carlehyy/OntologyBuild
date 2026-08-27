@@ -35,6 +35,7 @@ import {
 } from '@/api/agent'
 import { writeTextToClipboard } from '@/utils/clipboard'
 import { ChartBlock, type ChartSpec } from '../AgentChart'
+import { formatTurnElapsed, formatTurnTimes } from './callChainTimes'
 
 export interface ChatMsg {
   id: string
@@ -45,6 +46,12 @@ export interface ChatMsg {
   proposals: AgentProposal[]
   loading?: boolean
   error?: string
+  /**
+   * 消息时刻（ISO 字符串）。历史会话来自后端 AgentMessage.created_at，
+   * 实时会话由前端在发送 / 回合终态写入本地时钟；调用链按轮次用它
+   * 推导开始时间、结束时间与总耗时。
+   */
+  createdAt?: string | null
 }
 
 export const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
@@ -334,15 +341,17 @@ export function AgentCallChainView({ messages, conversationId, ontologyName, run
 }) {
   const turns = useMemo(() => {
     let question = ''
+    let startedAt: string | null | undefined = null
     let turn = 0
-    return messages.reduce<Array<{ turn: number; question: string; message: ChatMsg }>>((result, message) => {
+    return messages.reduce<Array<{ turn: number; question: string; startedAt: string | null | undefined; message: ChatMsg }>>((result, message) => {
       if (message.role === 'user') {
         question = message.content
+        startedAt = message.createdAt
         return result
       }
       turn += 1
       if (message.steps.length > 0 || message.content || message.loading || message.error) {
-        result.push({ turn, question, message })
+        result.push({ turn, question, startedAt, message })
       }
       return result
     }, [])
@@ -365,7 +374,7 @@ export function AgentCallChainView({ messages, conversationId, ontologyName, run
   }
 
   return (
-    <div className="scrollbar-thin h-full overflow-y-auto bg-[#f8fbff] px-4 py-4 dark:bg-[#161c26]" data-testid="agent-call-chain-view">
+    <div className="scrollbar-none h-full overflow-y-auto bg-[#f8fbff] px-4 py-4 dark:bg-[#161c26]" data-testid="agent-call-chain-view">
       <div className="mx-auto max-w-4xl">
         <div className="grid grid-cols-3 gap-2 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
           {[
@@ -385,8 +394,10 @@ export function AgentCallChainView({ messages, conversationId, ontologyName, run
         </div>
 
         <div className="relative mt-4 space-y-3 before:absolute before:bottom-4 before:left-[18px] before:top-4 before:w-px before:bg-slate-200">
-          {turns.map(({ turn, question, message }, index) => {
+          {turns.map(({ turn, question, startedAt, message }, index) => {
             const duration = message.steps.reduce((sum, step) => sum + (step.durationMs || 0), 0)
+            const { start: startLabel, end: endLabel } = formatTurnTimes(startedAt, message.createdAt)
+            const elapsed = formatTurnElapsed(startedAt, message.createdAt)
             return (
               <details key={message.id} open={index === turns.length - 1} className="group relative rounded-xl border border-slate-200 bg-white shadow-sm">
                 <summary className="flex cursor-pointer list-none items-start gap-3 px-3 py-3 marker:content-none">
@@ -397,8 +408,11 @@ export function AgentCallChainView({ messages, conversationId, ontologyName, run
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-xs font-semibold text-slate-800">{question || '系统续执行'}</span>
                     <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-400">
+                      <span>开始 {startLabel}</span>
+                      <span>结束 {endLabel}</span>
+                      <span>{elapsed ? `总耗时 ${elapsed}` : '等待耗时数据'}</span>
                       <span>{message.steps.length} 次工具调用</span>
-                      <span>{duration > 0 ? `${duration.toLocaleString('zh-CN')} ms` : '等待耗时数据'}</span>
+                      <span>{duration > 0 ? `工具耗时 ${duration.toLocaleString('zh-CN')} ms` : null}</span>
                       {message.loading && <span className="inline-flex items-center gap-1 text-sky-600"><Loader2 size={10} className="animate-spin" />执行中</span>}
                       {message.error && <span className="text-red-600">执行异常</span>}
                     </span>
@@ -424,7 +438,8 @@ export function AgentCallChainView({ messages, conversationId, ontologyName, run
                       <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">本轮执行结果</p>
                       {message.error
                         ? <p className="text-xs text-red-600">{message.error}</p>
-                        : <div className="max-h-72 overflow-y-auto text-slate-700"><Md text={message.content} /></div>}
+                        : /* 不再限制高度：回答完整展开，随外层容器整体滚动，避免卡片内再出现一层滚轮（MYW-66） */
+                          <div className="text-slate-700"><Md text={message.content} /></div>}
                     </div>
                   )}
                 </div>

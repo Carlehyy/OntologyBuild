@@ -256,6 +256,8 @@ export default function AgentWorkbenchPage() {
     const restoredMessages = (conv.messages || []).map(m => ({
       id: m.id, role: m.role, content: m.content,
       steps: m.steps || [], citations: m.citations || [], proposals: m.proposals || [],
+      // 后端落库时刻：调用链按轮次推导开始 / 结束时间与总耗时（MYW-66）
+      createdAt: m.createdAt || null,
     }))
     setConversationId(cid)
     setMessages(restoredMessages)
@@ -333,6 +335,7 @@ export default function AgentWorkbenchPage() {
 
     setMessages(prev => [...prev, {
       id: nextId(), role: 'user', content: question, steps: [], citations: [], proposals: [],
+      createdAt: new Date().toISOString(),
     }])
     const aid = nextId()
     setMessages(prev => [...prev, {
@@ -379,6 +382,8 @@ export default function AgentWorkbenchPage() {
         patch({ error: e?.message || '请求失败', loading: false })
       }
     } finally {
+      // 回合终态（答复 / 停止 / 异常）补写本地时钟，调用链据此展示每轮结束时间与总耗时（MYW-66）
+      patch(m => (m.createdAt ? {} : { createdAt: new Date().toISOString() }))
       abortRef.current = null
       runIdRef.current = null
       setBusy(false)
