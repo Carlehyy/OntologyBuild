@@ -89,7 +89,7 @@ async function mockPlatformShell(page: Page) {
   await page.route('**/api/v2/inbox', route => json(route, { items: [], nextCursor: null, hasMore: false }))
 }
 
-async function mockScenesApi(page: Page, options: { listItems?: typeof sceneA[] } = {}) {
+async function mockScenesApi(page: Page, options: { listItems?: SceneSummary[] } = {}) {
   const listItems = options.listItems ?? [sceneA, sceneB]
   const createdScenes: SceneSummary[] = []
   await page.route(/\/api\/v2\/scenes(\?.*)?$/, route => {
@@ -282,4 +282,154 @@ test('建模页历史会话切换与消息回放', async ({ page }) => {
   await expect(page.getByText('已应用 v2 · 初版布局')).toBeVisible()
   // 会话绑定场景后，版本管理条可见
   await expect(page.getByText('v2 · 手动')).toBeVisible()
+})
+
+// —— 建模页搜索式草稿选择器与版本回滚（阶段三）——
+
+const selectorDraftC: SceneSummary = {
+  id: 'scn-c',
+  name: '城市交通枢纽',
+  description: '地铁站点人流场景',
+  icon: 'boxes',
+  status: 'draft',
+  current_version_no: 4,
+  published_version_no: null,
+  created_by: null,
+  created_at: now,
+  updated_at: now,
+}
+
+const selectorDraftD: SceneSummary = {
+  id: 'scn-d',
+  name: '仓储物流中心',
+  description: '库位与分拣线演示',
+  icon: 'boxes',
+  status: 'draft',
+  current_version_no: 2,
+  published_version_no: null,
+  created_by: null,
+  created_at: now,
+  updated_at: now,
+}
+
+const selectorDraftE: SceneSummary = {
+  id: 'scn-e',
+  name: '医院门诊楼',
+  description: '',
+  icon: 'boxes',
+  status: 'draft',
+  current_version_no: 1,
+  published_version_no: null,
+  created_by: null,
+  created_at: now,
+  updated_at: now,
+}
+
+test('建模页搜索式选择器过滤与切换', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+  await mockScenesApi(page, {
+    listItems: [selectorDraftC, selectorDraftD, selectorDraftE],
+  })
+  await page.goto('/#/scenes/modeling')
+
+  const trigger = page.getByRole('button', { name: '选择草稿场景' })
+  await expect(trigger).toHaveText(/从零新建/)
+
+  // 打开浮层：「从零新建」常驻首项 + 3 条草稿
+  await trigger.click()
+  const listbox = page.getByRole('listbox', { name: '草稿场景' })
+  await expect(listbox.getByRole('option')).toHaveCount(4)
+
+  // 关键词过滤命中的场景 + 常驻首项
+  await page.getByPlaceholder('搜索草稿场景…').fill('枢纽')
+  await expect(listbox.getByRole('option')).toHaveCount(2)
+
+  // 无匹配时展示空态提示，仅剩「从零新建」可回退
+  await page.getByPlaceholder('搜索草稿场景…').fill('不存在的关键词xyz')
+  await expect(listbox.getByText('无匹配场景')).toBeVisible()
+  await expect(listbox.getByRole('option')).toHaveCount(1)
+
+  // 选中一条草稿：触发按钮显示所选名称，会话目标切换带动输入框占位语
+  await page.getByPlaceholder('搜索草稿场景…').fill('仓储')
+  await listbox.getByRole('option', { name: /仓储物流中心/ }).click()
+  await expect(trigger).toHaveText(/仓储物流中心/)
+  await expect(page.getByPlaceholder('描述对当前场景的调整…')).toBeEnabled()
+  await expect(page.getByRole('button', { name: '清除已选场景' })).toBeVisible()
+
+  // 重开浮层切回「从零新建」：目标清空、清除按钮消失
+  await trigger.click()
+  await listbox.getByRole('option', { name: '从零新建' }).click()
+  await expect(trigger).toHaveText(/从零新建/)
+  await expect(page.getByPlaceholder('描述要从零构建的场景…')).toBeEnabled()
+  await expect(page.getByRole('button', { name: '清除已选场景' })).toHaveCount(0)
+})
+
+test('版本条回滚生成新版本', async ({ page }) => {
+  await seedAuth(page)
+  await mockPlatformShell(page)
+  await mockScenesApi(page)
+
+  // 回滚后的 PUT 会把冻结出的 v3 追加进版本列表（onSuccess 后 invalidate refetch）
+  const rollbackVersionMetas = [
+    { id: 'sv-2', scene_id: 'scn-1', version_no: 2, source: 'manual', note: 'v2 草稿', created_by: null, created_at: now },
+    { id: 'sv-1', scene_id: 'scn-1', version_no: 1, source: 'manual', note: '初始版本', created_by: null, created_at: now },
+  ]
+  // 覆盖 mockScenesApi 的静态版本路由（后注册的 handler 优先命中）
+  await page.route(/\/api\/v2\/scenes\/scn-1\/versions(\?.*)?$/, route =>
+    json(route, { items: rollbackVersionMetas, total: rollbackVersionMetas.length }))
+  await page.route(/\/api\/v2\/scenes\/scn-1\/versions\/\d+(\?.*)?$/, route => {
+    const versionNo = Number(new URL(route.request().url()).pathname.split('/').pop())
+    const meta = rollbackVersionMetas.find(item => item.version_no === versionNo) ?? rollbackVersionMetas[0]
+    return json(route, { ...meta, definition: definitionV1 })
+  })
+  // 注意：source=manual 会作为 query 附在 URL 上，路由须兼容 query（本文件约定 (\?.*)?$ 形式）
+  await page.route(/\/api\/v2\/scenes\/scn-1\/definition(\?.*)?$/, route => {
+    if (route.request().method() !== 'PUT') return json(route, {})
+    rollbackVersionMetas.unshift({
+      id: 'sv-3', scene_id: 'scn-1', version_no: 3, source: 'manual', note: '回滚自 v2', created_by: null, created_at: now,
+    })
+    return json(route, {
+      scene: { ...sceneA, current_version_no: 3 },
+      version: { ...rollbackVersionMetas[0], definition: definitionV1 },
+    })
+  })
+
+  // 复用历史会话绑定 scn-1：免 SSE 流程直接让版本条可用
+  await page.route(/\/api\/v2\/scenes\/conversations(\?.*)?$/, route => json(route, {
+    items: [{ id: 'sc-7', scene_id: 'scn-1', title: '旧会话', model_config_id: null, created_at: now, updated_at: now }],
+    total: 1,
+  }))
+  await page.route(/\/api\/v2\/scenes\/conversations\/sc-7\/messages(\?.*)?$/, route => json(route, {
+    items: [
+      { id: 'm1', conversation_id: 'sc-7', role: 'user', content: '建一个仓库场景', status: 'complete', version_no: null, created_at: now },
+      { id: 'm2', conversation_id: 'sc-7', role: 'assistant', content: '初版布局', status: 'complete', version_no: 2, created_at: now },
+    ],
+    total: 2,
+  }))
+
+  await page.goto('/#/scenes/modeling')
+  await page.getByRole('button', { name: '历史会话' }).click()
+  await page.getByText('旧会话').click()
+  await expect(page.getByText('已应用 v2 · 初版布局')).toBeVisible()
+
+  // 打开确认弹窗，确认语义文案
+  await page.getByRole('button', { name: '回滚为当前' }).click()
+  await expect(page.getByRole('heading', { name: '回滚到 v2？' })).toBeVisible()
+  await expect(page.getByText(/复制冻结为新版本 v3/)).toBeVisible()
+
+  const definitionPut = page.waitForRequest(request =>
+    request.method() === 'PUT' && request.url().includes('/api/v2/scenes/scn-1/definition'))
+  await page.getByRole('button', { name: '确认回滚' }).click()
+  const putRequest = await definitionPut
+  // 冻结的是 v2 定义且备注/来源符合约定
+  expect(putRequest.postDataJSON().note).toBe('回滚自 v2')
+  expect(putRequest.url()).toContain('source=manual')
+  expect(putRequest.postDataJSON().definition.objects).toHaveLength(2)
+
+  // 成功 toast + 新版本芯片 v3 出现并选中
+  await expect(page.getByRole('status').filter({ hasText: '已回滚并生成新版本 v3' })).toBeVisible()
+  const chipV3 = page.getByRole('button', { name: 'v3 · 手动' })
+  await expect(chipV3).toBeVisible()
+  await expect(chipV3).toHaveAttribute('aria-pressed', 'true')
 })
