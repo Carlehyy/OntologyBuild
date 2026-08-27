@@ -1,4 +1,5 @@
 import { Children, isValidElement, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -156,7 +157,10 @@ export default function StructureDocDialog({ open, ontologyId, versionId, versio
     URL.revokeObjectURL(anchor.href)
   }
 
-  return (
+  // 详情页外层的 onto-glass-card 带 backdrop-filter，会把 fixed 定罪为局部
+  // 包含块、裁掉弹窗底部；挂到 body 上保证弹窗相对视口定位（与结构页其他
+  // 浮层同一惯例）。
+  return createPortal(
     <div className="fixed inset-0 z-[90] flex items-start justify-center bg-slate-950/30 px-4 pt-[7vh] backdrop-blur-[1px]" onMouseDown={onClose}>
       <div
         role="dialog"
@@ -290,6 +294,7 @@ export default function StructureDocDialog({ open, ontologyId, versionId, versio
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
