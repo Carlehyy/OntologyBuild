@@ -291,9 +291,17 @@ export async function listExecutionLogs(id: string): Promise<ActionExecutionLog[
   }));
 }
 
-export async function listInstances(id: string, objectTypeId?: string): Promise<ObjectInstance[]> {
-  const qs = objectTypeId ? `?object_type_id=${encodeURIComponent(objectTypeId)}` : '';
-  const data = await apiClientV2.get<any[]>(`${base(id)}/instances${qs}`);
+export async function listInstances(
+  id: string,
+  objectTypeId?: string,
+  expectedReleaseId?: string | null,
+): Promise<ObjectInstance[]> {
+  const qs = new URLSearchParams();
+  if (objectTypeId) qs.set('object_type_id', objectTypeId);
+  // 比较并读取：锁定当前发布版的运行投影，发布指针变动时后端返回 409。
+  if (expectedReleaseId) qs.set('expected_release_id', expectedReleaseId);
+  const query = qs.toString();
+  const data = await apiClientV2.get<any[]>(`${base(id)}/instances${query ? `?${query}` : ''}`);
   return (data || []).map(normalizeInstance);
 }
 

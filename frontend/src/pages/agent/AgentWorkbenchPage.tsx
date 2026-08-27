@@ -134,11 +134,6 @@ export default function AgentWorkbenchPage() {
   const linkTypes = modelOntology?.linkTypes || []
   const actions = modelOntology?.actions || []
   const functions = modelOntology?.functions || []
-  const instances = modelOntology?.instances || []
-  const instancesCount = useCallback(
-    (objectTypeId: string) => instances.filter(i => i.objectTypeId === objectTypeId).length,
-    [instances],
-  )
 
   // -- 能力边界 --
   const { data: caps } = useQuery<AgentCapabilities>({
@@ -146,6 +141,22 @@ export default function AgentWorkbenchPage() {
     queryFn: () => agentApi.capabilities(oid, releaseId),
     enabled: !!oid && !!releaseId,
   })
+  // 实例计数以能力边界接口为准（后端按 ontology_id + release_id 对运行投影
+  // group-by，与助手技能卡同一数据源）。本体拓扑图加载的 versions workspace
+  // 载荷按设计只携带试跑隔离实例、不携带生产实例，直接用它计数恒为 0（MYW-61）。
+  const capsInstanceCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    ;(caps?.objectTypes || []).forEach(item => counts.set(item.id, item.instanceCount ?? 0))
+    return counts
+  }, [caps])
+  const instancesCount = useCallback(
+    (objectTypeId: string) => {
+      if (capsInstanceCounts.has(objectTypeId)) return capsInstanceCounts.get(objectTypeId)!
+      return (modelOntology?.instances || []).filter(i => i.objectTypeId === objectTypeId).length
+    },
+    [capsInstanceCounts, modelOntology],
+  )
+
   const dynamicObjectTypes = useMemo(() => {
     if (!caps) return []
     const allowed = new Set(caps.objectTypes.map(item => item.id))
@@ -532,7 +543,7 @@ export default function AgentWorkbenchPage() {
                 actions={actions}
                 functions={functions}
                 instancesCount={instancesCount}
-                instances={instances}
+                releaseId={releaseId}
                 oid={oid}
               />
             )}
