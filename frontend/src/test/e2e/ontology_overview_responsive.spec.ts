@@ -135,7 +135,7 @@ test('矮屏（1280x720）下 KPI 栏不被压碎，内容改为滚动呈现', a
   await expect(page.getByRole('heading', { name: '事实类型构成' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '最近发生了什么' })).toHaveCount(0)
   await page.locator('.runtime-summary').scrollIntoViewIfNeeded()
-  await expect(page.getByRole('heading', { name: '近 7 日运行汇总' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '运行汇总' })).toBeVisible()
 
   // 待处理事项横条可见，且可点击直达对应 Tab。
   const health = page.getByLabel('待处理事项')

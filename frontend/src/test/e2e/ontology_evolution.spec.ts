@@ -852,7 +852,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(profile.locator('.profile-meta')).not.toContainText('创建时间')
   await expect(profile.getByTestId('version-evolution-card')).toBeVisible()
   await expect(profile.getByRole('button', { name: '播放' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '近 7 日运行汇总' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '运行汇总' })).toBeVisible()
   // 已下线面板不得回潮：事实构成无操作性（KPI 副标题已含构成概要），
   // 事实流预览与治理推演重复，总览不再常驻这两个面板。
   await expect(page.getByRole('heading', { name: '事实类型构成' })).toHaveCount(0)
@@ -877,13 +877,19 @@ test('complete branch → real-data trial → reviewed release works in the brow
   // 绝不允许回到 overflow:hidden 裁切内容。
   await expect(page.locator('.ontology-overview-shell')).toHaveCSS('overflow-y', 'auto')
   const runtimeSummary = page.locator('.runtime-summary')
-  const runtimeStart = runtimeSummary.getByLabel('运行汇总开始日期')
-  const runtimeEnd = runtimeSummary.getByLabel('运行汇总结束日期')
-  await expect(runtimeStart).toHaveValue('0')
-  await expect(runtimeEnd).toHaveValue('6')
-  await runtimeStart.press('ArrowRight')
-  await expect(runtimeStart).toHaveValue('1')
-  await expect(runtimeSummary).toContainText('6 日聚合')
+  // 时间维度下拉替代原"时间范围"拖拽条：默认近7天（走 overview 自带 daily7d，
+  // 不额外发请求）；其余维度走 runtime-summary 显式时间窗接口。
+  const dimensionSelect = runtimeSummary.getByLabel('运行汇总时间维度')
+  await expect(dimensionSelect).toHaveValue('last7')
+  await expect(runtimeSummary.locator('.runtime-range-input')).toHaveCount(0)
+  const summaryResponsePromise = page.waitForResponse(response =>
+    response.url().includes(`/api/v2/formal/ontologies/${ontology.id}/runtime-summary`)
+    && response.request().method() === 'GET')
+  await dimensionSelect.selectOption('last30')
+  const summaryResponse = await summaryResponsePromise
+  expect(summaryResponse.ok(), `runtime-summary: ${await summaryResponse.text()}`).toBeTruthy()
+  const summaryBody = await summaryResponse.json()
+  expect(summaryBody.data.days.length).toBe(30)
 
   // 待审批信息不再摆上总览（横条与卡片均不展示），审批统一在「治理推演」处理。
   const overviewMain = page.locator('.overview-dashboard')

@@ -4,7 +4,9 @@
    避免边线层重挂载/回流打断节点卡悬停——那正是「悬停卡片一直在闪」的根源;
    高亮集合经稳定字符串参与依赖,hover 状态变化不再重建连线数组;
    流动动画在悬停/清单联动/详情弹窗检视期间仍经 data-still 暂停(缩放下观感);
-   节点卡可拖拽调整布局,位置按本体持久化到 localStorage;
+   自动布局按列垂直居中(矮列相对最高列居中,整图重心均衡),节点卡可拖拽微调,
+   位置按本体持久化到 localStorage;
+   滚轮缩放(preventScrolling 捕获滚轮,画布上不再透传页面滚动),左键拖空白平移;
    点选节点高亮整条直接上下游、其余压暗,点画布空白复位;
    数据资产节点点击打开数据预览,本体元素节点点击打开血缘详情弹窗。 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -205,6 +207,10 @@ function MappingChainPanoramaInner({
   const flowNodes = useMemo<Node[]>(() => {
     const datasets = model.nodes.filter(node => node.kind === 'dataset')
     const elements = model.nodes.filter(node => node.kind !== 'dataset')
+    // 按列垂直居中：矮列相对最高列的卡片堆居中，整图重心均衡，不再都从顶部堆起
+    const stackHeight = (count: number) => count * NODE_H + Math.max(count - 1, 0) * NODE_GAP
+    const centerOffset = (count: number) =>
+      (stackHeight(Math.max(datasets.length, elements.length)) - stackHeight(count)) / 2
     const result: Node[] = [
       {
         id: 'header:dataset', type: 'mappingChainHeader', draggable: false, selectable: false,
@@ -215,15 +221,20 @@ function MappingChainPanoramaInner({
         position: { x: COLUMN_X, y: HEADER_Y }, data: { label: '本体元素', count: elements.length },
       },
     ]
-    const push = (nodeId: string, column: number, index: number, card: ChainCardFields) => {
+    const push = (nodeId: string, column: number, index: number, card: ChainCardFields, offsetY: number) => {
       const highlighted = Boolean(highlightSet?.has(nodeId)) || hoverKey === nodeId || selectedKey === nodeId
       result.push({
         id: nodeId,
         type: 'mappingChainNode',
-        position: dragPositions[nodeId] ?? { x: column * COLUMN_X, y: FIRST_NODE_Y + index * (NODE_H + NODE_GAP) },
+        position: dragPositions[nodeId] ?? {
+          x: column * COLUMN_X,
+          y: FIRST_NODE_Y + offsetY + index * (NODE_H + NODE_GAP),
+        },
         data: { ...card, highlighted, dimmed: highlightSet ? !highlightSet.has(nodeId) : false } satisfies ChainCardData,
       })
     }
+    const datasetOffsetY = centerOffset(datasets.length)
+    const elementOffsetY = centerOffset(elements.length)
     datasets.forEach((node, index) => {
       const card = datasetCards.get(node.id.replace(/^dataset:/, ''))
       push(node.id, 0, index, {
@@ -231,7 +242,7 @@ function MappingChainPanoramaInner({
         sub: card?.sub ?? '',
         badge: card?.badge ?? null,
         icon: 'dataset',
-      })
+      }, datasetOffsetY)
     })
     elements.forEach((node, index) => {
       const row = rows.find(candidate => candidate.key === node.id)
@@ -240,7 +251,7 @@ function MappingChainPanoramaInner({
         sub: row ? `实例 ${row.instanceCount.toLocaleString()} 条 · 字段 ${row.mappedFields}/${row.totalFields}` : '',
         badge: row ? { text: row.statusLabel, tone: STATUS_TONE[row.status] ?? 'muted' } : null,
         icon: node.kind === 'object' ? 'object' : 'relation',
-      })
+      }, elementOffsetY)
     })
     return result
   }, [model, rows, datasetCards, highlightSet, hoverKey, selectedKey, dragPositions])
@@ -305,13 +316,12 @@ function MappingChainPanoramaInner({
         minZoom={0.3}
         nodesConnectable={false}
         elementsSelectable
-        zoomOnScroll={false}
-        panOnScroll={false}
-        // 节点可拖拽后恢复左键全景交互：拖节点=调整布局，拖空白=平移画布；
+        // 滚轮缩放（preventScrolling 捕获滚轮，画布上不再透传页面滚动）；
+        // 节点可拖拽后保留左键全景交互：拖节点=调整布局，拖空白=平移画布；
         // 静止点按不会被识别为拖拽，节点 click 不受影响
         panOnDrag
         zoomOnPinch
-        preventScrolling={false}
+        preventScrolling
         onNodeClick={handleNodeClick}
         onNodeDragStop={(_, node) => {
           if (node.type !== 'mappingChainNode') return

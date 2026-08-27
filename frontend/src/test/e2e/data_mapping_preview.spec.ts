@@ -5,6 +5,8 @@ interface MockOptions {
   datasetStatus?: 'approved' | 'rejected'
   withInstances?: boolean
   withUnmappedObject?: boolean
+  /** 追加第二条映射（日志类型，同源数据集）：全景出现 1 数据资产卡 + 2 本体元素卡 */
+  withSecondMappedObject?: boolean
   noMappings?: boolean
   darkTheme?: boolean
 }
@@ -55,18 +57,26 @@ async function mockMappingPreview(page: Page, options: MockOptions = {}) {
           id: 'object-order', name: 'Order', displayName: '订单', primaryKey: 'id',
           properties: [{ id: 'id', name: 'id', displayName: '订单编号', type: 'string' }],
         },
-        ...(options.withUnmappedObject ? [{
+        ...(options.withUnmappedObject || options.withSecondMappedObject ? [{
           id: 'object-log', name: 'Log', displayName: '日志', primaryKey: null,
           properties: [{ id: 'msg', name: 'msg', displayName: '消息', type: 'string' }],
         }] : []),
       ],
       linkTypes: [],
-      mappings: options.noMappings ? [] : [{
-        id: 'mapping-1', curatedDatasetId: 'dataset-wide', targetObjectTypeId: 'object-order',
-        entityClass: 'Order',
-        fieldMapping: { field_1: 'id', __applied_dataset_version_id__: 'dataset-version-23' },
-        status: 'published',
-      }],
+      mappings: options.noMappings ? [] : [
+        {
+          id: 'mapping-1', curatedDatasetId: 'dataset-wide', targetObjectTypeId: 'object-order',
+          entityClass: 'Order',
+          fieldMapping: { field_1: 'id', __applied_dataset_version_id__: 'dataset-version-23' },
+          status: 'published',
+        },
+        ...(options.withSecondMappedObject ? [{
+          id: 'mapping-log', curatedDatasetId: 'dataset-wide', targetObjectTypeId: 'object-log',
+          entityClass: 'Log',
+          fieldMapping: { field_2: 'msg' },
+          status: 'published',
+        }] : []),
+      ],
       linkMappings: [],
     })
     if (url.pathname === '/api/v2/curated') return ok([{
@@ -625,4 +635,55 @@ test('供给全景列抬头居中于卡片列，且整块内容水平居中于�
     const colCenter = inCol.reduce((sum, c) => sum + (c.left + c.right) / 2, 0) / inCol.length
     expect(Math.abs(head.cx - colCenter)).toBeLessThanOrEqual(8)
   }
+})
+
+test('供给全景两列卡片按列垂直居中，滚轮可缩放画布', async ({ page }) => {
+  // 1 数据资产卡 + 2 本体元素卡：矮列不再从顶部堆起，卡片堆垂直中心与最高列对齐；
+  // 画布滚轮从"只透传页面滚动"改为缩放（preventScrolling 捕获滚轮）。
+  await mockMappingPreview(page, { withSecondMappedObject: true })
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  const canvas = page.getByTestId('mapping-chain-panorama')
+  await expect(canvas).toBeVisible()
+  await expect(canvas.locator('.dmo-chain-node')).toHaveCount(3)
+  // 等测量后的 refit 生效：布局稳定两个采样点一致
+  let anchor = await canvas.boundingBox()
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await page.waitForTimeout(150)
+    const next = await canvas.boundingBox()
+    if (anchor && next && Math.abs(next.y - anchor.y) < 1) break
+    anchor = next
+  }
+
+  // ① 按列垂直居中：每列卡片堆的垂直中心与另一列一致（≤ 8px）
+  const layout = await page.evaluate(() => {
+    const canvasEl = document.querySelector('[data-testid="mapping-chain-panorama"]') as HTMLElement
+    const hostBox = canvasEl.getBoundingClientRect()
+    const cards = Array.from(canvasEl.querySelectorAll('.dmo-chain-node')).map(el => {
+      const box = el.getBoundingClientRect()
+      return { cx: box.left - hostBox.left + box.width / 2, cy: box.top - hostBox.top + box.height / 2 }
+    })
+    return { canvasW: hostBox.width, cards }
+  })
+  const leftCol = layout.cards.filter(card => card.cx < layout.canvasW / 2)
+  const rightCol = layout.cards.filter(card => card.cx >= layout.canvasW / 2)
+  expect(leftCol.length).toBe(1)
+  expect(rightCol.length).toBe(2)
+  const stackCenter = (column: typeof leftCol) => column.reduce((sum, card) => sum + card.cy, 0) / column.length
+  expect(Math.abs(stackCenter(leftCol) - stackCenter(rightCol))).toBeLessThanOrEqual(8)
+
+  // ② 滚轮缩放：视口 transform 的缩放分量必须变化（此前 zoomOnScroll=false 滚轮无效果）
+  const readScale = () => page.evaluate(() => {
+    const viewport = document.querySelector(
+      '[data-testid="mapping-chain-panorama"] .react-flow__viewport',
+    ) as HTMLElement | null
+    const transform = viewport ? getComputedStyle(viewport).transform : 'none'
+    return transform && transform !== 'none' ? new DOMMatrix(transform).a : 1
+  })
+  const scaleBefore = await readScale()
+  await canvas.hover()
+  await page.mouse.wheel(0, -480)
+  await page.waitForTimeout(450)
+  const scaleAfter = await readScale()
+  expect(scaleAfter).toBeGreaterThan(scaleBefore + 0.05)
 })

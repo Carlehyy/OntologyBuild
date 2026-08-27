@@ -326,6 +326,10 @@
 .kpi-status.is-warning { color: #ef8b17; }
 .kpi-status.is-neutral { color: #607086; font-weight: 500; }
 .kpi-status.is-purple { color: #755bd3; }
+.kpi-status.is-blue { color: var(--ov-blue); }
+.kpi-status.is-teal { color: var(--ov-teal); }
+/* 状态行 + 释义脚注两行并存时：脚注（末行）仍钉在卡底，状态行紧随内容之后 */
+.kpi-status:not(:last-child) { margin-top: 0; margin-bottom: 8px; }
 
 .overview-hero-grid > .runtime-summary { grid-column: 2; grid-row: 2; }
 
@@ -359,22 +363,33 @@
 .runtime-empty-note svg { flex: 0 0 auto; color: #6b8dca; }
 .runtime-empty-note > span { color: #59687c; font-size: 10px; font-weight: 650; }
 .runtime-empty-note small { display: block; margin-top: 2px; color: #96a1af; font-size: 10px; font-weight: 500; }
-.runtime-range { margin-top: 11px; }
-.runtime-range-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #8490a2; font-size: 10px; }
-.runtime-range-heading output { color: #526177; font-size: 11px; font-weight: 650; }
-.runtime-range-control { position: relative; height: 24px; margin-top: 3px; }
-.runtime-range-track { position: absolute; top: 10px; right: 7px; left: 7px; height: 4px; overflow: hidden; border-radius: 999px; background: #dfe6ed; }
-.runtime-range-track i { position: absolute; top: 0; bottom: 0; left: var(--runtime-range-start); width: calc(var(--runtime-range-end) - var(--runtime-range-start)); border-radius: inherit; background: linear-gradient(90deg, #18a58f, #3f82ed); }
-.runtime-range-input { position: absolute; inset: 0; width: 100%; height: 24px; margin: 0; appearance: none; -webkit-appearance: none; background: transparent; pointer-events: none; }
-.runtime-range-input::-webkit-slider-runnable-track { height: 4px; background: transparent; }
-.runtime-range-input::-webkit-slider-thumb { width: 15px; height: 15px; margin-top: -5.5px; appearance: none; -webkit-appearance: none; border: 3px solid white; border-radius: 50%; background: #2e76df; box-shadow: 0 0 0 1px #2e76df, 0 2px 5px rgba(46, 83, 135, .2); cursor: grab; pointer-events: auto; }
-.runtime-range-input::-moz-range-track { height: 4px; background: transparent; }
-.runtime-range-input::-moz-range-thumb { width: 10px; height: 10px; border: 3px solid white; border-radius: 50%; background: #2e76df; box-shadow: 0 0 0 1px #2e76df, 0 2px 5px rgba(46, 83, 135, .2); cursor: grab; pointer-events: auto; }
-.runtime-range-input:focus-visible::-webkit-slider-thumb { outline: 2px solid rgba(52, 120, 238, .48); outline-offset: 3px; }
-.runtime-range-input:focus-visible::-moz-range-thumb { outline: 2px solid rgba(52, 120, 238, .48); outline-offset: 3px; }
-.runtime-range-input:active::-webkit-slider-thumb { cursor: grabbing; transform: scale(1.08); }
-.runtime-range-input:active::-moz-range-thumb { cursor: grabbing; transform: scale(1.08); }
-.runtime-range-bounds { display: flex; align-items: center; justify-content: space-between; color: #98a2b1; font-size: 10px; }
+
+/* 运行汇总时间维度下拉：替代原"时间范围"拖拽条，作为面板标题的子行控件 */
+.runtime-dimension { display: inline-flex; align-items: center; gap: 8px; }
+.runtime-dimension-select {
+  height: 26px;
+  border: 1px solid var(--ov-border);
+  border-radius: 8px;
+  padding: 0 6px;
+  background: #fff;
+  color: #526076;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.runtime-dimension-select:hover { border-color: #c6d3e0; color: #33415a; }
+.runtime-dimension-select:focus-visible { outline: 2px solid rgba(52, 120, 238, .48); outline-offset: 2px; }
+.runtime-custom-range { display: inline-flex; align-items: center; gap: 5px; color: #8490a2; font-size: 11px; }
+.runtime-custom-range input {
+  height: 26px;
+  border: 1px solid var(--ov-border);
+  border-radius: 8px;
+  padding: 0 6px;
+  background: #fff;
+  color: #526076;
+  font-size: 11px;
+}
+.runtime-custom-range input:focus-visible { outline: 2px solid rgba(52, 120, 238, .48); outline-offset: 2px; }
 
 .overview-loading, .overview-error { display: flex; min-height: 420px; align-items: center; justify-content: center; gap: 9px; border: 1px solid var(--ov-border); border-radius: 14px; background: rgba(255,255,255,.92); color: #758297; font-size: 13px; }
 .overview-error { color: #c75858; }
