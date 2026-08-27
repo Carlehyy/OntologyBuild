@@ -537,7 +537,7 @@ export function relaxForClearance(
   const maxDegree = maxDegreeOf(edges)
   const byId = new Map(nodes.map(node => [node.id, node]))
   const entries: { id: string; occ: Occupancy; clusterId: string }[] = []
-  for (const [id, point] of relaxed) {
+  for (const id of relaxed.keys()) {
     const node = byId.get(id)
     if (!node) continue
     const radius = nodeSize(node, degrees.get(id) || 0, maxDegree) / 2
@@ -569,10 +569,8 @@ export function relaxForClearance(
   for (const entry of entries) clampToBounds(relaxed.get(entry.id)!)
 
   for (let iter = 0; iter < iterations; iter++) {
-    let moved = false
-
     // 1) 碰撞推开（稳定序成对遍历）
-    moved = resolveCollisionsOnce()
+    const moved = resolveCollisionsOnce()
 
     // 2) 簇锚回拉
     for (const entry of entries) {
