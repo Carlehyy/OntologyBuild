@@ -187,6 +187,12 @@ export interface ReflectionSettings {
   pending_count: number
 }
 
+/** 悬浮 AI 助手的页面可见范围（平台级配置）：隐藏名单语义，空名单 = 全部页面可见 */
+export interface AssistantWidgetConfig {
+  hidden_menu_keys: string[]
+  updated_at: string | null
+}
+
 export interface MemoryConflictError {
   detail: string
   existing?: { id: string; content: string; similarity: number }
@@ -287,4 +293,8 @@ export const superAssistantApi = {
   reflectionSettings: () => apiClientV2.get<ReflectionSettings>('/super-assistant/reflection/settings'),
   updateReflectionSettings: (body: { auto_accept_enabled: boolean }) =>
     apiClientV2.put<ReflectionSettings>('/super-assistant/reflection/settings', body),
+
+  widgetConfig: () => apiClientV2.get<AssistantWidgetConfig>('/super-assistant/widget-config'),
+  updateWidgetConfig: (hiddenMenuKeys: string[]) =>
+    apiClientV2.put<AssistantWidgetConfig>('/super-assistant/widget-config', { hidden_menu_keys: hiddenMenuKeys }),
 }

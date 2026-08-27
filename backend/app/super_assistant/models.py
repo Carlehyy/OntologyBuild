@@ -247,3 +247,19 @@ class SuperAssistantMcpServer(Base):
     last_tested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, onupdate=_now)
+
+
+class SuperAssistantWidgetConfig(Base):
+    """悬浮 AI 助手（迷你超级助手）的页面可见范围配置（平台级单例）。
+
+    只存"隐藏名单"：hidden_menu_keys 列出左导航叶子菜单键，命中这些键的
+    页面不渲染右下角悬浮入口；未配置（无行）或名单为空表示全部页面可见，
+    与功能上线前的行为保持一致。新增导航页面默认可见，无需回填。
+    """
+
+    __tablename__ = "super_assistant_widget_config"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: "default")
+    hidden_menu_keys: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    updated_by: Mapped[str | None] = mapped_column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, onupdate=_now)

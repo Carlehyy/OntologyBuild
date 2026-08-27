@@ -24,6 +24,7 @@ import {
   Rocket,
   Settings,
   Share2,
+  Sparkles,
   Table2,
   Waypoints,
 } from 'lucide-react'
@@ -115,6 +116,7 @@ export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
       { key: 'settings.domains', to: '/settings/domains', icon: Globe, label: '领域设置', adminOnly: true },
       { key: 'settings.monitoring', to: '/settings/monitoring', icon: Activity, label: '运行监控', description: '接口性能与平台运行健康度', adminOnly: true },
       { key: 'settings.assistant-eval', to: '/settings/assistant-eval', icon: FlaskConical, label: '助手评估', description: '基于 OpenJudge 的助手会话质量评估与报告', adminOnly: true },
+      { key: 'settings.assistant-widget', to: '/settings/assistant-widget', icon: Sparkles, label: '超级助手', description: '配置悬浮 AI 助手在哪些目录页面显示', adminOnly: true },
     ],
   },
 ]

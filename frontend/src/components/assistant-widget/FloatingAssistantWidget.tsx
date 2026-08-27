@@ -1,13 +1,17 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { Loader2, Sparkles } from 'lucide-react'
 
+import { superAssistantApi } from '@/api/superAssistant'
+import { PLATFORM_NAV_ITEMS } from '@/config/navigation'
 import { useAssistantWidgetStore } from '@/stores/assistantWidgetStore'
 import {
   WIDGET_FAB_BOTTOM,
   WIDGET_PANEL_BOTTOM,
   WIDGET_Z,
   widgetAnchor,
+  widgetVisibleOnPath,
 } from '@/components/assistant-widget/logic'
 
 // 面板依赖 antd / @ant-design/x，体积大，懒加载分包：首屏只承载这个轻量悬浮球
@@ -29,6 +33,8 @@ function PanelSkeleton({ bottomClass, zClass }: { bottomClass: string; zClass: s
  * 层级与位置按 widgetAnchor 策略分级（见 logic.ts）：常规页面 z-40
  * （让抽屉/模态/toast 正常覆盖），图谱编辑器等全屏覆盖层页面抬升至
  * z-[10000] 并上移避让页面自带控件。
+ * 页面可见范围由管理员在 系统设置 → 超级助手 平台级配置（隐藏名单）；
+ * 配置拉取失败或未配置时保持全部页面可见（与功能上线前一致）。
  */
 export default function FloatingAssistantWidget() {
   const open = useAssistantWidgetStore(state => state.open)
@@ -37,6 +43,18 @@ export default function FloatingAssistantWidget() {
   const toggle = useAssistantWidgetStore(state => state.toggle)
   const location = useLocation()
   const anchor = widgetAnchor(location.pathname)
+
+  const { data: widgetConfig } = useQuery({
+    queryKey: ['assistant-widget-config'],
+    queryFn: () => superAssistantApi.widgetConfig(),
+    staleTime: 60_000,
+    retry: 1,
+  })
+  const hiddenMenuKeys = useMemo(
+    () => new Set(Array.isArray(widgetConfig?.hidden_menu_keys) ? widgetConfig.hidden_menu_keys : []),
+    [widgetConfig],
+  )
+  if (!widgetVisibleOnPath(location.pathname, PLATFORM_NAV_ITEMS, hiddenMenuKeys)) return null
 
   return (
     <>
