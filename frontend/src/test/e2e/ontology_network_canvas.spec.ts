@@ -215,11 +215,13 @@ test('本体网络画布渲染全局图：默认结构层、统计、图例与�
     ['实例标签至少 2/4 可见，实际可见：', visibleInstances.join('、') || '无'].join(''),
   )
 
-  // MYW-58 二期：碰撞消解后节点符号之间应无深重叠（取节点圆包围盒两两判定）
+  // MYW-58 二期：碰撞消解后节点符号之间应无深重叠。
+  // 注意 ECharts SVG 会把圆形符号渲染为 path（细长的连线也是 path），
+  // 因此按"近正方形且尺寸 > 12px"过滤出节点符号，避免断言空转。
   const deepOverlaps = await page.evaluate(() => {
-    const rects = [...document.querySelectorAll('[data-testid="network-chart-host"] svg circle')]
-      .map(circle => circle.getBoundingClientRect())
-      .filter(rect => rect.width > 4 && rect.height > 4)
+    const rects = [...document.querySelectorAll('[data-testid="network-chart-host"] svg path, [data-testid="network-chart-host"] svg circle')]
+      .map(el => el.getBoundingClientRect())
+      .filter(rect => rect.width > 12 && rect.height > 12 && rect.width <= 70 && Math.abs(rect.width - rect.height) <= 2)
     let hits = 0
     for (let i = 0; i < rects.length; i++) {
       for (let j = i + 1; j < rects.length; j++) {

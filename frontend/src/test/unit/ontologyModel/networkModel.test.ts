@@ -120,6 +120,28 @@ describe('clusterLayout（确定性本体分区布局）', () => {
   })
 })
 
+describe('clusterLayout 回归：BFS 序 ≠ 全局序时不得丢节点', () => {
+  it('组件内每个类型都必须有坐标（历史 bug：按全局下标索引组件数组导致越界丢节点）', () => {
+    // 让最高度节点排在数组末尾：BFS 从它出发，访问序与全局序必然错开
+    const nodes = [
+      makeNode({ id: 'type:a1', entityId: 'a1', kind: 'object_type', label: '叶子一', objectTypeId: 'a1' }),
+      makeNode({ id: 'type:a2', entityId: 'a2', kind: 'object_type', label: '叶子二', objectTypeId: 'a2' }),
+      makeNode({ id: 'type:a3', entityId: 'a3', kind: 'object_type', label: '中间', objectTypeId: 'a3' }),
+      makeNode({ id: 'type:a4', entityId: 'a4', kind: 'object_type', label: '枢纽', objectTypeId: 'a4' }),
+    ]
+    const edges: NetworkGraphEdge[] = [
+      { id: 's1', kind: 'schema_relation', source: 'type:a4', target: 'type:a3', label: 'r' },
+      { id: 's2', kind: 'schema_relation', source: 'type:a3', target: 'type:a1', label: 'r' },
+      { id: 's3', kind: 'schema_relation', source: 'type:a3', target: 'type:a2', label: 'r' },
+    ]
+    const layout = clusterLayout(nodes, edges)
+    assert.equal(layout.positions.size, nodes.length, '所有类型都必须有坐标')
+    for (const node of nodes) {
+      assert.ok(layout.positions.has(node.id), `${node.label} 缺少坐标`)
+    }
+  })
+})
+
 describe('fitLayoutToViewport（视口归一化）', () => {
   it('把布局拉伸到恰好填满视图盒：中心即盒中心，节点都落在留白内', () => {
     const nodes = [

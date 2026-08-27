@@ -155,6 +155,9 @@ function componentLevels(
   const degreeOf = (id: string) => adjacency.get(id)?.length ?? 0
   const levels: NetworkGraphNode[][] = []
   const levelOf = new Map<string, number>()
+  // 组件数组是 BFS 访问序，与全局 typeNodes 顺序无关：必须按 id 取节点，
+  // 不能用全局下标索引组件数组（否则越界读 undefined，节点被静默丢弃）。
+  const byId = new Map(component.map(node => [node.id, node]))
   const root = component[0]
   levels.push([root])
   levelOf.set(root.id, 0)
@@ -164,7 +167,8 @@ function componentLevels(
       for (const peer of adjacency.get(node.id) ?? []) {
         if (levelOf.has(peer)) continue
         levelOf.set(peer, depth + 1)
-        next.push(component[orderIndex.get(peer)!])
+        const peerNode = byId.get(peer)
+        if (peerNode) next.push(peerNode)
       }
     }
     if (next.length > 0) {
@@ -587,7 +591,10 @@ export function relaxForClearance(
 
   // 3) 收尾阶段：关闭簇锚，纯碰撞迭代直至完全无重叠（有界），保证净空是
   //    硬约束而不是"与锚力平衡后的残差"。位移被边界盒钳住，不会飘出分区。
-  for (let iter = 0; iter < iterations; iter++) {
+  //    密集结扣处一次推开会引发邻接连锁，需要更多轮数才能解开：
+  //    节点少时给足预算，超大图用折中轮数换时间。
+  const tailIterations = entries.length <= 150 ? 240 : 80
+  for (let iter = 0; iter < tailIterations; iter++) {
     if (!resolveCollisionsOnce()) break
   }
 
