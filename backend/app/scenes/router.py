@@ -100,7 +100,7 @@ def get_scene(
     scene_id: str, db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    return _ok(query_service.scene_detail(_require_scene(db, scene_id)))
+    return _ok(query_service.scene_detail(db, _require_scene(db, scene_id)))
 
 
 @router.patch("/{scene_id}")

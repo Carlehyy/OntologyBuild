@@ -76,6 +76,18 @@ def test_create_with_definition_freezes_v1(client, auth_headers):
     assert scene["version_count"] == 1
 
 
+def test_get_scene_detail_returns_existing_scene(client, auth_headers):
+    scene = _create_scene(client, auth_headers, definition=VALID_DEFINITION)
+    resp = client.get(f"/api/v2/scenes/{scene['id']}", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["id"] == scene["id"]
+    assert data["name"] == scene["name"]
+    assert data["status"] == "draft"
+    assert data["current_version_no"] == 1
+    assert data["version_count"] == 1
+
+
 def test_create_rejects_invalid_definition_atomically(client, auth_headers):
     resp = client.post(
         "/api/v2/scenes",
