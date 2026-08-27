@@ -191,7 +191,11 @@ export default function ProfileModal({ open, onClose }: { open: boolean; onClose
         </div>
       )}
 
-      <div className="grid grid-cols-[128px_minmax(0,1fr)] gap-5">
+      {/* 双栏区域固定最小高度：两个 tab 内容量差异大（账号信息约为环境变量
+          的三倍高），不固定高度时切换 tab 弹窗会忽高忽低。min-h 覆盖账号
+          信息面板的完整内容，选中环境变量时同样保持这一高度；内容超出时
+          仍随内容增高并由 Modal 整体限高滚动。 */}
+      <div className="grid min-h-[30rem] grid-cols-[128px_minmax(0,1fr)] items-start gap-5">
         {/* 左侧竖向 tab 导航 */}
         <nav
           role="tablist"
