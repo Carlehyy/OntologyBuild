@@ -16,6 +16,21 @@ export function parseSessionBinding(params: Pick<URLSearchParams, 'get'>): Sessi
   return { ontologyId, versionId }
 }
 
+/**
+ * 「业务澄清」入口锚点：/explore?session=new。
+ * 表示用户从其他页面（如本体管理首卡）显式要求开启一个新会话：
+ * 进入页面保持空白待建态，真实会话由首条消息/首个附件经 ensureSession 懒创建，
+ * 避免重复点击入口堆积空会话。与绑定参数同时出现时待建意图优先（不自动创建绑定会话）。
+ */
+export function parsePendingNewSession(params: Pick<URLSearchParams, 'get'>): boolean {
+  return (params.get('session') || '').trim() === 'new'
+}
+
+/** 首次落点选择：普通进入自动恢复最近会话；待建新会话时保持空白等待输入。 */
+export function shouldAutoSelectLatestSession(pendingNew: boolean, hasCurrentSession: boolean): boolean {
+  return !pendingNew && !hasCurrentSession
+}
+
 export function sessionBindingKey(binding: SessionBinding): string {
   return `${binding.ontologyId}:${binding.versionId}`
 }

@@ -23,6 +23,7 @@ export default defineConfig({
     '**/explore_async_isolation.spec.ts',
     '**/explore_diagram_interaction.spec.ts',
     '**/explore_document_risk.spec.ts',
+    '**/explore_pending_new_session.spec.ts',
     '**/explore_process_panel.spec.ts',
     '**/file_asset_links.spec.ts',
     '**/governance_async_refresh.spec.ts',

@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
+  parsePendingNewSession,
   parseSessionBinding,
   resolveBoundSession,
   sessionBindingKey,
+  shouldAutoSelectLatestSession,
 } from '../../../pages/explore/sessionBinding.ts'
 
 
@@ -72,5 +74,34 @@ describe('resolveBoundSession', () => {
   it('历史会话缺绑定字段（旧数据）不参与匹配', () => {
     const legacy = [{ id: 's1' }]
     assert.deepEqual(resolveBoundSession(legacy, binding, 's1'), { action: 'create' })
+  })
+})
+
+describe('parsePendingNewSession', () => {
+  it('session=new 识别为待建新会话意图', () => {
+    assert.equal(parsePendingNewSession(params({ session: 'new' })), true)
+    assert.equal(parsePendingNewSession(params({ session: ' new ' })), true)
+  })
+
+  it('无参数或取值不符按普通进入处理', () => {
+    assert.equal(parsePendingNewSession(params({})), false)
+    assert.equal(parsePendingNewSession(params({ session: '' })), false)
+    assert.equal(parsePendingNewSession(params({ session: 'old' })), false)
+    assert.equal(parsePendingNewSession(params({ ontologyId: 'ont-1' })), false)
+  })
+})
+
+describe('shouldAutoSelectLatestSession', () => {
+  it('普通进入且未选中会话 → 自动恢复最近会话', () => {
+    assert.equal(shouldAutoSelectLatestSession(false, false), true)
+  })
+
+  it('已选中会话时不自动切换', () => {
+    assert.equal(shouldAutoSelectLatestSession(false, true), false)
+  })
+
+  it('待建新会话态保持空白，不恢复最近会话', () => {
+    assert.equal(shouldAutoSelectLatestSession(true, false), false)
+    assert.equal(shouldAutoSelectLatestSession(true, true), false)
   })
 })

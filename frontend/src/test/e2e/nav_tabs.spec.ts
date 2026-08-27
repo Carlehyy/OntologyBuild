@@ -113,15 +113,15 @@ test('顶栏多标签页：打开、切换、域内路径恢复、关闭与刷�
   await expect(agentTab).toHaveAttribute('aria-selected', 'true')
   await expect(ontologiesTab).toHaveCount(0)
 
-  // 侧边栏展开本体模型分组，经子项打开本体管理，出现第二个标签
+  // 侧边栏展开本体模型分组：子项首项为本体管理，展开即自动进入并生成标签
   await page.getByRole('navigation').getByRole('button', { name: '本体模型' }).click()
-  await expect(page).toHaveURL(/\/#\/explore$/)
-  await page.getByRole('navigation').getByRole('link', { name: '本体管理' }).click()
   await expect(page).toHaveURL(/\/#\/ontologies$/)
   await expect(agentTab).toHaveAttribute('aria-selected', 'false')
   await expect(ontologiesTab).toHaveAttribute('aria-selected', 'true')
 
-  // 收起入口页产生的本体建模标签，聚焦本体助手与本体管理的双标签流转
+  // 经子项打开本体建模标签，再收起该入口标签，聚焦本体助手与本体管理的双标签流转
+  await page.getByRole('navigation').getByRole('link', { name: '本体建模' }).click()
+  await expect(page).toHaveURL(/\/#\/explore$/)
   await tabList.getByRole('tab', { name: '本体模型 · 本体建模' })
     .getByRole('button', { name: '关闭 本体模型 · 本体建模' }).click()
 
@@ -217,10 +217,8 @@ test('标签可见标题使用平台导航的一级/二级菜单标签，不使�
 
   const tabList = page.getByRole('tablist', { name: '页面标签' })
 
-  // 列表页：一级 · 二级菜单标签
+  // 列表页：一级 · 二级菜单标签（展开分组自动落到首项本体管理）
   await page.getByRole('navigation').getByRole('button', { name: '本体模型' }).click()
-  await expect(page).toHaveURL(/\/#\/explore$/)
-  await page.getByRole('navigation').getByRole('link', { name: '本体管理' }).click()
   await expect(page).toHaveURL(/\/#\/ontologies$/)
   const ontologiesTab = tabList.getByRole('tab', { name: '本体模型 · 本体管理' })
   await expect(ontologiesTab).toBeVisible()

@@ -27,7 +27,7 @@ import CanvasPanel from './CanvasPanel'
 import DocumentsDrawer from './DocumentsDrawer'
 import DraftReviewDrawer from './DraftReviewDrawer'
 import FileWorkspaceDrawer from './FileWorkspaceDrawer'
-import { parseSessionBinding, resolveBoundSession, sessionBindingKey } from './sessionBinding'
+import { parsePendingNewSession, parseSessionBinding, resolveBoundSession, sessionBindingKey, shouldAutoSelectLatestSession } from './sessionBinding'
 import { SplitHandle, useSplitLayout } from '@/hooks/useSplitLayout'
 import type { ModelConfig } from '@/types/ontology'
 
@@ -187,7 +187,14 @@ export default function ExplorationPage() {
   const { toast } = useToast()
   // -- URL 绑定锚点（/explore?ontologyId=…&versionId=…，来自版本试跑门禁的补齐入口） --
   const [searchParams] = useSearchParams()
-  const binding = useMemo(() => parseSessionBinding(searchParams), [searchParams])
+  // -- 「业务澄清」待建新会话锚点（/explore?session=new，来自本体管理首卡入口）：
+  //    进入时保持空白待建态、不恢复最近会话；真实会话由首条消息/首个附件懒创建。
+  //    与绑定参数同现时待建意图优先，避免未经输入就创建绑定会话。
+  const pendingNewSession = useMemo(() => parsePendingNewSession(searchParams), [searchParams])
+  const binding = useMemo(
+    () => (pendingNewSession ? null : parseSessionBinding(searchParams)),
+    [searchParams, pendingNewSession],
+  )
   // -- 会话 --
   const { data: sessions = [], refetch: refetchSessions, isSuccess: sessionsLoaded } = useQuery({
     queryKey: ['bx-sessions'], queryFn: () => explorationApi.sessions(),
@@ -353,11 +360,13 @@ export default function ExplorationPage() {
     }
   }, [cancelActiveChat, selectSession])
 
-  // 首次进入自动选中最近会话；绑定态下由绑定解析决定选中，不抢绑定的落点
+  // 首次进入自动选中最近会话；绑定态由绑定解析决定选中；待建新会话（?session=new）
+  // 保持空白，等首条输入经 ensureSession 懒创建后再进入常规选中逻辑
   useEffect(() => {
     if (binding) return
-    if (!sid && sessions.length > 0) void loadSession(sessions[0].id)
-  }, [sessions, sid, loadSession, binding])
+    if (!shouldAutoSelectLatestSession(pendingNewSession, Boolean(sid))) return
+    if (sessions.length > 0) void loadSession(sessions[0].id)
+  }, [sessions, sid, loadSession, binding, pendingNewSession])
 
   const newSession = async () => {
     const s = await explorationApi.createSession()
