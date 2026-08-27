@@ -5,6 +5,7 @@
   PUT    /agent/profile            更新边界（仅管理员）
   GET    /agent/capabilities       解析后的能力概览 + 技能卡预览（前端边界可视化）
   POST   /agent/chat               对话（默认 SSE 流式；stream=false 同步返回）
+  GET    /agent/chat/runs/{run_id} 回合状态轮询（离开页面后恢复「正在处理」展示）
   GET    /agent/conversations      当前用户在该本体下的会话列表
   GET    /agent/conversations/{id} 会话详情（含完整轨迹，审计视图）
   GET    /agent/conversations/{id}/export 完整会话 JSON（不限制消息条数）
@@ -27,6 +28,7 @@ from app.deps import get_db, get_current_user, require_admin
 from app.models.ontology import OntologyProject
 from app.ontologies.access import require_ontology_access
 from app.ontologies.agent_runtime import (
+    chat_runs,
     chat_service as _chat_service,
     conversation_service as _conversation_service,
     dynamic_workflow as _dynamic_workflow,
@@ -530,6 +532,19 @@ def cancel_chat(ontology_id: str, body: S.ChatCancelRequest,
             if cancelled
             else "该回合不在本进程执行中（可能已结束或属于其他实例）。"),
     })
+
+
+@router.get("/{ontology_id}/agent/chat/runs/{run_id}")
+def get_chat_run(ontology_id: str, run_id: str,
+                 db: Session = Depends(get_db),
+                 current_user=Depends(get_current_user)):
+    """查询回合状态（run_id 由前端生成，随 chat 请求注册）。
+
+    SSE 推送与执行解耦后，前端在离开页面后凭 run_id 轮询此端点恢复
+    「正在处理」的展示（MYW-71）。
+    """
+    _require_ontology(db, ontology_id)
+    return _ok(chat_runs.run_status_payload(run_id, ontology_id))
 
 
 @router.get("/{ontology_id}/agent/conversations")

@@ -46,6 +46,8 @@ export interface ChatMsg {
   proposals: AgentProposal[]
   loading?: boolean
   error?: string
+  /** 后台回合恢复中的占位气泡：提示用户离开页面期间消息仍在处理（MYW-71） */
+  resumed?: boolean
   /**
    * 消息时刻（ISO 字符串）。历史会话来自后端 AgentMessage.created_at，
    * 实时会话由前端在发送 / 回合终态写入本地时钟；调用链按轮次用它

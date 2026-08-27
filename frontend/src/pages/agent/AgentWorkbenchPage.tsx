@@ -21,7 +21,7 @@ import { ontologyApi, modelApi } from '@/api/ontologies'
 import { useAuthStore } from '@/stores/authStore'
 import {
   agentApi, streamAgentChat,
-  type AgentCapabilities, type AgentStep,
+  type AgentCapabilities, type AgentChatRun, type AgentStep,
 } from '@/api/agent'
 import { ProposalCard } from './ProposalCard'
 import { SentinelProposalCard } from './SentinelProposalCard'
@@ -36,6 +36,14 @@ import {
   queuedPromptsKey,
   type QueuedPrompt,
 } from './components/queuedPrompts'
+import {
+  loadActiveChatRun,
+  patchActiveChatRunConversationId,
+  persistActiveChatRun,
+  RESUME_POLL_INTERVAL_MS,
+  RESUME_POLL_TIMEOUT_MS,
+  type ActiveChatRun,
+} from './components/activeChatRun'
 import {
   AgentCallChainView,
   Md,
@@ -181,6 +189,19 @@ export default function AgentWorkbenchPage() {
   const abortRef = useRef<AbortController | null>(null)
   const runIdRef = useRef<string | null>(null)
   const stoppedRef = useRef(false)
+  // 状态镜像：后台回合恢复流程跨 await 检查「是否仍停留在原会话/本体」用
+  const conversationIdRef = useRef<string | null>(null)
+  const oidRef = useRef('')
+  useEffect(() => { oidRef.current = oid }, [oid])
+  // 同一时刻只允许一个活动回合（send 或后台恢复），避免 busy 与 runId 互相踩踏
+  const turnOwnerRef = useRef<'send' | 'resume' | null>(null)
+  const resumeSeqRef = useRef(0)
+  const resumeRef = useRef<((entry: ActiveChatRun) => Promise<void>) | null>(null)
+  // 返回页面时的后台回合登记：刷新/跳转后仍可恢复「正在处理」的展示（MYW-71）
+  const [backgroundRun, setBackgroundRun] = useState<ActiveChatRun | null>(null)
+  useEffect(() => { setBackgroundRun(loadActiveChatRun()) }, [])
+  // 组件卸载（SPA 跳转）后终止仍在运行的恢复轮询；回合本身由后端继续执行落库
+  useEffect(() => () => { resumeSeqRef.current++ }, [])
   // 追问队列：运行中提交的问题排队，回合终态后自动派发下一条
   const queuedRef = useRef<QueuedPrompt[]>([])
   const [queuedCount, setQueuedCount] = useState(0)
@@ -210,6 +231,7 @@ export default function AgentWorkbenchPage() {
   })
 
   const resetChat = useCallback(() => {
+    conversationIdRef.current = null
     setConversationId(null)
     setMessages([])
     setShowHistory(false)
@@ -260,6 +282,7 @@ export default function AgentWorkbenchPage() {
       createdAt: m.createdAt || null,
     }))
     setConversationId(cid)
+    conversationIdRef.current = cid
     setMessages(restoredMessages)
     setDecisionRunId(null)
     setGraphSignal(null)
@@ -282,6 +305,13 @@ export default function AgentWorkbenchPage() {
       }
     }
     setShowHistory(false)
+    // 打开的会话恰有登记中的后台回合且当前空闲 → 自动恢复「正在处理」展示（MYW-71）。
+    // 由 send / 恢复流程自身触发的装载（turnOwner 非空）不重复挂接。
+    const activeEntry = loadActiveChatRun()
+    if (!turnOwnerRef.current && activeEntry
+      && activeEntry.ontologyId === oid && activeEntry.conversationId === cid) {
+      void resumeRef.current?.(activeEntry)
+    }
   }
 
   const removeConversation = async (cid: string) => {
@@ -326,10 +356,21 @@ export default function AgentWorkbenchPage() {
     }
     setInput('')
     setBusy(true)
+    turnOwnerRef.current = 'send'
     stoppedRef.current = false
     runIdRef.current = typeof crypto !== 'undefined' && 'randomUUID' in crypto
       ? crypto.randomUUID()
       : `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    // 登记后台回合：离开页面（刷新/跳转）后凭 run_id 恢复「正在处理」展示（MYW-71）
+    const runEntry: ActiveChatRun = {
+      runId: runIdRef.current,
+      ontologyId: oid,
+      conversationId: conversationIdRef.current,
+      question,
+      startedAt: new Date().toISOString(),
+    }
+    persistActiveChatRun(runEntry)
+    setBackgroundRun(null)
     abortRef.current = new AbortController()
     if (/(决策推演|推演.{0,24}(方案|策略|未来|决策)|(?:方案|策略).{0,24}(比较|推演))/.test(question)) {
       setWorkspaceView('decision')
@@ -348,12 +389,16 @@ export default function AgentWorkbenchPage() {
         m.id === aid ? { ...m, ...(typeof p === 'function' ? p(m) : p) } : m))
 
     const turnSteps: AgentStep[] = []
+    let streamLost = false
     try {
       await streamAgentChat(oid, {
         message: question, conversationId, modelId, releaseId, runId: runIdRef.current,
       }, ev => {
-        if (ev.type === 'meta') setConversationId(ev.conversationId)
-        else if (ev.type === 'step') {
+        if (ev.type === 'meta') {
+          setConversationId(ev.conversationId)
+          conversationIdRef.current = ev.conversationId
+          patchActiveChatRunConversationId(ev.conversationId)
+        } else if (ev.type === 'step') {
           const { type: _t, ...step } = ev
           const typedStep = step as AgentStep
           turnSteps.push(typedStep)
@@ -380,24 +425,142 @@ export default function AgentWorkbenchPage() {
       if (stoppedRef.current || (e?.name === 'AbortError')) {
         patch(m => m.loading ? { content: '（已停止）', loading: false } : {})
       } else {
-        patch({ error: e?.message || '请求失败', loading: false })
+        // 连接中断但回合已在后台继续：走恢复流程，而不是把消息标记为失败丢失
+        streamLost = true
+        patch({ error: e?.message || '连接中断，正在恢复后台处理…', loading: false })
       }
     } finally {
       // 回合终态（答复 / 停止 / 异常）补写本地时钟，调用链据此展示每轮结束时间与总耗时（MYW-66）
       patch(m => (m.createdAt ? {} : { createdAt: new Date().toISOString() }))
       abortRef.current = null
       runIdRef.current = null
-      setBusy(false)
       refetchConversations()
-      // 追问队列自动派发下一条
-      const remaining = queuedRef.current
-      if (remaining.length > 0) {
-        const [head, ...tail] = remaining
-        updateQueue(tail)
-        void send(head.text)
+      if (streamLost) {
+        // 后端回合与 SSE 解耦（MYW-71）：凭登记恢复「正在处理」展示，终态后由
+        // 恢复流程重新装载会话并派发追问队列。登记保留，busy 交给恢复流程接管。
+        turnOwnerRef.current = null
+        void resumeRef.current?.({
+          ...runEntry,
+          conversationId: conversationIdRef.current || runEntry.conversationId,
+        })
+      } else {
+        persistActiveChatRun(null)
+        turnOwnerRef.current = null
+        setBusy(false)
+        // 追问队列自动派发下一条
+        const remaining = queuedRef.current
+        if (remaining.length > 0) {
+          const [head, ...tail] = remaining
+          updateQueue(tail)
+          void send(head.text)
+        }
       }
     }
   }, [busy, conversationId, input, modelId, oid, queuePrompt, releaseId, refetchConversations, updateQueue])
+
+  /**
+   * 恢复后台回合（MYW-71）：用户发送消息后离开页面（刷新/跳转），回合仍在
+   * 后端执行完毕并落库。回到页面后凭登记的 run_id 轮询回合状态：仍在处理则
+   * 装载会话并展示「正在处理」占位，到终态后重新装载、用落库的完整回答
+   * （含调用链）替换占位气泡。期间排队的追问照常在终态后派发。
+   */
+  const resumeBackgroundRun = async (entry: ActiveChatRun) => {
+    if (turnOwnerRef.current) return
+    turnOwnerRef.current = 'resume'
+    const seq = ++resumeSeqRef.current
+    const runOid = entry.ontologyId
+    // 仍停留在恢复目标（同会话、同本体、恢复流程未被接替）才允许继续写界面
+    const contextAlive = (convId: string) =>
+      resumeSeqRef.current === seq
+      && turnOwnerRef.current === 'resume'
+      && conversationIdRef.current === convId
+      && oidRef.current === runOid
+    setBusy(true)
+    stoppedRef.current = false
+    runIdRef.current = entry.runId
+    try {
+      // 1. 查询回合状态；瞬态网络错误重试一次
+      let snapshot: AgentChatRun | null = await agentApi.chatRun(runOid, entry.runId).catch(() => null)
+      if (!snapshot) {
+        await new Promise(resolve => setTimeout(resolve, RESUME_POLL_INTERVAL_MS))
+        snapshot = await agentApi.chatRun(runOid, entry.runId).catch(() => null)
+      }
+      if (!snapshot) throw new Error('回合状态不可用')
+      const convId = snapshot.conversationId || entry.conversationId
+      if (!convId || snapshot.status === 'unknown') {
+        // 回合已结束很久 / 后端重启 / 从未执行：清登记；能定位会话就装载最新内容
+        persistActiveChatRun(null)
+        setBackgroundRun(null)
+        if (convId) await loadConversation(convId).catch(() => {})
+        else {
+          toast({
+            tone: 'info',
+            title: '后台消息已结束',
+            description: '未找到处理中的会话，可在历史会话中查看结果。',
+          })
+        }
+        return
+      }
+      // 2. 装载会话（提问已落库，回答随终态落库）
+      await loadConversation(convId)
+      if (snapshot.status === 'running') {
+        if (!contextAlive(convId)) return
+        setMessages(prev => [...prev, {
+          id: nextId(), role: 'assistant', content: '', steps: [], citations: [], proposals: [],
+          loading: true, resumed: true,
+        }])
+        const deadline = Date.now() + RESUME_POLL_TIMEOUT_MS
+        let terminal: AgentChatRun['status'] = 'unknown'
+        while (Date.now() < deadline) {
+          await new Promise(resolve => setTimeout(resolve, RESUME_POLL_INTERVAL_MS))
+          if (!contextAlive(convId)) return
+          const next = await agentApi.chatRun(runOid, entry.runId).catch(() => null)
+          if (!contextAlive(convId)) return
+          if (next && next.status !== 'running') {
+            terminal = next.status
+            break
+          }
+        }
+        if (!contextAlive(convId)) return
+        // 等待上限内未到终态（terminal 仍为 unknown）：如实提示，不在前端伪造终态
+        if (terminal === 'unknown') {
+          toast({
+            tone: 'info',
+            title: '后台消息仍在处理',
+            description: '已超出本次等待上限，稍后可在历史会话中查看结果。',
+          })
+        }
+      }
+      // 3. 终态：重新装载会话，占位气泡被落库的完整回答替换
+      await loadConversation(convId)
+      persistActiveChatRun(null)
+      setBackgroundRun(null)
+      refetchConversations()
+      // 4. 恢复期间排队的追问照常派发
+      if (contextAlive(convId)) {
+        const remaining = queuedRef.current
+        if (remaining.length > 0) {
+          const [head, ...tail] = remaining
+          updateQueue(tail)
+          void send(head.text)
+        }
+      }
+    } catch {
+      toast({
+        tone: 'error',
+        title: '恢复后台消息失败',
+        description: '请稍后在历史会话中查看结果。',
+      })
+    } finally {
+      runIdRef.current = null
+      if (turnOwnerRef.current === 'resume') {
+        turnOwnerRef.current = null
+        setBusy(false)
+      }
+    }
+  }
+  // send（useCallback）在流断开时要调用到最新一帧的恢复逻辑，用 ref 中转
+  resumeRef.current = resumeBackgroundRun
 
   const suggested = useMemo<string[]>(() => {
     const first = caps?.objectTypes?.[0]?.displayName
@@ -654,6 +817,22 @@ export default function AgentWorkbenchPage() {
           <div data-testid="agent-chat-region" className="workspace-topology-surface scrollbar-none flex-1 overflow-auto px-4 py-4">
             {messages.length === 0 ? (
               <div className="flex min-h-full flex-col justify-center py-8 text-center anim-scale-in">
+                {backgroundRun && backgroundRun.ontologyId === oid && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const entry = backgroundRun
+                      setBackgroundRun(null)
+                      void resumeBackgroundRun(entry)
+                    }}
+                    data-testid="agent-resume-banner"
+                    className="mx-auto mb-5 flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700 transition-colors hover:border-sky-300 hover:bg-sky-100"
+                  >
+                    <Loader2 size={13} className="animate-spin" />
+                    <span className="max-w-[260px] truncate">「{backgroundRun.question}」仍在后台处理</span>
+                    <span className="shrink-0 font-medium">点击查看会话</span>
+                  </button>
+                )}
                 <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-teal-600 text-white shadow-sm">
                   <Sparkles size={22} />
                 </div>
@@ -707,6 +886,12 @@ export default function AgentWorkbenchPage() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <StepTrace steps={msg.steps} running={msg.loading} />
+                      {msg.loading && msg.resumed && (
+                        <p className="mt-1 flex items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]" data-testid="agent-resume-pending">
+                          <Loader2 size={11} className="animate-spin text-sky-600" />
+                          您离开页面期间，这条消息仍在后台处理，完成后自动展示结果。
+                        </p>
+                      )}
                       {msg.error ? (
                         <div className="rounded-lg border border-red-200 bg-red-50/70 px-4 py-3">
                           <p className="flex items-start gap-2 text-sm text-red-600">

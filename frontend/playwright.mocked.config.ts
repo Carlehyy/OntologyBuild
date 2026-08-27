@@ -11,6 +11,7 @@ process.env.E2E_API_BASE = 'http://127.0.0.1:9'
 export default defineConfig({
   ...baseConfig,
   testMatch: [
+    '**/agent_chat_resume.spec.ts',
     '**/agent_header.spec.ts',
     '**/agent_ontology_carousel.spec.ts',
     '**/agent_topology_instances.spec.ts',

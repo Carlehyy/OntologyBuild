@@ -34,6 +34,7 @@ from app.ontologies.agent_runtime import llm_bridge
 from app.ontologies.agent_runtime import answer_verifier
 from app.ontologies.agent_runtime.boundary import ToolError, build_scope
 from app.ontologies.agent_runtime.chat_cancel import chat_cancel_registry
+from app.ontologies.agent_runtime.chat_runs import chat_run_registry
 from app.ontologies.agent_runtime.limits import limit
 from app.ontologies.agent_runtime.models import AgentConversation, AgentMessage
 from app.ontologies.agent_runtime.toolkit import TOOL_DEFS, ToolRunner
@@ -280,22 +281,40 @@ def run_agent_turn(db: Session, ontology_id: str, user, question: str,
                    model_id: Optional[str] = None,
                    release_id: Optional[str] = None,
                    run_id: Optional[str] = None) -> Iterator[dict]:
-    """执行一个回合，yield 事件流。所有异常都转成 error 事件，绝不让 SSE 中途裸断。"""
+    """执行一个回合，yield 事件流。所有异常都转成 error 事件，绝不让 SSE 中途裸断。
+
+    回合状态同步写入 chat_run_registry：SSE 推送与执行解耦后（MYW-71），前端
+    在离开页面后凭 run_id 轮询回合状态，即可恢复「正在处理」的展示。
+    """
     if run_id:
         chat_cancel_registry.register(run_id)
+        chat_run_registry.register(run_id, ontology_id)
+    terminal_status = "error"
     try:
-        yield from _run(
+        for event in _run(
             db, ontology_id, user, question, conversation_id, model_id,
-            release_id, run_id)
+            release_id, run_id):
+            event_type = event.get("type")
+            if event_type == "meta" and run_id:
+                chat_run_registry.attach_conversation(
+                    run_id, event.get("conversationId"))
+            if event_type == "answer":
+                terminal_status = "succeeded"
+            elif event_type in ("cancelled", "error"):
+                terminal_status = event_type
+            yield event
     except GeneratorExit:
         # 浏览器刷新/离开会主动关闭 SSE。生成器关闭后不能在 finally 中继续 yield，
         # 否则 Python 会抛出 ``generator ignored GeneratorExit`` 并污染服务日志。
+        # 流式路径已把执行解耦到独立线程，只有直接消费本生成器的调用方会走到这里。
         return
     except Exception as e:  # noqa: BLE001
         logger.exception("agent 回合失败")
+        terminal_status = "error"
         yield {"type": "error", "message": f"智能体执行失败: {e}"}
     finally:
         if run_id:
+            chat_run_registry.mark_finished(run_id, terminal_status)
             chat_cancel_registry.unregister(run_id)
     yield {"type": "done"}
 

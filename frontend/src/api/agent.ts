@@ -231,6 +231,15 @@ export type AgentEvent =
   | { type: 'cancelled' }
   | { type: 'done' }
 
+/** 回合状态（GET /agent/chat/runs/{runId}）：unknown = 注册表不认识该 run */
+export interface AgentChatRun {
+  runId: string
+  conversationId: string | null
+  status: 'running' | 'succeeded' | 'error' | 'cancelled' | 'unknown'
+  startedAt: string | null
+  finishedAt: string | null
+}
+
 export interface ExecuteProposalResult {
   status: string
   errorMessage?: string | null
@@ -647,6 +656,8 @@ export const agentApi = {
   cancelChat: (oid: string, runId: string) =>
     apiClientV2.post<{ runId: string; cancelled: boolean; note: string }>(
       `${base(oid)}/chat/cancel`, { runId }),
+  chatRun: (oid: string, runId: string) =>
+    apiClientV2.get<AgentChatRun>(`${base(oid)}/chat/runs/${runId}`),
   dynamicSentinels: (oid: string, releaseId: string) =>
     apiClientV2.get<DynamicSentinel[]>(`${base(oid)}/dynamic-sentinels`, { params: { release_id: releaseId } }),
   createDynamicSentinel: (oid: string, releaseId: string, definition: DynamicSentinelDefinition) =>
