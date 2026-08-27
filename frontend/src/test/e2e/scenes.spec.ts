@@ -169,22 +169,28 @@ test('克隆发布态场景生成副本草稿', async ({ page }) => {
   await expect(page.getByText('供应链园区-副本')).toBeVisible()
 })
 
-test('详情页三标签 ?tab= 深链与切换', async ({ page }) => {
+test('详情页左右双卡：右栏标签深链、切换与画布常驻', async ({ page }) => {
   await seedAuth(page)
   await mockPlatformShell(page)
   await mockScenesApi(page)
+  // 顶部信息卡 + 左可视化 + 右操作栏（场景模型/运行日志）
+  await page.goto('/#/scenes/scn-1')
+  await expect(page.locator('[aria-label="场景操作栏"]')).toBeVisible()
+  await expect(page.locator('[aria-label="三维场景可视化"]')).toBeVisible()
+  // 深链直达运行日志标签
   await page.goto('/#/scenes/scn-1?tab=logs')
   await expect(page.getByText('库位利用率 > 95%')).toBeVisible()
-  // 深链直达运行日志标签
   await expect(page).toHaveURL(/tab=logs/)
-  // 切到场景模型标签：URL 写回 + 对象清单渲染
+  // 切到场景模型：视为默认态清参 + 对象清单渲染
   await page.getByRole('tab', { name: '场景模型' }).click()
-  await expect(page).toHaveURL(/tab=models/)
-  await expect(page.getByRole('cell', { name: 'warehouse' }).first()).toBeVisible()
-  await expect(page.getByText('办公楼')).toBeVisible()
-  // 场景展示标签：版本下拉默认选中已发布 v1
-  await page.getByRole('tab', { name: '场景展示' }).click()
   await expect(page).toHaveURL(/\/scenes\/scn-1$/)
+  await expect(page.getByRole('cell', { name: 'warehouse' }).first()).toBeVisible()
+  await expect(page.getByRole('cell', { name: '办公楼' })).toBeVisible()
+  // 兼容旧三标签深链：tab=display 归一为默认面板且画布仍常驻
+  await page.goto('/#/scenes/scn-1?tab=display')
+  await expect(page.getByRole('cell', { name: 'office' }).first()).toBeVisible()
+  // 左卡版本下拉默认选中已发布 v1
+  await expect(page.locator('[aria-label="三维场景可视化"] select')).toHaveValue('1')
 })
 
 test('custom 角色未授权 scenes 时直达被拦截', async ({ page }) => {
