@@ -843,42 +843,44 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
         </button>
       </header>
 
-      {/* ═══ 数据供给全景：节点卡链路呈现「数据资产 → 本体元素」的真实流向 ═══ */}
-      <section className="dmo-flow" aria-label="数据供给全景">
-        <div className="dmo-flow-head">
-          <div className="dmo-flow-title">
-            <b>数据供给全景</b>
-            <small>数据资产如何流入本体元素；点击节点查看详情，卡片可拖拽调整布局</small>
-          </div>
-          {mappingRows.length - mappedFlowCount > 0 && (
-            <span className="dmo-flow-caption">另有 {mappingRows.length - mappedFlowCount} 个本体元素未接入数据流 · 见下方清单</span>
-          )}
-        </div>
-        {mappedFlowCount === 0 ? (
-          <div className="dmo-flow-empty">
-            <Link2 size={22} />
-            <b>暂无数据流</b>
-            <span>当前发布版本尚未建立可见的映射链路；完成映射配置并发布后，这里会呈现数据资产流入本体的全景。</span>
-          </div>
-        ) : (
-          <Suspense fallback={<div className="dmo-flow-skeleton" aria-label="正在加载供给全景图" />}>
-            <MappingChainPanorama
-              rows={flowRows}
-              hoverKey={rowHoverKey}
-              selectedKey={dialogRow?.key ?? null}
-              onSelectElement={selectFromChart}
-              onPreviewDataset={(datasetId) => {
-                const dataset = data.datasets.find(item => item.id === datasetId)
-                if (dataset) setPreviewDataset(dataset)
-              }}
-              onHoverNode={setChartHoverKey}
-              ontologyId={ontologyId}
-            />
-          </Suspense>
-        )}
-      </section>
-
+      {/* ═══ 数据供给全景（左）+ 映射结果清单（右）：同屏双栏，一屏读完“总-分” ═══
+          全景是横向链路（两列节点 + 连线），宽度收益更高，占左栏稍宽份额；
+          清单是六列定宽网格，右栏保底不塌缩。窄屏（≤1020px）回退上下堆叠。 */}
       <div className="dmo-workspace">
+        <section className="dmo-flow" aria-label="数据供给全景">
+          <div className="dmo-flow-head">
+            <div className="dmo-flow-title">
+              <b>数据供给全景</b>
+              <small>数据资产如何流入本体元素；点击节点查看详情，卡片可拖拽调整布局</small>
+            </div>
+            {mappingRows.length - mappedFlowCount > 0 && (
+              <span className="dmo-flow-caption">另有 {mappingRows.length - mappedFlowCount} 个本体元素未接入数据流 · 详见清单</span>
+            )}
+          </div>
+          {mappedFlowCount === 0 ? (
+            <div className="dmo-flow-empty">
+              <Link2 size={22} />
+              <b>暂无数据流</b>
+              <span>当前发布版本尚未建立可见的映射链路；完成映射配置并发布后，这里会呈现数据资产流入本体的全景。</span>
+            </div>
+          ) : (
+            <Suspense fallback={<div className="dmo-flow-skeleton" aria-label="正在加载供给全景图" />}>
+              <MappingChainPanorama
+                rows={flowRows}
+                hoverKey={rowHoverKey}
+                selectedKey={dialogRow?.key ?? null}
+                onSelectElement={selectFromChart}
+                onPreviewDataset={(datasetId) => {
+                  const dataset = data.datasets.find(item => item.id === datasetId)
+                  if (dataset) setPreviewDataset(dataset)
+                }}
+                onHoverNode={setChartHoverKey}
+                ontologyId={ontologyId}
+              />
+            </Suspense>
+          )}
+        </section>
+
         <main className="dmo-register">
           <div className="dmo-register-head">
             <div className="dmo-register-title">
