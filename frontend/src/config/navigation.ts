@@ -183,6 +183,7 @@ function menuChainLabelForPath(pathname: string, key: string): string | null {
 /** 无菜单映射但值得拥有顶栏标签的页面（key 取路径本身）。 */
 const FALLBACK_TAB_PATHS: Record<string, string> = {
   '/inbox': '收件箱',
+  '/tickets': '工单反馈',
 }
 
 export interface NavTabInfo {

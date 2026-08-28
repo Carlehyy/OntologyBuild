@@ -65,6 +65,7 @@ export default defineConfig({
     '**/super_assistant_agent_mode.spec.ts',
     '**/super_assistant_evolution.spec.ts',
     '**/theme_toggle.spec.ts',
+    '**/tickets.spec.ts',
     '**/trial_action_plan_review.spec.ts',
     '**/world_model.spec.ts',
   ],

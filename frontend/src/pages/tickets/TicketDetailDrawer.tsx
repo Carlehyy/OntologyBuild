@@ -1,0 +1,323 @@
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  AlertTriangle, Check, Copy, Download, Loader2, Paperclip, RefreshCw,
+  ScrollText, X,
+} from 'lucide-react'
+import {
+  fmtTime, formatBytes, ticketsApi,
+  TICKET_STATUS_META, TICKET_STATUS_ORDER, type TicketItem, type TicketStatus,
+} from '@/api/tickets'
+import { useAuthStore } from '@/stores/authStore'
+import { useToast } from '@/components/ui/Toast'
+import { writeTextToClipboard } from '@/utils/clipboard'
+import { StatusBadge } from './shared'
+
+function CopyBtn({ text }: { text: string }) {
+  const [done, setDone] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void writeTextToClipboard(text).then(() => {
+          setDone(true)
+          window.setTimeout(() => setDone(false), 1500)
+        }).catch(() => setDone(false))
+      }}
+      className="inline-flex items-center gap-1 rounded-md text-xs text-emerald-700 transition-colors hover:text-emerald-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30"
+    >
+      {done ? <Check size={13} /> : <Copy size={13} />}{done ? '已复制' : '复制'}
+    </button>
+  )
+}
+
+function MetaItem({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-slate-400">{label}</dt>
+      <dd className="mt-0.5 truncate text-sm text-slate-700">{children}</dd>
+    </div>
+  )
+}
+
+/** 管理员处理面板：状态 + 必填评论。 */
+function ProgressPanel({
+  ticket,
+  onDone,
+}: {
+  ticket: TicketItem
+  onDone: () => void
+}) {
+  const { toast } = useToast()
+  const queryClient = useQueryClient()
+  const [status, setStatus] = useState<TicketStatus>(ticket.status)
+  const [comment, setComment] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!ticket) return
+    setStatus(ticket.status)
+    setComment('')
+    setError('')
+  }, [ticket.id, ticket.status])
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!comment.trim()) throw new Error('处理评论为必填项')
+      return ticketsApi.updateProgress(ticket.id, status, comment.trim())
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tickets'] })
+      toast({ tone: 'success', title: '工单已处理', description: `状态已更新为「${TICKET_STATUS_META[status].label}」` })
+      setComment('')
+      onDone()
+    },
+    onError: (cause: any) => setError(cause?.message || cause?.detail || '处理失败，请稍后重试'),
+  })
+
+  return (
+    <section className="rounded-xl border border-emerald-100 bg-emerald-50/40 px-4 py-3.5">
+      <h3 className="text-sm font-semibold text-slate-700">处理工单</h3>
+      <p className="mt-0.5 text-xs text-slate-400">调整进度状态并留下处理评论（评论为必填，提交后对处理轨迹可见）</p>
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[200px_minmax(0,1fr)]">
+        <div>
+          <label htmlFor="ticket-progress-status" className="mb-1 block text-xs font-medium text-slate-500">进度状态</label>
+          <select
+            id="ticket-progress-status"
+            value={status}
+            onChange={event => setStatus(event.target.value as TicketStatus)}
+            className="h-9 w-full cursor-pointer rounded-lg border border-slate-200 bg-white px-2.5 text-sm text-slate-700 shadow-sm transition focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/15"
+          >
+            {TICKET_STATUS_ORDER.map(value => (
+              <option key={value} value={value}>{TICKET_STATUS_META[value].label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="ticket-progress-comment" className="mb-1 block text-xs font-medium text-slate-500">
+            处理评论 <span className="text-red-500">*</span>
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="ticket-progress-comment"
+              value={comment}
+              onChange={event => { setComment(event.target.value); if (error) setError('') }}
+              onKeyDown={event => {
+                if (event.key === 'Enter' && comment.trim() && !mutation.isPending) mutation.mutate()
+              }}
+              placeholder="例如：已复现，等待下个版本修复"
+              className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm transition placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/15"
+            />
+            <button
+              type="button"
+              onClick={() => mutation.mutate()}
+              disabled={mutation.isPending || !comment.trim()}
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-sm font-medium text-white shadow-sm transition-all hover:bg-emerald-700 active:scale-[0.98] disabled:opacity-50"
+            >
+              {mutation.isPending && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />}
+              提交处理
+            </button>
+          </div>
+        </div>
+      </div>
+      {error && (
+        <p className="mt-2 flex items-center gap-1.5 text-xs text-red-600" role="alert">
+          <AlertTriangle size={13} /> {error}
+        </p>
+      )}
+    </section>
+  )
+}
+
+export default function TicketDetailDrawer({
+  open,
+  ticketId,
+  onClose,
+}: {
+  open: boolean
+  ticketId: string | null
+  onClose: () => void
+}) {
+  const { toast } = useToast()
+  const isAdmin = useAuthStore(s => s.user?.role === 'admin')
+  const [downloadingId, setDownloadingId] = useState<string | null>(null)
+  const detailQuery = useQuery({
+    queryKey: ['tickets', 'detail', ticketId],
+    queryFn: () => ticketsApi.get(ticketId!),
+    enabled: open && Boolean(ticketId),
+  })
+  const ticket = detailQuery.data
+  const attachments = ticket?.attachments ?? []
+  const progressLogs = ticket?.progressLogs ?? []
+
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose, open])
+
+  if (!open) return null
+
+  const download = async (attachmentId: string) => {
+    if (!ticketId) return
+    const attachment = attachments.find(item => item.id === attachmentId)
+    if (!attachment) return
+    setDownloadingId(attachmentId)
+    try {
+      await ticketsApi.downloadAttachment(ticketId, attachment)
+    } catch (cause: any) {
+      toast({ tone: 'error', title: '附件下载失败', description: cause?.detail || cause?.message || '请稍后重试' })
+    } finally {
+      setDownloadingId(null)
+    }
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[80] flex justify-end">
+      <div className="absolute inset-0 bg-[var(--color-bg-overlay)]" onClick={onClose} />
+      <aside className="anim-drawer-in relative flex w-full max-w-2xl flex-col border-l border-slate-200 bg-white shadow-xl">
+        <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-6 py-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="truncate text-lg font-semibold text-slate-900" title={ticket?.title}>
+                {ticket?.title ?? '工单详情'}
+              </h2>
+              {ticket && <StatusBadge status={ticket.status} />}
+            </div>
+            {ticket && (
+              <div className="mt-1 flex items-center gap-2 text-xs text-slate-400">
+                <span className="font-mono text-slate-500">{ticket.ticketNo}</span>
+                <CopyBtn text={ticket.ticketNo} />
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30"
+            aria-label="关闭工单详情"
+          >
+            <X size={20} />
+          </button>
+        </header>
+
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          {detailQuery.isLoading ? (
+            <div className="space-y-3" aria-label="正在加载工单详情">
+              {[0, 1, 2].map(index => (
+                <div key={index} className="animate-pulse space-y-2 rounded-xl border border-slate-100 p-4">
+                  <span className="block h-3 w-1/3 rounded bg-slate-100" />
+                  <span className="block h-2.5 w-2/3 rounded bg-slate-100" />
+                </div>
+              ))}
+            </div>
+          ) : detailQuery.isError || !ticket ? (
+            <div className="flex flex-col items-center px-6 py-16 text-center">
+              <p className="text-sm font-medium text-red-600">工单详情加载失败</p>
+              <p className="mt-1 text-xs text-slate-400">请检查网络连接后重试</p>
+              <button
+                type="button"
+                onClick={() => void detailQuery.refetch()}
+                className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30"
+              >
+                <RefreshCw size={14} /> 重新加载
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {isAdmin && <ProgressPanel ticket={ticket} onDone={() => void detailQuery.refetch()} />}
+
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+                <MetaItem label="提交人">{ticket.submitterName || '—'}</MetaItem>
+                <MetaItem label="提交时间">{fmtTime(ticket.createdAt)}</MetaItem>
+                <MetaItem label="最近更新">{fmtTime(ticket.updatedAt)}</MetaItem>
+              </dl>
+
+              <section>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">反馈内容</h3>
+                <p className="whitespace-pre-wrap rounded-xl bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-700">
+                  {ticket.content || <span className="italic text-slate-400">无内容</span>}
+                </p>
+              </section>
+
+              <section>
+                <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <Paperclip size={13} /> 附件（{attachments.length}）
+                </h3>
+                {attachments.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-slate-200 px-4 py-4 text-center text-xs text-slate-400">
+                    当前工单没有附件
+                  </p>
+                ) : (
+                  <div className="overflow-hidden rounded-xl border border-slate-100">
+                    {attachments.map(attachment => {
+                      const isDownloading = downloadingId === attachment.id
+                      return (
+                        <div key={attachment.id} className="flex items-center gap-3 border-t border-slate-100 px-3 py-2.5 first:border-t-0">
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+                            <Paperclip size={14} />
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium text-slate-700" title={attachment.filename}>{attachment.filename}</p>
+                            <p className="mt-0.5 text-xs tabular-nums text-slate-400">{formatBytes(attachment.fileSize)} · {fmtTime(attachment.createdAt)}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void download(attachment.id)}
+                            disabled={isDownloading}
+                            className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-emerald-50 hover:text-emerald-700 disabled:opacity-40"
+                            title={`下载 ${attachment.filename}`}
+                            aria-label={`下载 ${attachment.filename}`}
+                          >
+                            {isDownloading ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <section>
+                <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <ScrollText size={13} /> 处理记录（{progressLogs.length}）
+                </h3>
+                {progressLogs.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-slate-200 px-4 py-4 text-center text-xs text-slate-400">
+                    暂无处理记录，等待管理员处理
+                  </p>
+                ) : (
+                  <ul className="space-y-0">
+                    {[...progressLogs].sort((a, b) => b.seq - a.seq).map(entry => {
+                      const fromLabel = entry.fromStatus ? TICKET_STATUS_META[entry.fromStatus].label : null
+                      const toLabel = TICKET_STATUS_META[entry.toStatus]?.label ?? entry.toStatus
+                      return (
+                        <li key={entry.id} className="relative ml-1 border-l border-slate-200 pb-4 pl-4 last:pb-0">
+                          <span className="absolute -left-[5px] top-1.5 h-2.5 w-2.5 rounded-full bg-emerald-400/80 ring-2 ring-white" aria-hidden="true" />
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
+                            <span className="font-medium text-slate-700">
+                              {fromLabel && fromLabel !== toLabel ? `${fromLabel} → ${toLabel}` : toLabel}
+                            </span>
+                            <span className="text-xs text-slate-400">
+                              {entry.actorName || '管理员'} · {fmtTime(entry.createdAt)}
+                            </span>
+                          </div>
+                          <p className="mt-0.5 text-xs leading-5 text-slate-500">{entry.comment}</p>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </section>
+            </div>
+          )}
+        </div>
+      </aside>
+    </div>,
+    document.body,
+  )
+}
