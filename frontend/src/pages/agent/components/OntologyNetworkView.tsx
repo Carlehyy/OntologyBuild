@@ -59,6 +59,15 @@ const NETWORK_NODE_GAP = 104
 const NETWORK_RANK_GAP = 164
 const NETWORK_MARGIN_X = 96
 const NETWORK_MARGIN_Y = 96
+/**
+ * 视口缩放上下限（倍数，展示为 %）。注意 100% 是「适配画布」而非 1:1：
+ * viewBox 把整张 dagre 布局缩进面板，大本体的初始有效缩放可能只有 ~0.3
+ * （316px 卡片在屏幕上不足百像素），旧上限 1.8 放大到底仍读不清卡片文字
+ * （MYW-73）。4.0 与本体网络画布 NetworkCanvas 的 ZOOM_MAX 对齐：适配比
+ * ≥0.3 的图放大到顶可达 ≥1.2× 卡片设计尺寸，每个卡片内容清晰可读。
+ */
+const NETWORK_ZOOM_MIN = 0.2
+const NETWORK_ZOOM_MAX = 4
 
 function edgeAnchor(from: { x: number; y: number }, to: { x: number; y: number }) {
   const dx = to.x - from.x
@@ -206,7 +215,7 @@ export function OntologyNetworkView({
   )
   const zoomPercent = Math.round(zoom * 100)
   const setZoomLevel = (next: number) => {
-    const nextZoom = clamp(Number(next.toFixed(2)), 0.2, 1.8)
+    const nextZoom = clamp(Number(next.toFixed(2)), NETWORK_ZOOM_MIN, NETWORK_ZOOM_MAX)
     setViewport(current => ({ ...current, zoom: nextZoom }))
   }
   const resetViewport = useCallback(() => {
@@ -232,7 +241,7 @@ export function OntologyNetworkView({
 
       setViewport(current => {
         const factor = Math.exp(-event.deltaY * 0.0012)
-        const nextZoom = clamp(Number((current.zoom * factor).toFixed(3)), 0.2, 1.8)
+        const nextZoom = clamp(Number((current.zoom * factor).toFixed(3)), NETWORK_ZOOM_MIN, NETWORK_ZOOM_MAX)
         if (nextZoom === current.zoom) return current
         const ratio = nextZoom / current.zoom
         return {
