@@ -173,6 +173,9 @@ class Settings(BaseSettings):
     # 事件附件只做安全落盘与下载，不进入文档解析链路，因此默认兼容任意扩展名。
     # 如部署方需要收紧，可通过 EVENT_ATTACHMENT_EXTENSIONS 配置逗号分隔白名单。
     event_attachment_extensions: str = "*"
+    # 工单附件与事件附件同构：仅安全落盘与下载，默认兼容任意扩展名；
+    # 部署方可通过 TICKET_ATTACHMENT_EXTENSIONS 收紧白名单。
+    ticket_attachment_extensions: str = "*"
     # 可选 OfficeCLI 适配器。核心会话空间不依赖它；配置后才向探索 Agent 暴露
     # docx/xlsx/pptx 的结构化增删改工具，避免生产镜像隐式下载第三方二进制。
     exploration_officecli_path: str = ""

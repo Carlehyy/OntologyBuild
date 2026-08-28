@@ -6,6 +6,7 @@ import Layout from '@/components/Layout'
 import LoginPage from '@/pages/login/LoginPage'
 import { OverviewPage } from '@/features/overview'
 import InboxPage from '@/pages/inbox/InboxPage'
+import TicketsPage from '@/pages/tickets/TicketsPage'
 import OntologyListPage from '@/pages/ontologies/list/OntologyListPage'
 import OntologyDetailPage from '@/pages/ontologies/detail/OntologyDetailPage'
 import MappingConfigurationPage from '@/pages/ontologies/mapping/MappingConfigurationPage'
@@ -134,6 +135,7 @@ export default function App() {
           <Route path="/no-access" element={<ProtectedRoute><NoAssignedPagesPage /></ProtectedRoute>} />
           <Route path="/overview" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
           <Route path="/inbox" element={<ProtectedRoute><InboxPage /></ProtectedRoute>} />
+          <Route path="/tickets" element={<ProtectedRoute><TicketsPage /></ProtectedRoute>} />
 
           {/* ── 数据管理 ── */}
           <Route path="/data" element={<Navigate to="/data/pipelines" replace />} />

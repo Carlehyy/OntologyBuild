@@ -341,6 +341,9 @@ app.include_router(collectors_router.router, prefix="/api/v2/collectors", tags=[
 from app.events import router as events_router
 app.include_router(events_router.router, prefix="/api/v2/events", tags=["events"], dependencies=events_guard)
 app.include_router(events_router.ingest_router, prefix="/api/v2/ingest", tags=["events-ingest"])
+# 工单 — 全角色可用的平台使用反馈通道（提交 + 管理员处理）；仅要求登录，不挂菜单权限
+from app.tickets import router as tickets_router
+app.include_router(tickets_router.router, prefix="/api/v2/tickets", tags=["tickets"])
 
 # 世界模型（演化层）— 一级导航域：推演模型项目开发调试 + 调用记录（发布为推演服务属二期）
 world_model_guard = menu_guard("world_model")

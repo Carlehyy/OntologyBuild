@@ -3,7 +3,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import {
   Network, Settings, LogOut, ChevronLeft, ChevronRight, ChevronDown,
-  UserCircle, User, Menu, X,
+  UserCircle, User, Menu, Ticket, X,
 } from 'lucide-react'
 import FloatingAssistantWidget from '@/components/assistant-widget/FloatingAssistantWidget'
 import InboxPopover from '@/components/inbox/InboxPopover'
@@ -90,7 +90,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     && new URLSearchParams(location.search).get('tab') === 'data'
   // 场景助手（对话式建模）与本体网络页同为「左画布 + 右操作」双卡全高布局，
   // 需要相同的 edge-to-edge 容器（h-full 无内边距，间距由页面自身 p-1 提供，MYW-64）。
-  const isEdgeToEdgePage = isActive('/explore') || isActive('/agent') || isActive('/super-assistant') || isActive('/events') || isActive('/api-hub') || isActive('/ontology-model/network') || isActive('/scenes/modeling') || isMappingWorkspace
+  const isEdgeToEdgePage = isActive('/explore') || isActive('/agent') || isActive('/super-assistant') || isActive('/events') || isActive('/tickets') || isActive('/api-hub') || isActive('/ontology-model/network') || isActive('/scenes/modeling') || isMappingWorkspace
   const isStewardPage = isActive('/data/pipelines/steward')
   // 标签栏独立于所有页面，所有页面统一显示（含业务探索、智能助手等全屏页）
   const showTopTabBar = true
@@ -233,8 +233,23 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               <NavTabs />
             </div>
 
-            {/* 右侧：收件箱 + 用户中心 */}
+            {/* 右侧：工单反馈 + 收件箱 + 用户中心 */}
             <div className="flex shrink-0 items-center gap-1">
+              {/* 工单反馈：使用反馈入口，位于收件箱左侧 */}
+              <button
+                type="button"
+                onClick={() => { navigate('/tickets'); setInboxOpen(false); setUserMenuOpen(false) }}
+                className={`flex items-center justify-center w-10 h-10 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] ${
+                  isActive('/tickets')
+                    ? 'bg-[var(--color-bg-hover)] text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
+                }`}
+                title="工单反馈"
+                aria-label="工单反馈"
+              >
+                <Ticket size={21} strokeWidth={1.8} />
+              </button>
+
               {/* 收件箱 */}
               <div className="relative" ref={inboxRef}>
                 <InboxPopover
