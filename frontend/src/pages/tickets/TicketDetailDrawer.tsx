@@ -2,17 +2,18 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlertTriangle, Check, Copy, Download, Loader2, Paperclip, RefreshCw,
+  AlertTriangle, Check, Copy, Download, Eye, Loader2, Paperclip, RefreshCw,
   ScrollText, X,
 } from 'lucide-react'
 import {
   fmtTime, formatBytes, ticketsApi,
-  TICKET_STATUS_META, TICKET_STATUS_ORDER, type TicketItem, type TicketStatus,
+  TICKET_CATEGORY_META, TICKET_STATUS_META, TICKET_STATUS_ORDER,
+  type TicketAttachment, type TicketItem, type TicketStatus,
 } from '@/api/tickets'
 import { useAuthStore } from '@/stores/authStore'
 import { useToast } from '@/components/ui/Toast'
 import { writeTextToClipboard } from '@/utils/clipboard'
-import { StatusBadge } from './shared'
+import { ImagePreviewModal, StatusBadge } from './shared'
 
 function CopyBtn({ text }: { text: string }) {
   const [done, setDone] = useState(false)
@@ -142,6 +143,8 @@ export default function TicketDetailDrawer({
   const { toast } = useToast()
   const isAdmin = useAuthStore(s => s.user?.role === 'admin')
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
+  const [previewingId, setPreviewingId] = useState<string | null>(null)
+  const [preview, setPreview] = useState<{ url: string; filename: string } | null>(null)
   const detailQuery = useQuery({
     queryKey: ['tickets', 'detail', ticketId],
     queryFn: () => ticketsApi.get(ticketId!),
@@ -160,7 +163,33 @@ export default function TicketDetailDrawer({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onClose, open])
 
+  useEffect(() => {
+    // 关闭抽屉时释放未清理的预览 objectURL
+    if (open) return
+    if (preview) URL.revokeObjectURL(preview.url)
+    setPreview(null)
+    setPreviewingId(null)
+  }, [open, preview])
+
   if (!open) return null
+
+  const previewAttachment = async (attachment: TicketAttachment) => {
+    if (!ticketId) return
+    setPreviewingId(attachment.id)
+    try {
+      const blob = await ticketsApi.fetchAttachmentBlob(ticketId, attachment)
+      setPreview({ url: URL.createObjectURL(blob), filename: attachment.filename })
+    } catch (cause: any) {
+      toast({ tone: 'error', title: '图片加载失败', description: cause?.detail || cause?.message || '请稍后重试' })
+    } finally {
+      setPreviewingId(null)
+    }
+  }
+
+  const closePreview = () => {
+    if (preview) URL.revokeObjectURL(preview.url)
+    setPreview(null)
+  }
 
   const download = async (attachmentId: string) => {
     if (!ticketId) return
@@ -233,8 +262,17 @@ export default function TicketDetailDrawer({
 
               <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
                 <MetaItem label="提交人">{ticket.submitterName || '—'}</MetaItem>
+                <MetaItem label="工单分类">{TICKET_CATEGORY_META[ticket.category]?.label ?? '—'}</MetaItem>
                 <MetaItem label="提交时间">{fmtTime(ticket.createdAt)}</MetaItem>
                 <MetaItem label="最近更新">{fmtTime(ticket.updatedAt)}</MetaItem>
+                {ticket.pageUrl && (
+                  <div className="col-span-2 min-w-0">
+                    <dt className="text-xs text-slate-400">提交页面</dt>
+                    <dd className="mt-0.5 truncate font-mono text-xs text-slate-500" title={ticket.pageUrl}>
+                      {ticket.pageUrl}
+                    </dd>
+                  </div>
+                )}
               </dl>
 
               <section>
@@ -265,6 +303,18 @@ export default function TicketDetailDrawer({
                             <p className="truncate text-sm font-medium text-slate-700" title={attachment.filename}>{attachment.filename}</p>
                             <p className="mt-0.5 text-xs tabular-nums text-slate-400">{formatBytes(attachment.fileSize)} · {fmtTime(attachment.createdAt)}</p>
                           </div>
+                          {(attachment.mimeType || '').startsWith('image/') && (
+                            <button
+                              type="button"
+                              onClick={() => void previewAttachment(attachment)}
+                              disabled={previewingId === attachment.id}
+                              className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-emerald-50 hover:text-emerald-700 disabled:opacity-40"
+                              title={`预览 ${attachment.filename}`}
+                              aria-label={`预览 ${attachment.filename}`}
+                            >
+                              {previewingId === attachment.id ? <Loader2 size={15} className="animate-spin" /> : <Eye size={15} />}
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => void download(attachment.id)}
@@ -317,6 +367,13 @@ export default function TicketDetailDrawer({
           )}
         </div>
       </aside>
+
+      <ImagePreviewModal
+        open={Boolean(preview)}
+        src={preview?.url ?? null}
+        filename={preview?.filename ?? ''}
+        onClose={closePreview}
+      />
     </div>,
     document.body,
   )

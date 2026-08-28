@@ -47,6 +47,19 @@ TICKET_STATUSES = (
     STATUS_CANCELLED,
 )
 
+# —— 分类词汇（用户反馈的来源类型；other 兼容历史数据与自由反馈）——
+CATEGORY_SYSTEM_FAULT = "system_fault"  # 系统故障
+CATEGORY_EXPERIENCE = "experience"      # 体验优化
+CATEGORY_FEATURE = "feature"            # 新增功能
+CATEGORY_OTHER = "other"                # 其他
+
+TICKET_CATEGORIES = (
+    CATEGORY_SYSTEM_FAULT,
+    CATEGORY_EXPERIENCE,
+    CATEGORY_FEATURE,
+    CATEGORY_OTHER,
+)
+
 
 class Ticket(Base):
     """一条用户反馈工单。"""
@@ -63,6 +76,9 @@ class Ticket(Base):
     # —— 内容 ——
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    category: Mapped[str] = mapped_column(String(50), default=CATEGORY_OTHER)
+    # 提交工单时用户所在页面的完整地址（含 hash 路由），供后续审查定位
+    page_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
     # —— 提交人（快照提交时的用户名，提交人账号删除后仍可读）——
     submitter_id: Mapped[str | None] = mapped_column(

@@ -11,6 +11,8 @@ import { apiClientV2 } from './client'
 
 export type TicketStatus = 'pending' | 'verifying' | 'accepted' | 'completed' | 'cancelled'
 
+export type TicketCategory = 'system_fault' | 'experience' | 'feature' | 'other'
+
 export interface TicketAttachment {
   id: string
   ticketId: string
@@ -39,6 +41,8 @@ export interface TicketItem {
   title: string
   content: string
   status: TicketStatus
+  category: TicketCategory
+  pageUrl: string | null
   submitterId: string | null
   submitterName: string | null
   createdAt: string
@@ -63,11 +67,14 @@ export interface TicketStats {
 export interface TicketCreateBody {
   title: string
   content: string
+  category?: TicketCategory
+  pageUrl?: string | null
 }
 
 export interface TicketListParams {
   q?: string
-  status?: TicketStatus | 'all'
+  /** 单状态，或逗号分隔多状态（顶栏弹窗取处理中：pending,verifying,accepted） */
+  status?: string
   page?: number
   pageSize?: number
 }
@@ -118,6 +125,9 @@ export const ticketsApi = {
     apiClientV2
       .get(`/tickets/${ticketId}/attachments/${att.id}/download`, { responseType: 'blob' })
       .then((blob: Blob) => saveBlob(blob, att.filename)),
+
+  fetchAttachmentBlob: (ticketId: string, att: TicketAttachment): Promise<Blob> =>
+    apiClientV2.get(`/tickets/${ticketId}/attachments/${att.id}/download`, { responseType: 'blob' }),
 }
 
 // ---------- 展示辅助 ----------
@@ -132,6 +142,17 @@ export const TICKET_STATUS_META: Record<TicketStatus, { label: string; cls: stri
 
 export const TICKET_STATUS_ORDER: TicketStatus[] = [
   'pending', 'verifying', 'accepted', 'completed', 'cancelled',
+]
+
+export const TICKET_CATEGORY_META: Record<TicketCategory, { label: string }> = {
+  system_fault: { label: '系统故障' },
+  experience: { label: '体验优化' },
+  feature: { label: '新增功能' },
+  other: { label: '其他' },
+}
+
+export const TICKET_CATEGORY_ORDER: TicketCategory[] = [
+  'system_fault', 'experience', 'feature', 'other',
 ]
 
 export function formatBytes(n: number): string {

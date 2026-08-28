@@ -30,6 +30,36 @@ def test_create_ticket_defaults_to_pending_and_records_submitter(
     assert data["submitterName"] == "admin"
     assert data["ticketNo"].startswith("TK-")
     assert data["attachmentCount"] == 0
+    # 未显式给分类时回退 other，pageUrl 缺省为空
+    assert data["category"] == "other"
+    assert data["pageUrl"] is None
+
+
+def test_create_ticket_persists_category_and_page_url(client, auth_headers):
+    response = client.post(
+        "/api/v2/tickets",
+        json={
+            "title": "拓扑图文字模糊",
+            "content": "放大到 400% 仍看不清",
+            "category": "experience",
+            "pageUrl": "http://10.68.17.78:5173/#/agent?ontology_id=abc",
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 201
+    data = response.json()["data"]
+    assert data["category"] == "experience"
+    assert data["pageUrl"] == "http://10.68.17.78:5173/#/agent?ontology_id=abc"
+
+
+def test_create_ticket_rejects_invalid_category(client, auth_headers):
+    response = client.post(
+        "/api/v2/tickets",
+        json={"title": "非法分类", "content": "x", "category": "urgent"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+    assert "非法分类" in response.json()["detail"]
 
 
 def test_create_ticket_rejects_blank_fields(client, auth_headers):
@@ -138,6 +168,33 @@ def test_list_filters_by_status_and_query(client, auth_headers):
     bad_status = client.get(
         "/api/v2/tickets", params={"status": "done"}, headers=auth_headers)
     assert bad_status.status_code == 422
+
+
+def test_list_supports_comma_separated_status_for_popover(client, auth_headers):
+    """顶栏弹窗取「处理中 = pending,verifying,accepted」最近工单。"""
+    pending = _create(client, auth_headers, title="待处理单", content="x").json()["data"]
+    verifying = _create(client, auth_headers, title="查验中单", content="x").json()["data"]
+    completed = _create(client, auth_headers, title="已完成单", content="x").json()["data"]
+    for ticket_id in (verifying["id"], completed["id"]):
+        client.post(
+            f"/api/v2/tickets/{ticket_id}/progress",
+            json={"status": "verifying" if ticket_id == verifying["id"] else "completed",
+                  "comment": "处理"},
+            headers=auth_headers,
+        )
+
+    in_progress = client.get(
+        "/api/v2/tickets",
+        params={"status": "pending,verifying,accepted", "page_size": 10},
+        headers=auth_headers,
+    ).json()["data"]
+    assert in_progress["total"] == 2
+    assert {item["title"] for item in in_progress["items"]} == {"待处理单", "查验中单"}
+
+    # 逗号分隔中任一非法取值整体拒绝
+    bad = client.get(
+        "/api/v2/tickets", params={"status": "pending,done"}, headers=auth_headers)
+    assert bad.status_code == 422
 
 
 def test_stats_summary_scopes_by_role(client, auth_headers, editor_user):

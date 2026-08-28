@@ -3,13 +3,14 @@ import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import {
   Network, Settings, LogOut, ChevronLeft, ChevronRight, ChevronDown,
-  UserCircle, User, Menu, Ticket, X,
+  UserCircle, User, Menu, X,
 } from 'lucide-react'
 import FloatingAssistantWidget from '@/components/assistant-widget/FloatingAssistantWidget'
 import InboxPopover from '@/components/inbox/InboxPopover'
 import NavTabs from '@/components/NavTabs'
 import PreferencesModal from '@/components/preferences/PreferencesModal'
 import ProfileModal from '@/components/profile/ProfileModal'
+import TicketPopover from '@/components/tickets/TicketPopover'
 import { PLATFORM_NAV_ITEMS, visibleNavigation, type PlatformNavItem } from '@/config/navigation'
 
 export default function Layout({ children }: { children: React.ReactNode }) {
@@ -22,10 +23,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
   const [collapsedActiveGroup, setCollapsedActiveGroup] = useState<string | null>(null)
   const [inboxOpen, setInboxOpen] = useState(false)
+  const [ticketOpen, setTicketOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [preferencesOpen, setPreferencesOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const inboxRef = useRef<HTMLDivElement>(null)
+  const ticketRef = useRef<HTMLDivElement>(null)
   const userMenuRef = useRef<HTMLDivElement>(null)
 
   // 分组激活范围：父路径前缀或任一子项路径命中都算仍在组内。「本体模型」的
@@ -54,15 +57,16 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   // 点击外部关闭下拉面板
   useEffect(() => {
-    if (!inboxOpen && !userMenuOpen) return
+    if (!inboxOpen && !ticketOpen && !userMenuOpen) return
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node
       if (inboxOpen && inboxRef.current && !inboxRef.current.contains(target)) setInboxOpen(false)
+      if (ticketOpen && ticketRef.current && !ticketRef.current.contains(target)) setTicketOpen(false)
       if (userMenuOpen && userMenuRef.current && !userMenuRef.current.contains(target)) setUserMenuOpen(false)
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [inboxOpen, userMenuOpen])
+  }, [inboxOpen, ticketOpen, userMenuOpen])
 
   const navItems = visibleNavigation(user)
 
@@ -235,20 +239,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
             {/* 右侧：工单反馈 + 收件箱 + 用户中心 */}
             <div className="flex shrink-0 items-center gap-1">
-              {/* 工单反馈：使用反馈入口，位于收件箱左侧 */}
-              <button
-                type="button"
-                onClick={() => { navigate('/tickets'); setInboxOpen(false); setUserMenuOpen(false) }}
-                className={`flex items-center justify-center w-10 h-10 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] ${
-                  isActive('/tickets')
-                    ? 'bg-[var(--color-bg-hover)] text-[var(--color-text-primary)]'
-                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
-                }`}
-                title="工单反馈"
-                aria-label="工单反馈"
-              >
-                <Ticket size={21} strokeWidth={1.8} />
-              </button>
+              {/* 工单反馈：使用反馈弹窗（最近处理中工单 + 任意页面提单），位于收件箱左侧 */}
+              <div className="relative" ref={ticketRef}>
+                <TicketPopover
+                  open={ticketOpen}
+                  onOpenChange={nextOpen => {
+                    setTicketOpen(nextOpen)
+                    if (nextOpen) { setInboxOpen(false); setUserMenuOpen(false) }
+                  }}
+                  onNavigate={navigate}
+                />
+              </div>
 
               {/* 收件箱 */}
               <div className="relative" ref={inboxRef}>
@@ -256,7 +257,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   open={inboxOpen}
                   onOpenChange={nextOpen => {
                     setInboxOpen(nextOpen)
-                    if (nextOpen) setUserMenuOpen(false)
+                    if (nextOpen) { setTicketOpen(false); setUserMenuOpen(false) }
                   }}
                   onNavigate={navigate}
                 />
@@ -265,7 +266,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               {/* 用户中心 */}
               <div className="relative" ref={userMenuRef}>
                 <button
-                  onClick={() => { setUserMenuOpen(!userMenuOpen); setInboxOpen(false) }}
+                  onClick={() => { setUserMenuOpen(!userMenuOpen); setInboxOpen(false); setTicketOpen(false) }}
                   className={`flex items-center justify-center w-10 h-10 rounded-lg transition-colors ${
                     userMenuOpen ? 'bg-[var(--color-bg-hover)] text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
                   }`}

@@ -78,10 +78,15 @@ def create_ticket(db: Session, data: TicketCreate, user) -> Ticket:
         raise HTTPException(422, "title 不能为空")
     if not content:
         raise HTTPException(422, "content 不能为空")
+    page_url = (data.page_url or "").strip() or None
+    if page_url:
+        page_url = page_url[:1000]  # 列宽兜底，正常页面地址远短于此
     ticket = Ticket(
         ticket_no=generate_ticket_no(db),
         title=title,
         content=content,
+        category=_norm_category(data.category),
+        page_url=page_url,
         submitter_id=getattr(user, "id", None),
         submitter_name=getattr(user, "username", None),
         status=m.STATUS_PENDING,  # 用户提交后自动进入「待处理」
@@ -90,6 +95,16 @@ def create_ticket(db: Session, data: TicketCreate, user) -> Ticket:
     db.commit()
     db.refresh(ticket)
     return ticket
+
+
+def _norm_category(value: Optional[str]) -> str:
+    """缺省 other；显式给出时必须命中分类词汇，防脏数据入库。"""
+    category = (value or "").strip()
+    if not category:
+        return m.CATEGORY_OTHER
+    if category not in m.TICKET_CATEGORIES:
+        raise HTTPException(422, f"非法分类: {category}")
+    return category
 
 
 def apply_progress(db: Session, ticket: Ticket, status: str,
@@ -192,9 +207,13 @@ def list_tickets(
 ) -> dict:
     query = _scoped_query(db, user)
     if status and status != "all":
-        if status not in m.TICKET_STATUSES:
-            raise HTTPException(422, f"非法状态筛选: {status}")
-        query = query.filter(Ticket.status == status)
+        # 支持逗号分隔多状态（顶栏弹窗用「处理中 = pending,verifying,accepted」）
+        statuses = [part.strip() for part in status.split(",") if part.strip()]
+        invalid = [part for part in statuses if part not in m.TICKET_STATUSES]
+        if invalid:
+            raise HTTPException(422, f"非法状态筛选: {','.join(invalid)}")
+        if statuses:
+            query = query.filter(Ticket.status.in_(statuses))
     if q and q.strip():
         like = f"%{q.strip()}%"
         query = query.filter(
@@ -278,6 +297,7 @@ def ticket_out(t: Ticket, *, attachment_count: Optional[int] = None,
     out = {
         "id": t.id, "ticketNo": t.ticket_no, "title": t.title,
         "content": t.content, "status": t.status,
+        "category": t.category, "pageUrl": t.page_url,
         "submitterId": t.submitter_id, "submitterName": t.submitter_name,
         "createdAt": _iso(t.created_at), "updatedAt": _iso(t.updated_at),
     }
