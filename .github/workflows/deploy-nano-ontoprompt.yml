@@ -141,7 +141,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 15 分钟余量过薄：同一提交在快慢不同的 runner 上实测 11m39s ~ >15m，
+    # 慢机器会随机撞顶导致部署被跳过（MYW-73 首次部署即如此）。提到 25 分钟。
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
