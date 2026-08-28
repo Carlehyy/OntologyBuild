@@ -3,12 +3,15 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 /**
  * 本体助手 · 本体拓扑图数据正确性（MYW-61）mocked E2E。
  *
- * 覆盖两个缺陷的回归：
+ * 覆盖三个缺陷的回归：
  *   1. 实例徽标计数：versions workspace 载荷按设计不携带生产实例（仅试跑隔离
  *      数据），徽标计数必须取自能力边界接口（与助手技能卡同一数据源），
  *      不再恒显示「0 实例」；点开徽标后实例行按 release 拉取真实数据。
  *   2. 卡片底部行可见性：属性区满配（>4 个属性时 3 行 + 更多行）时，
  *      「激活函数」行不得被卡片 overflow 裁切（bounding box 必须落在卡片内）。
+ *   3. 缩放上限（MYW-73）：100% 是 viewBox 适配而非 1:1，大本体初始有效缩放
+ *      远小于 1，旧 1.8 上限放大到底仍读不清卡片；滚轮/按钮必须能放大到
+ *      400%（与本体网络画布 ZOOM_MAX 对齐）并在 400% 精确封顶、双击复位。
  */
 
 const now = '2026-07-19T08:00:00+00:00'
@@ -186,4 +189,37 @@ test('属性区满配时底部「激活函数」行仍完整可见，不被卡�
   expect(clip.error).toBeUndefined()
   expect(clip.clipped, `激活函数行被裁切：行底 ${clip.rowBottom} > 卡底 ${clip.cardBottom}`).toBe(false)
   expect(clip.overflowPx, `卡片内容溢出 ${clip.overflowPx}px`).toBe(0)
+})
+
+test('滚轮缩放可放大到 400% 并精确封顶，一键复位回到适配视图（MYW-73）', async ({ page }) => {
+  await mockAgentTopology(page)
+  await page.setViewportSize({ width: 1728, height: 1080 })
+  await page.goto(`/#/agent?ontology_id=${ONTOLOGY_ID}`, { waitUntil: 'domcontentloaded' })
+
+  const nodes = page.getByTestId('ontology-network-node')
+  await expect(nodes.first()).toBeVisible({ timeout: 15000 })
+  const zoomLevel = page.getByTestId('ontology-zoom-level')
+  await expect(zoomLevel).toHaveText('100%')
+
+  // 滚轮：在画布空白处连续放大。每格 deltaY=-120 → factor≈1.155，
+  // 1 → 4 需约 10 格；滚 15 格后必须到达 400% 封顶（旧实现停在 180%）。
+  const graphBox = await page.getByRole('img', { name: '本体拓扑图' }).boundingBox()
+  expect(graphBox).not.toBeNull()
+  if (!graphBox) throw new Error('topology SVG must have a visible bounding box')
+  await page.mouse.move(graphBox.x + graphBox.width * 0.75, graphBox.y + graphBox.height * 0.5)
+  for (let i = 0; i < 15; i += 1) await page.mouse.wheel(0, -120)
+  await expect(zoomLevel).toHaveText('400%')
+
+  // 封顶后继续滚轮/按钮放大都停在 400%。
+  await page.mouse.wheel(0, -120)
+  await page.getByLabel('放大网络图').click()
+  await expect(zoomLevel).toHaveText('400%')
+
+  // 中途状态确实越过旧 180% 上限：缩小一格后是 390%。
+  await page.getByLabel('缩小网络图').click()
+  await expect(zoomLevel).toHaveText('390%')
+
+  // 复位按钮回到适配视图（100%）。双击复位路径由 agent_graph.spec 覆盖。
+  await page.getByLabel('重置网络图视图').click()
+  await expect(zoomLevel).toHaveText('100%')
 })
