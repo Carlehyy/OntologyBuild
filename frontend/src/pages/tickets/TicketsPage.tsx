@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   ChevronLeft, ChevronRight, Inbox, Loader2, Megaphone, Paperclip,
@@ -10,9 +11,9 @@ import {
   fmtTime, ticketsApi, TICKET_STATUS_META, TICKET_STATUS_ORDER,
   type TicketStatus,
 } from '@/api/tickets'
-import TicketFormModal from './TicketFormModal'
+import TicketFormModal from '@/components/tickets/TicketFormModal'
 import TicketDetailDrawer from './TicketDetailDrawer'
-import { StatusBadge } from './shared'
+import { CategoryBadge, StatusBadge } from './shared'
 
 // 与「事件登记」一致的基础面板：白底、细边框、轻阴影。
 const PANEL = 'rounded-xl border border-slate-200 bg-white shadow-sm/50'
@@ -26,6 +27,7 @@ const STATUS_TABS: Array<{ value: TicketStatus | 'all'; label: string }> = [
 export default function TicketsPage() {
   const isAdmin = useAuthStore(s => s.user?.role === 'admin')
   const username = useAuthStore(s => s.user?.username)
+  const [searchParams, setSearchParams] = useSearchParams()
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebouncedValue(search, 300)
   const [status, setStatus] = useState<TicketStatus | 'all'>('all')
@@ -44,6 +46,14 @@ export default function TicketsPage() {
   })
 
   useEffect(() => { setPage(1) }, [debouncedSearch, status])
+
+  // 顶栏工单弹窗带 ?focus=<id> 深链进入时，直接打开对应工单详情
+  useEffect(() => {
+    const focus = searchParams.get('focus')
+    if (!focus) return
+    setDetailTicketId(focus)
+    setSearchParams({}, { replace: true })
+  }, [searchParams, setSearchParams])
 
   const totalPages = Math.max(1, Math.ceil((listQ.data?.total ?? 0) / PAGE_SIZE))
   const refresh = () => { statsQ.refetch(); listQ.refetch() }
@@ -179,7 +189,10 @@ export default function TicketsPage() {
                   style={{ animation: `rowIn 0.35s ease-out ${index * 30}ms both` }}
                 >
                   <td className="px-4 py-3 text-left align-middle">
-                    <div className="truncate font-medium text-slate-800" title={row.title}>{row.title}</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate font-medium text-slate-800" title={row.title}>{row.title}</span>
+                      <CategoryBadge category={row.category} />
+                    </div>
                     <div className="mt-0.5 font-mono text-xs text-slate-400">{row.ticketNo}</div>
                   </td>
                   <td className="px-3 py-3 text-center align-middle">
