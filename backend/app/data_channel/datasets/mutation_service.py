@@ -290,9 +290,14 @@ def commit_dataset_import_job(
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
-    if status.get("status") != "ready":
+    # ready 可提交；failed 且已完成过解析（columns 仍在状态里）的任务同样
+    # 允许修正字段后直接重新 commit——导入失败发生在 DB 写入之前，无脏数据，
+    # 仅 ready 态可提交会把用户逼去整文件重传。解析阶段就失败的任务没有
+    # 列信息，重新提交也无从修正，仍须重新上传。
+    current = str(status.get("status") or "")
+    if current != "ready" and not (current == "failed" and status.get("columns")):
         raise HTTPException(
-            409, f"导入任务当前状态为 {status.get('status') or 'unknown'}，不能提交")
+            409, f"导入任务当前状态为 {current or 'unknown'}，不能提交")
 
     # Validate the small field contract synchronously; full-file validation runs
     # in the NATS pipeline executor after the response.

@@ -397,6 +397,145 @@ def test_async_import_stages_file_and_normalizes_source_headers_to_field_keys(
     }]
 
 
+def test_async_import_infers_integer_for_column_starting_with_zero(
+    api, auth_headers, db, monkeypatch, tmp_path,
+):
+    """首值 0/1 的整数列不再被判成 boolean：推断与 commit 全量校验同口径，
+    按默认契约直接提交即可入湖，不再要求手工逐列改类型。"""
+    from sqlalchemy.orm import sessionmaker
+
+    from app import database as database_module
+    from app.config import settings
+    from app.data_channel.pipeline_tasks import dispatch as dispatch_module
+    from app.tasks.v2 import dataset_import as import_tasks
+
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(
+        dispatch_module,
+        "dispatch_task",
+        lambda subject, payload: None,
+    )
+    monkeypatch.setattr(database_module, "SessionLocal", sessionmaker(bind=db.get_bind()))
+
+    csv_content = "工单,解决周期(天)\nA,0\nB,1\nC,2\nD,4\nE,6\n"
+    started = api.post(
+        "/api/v2/datasets/imports",
+        files={"file": (
+            "工单.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")},
+        headers=auth_headers,
+    )
+    assert started.status_code == 202, started.text
+    job_id = started.json()["data"]["job_id"]
+    import_tasks.inspect_dataset_import(job_id)
+
+    inspected = api.get(
+        f"/api/v2/datasets/imports/{job_id}", headers=auth_headers)
+    assert inspected.status_code == 200
+    job = inspected.json()["data"]
+    assert job["status"] == "ready"
+    types = {column["name"]: column["type"] for column in job["columns"]}
+    assert types == {"工单": "string", "解决周期(天)": "integer"}
+
+    committed = api.post(
+        f"/api/v2/datasets/imports/{job_id}/commit",
+        json={
+            "name": "首值零整数列导入",
+            "columns": [
+                {"source_key": "工单", "name": "ticket", "display_name": "工单",
+                 "type": "string", "nullable": False},
+                {"source_key": "解决周期(天)", "name": "resolve_days",
+                 "display_name": "解决周期(天)", "type": "integer", "nullable": True},
+            ],
+            "primary_key": "ticket",
+        },
+        headers=auth_headers,
+    )
+    assert committed.status_code == 202, committed.text
+    import_tasks.commit_dataset_import(job_id)
+
+    final = api.get(
+        f"/api/v2/datasets/imports/{job_id}", headers=auth_headers).json()["data"]
+    assert final["status"] == "completed", final.get("error")
+    assert final["result"]["rowcount"] == 5
+
+
+def test_failed_import_commit_allows_field_fix_retry_without_reupload(
+    api, auth_headers, db, monkeypatch, tmp_path,
+):
+    """commit 校验失败的任务允许修正字段后直接重新提交，免整文件重传。"""
+    from sqlalchemy.orm import sessionmaker
+
+    from app import database as database_module
+    from app.config import settings
+    from app.data_channel.pipeline_tasks import dispatch as dispatch_module
+    from app.tasks.v2 import dataset_import as import_tasks
+
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(
+        dispatch_module,
+        "dispatch_task",
+        lambda subject, payload: None,
+    )
+    monkeypatch.setattr(database_module, "SessionLocal", sessionmaker(bind=db.get_bind()))
+
+    csv_content = "工单,解决周期(天)\nA,0\nB,1\nC,2\n"
+    started = api.post(
+        "/api/v2/datasets/imports",
+        files={"file": (
+            "工单.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")},
+        headers=auth_headers,
+    )
+    assert started.status_code == 202, started.text
+    job_id = started.json()["data"]["job_id"]
+    import_tasks.inspect_dataset_import(job_id)
+
+    def _commit_payload(resolve_days_type: str) -> dict:
+        return {
+            "name": "失败后修正重提",
+            "columns": [
+                {"source_key": "工单", "name": "ticket", "display_name": "工单",
+                 "type": "string", "nullable": False},
+                {"source_key": "解决周期(天)", "name": "resolve_days",
+                 "display_name": "解决周期(天)", "type": resolve_days_type,
+                 "nullable": True},
+            ],
+            "primary_key": "ticket",
+        }
+
+    # 故意把 0/1/2 整数列声明成 boolean：全量校验遇 2 硬失败
+    bad = api.post(
+        f"/api/v2/datasets/imports/{job_id}/commit",
+        json=_commit_payload("boolean"),
+        headers=auth_headers,
+    )
+    assert bad.status_code == 202, bad.text
+    import_tasks.commit_dataset_import(job_id)
+    failed = api.get(
+        f"/api/v2/datasets/imports/{job_id}", headers=auth_headers).json()["data"]
+    assert failed["status"] == "failed"
+    assert "boolean" in str(failed["error"])
+
+    # failed 状态下修正字段直接重新 commit，不再走上传
+    retry = api.post(
+        f"/api/v2/datasets/imports/{job_id}/commit",
+        json=_commit_payload("integer"),
+        headers=auth_headers,
+    )
+    assert retry.status_code == 202, retry.text
+    import_tasks.commit_dataset_import(job_id)
+
+    final = api.get(
+        f"/api/v2/datasets/imports/{job_id}", headers=auth_headers).json()["data"]
+    assert final["status"] == "completed", final.get("error")
+    assert final["result"]["rowcount"] == 3
+    preview = api.get(
+        f"/api/v2/datasets/{final['result']['id']}/preview",
+        headers=auth_headers,
+    )
+    assert preview.status_code == 200
+    assert preview.json()["columns"] == ["ticket", "resolve_days"]
+
+
 def test_configured_upload_accepts_cr_only_csv_newlines(api, auth_headers):
     payload = {
         "name": "旧式换行 CSV",

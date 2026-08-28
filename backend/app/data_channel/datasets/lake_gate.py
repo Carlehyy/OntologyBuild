@@ -352,8 +352,29 @@ def detect_drift(new_cols: list[str], expected: list[str] | None) -> dict | None
     return {"added": added, "missing": missing}
 
 
+# 推断类型的自检降级阶梯：候选类型无法覆盖样本中的其余值时，按序放宽到
+# 全部样本都能通过 _cell_type_ok 的最窄类型。boolean 混入 2/4/6 是线上高频
+# 误判（首值 0/1 被 SchemaInferenceStep._infer_type 判成 boolean），整数/小数
+# 是其唯一的兼容放宽方向；timestamp/json 与数值无公共词表，直接落到 string。
+_TYPE_DEGRADE_LADDER = {
+    "boolean": ("boolean", "integer", "float", "string"),
+    "integer": ("integer", "float", "string"),
+    "float": ("float", "string"),
+    "timestamp": ("timestamp", "string"),
+    "json": ("json", "string"),
+    "string": ("string",),
+}
+
+
 def infer_columns_typed(rows: list[dict], sample_size: int = 50) -> list[dict]:
-    """带类型的列清单：列序保持首现顺序，类型按前 N 行非空值推断。"""
+    """带类型的列清单：列序保持首现顺序，类型按前 N 行非空值推断。
+
+    候选类型取首见非空值，但推断结果必须覆盖同一采样窗口内的全部非空值
+    （与 commit 时 validate_declared_types 用同一把 _cell_type_ok 尺子）：
+    否则“解决周期”这类首值为 0/1 的整数列会被推断成 boolean，用户按默认
+    契约提交后全量校验遇 2/4/6 硬失败，只能整文件重传。冲突时按
+    boolean→integer→float→string 阶梯降级，把一致契约留在推断阶段。
+    """
     from app.services.v2.pipeline.steps.schema_inference import SchemaInferenceStep
 
     columns: list[str] = []
@@ -366,25 +387,33 @@ def infer_columns_typed(rows: list[dict], sample_size: int = 50) -> list[dict]:
 
     typed: list[dict] = []
     for col in columns:
-        col_type = "string"
+        samples: list = []
+        first_type = "string"
         for row in rows[:sample_size]:
             v = row.get(col)
             if v is None or str(v).strip() == "":
                 continue
+            samples.append(v)
+            if len(samples) > 1:
+                continue
             if isinstance(v, bool):
-                col_type = "boolean"
+                first_type = "boolean"
             elif isinstance(v, int):
-                col_type = "integer"
+                first_type = "integer"
             elif isinstance(v, float):
-                col_type = "float"
+                first_type = "float"
             elif isinstance(v, (dict, list)):
-                col_type = "json"
+                first_type = "json"
             else:
                 try:
-                    col_type = SchemaInferenceStep._infer_type(str(v).strip())
+                    first_type = SchemaInferenceStep._infer_type(str(v).strip())
                 except Exception:  # noqa: BLE001 — 类型推断永不阻断入湖
-                    col_type = "string"
-            break
+                    first_type = "string"
+        col_type = "string"
+        for candidate in _TYPE_DEGRADE_LADDER.get(first_type, ("string",)):
+            if all(_cell_type_ok(v, candidate) for v in samples):
+                col_type = candidate
+                break
         typed.append({"name": col, "type": col_type})
     return typed
 

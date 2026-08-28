@@ -7,7 +7,6 @@ executor 共享卷，把迁移任务的瞬态状态收敛在独立根目录下�
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import uuid
 from datetime import datetime
@@ -54,12 +53,16 @@ def _read_json(path: Path) -> dict:
 
 
 def _write_json_atomic(path: Path, value: dict) -> None:
+    # 与导入任务共用同一把带退避重试的原子替换：前端轮询 read_status 与
+    # 执行器写状态并发时，Windows 下裸 os.replace 会撞 WinError 5。
+    from app.data_channel.datasets.import_jobs import _replace_with_retry
+
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         temporary.write_text(
             json.dumps(value, ensure_ascii=False), encoding="utf-8")
-        os.replace(temporary, path)
+        _replace_with_retry(temporary, path)
     finally:
         try:
             temporary.unlink()

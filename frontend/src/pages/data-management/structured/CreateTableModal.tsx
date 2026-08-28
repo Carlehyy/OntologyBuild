@@ -176,9 +176,12 @@ export default function CreateTableModal({ onClose, onCreated }: {
     if (job.status === 'failed') {
       setParsing(false)
       setSubmitting(false)
-      setError(job.error || '表格解析失败')
+      const message = job.error || '表格解析失败'
+      setError(progressMode === 'import'
+        ? `${message}（修正字段设置后可直接重新导入，无需重新上传文件）`
+        : message)
     }
-  }, [onCreated])
+  }, [onCreated, progressMode])
 
   useEffect(() => {
     if (!importJobId || !['queued', 'parsing', 'import_queued', 'importing'].includes(importStatus ?? '')) return
@@ -305,7 +308,8 @@ export default function CreateTableModal({ onClose, onCreated }: {
 
   const validate = () => {
     if (!file && !blankMode) return '请上传一个表格，或选择直接定义空表'
-    if (file && importStatus !== 'ready') return '请等待后端完成表格解析'
+    // failed（提交后校验失败）允许修正字段直接重试；其余非 ready 态仍须等待解析
+    if (file && importStatus !== 'ready' && importStatus !== 'failed') return '请等待后端完成表格解析'
     if (!name.trim()) return '请填写数据集名称'
     const configured = columns.filter(column =>
       Boolean(file || column.name.trim() || column.displayName.trim()))
