@@ -351,6 +351,38 @@ def test_infer_columns_typed_orders_and_skips_content():
     assert [c["name"] for c in typed] == ["b", "a"]
 
 
+# ── 推断与全量校验同口径（首值 0/1 不再误判 boolean）──────────────
+
+def test_infer_columns_typed_degrades_boolean_to_integer_on_sample_conflict():
+    """首值 0/1 的整数列（如“解决周期”）不能被判成 boolean：
+    候选类型必须覆盖采样窗口内全部非空值，否则 commit 全量校验遇 2/4/6 必炸。"""
+    rows = [{"解决周期(天)": v} for v in ("0", "1", "2", "4", "6")]
+    assert infer_columns_typed(rows) == [{"name": "解决周期(天)", "type": "integer"}]
+
+
+def test_infer_columns_typed_keeps_consistent_boolean_column():
+    """样本全部落在 boolean 词表内时维持 boolean，不为降级而降级。"""
+    rows = [{"flag": v} for v in ("0", "1", "true", "false", "yes")]
+    assert infer_columns_typed(rows) == [{"name": "flag", "type": "boolean"}]
+
+
+def test_infer_columns_typed_degrades_integer_to_float_or_string():
+    assert infer_columns_typed(
+        [{"a": "1"}, {"a": "2.5"}]) == [{"name": "a", "type": "float"}]
+    assert infer_columns_typed(
+        [{"a": 1}, {"a": "abc"}]) == [{"name": "a", "type": "string"}]
+
+
+def test_infer_columns_typed_timestamp_with_plain_text_falls_back_to_string():
+    rows = [{"t": "2024-01-15"}, {"t": "15/01/2024"}, {"t": "本季度"}]
+    assert infer_columns_typed(rows) == [{"name": "t", "type": "string"}]
+
+
+def test_infer_columns_typed_json_with_plain_text_falls_back_to_string():
+    rows = [{"payload": {"x": 1}}, {"payload": "plain"}]
+    assert infer_columns_typed(rows) == [{"name": "payload", "type": "string"}]
+
+
 def test_manual_json_type_requires_structured_or_parseable_json():
     columns = [{"name": "payload", "type": "json"}]
     validate_declared_types(

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 import uuid
 from datetime import date, datetime
 from pathlib import Path
@@ -22,6 +23,13 @@ IMPORT_ROOT_NAME = "dataset-imports"
 MANIFEST_NAME = "manifest.json"
 STATUS_NAME = "status.json"
 METADATA_NAME = "metadata.json"
+
+# Windows 下前端 1.2s 轮询 read_status 与执行器写状态并发：CPython 打开文件
+# 不带 FILE_SHARE_DELETE，读取窗口内 os.replace 会报 WinError 5（拒绝访问），
+# 进行中的任务被误标失败。状态文件只有几 KB、读窗口毫秒级，3 次 × 50ms
+# 退避足够跨过；重试耗尽仍失败才向上抛，不吞真实错误。
+REPLACE_ATTEMPTS = 3
+REPLACE_BACKOFF_SECONDS = 0.05
 
 
 def _json_default(value: Any) -> str:
@@ -59,6 +67,20 @@ def _read_json(path: Path) -> dict:
     return value
 
 
+def _replace_with_retry(temporary: Path, path: Path) -> None:
+    """os.replace 的短退避重试（跨 Windows 读端共享冲突），供本包各任务
+    状态文件的原子写共用；迁移任务（migration_jobs）与导入任务轮询同频，
+    竞态窗口相同。"""
+    for attempt in range(REPLACE_ATTEMPTS):
+        try:
+            os.replace(temporary, path)
+            return
+        except PermissionError:
+            if attempt == REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(REPLACE_BACKOFF_SECONDS)
+
+
 def _write_json_atomic(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -67,7 +89,7 @@ def _write_json_atomic(path: Path, value: dict) -> None:
             json.dumps(value, ensure_ascii=False, default=_json_default),
             encoding="utf-8",
         )
-        os.replace(temporary, path)
+        _replace_with_retry(temporary, path)
     finally:
         try:
             temporary.unlink()
