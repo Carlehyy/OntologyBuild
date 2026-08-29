@@ -39,7 +39,10 @@ from app.shared.database import SessionLocal
 logger = logging.getLogger(__name__)
 
 MAX_CONVERSATIONS_PER_TASK = 50
-TASK_CONCURRENCY = 3
+# P0-4（MYW-79 生产实测）：任务间并行 × 会话并发曾把 judge 配额打爆（429，
+# 44 条会话只评成 9 条）——任务间经 _TASK_GATE 串行，会话并发降为 2。
+TASK_CONCURRENCY = 2
+_TASK_GATE = threading.Lock()
 
 
 class ServiceError(ValueError):
@@ -138,8 +141,9 @@ def _resolve_judge_model(db: Session, model_config_id: str | None):
 
 
 def _run_task(task_id: str) -> None:
-    """任务执行入口（守护线程上下文）：内联事件循环并发调度。"""
-    asyncio.run(_run_task_async(task_id))
+    """任务执行入口（守护线程上下文）：全局闸门内串行执行，内联事件循环调度。"""
+    with _TASK_GATE:
+        asyncio.run(_run_task_async(task_id))
 
 
 async def _run_task_async(task_id: str) -> None:

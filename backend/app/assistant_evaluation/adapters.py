@@ -243,14 +243,16 @@ def _load_steward_trace(db: Session, conversation_id: str) -> Trace | None:
 
 
 def _load_scene_trace(db: Session, conversation_id: str) -> Trace | None:
+    """场景助手为纯问答（SceneMessage 无 steps 字段，MYW-79 生产实测崩溃点）：
+    直接由 role/content 组装轨迹，不经过 _extract_steps。"""
     rows = (
         db.query(SceneMessage)
         .filter(SceneMessage.conversation_id == conversation_id)
         .order_by(SceneMessage.created_at.asc(), SceneMessage.id.asc())
         .all()
     )
-    actions, msgs, errors = _extract_steps(rows, "_none_", None, ())
-    return _finalize_trace(msgs, actions, errors)
+    msgs = [{"role": r.role, "content": r.content or ""} for r in rows]
+    return _finalize_trace(msgs, [], 0)
 
 
 def build_adapters() -> dict[str, AssistantAdapter]:

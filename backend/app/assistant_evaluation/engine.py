@@ -68,7 +68,44 @@ def openjudge_available() -> bool:
     return _OPENJUDGE_AVAILABLE
 
 
+# ---------------------------------------------------------------- openai 兼容
+
+
+async def _compat_async_parse(self, **kwargs):
+    """委托到 openai<1.9x 等价的 beta.chat.completions.parse（同为结构化输出）。"""
+    return await self._client.beta.chat.completions.parse(**kwargs)
+
+
+def _ensure_openai_parse_compat() -> None:
+    """P0-1（MYW-79 生产实测）：平台锁定 openai<2，而 py-openjudge>=0.2 按
+    openai>=2.8 的 API 调 ``chat.completions.parse``，生产环境所有官方评分器
+    因此 AttributeError（结构化输出路径），全程静默降级。openai 旧版把同
+    能力放在 ``beta.chat.completions.parse``，缺失时补一个委托方法即可让
+    官方引擎恢复可用；openai>=2 自带 parse，此处为空操作。
+    """
+    try:
+        from openai.resources.chat.completions import AsyncCompletions
+    except Exception:  # pragma: no cover - openai 缺失时评估本就走降级
+        return
+    if not hasattr(AsyncCompletions, "parse"):
+        AsyncCompletions.parse = _compat_async_parse
+
+
+_ensure_openai_parse_compat()
+
+
 # ---------------------------------------------------------------- 内置降级评判
+
+
+# 429 限流退避参数（MYW-79 生产实测：并发无退避曾把 judge 配额打爆）
+_RATE_LIMIT_RETRIES = 2
+_RATE_LIMIT_BACKOFF_SECONDS = (8, 24)
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """网关层把上游 429 包装成文本异常，按标记识别限流类错误。"""
+    text = str(exc)
+    return "429" in text or "rate limit" in text.lower() or "速率限制" in text
 
 
 _FALLBACK_PROMPTS = {
@@ -121,14 +158,28 @@ def _rubric_fallback_system(rubric: dict) -> str:
 
 
 def _gateway_judge(llm_kwargs: dict, system: str, user: str) -> str | None:
-    """经平台 llm_gateway 做一次 LLM 评判（兼容全部 provider）。"""
+    """经平台 llm_gateway 做一次 LLM 评判（兼容全部 provider）。
+
+    P0-4（MYW-79 生产实测）：judge 通道撞 429 限流时按指数退避重试，
+    其余错误快速失败（由单会话容错层记 engine_error，不静默吞掉）。
+    """
     from app.model_configs.llm_gateway import chat as llm_chat
 
-    result = llm_chat(llm_kwargs, [
+    messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
-    ], [])
-    return result.get("content")
+    ]
+    attempt = 0
+    while True:
+        try:
+            result = llm_chat(llm_kwargs, messages, [])
+            return result.get("content")
+        except Exception as exc:
+            if attempt < _RATE_LIMIT_RETRIES and _is_rate_limit_error(exc):
+                time.sleep(_RATE_LIMIT_BACKOFF_SECONDS[attempt])
+                attempt += 1
+                continue
+            raise
 
 
 def _parse_judge_json(content: str | None) -> dict:
@@ -328,6 +379,12 @@ class OpenJudgeEngine:
             return None, f"OpenJudge 执行失败：{getattr(result, 'error', '') or result}"
         score = getattr(result, "score", None)
         reason = str(getattr(result, "reason", "") or "")
+        if reason.startswith("Evaluation error"):
+            # P0-2（MYW-79 生产实测）：官方评分器会把内部异常包装成
+            # score=0 的结果返回（如 openai 兼容 AttributeError）——若照单
+            # 落库，所有会话都会被误标“工具问题：调用失败”。视为直评失败，
+            # 走既有网关降级通道。
+            return None, f"OpenJudge 执行失败（评分器内部异常）：{reason}"
         return (float(score) if score is not None else None), reason
 
     async def _score_repetition(self, response: str) -> float:
