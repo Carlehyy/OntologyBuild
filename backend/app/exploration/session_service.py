@@ -26,6 +26,7 @@ from app.exploration.models import (
 )
 from app.exploration.reverse_projection import project_snapshot_to_canvas
 from app.ontologies.access import require_ontology_access
+from app.ontologies.projects.models import OntologyProject
 from app.ontologies.versions.models import OntologyVersion
 
 
@@ -375,3 +376,53 @@ def list_diagram_kinds(
             for kind, label in diagram_kinds.items()
         ],
     })
+
+
+def list_draft_bindable_ontologies(
+    db: Session,
+    current_user,
+    *,
+    project_model=OntologyProject,
+    version_model=OntologyVersion,
+    require_ontology_access_fn=require_ontology_access,
+    ok_fn: Callable[[Any], dict] = _ok,
+):
+    """「业务澄清」分支②入口数据：有编辑中草稿版本、且当前用户可写的本体。
+
+    平台的「草稿态」只存在于版本层（node_kind=draft 且 lifecycle_status=editing），
+    合并落地走绑定会话 → 目标草稿版本，因此这里按合并链路的同一写权限口径
+    （require_ontology_access write=True）过滤，同一本体只保留最新一个编辑中
+    草稿，按草稿创建时间倒序（最近澄清过的在前）。
+    """
+    rows = (
+        db.query(version_model, project_model)
+        .join(project_model, version_model.ontology_id == project_model.id)
+        .filter(
+            version_model.node_kind == "draft",
+            version_model.lifecycle_status == "editing",
+        )
+        .order_by(version_model.created_at.desc(), version_model.id.desc())
+        .all()
+    )
+    items: list[dict] = []
+    seen_projects: set[str] = set()
+    for version, project in rows:
+        if project.id in seen_projects:
+            continue
+        try:
+            require_ontology_access_fn(db, project.id, current_user, write=True)
+        except HTTPException:
+            continue
+        seen_projects.add(project.id)
+        items.append({
+            "ontologyId": project.id,
+            "ontologyName": project.name,
+            "domain": project.domain,
+            "versionId": version.id,
+            "versionNumber": version.version_number,
+            "versionLabel": version.version_label or "",
+            "draftCreatedAt": (
+                version.created_at.isoformat() if version.created_at else None
+            ),
+        })
+    return ok_fn({"items": items})

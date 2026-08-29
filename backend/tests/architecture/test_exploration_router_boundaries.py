@@ -45,6 +45,7 @@ SERVICE_PATHS = (
 DELEGATES = {
     "list_sessions": ("_session_service", "list_sessions"),
     "create_session": ("_session_service", "create_session"),
+    "list_draft_ontologies": ("_session_service", "list_draft_bindable_ontologies"),
     "get_session": ("_session_service", "get_session"),
     "delete_session": ("_session_service", "delete_session"),
     "get_canvas": ("_session_service", "get_canvas"),
@@ -361,8 +362,9 @@ def test_exploration_openapi_fingerprint_is_stable():
         separators=(",", ":"),
     ).encode()
 
-    assert len(paths) == 21
-    assert operations == 26
+    # MYW-68 业务澄清分支②入口：新增 GET /exploration/draft-ontologies（读契约）。
+    assert len(paths) == 22
+    assert operations == 27
     assert hashlib.sha256(payload).hexdigest() == (
-        "cc27784e0ee7d0362a630f84498527f9531f17abd488b9adfe8952080e3d82a1"
+        "d8ac046024f212602688fa6eb0b0565ecd9e00762a4bb3f9972257cf3e331abd"
     )
