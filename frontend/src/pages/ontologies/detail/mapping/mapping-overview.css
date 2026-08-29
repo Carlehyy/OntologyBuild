@@ -157,18 +157,12 @@
   min-width: 0;
   min-height: 0;
   flex: 11 1 0%;
-  padding: 14px 18px 12px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
   border-right: 1px solid var(--dmo-line);
   background: var(--dmo-panel);
 }
-.dmo-flow-head { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; }
-.dmo-flow-title { min-width: 0; display: flex; flex-direction: column; }
-.dmo-flow-title b { color: var(--dmo-ink); font-size: 15px; font-weight: 700; letter-spacing: .01em; }
-.dmo-flow-title small { margin-top: 3px; color: var(--dmo-subtle); font-size: 12px; }
-.dmo-flow-caption { flex: none; color: var(--dmo-faint); font-size: 11px; }
 /* 画布随左栏富余高度拉伸（组件侧只给 minHeight 下限），图区越大全景越可读。
    画布盒在堆叠模式下只有 minHeight 而无确定高度，React Flow 根节点自带的
    height:100% 内联样式会塌缩为 0——组件侧用绝对定位填充层包住画布，
@@ -416,17 +410,21 @@
 
 /* ═══ 数据供给全景节点卡（@xyflow/react 自定义节点，与治理链路全景同一设计语言） ═══ */
 .dmo-chain-canvas { border: 1px solid var(--dmo-line-soft); border-radius: 12px; overflow: hidden; background: var(--dmo-cell-bg); }
-/* 连线流动动画逐帧重绘；fitView 缩放(<1)时悬停检视卡片，卡片边缘抗锯齿像素会随
-   之抖动，观感即“一直在闪”。检视期间（悬停节点卡 / 清单行联动 / 血缘弹窗）经
-   data-still 暂停流动动画，离开后恢复；减弱动态偏好下始终静止。 */
-.dmo-chain-canvas[data-still="true"] .react-flow__edge.animated path { animation-play-state: paused; }
+/* 连线流动粒子逐帧重绘；fitView 缩放(<1)时悬停检视卡片，卡片边缘抗锯齿像素会随
+   之抖动。悬停检视（未聚焦）期间非聚焦连线经 data.still 不渲染粒子，离开后恢复；
+   聚焦连线（点选/清单选中）始终流动；减弱动态偏好下粒子隐藏（见文件末尾）。 */
 @media (prefers-reduced-motion: reduce) {
   .dmo-chain-canvas .react-flow__edge.animated path { animation-play-state: paused; }
 }
 /* 连线是纯视觉元素：组件层已 interactionWidth=0，这里兜底禁用命中，
    确保边线层重挂载/回流永远不会打断节点卡的悬停命中测试
    （悬停卡片时 enter/leave 反复振荡致闪烁的机制根源）。 */
-.dmo-chain-canvas .react-flow__edge path { pointer-events: none; }
+.dmo-chain-canvas .react-flow__edge path,
+.dmo-chain-canvas .react-flow__edge circle { pointer-events: none; }
+/* SMIL 流动粒子不受 CSS animation-play-state 控制，减弱动态偏好下直接隐藏 */
+@media (prefers-reduced-motion: reduce) {
+  .dmo-chain-particle { display: none; }
+}
 
 .dmo-chain-node { border: 1px solid var(--dmo-line); border-radius: 12px; padding: 8px 10px; color: var(--dmo-text); background: var(--dmo-panel); box-shadow: 0 1px 3px rgba(15,23,42,.06); cursor: pointer; transition: opacity .22s ease, box-shadow .22s ease, border-color .22s ease; }
 .dmo-chain-node:hover { border-color: var(--dmo-teal-line); box-shadow: 0 4px 14px rgba(13,148,136,.12); }
@@ -447,8 +445,9 @@
 .dmo-chain-badge[data-tone="warn"] { color: var(--dmo-note-warn-ink); background: var(--dmo-note-warn-bg); }
 .dmo-chain-badge[data-tone="danger"] { color: var(--dmo-danger-ink); background: var(--dmo-danger-bg); }
 .dmo-chain-badge[data-tone="muted"] { color: var(--dmo-muted); background: var(--dmo-unmapped-bg); }
-.dmo-chain-colhead { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--dmo-faint); font-size: 10px; font-weight: 700; letter-spacing: .04em; pointer-events: none; }
-.dmo-chain-colhead em { padding: 1px 6px; border-radius: 999px; color: var(--dmo-faint); background: var(--dmo-unmapped-bg); font-size: 9.5px; font-style: normal; font-variant-numeric: tabular-nums; }
+/* 列抬头是面板标题级信息（MYW-77 二轮）：字号从 10px 上调到 12.5px，计数徽章同步放大 */
+.dmo-chain-colhead { display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--dmo-muted); font-size: 12.5px; font-weight: 700; letter-spacing: .04em; pointer-events: none; }
+.dmo-chain-colhead em { padding: 1.5px 7px; border-radius: 999px; color: var(--dmo-muted); background: var(--dmo-unmapped-bg); font-size: 11px; font-style: normal; font-variant-numeric: tabular-nums; }
 
 @media (max-width: 1280px) {
   /* summary 已改为 flex 换行（KPI 带自动折行），无需栅格降档 */

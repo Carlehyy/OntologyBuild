@@ -136,6 +136,14 @@ test('矮屏（1280x720）下 KPI 栏不被压碎，内容单页呈现无滚轮'
   expect(await shell.evaluate(element => element.scrollHeight <= element.clientHeight + 1)).toBeTruthy()
   // 运行趋势图由 ECharts 渲染。
   await expect(page.locator('.runtime-trend-chart canvas').first()).toBeVisible()
+  // MYW-77 二轮回归：无运行数据时的空态提示必须是紧凑浮层，不得被拉伸成
+  // 撑满图表区的大卡片（曾因绝对定位填充规则误命中 .runtime-empty-note）。
+  const emptyNote = page.locator('.runtime-empty-note')
+  await expect(emptyNote).toBeVisible()
+  await expect(emptyNote).toContainText('所选时段暂无运行记录')
+  const noteBox = await emptyNote.boundingBox()
+  expect(noteBox).not.toBeNull()
+  expect(noteBox!.width).toBeLessThanOrEqual(480)
   // 已下线的两个事实面板不再渲染。
   await expect(page.getByRole('heading', { name: '事实类型构成' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '最近发生了什么' })).toHaveCount(0)

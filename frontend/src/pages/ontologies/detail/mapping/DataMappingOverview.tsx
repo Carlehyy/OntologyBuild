@@ -847,16 +847,8 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
           全景是横向链路（两列节点 + 连线），宽度收益更高，占左栏稍宽份额；
           清单是六列定宽网格，右栏保底不塌缩。窄屏（≤1020px）回退上下堆叠。 */}
       <div className="dmo-workspace">
+        {/* MYW-77 二轮：卡片顶部说明文字按用户要求移除，画布内容直接铺满面板 */}
         <section className="dmo-flow" aria-label="数据供给全景">
-          <div className="dmo-flow-head">
-            <div className="dmo-flow-title">
-              <b>数据供给全景</b>
-              <small>数据资产如何流入本体元素；点击节点查看详情，卡片可拖拽调整布局</small>
-            </div>
-            {mappingRows.length - mappedFlowCount > 0 && (
-              <span className="dmo-flow-caption">另有 {mappingRows.length - mappedFlowCount} 个本体元素未接入数据流 · 详见清单</span>
-            )}
-          </div>
           {mappedFlowCount === 0 ? (
             <div className="dmo-flow-empty">
               <Link2 size={22} />

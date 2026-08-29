@@ -3,7 +3,7 @@
    连线为纯视觉元素(interactionWidth=0 + pointer-events:none),不参与命中测试,
    避免边线层重挂载/回流打断节点卡悬停——那正是「悬停卡片一直在闪」的根源;
    高亮集合经稳定字符串参与依赖,hover 状态变化不再重建连线数组;
-   流动动画在悬停/清单联动/详情弹窗检视期间仍经 data-still 暂停(缩放下观感);
+   流动粒子在悬停检视(未聚焦)期间对非聚焦连线静止(缩放下观感),聚焦链路保持流动;
    自动布局按列垂直居中(矮列相对最高列居中,整图重心均衡),节点卡可拖拽微调,
    位置按本体持久化到 localStorage;
    滚轮缩放(preventScrolling 捕获滚轮,画布上不再透传页面滚动),左键拖空白平移;
@@ -12,7 +12,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Background,
+  BaseEdge,
   Controls,
+  getBezierPath,
   Handle,
   Position,
   ReactFlow,
@@ -20,6 +22,7 @@ import {
   useNodesInitialized,
   useReactFlow,
   type Edge,
+  type EdgeProps,
   type Node,
   type NodeProps,
 } from '@xyflow/react'
@@ -130,6 +133,59 @@ function MappingChainColumnHeader({ data }: NodeProps<Node<{ label: string; coun
 
 const nodeTypes = { mappingChainNode: MappingChainNodeCard, mappingChainHeader: MappingChainColumnHeader }
 
+interface MappingEdgeData extends Record<string, unknown> {
+  highlighted: boolean
+  dimmed: boolean
+  /** 悬停检视期间静止非聚焦连线（防缩放闪烁）；聚焦连线保持流动。 */
+  still?: boolean
+}
+
+/* 流动粒子连线：基线 + 两个沿线流动的光点，视觉口径对齐治理推演·本体执行链
+   （ChainFlowEdge）——选中聚焦时连线加粗提亮、粒子变大且流速加快（1.6s），
+   其余压暗近乎隐去，视线自然聚焦到选中链路。 */
+function MappingFlowEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, interactionWidth }: EdgeProps<Edge<MappingEdgeData>>) {
+  const [path] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
+  const highlighted = Boolean(data?.highlighted)
+  const dimmed = Boolean(data?.dimmed)
+  const showParticles = !dimmed && (!data?.still || highlighted)
+  const dur = highlighted ? '1.6s' : '2.8s'
+  const begin = highlighted ? '-0.8s' : '-1.4s'
+  return (
+    <>
+      <BaseEdge
+        id={id}
+        path={path}
+        /* BaseEdge 默认 interactionWidth=20 会渲染透明命中条，显式透传 0 保持
+           连线纯视觉（防悬停振荡，见组件头注释与 MYW-60 用例） */
+        interactionWidth={interactionWidth}
+        style={{
+          stroke: 'var(--dmo-teal)',
+          strokeWidth: highlighted ? 2.2 : 1.3,
+          opacity: dimmed ? 0.15 : highlighted ? 0.95 : 0.5,
+        }}
+      />
+      {showParticles && [0, 1].map(index => (
+        <circle
+          key={index}
+          className="dmo-chain-particle"
+          r={highlighted ? 3 : 2.4}
+          fill="var(--dmo-teal)"
+          opacity={highlighted ? 0.95 : 0.5}
+        >
+          <animateMotion
+            dur={dur}
+            begin={index === 0 ? '0s' : begin}
+            repeatCount="indefinite"
+            path={path}
+          />
+        </circle>
+      ))}
+    </>
+  )
+}
+
+const edgeTypes = { mappingFlowEdge: MappingFlowEdge }
+
 /** 二分图的直接上下游:节点自身 + 与其相连的边两端。 */
 function collectNeighborhood(nodeId: string, links: Array<{ source: string; target: string }>): Set<string> {
   const ids = new Set<string>([nodeId])
@@ -162,8 +218,8 @@ function MappingChainPanoramaInner({
   const [highlightSet, setHighlightSet] = useState<Set<string> | null>(null)
   // 节点拖拽位置按本体持久化：重进/刷新后保持手动调整的布局
   const [dragPositions, setDragPositions] = useState<Record<string, { x: number; y: number }>>(() => readChainPositions(ontologyId))
-  // 指针悬停在图内节点卡上时置真：检视期间经 data-still 暂停连线流动动画，
-  // 避免 dash 动画在 fitView 缩放(<1)下逐帧重绘使卡片边缘闪烁（见 mapping-overview.css）。
+  // 指针悬停在图内节点卡上时置真：检视期间非聚焦连线不渲染流动粒子，
+  // 避免粒子在 fitView 缩放(<1)下逐帧重绘使卡片边缘闪烁（见 mapping-overview.css）。
   const [hoveringNode, setHoveringNode] = useState(false)
 
   // 内容水平居中：fitView 只在初始化时执行一次，彼时节点尺寸尚未测量完成，
@@ -263,6 +319,8 @@ function MappingChainPanoramaInner({
     () => (highlightSet ? Array.from(highlightSet).sort().join('|') : ''),
     [highlightSet],
   )
+  // 悬停检视（未聚焦）期间非聚焦连线静止防闪烁；点选/选中聚焦时保持流动（MYW-77 二轮）
+  const still = (hoveringNode || hoverKey != null) && !highlightSet && selectedKey == null
   const flowEdges = useMemo<Edge[]>(() => {
     const members = highlightSetKey ? new Set(highlightSetKey.split('|')) : null
     return model.links.map((link, index) => {
@@ -272,20 +330,15 @@ function MappingChainPanoramaInner({
         id: `edge:${index}:${link.source}->${link.target}`,
         source: link.source,
         target: link.target,
-        type: 'bezier',
-        animated: !dimmed,
+        type: 'mappingFlowEdge',
         // 连线不承载任何点击/悬停交互：interactionWidth=0 去掉 20px 宽的透明
         // 命中条，配合样式层 pointer-events:none，杜绝边线层反复卸载/重挂时
         // 打断节点卡悬停命中测试（悬停卡片闪烁问题的根源）
         interactionWidth: 0,
-        style: {
-          stroke: 'var(--dmo-teal)',
-          strokeWidth: highlighted ? 2.2 : 1.3,
-          opacity: dimmed ? 0.12 : highlighted ? 0.95 : 0.5,
-        },
+        data: { highlighted, dimmed, still } satisfies MappingEdgeData,
       }
     })
-  }, [model, highlightSetKey])
+  }, [model, highlightSetKey, still])
 
   const handleNodeClick = useCallback((_: unknown, node: Node) => {
     if (node.type !== 'mappingChainNode') return
@@ -308,7 +361,6 @@ function MappingChainPanoramaInner({
       ref={containerRef}
       className="dmo-flow-canvas dmo-chain-canvas"
       data-testid="mapping-chain-panorama"
-      data-still={hoveringNode || hoverKey != null || selectedKey != null ? 'true' : undefined}
       style={{ minHeight }}
     >
       {/* 绝对定位填充层：画布盒只有 minHeight 下限（无确定高度）时，
@@ -318,6 +370,7 @@ function MappingChainPanoramaInner({
           nodes={flowNodes}
           edges={flowEdges}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           fitView
           fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
           minZoom={0.3}

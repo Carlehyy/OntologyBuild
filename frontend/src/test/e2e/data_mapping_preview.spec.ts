@@ -381,19 +381,24 @@ test('数据供给全景：节点卡链路渲染，图与清单、血缘弹窗�
   await mockMappingPreview(page)
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
-  await expect(page.getByText('数据供给全景')).toBeVisible()
+  // MYW-77 二轮：卡片顶部「数据供给全景」标题/说明已移除，画布直接铺满面板
+  await expect(page.getByRole('region', { name: '数据供给全景' })).toBeVisible()
+  await expect(page.locator('.dmo-flow-title')).toHaveCount(0)
   const chart = page.getByTestId('mapping-chain-panorama')
   await expect(chart).toBeVisible()
-  // 1 个数据集 + 1 个对象 → 两张节点卡 + 一条连线；节点可拖拽、连线带流动动画
+  // 1 个数据集 + 1 个对象 → 两张节点卡 + 一条连线；节点可拖拽、连线为流动粒子样式
   await expect(chart.getByText('订单宽表')).toBeVisible()
   await expect(chart.getByText('订单', { exact: true })).toBeVisible()
   await expect.poll(async () => chart.locator('svg path').count()).toBeGreaterThan(0)
   await expect(chart.locator('.react-flow__node.draggable')).toHaveCount(2)
-  await expect.poll(async () => chart.locator('.react-flow__edge.animated').count()).toBeGreaterThan(0)
-  // 全部元素已映射时不显示"未接入数据流"caption
-  await expect(page.locator('.dmo-flow-caption')).toHaveCount(0)
-  // 点击元素节点卡 → 打开血缘详情弹窗；关闭后画布保持渲染
+  await expect.poll(async () => chart.locator('.dmo-chain-particle').count()).toBeGreaterThan(0)
+  // 列抬头是面板标题（字号已上调），两列计数如实呈现
+  await expect(chart.getByText('来源数据资产')).toBeVisible()
+  await expect(chart.getByText('本体元素')).toBeVisible()
+  // 点击元素节点卡 → 连线进入聚焦态（加粗 2.2 + 粒子放大），并打开血缘详情弹窗
   await chart.getByText('订单', { exact: true }).click()
+  await expect.poll(async () => chart.locator('path.react-flow__edge-path').first()
+    .evaluate(element => (element.getAttribute('stroke-width') || getComputedStyle(element).strokeWidth).replace('px', ''))).toBe('2.2')
   const lineage = page.getByRole('dialog', { name: '订单', exact: true })
   await expect(lineage).toBeVisible()
   await lineage.getByRole('button', { name: '关闭血缘详情' }).click()
@@ -407,8 +412,8 @@ test('无映射本体显示诚实空态而非空画布', async ({ page }) => {
 
   await expect(page.getByText('暂无数据流')).toBeVisible()
   await expect(page.getByTestId('mapping-chain-panorama')).toHaveCount(0)
-  // 唯一的对象元素不在图中，caption 如实告知去向
-  await expect(page.locator('.dmo-flow-caption')).toContainText('1 个本体元素未接入数据流')
+  // MYW-77 二轮：原「未接入数据流」caption 已随卡片顶部文字一并移除；
+  // 未接入元素的去向仍可在右侧映射结果清单中如实查看
 })
 
 test('实例数链接跳转实例数据 Tab 并选中对应类型', async ({ page }) => {
@@ -524,8 +529,10 @@ test('KPI 首个数据帧直出终值：进页不再从 0 重放', async ({ page
   expect(kpiText).toContain('100%')
 })
 
-test('悬停全景节点卡时暂停连线流动动画（data-still），移开后恢复', async ({ page }) => {
-  // MYW-51：流动动画逐帧重绘，缩放悬停检视时卡片边缘闪烁；悬停期间必须静止。
+test('悬停全景节点卡时静止非聚焦连线粒子，移开后恢复流动', async ({ page }) => {
+  // MYW-51：流动粒子逐帧重绘，缩放悬停检视时卡片边缘闪烁；悬停（未聚焦）期间
+  // 非聚焦连线不得渲染粒子。MYW-77 二轮起连线改为基线 + SMIL 流动粒子，
+  // 静止语义由连线 data.still 承载（原 data-still 属性机制已下线）。
   await mockMappingPreview(page)
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
@@ -534,19 +541,17 @@ test('悬停全景节点卡时暂停连线流动动画（data-still），移开�
   const nodeCard = canvas.locator('.react-flow__node-mappingChainNode').first()
   await expect(nodeCard).toBeVisible()
 
-  // 悬停前无 data-still 属性
-  await expect(canvas).not.toHaveAttribute('data-still')
+  // 悬停前粒子在流动
+  await expect.poll(async () => canvas.locator('.dmo-chain-particle').count()).toBeGreaterThan(0)
   await nodeCard.hover()
-  await expect(canvas).toHaveAttribute('data-still', 'true')
-  // CSS 规则命中：dash 流动动画确实处于暂停态（跳过无动画的 interaction 路径）
-  const edgePath = canvas.locator('.react-flow__edge.animated path.react-flow__edge-path').first()
-  await expect(edgePath).toHaveCSS('animation-play-state', 'paused')
+  // 悬停检视（未聚焦）：非聚焦连线不渲染粒子
+  await expect(canvas.locator('.dmo-chain-particle')).toHaveCount(0)
 
   // 离开节点卡后恢复流动
   const canvasBox = await canvas.boundingBox()
   expect(canvasBox).not.toBeNull()
   await page.mouse.move(canvasBox!.x + 8, canvasBox!.y - 10)
-  await expect(canvas).not.toHaveAttribute('data-still')
+  await expect.poll(async () => canvas.locator('.dmo-chain-particle').count()).toBeGreaterThan(0)
 })
 
 test('供给全景连线不可命中，悬停节点卡无 enter/leave 振荡', async ({ page }) => {
@@ -591,11 +596,11 @@ test('供给全景连线不可命中，悬停节点卡无 enter/leave 振荡', a
   expect(enter).toBeLessThanOrEqual(2)
   expect(Math.abs(enter - leave)).toBeLessThanOrEqual(1)
 
-  // 离开后仍恢复流动动画（不破坏 MYW-51 的检视暂停语义）
+  // 离开后仍恢复流动粒子（不破坏 MYW-51 的检视静止语义）
   const canvasBox = await canvas.boundingBox()
   expect(canvasBox).not.toBeNull()
   await page.mouse.move(canvasBox!.x + 8, canvasBox!.y - 10)
-  await expect(canvas).not.toHaveAttribute('data-still')
+  await expect.poll(async () => canvas.locator('.dmo-chain-particle').count()).toBeGreaterThan(0)
 })
 
 test('供给全景列抬头居中于卡片列，且整块内容水平居中于画布', async ({ page }) => {

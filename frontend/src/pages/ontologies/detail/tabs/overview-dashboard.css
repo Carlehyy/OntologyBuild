@@ -375,7 +375,7 @@
 /* ECharts 根节点用绝对定位填充层：百分比高度容器在内容尺寸计算中会被画布
    内联高度反哺成 max-content，导致网格行高失控出现整页滚动；
    绝对定位让图表只从 flex 剩余空间取高（同 mapping-overview 的做法）。 */
-.runtime-trend-chart > div { position: absolute; inset: 0; }
+.runtime-trend-chart > div:first-child { position: absolute; inset: 0; }
 .runtime-empty-note { position: absolute; top: 50%; left: 50%; z-index: 3; display: flex; min-width: 260px; align-items: center; justify-content: center; gap: 8px; border: 1px solid rgba(215, 226, 233, .85); border-radius: 10px; padding: 8px 12px; background: rgba(255, 255, 255, .92); color: #7b8899; box-shadow: 0 8px 22px rgba(41, 63, 90, .07); transform: translate(-50%, -50%); pointer-events: none; }
 .runtime-empty-note svg { flex: 0 0 auto; color: #6b8dca; }
 .runtime-empty-note > span { color: #59687c; font-size: 10px; font-weight: 650; }
