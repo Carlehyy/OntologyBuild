@@ -165,6 +165,17 @@ Compose 部署固定使用随栈启动的 `python_kernel_gateway` 服务。该�
 backend 镜像依赖（requests/httpx/pandas/pymysql 等），脚本可直接发起 HTTP
 请求取数；新增第三方库须加入 backend 依赖并重建镜像。
 
+## 插件社区 stdio MCP（可选，默认关闭）
+
+stdio 形态的 MCP 会在后端容器内以子进程运行 `command`，等同开放容器内命令
+执行，因此按部署开关管理：`SUPER_ASSISTANT_MCP_STDIO_ENABLED`（默认
+`false`）与 `SUPER_ASSISTANT_MCP_STDIO_ALLOWED_COMMANDS`（逗号分隔的命令
+白名单，按可执行文件名匹配）。backend 镜像自带 `uvx` 并已内置
+node/npm/npx，覆盖 PyPI 与 npm 两大主流 MCP 分发形态；MCP SDK 启动子进程时
+只传递 PATH/HOME 等安全环境变量子集，平台密钥不会继承给子进程。经
+`deploy/production.dependencies.env` 或服务器 `.env` 配置后，随下一次部署
+生效；关闭开关或清空白名单即可随时回退。
+
 ## 当前自动部署兼容策略
 
 仓库所有者已明确决定在持续频繁开发期间暂时保留现有生产依赖清单。因此本轮
