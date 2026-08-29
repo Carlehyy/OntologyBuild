@@ -167,7 +167,13 @@ export default function OntologyDetailPage() {
       // 治理/映射页为页内自然文档流(头部吸附保持可达);其余 tab 固定视口+内容区内滚。
       activeGroup === 'data'
         ? 'min-h-full'
-        : `h-full min-h-0 ${activeGroup === 'governance' || activeGroup === 'data-mapping' ? 'overflow-y-auto' : 'overflow-hidden'}`
+        : `h-full min-h-0 ${
+          activeGroup === 'governance' || activeGroup === 'data-mapping'
+            // overflow-y 单独设 auto 时 overflow-x 会被计算成 auto，真实数据下的
+            // 行内溢出即变成页面横向滚动条；映射页要求严格单页，显式关掉横向。
+            ? activeGroup === 'data-mapping' ? 'overflow-y-auto overflow-x-hidden' : 'overflow-y-auto'
+            : 'overflow-hidden'
+        }`
     }`}>
       {/* ═══ 功能导航与低频操作(治理页为自然文档流,头部吸附保持可达) ═══ */}
       <div data-testid="ontology-detail-header" className={`onto-glass-header flex shrink-0 items-center justify-between gap-3 px-5 py-4 ${

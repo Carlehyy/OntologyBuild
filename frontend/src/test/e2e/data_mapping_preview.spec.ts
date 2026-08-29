@@ -7,6 +7,8 @@ interface MockOptions {
   withUnmappedObject?: boolean
   /** 追加第二条映射（日志类型，同源数据集）：全景出现 1 数据资产卡 + 2 本体元素卡 */
   withSecondMappedObject?: boolean
+  /** 生成 24 个对象实体与映射：清单长列表，验证卡片内细滚动与整页单页 */
+  manyRows?: boolean
   noMappings?: boolean
   darkTheme?: boolean
 }
@@ -61,6 +63,11 @@ async function mockMappingPreview(page: Page, options: MockOptions = {}) {
           id: 'object-log', name: 'Log', displayName: '日志', primaryKey: null,
           properties: [{ id: 'msg', name: 'msg', displayName: '消息', type: 'string' }],
         }] : []),
+        ...(options.manyRows ? Array.from({ length: 24 }, (_, index) => ({
+          id: `object-batch-${index}`, name: `Batch${index}`, displayName: `批量对象${String(index + 1).padStart(2, '0')}`,
+          primaryKey: 'id',
+          properties: [{ id: 'id', name: 'id', displayName: '编号', type: 'string' }],
+        })) : []),
       ],
       linkTypes: [],
       mappings: options.noMappings ? [] : [
@@ -76,6 +83,12 @@ async function mockMappingPreview(page: Page, options: MockOptions = {}) {
           fieldMapping: { field_2: 'msg' },
           status: 'published',
         }] : []),
+        ...(options.manyRows ? Array.from({ length: 24 }, (_, index) => ({
+          id: `mapping-batch-${index}`, curatedDatasetId: 'dataset-wide', targetObjectTypeId: `object-batch-${index}`,
+          entityClass: `Batch${index}`,
+          fieldMapping: { field_1: 'id' },
+          status: 'published',
+        })) : []),
       ],
       linkMappings: [],
     })
@@ -375,6 +388,59 @@ test('侧栏齿轮携带元素上下文跳转字段级映射视图', async ({ pa
   await lineage.getByRole('button', { name: '查看该元素字段映射' }).click()
   await expect(page).toHaveURL(/\/ontologies\/ontology-preview\/graph\?view=mapping&focus=object(%3A|:)object-order$/)
   await expect(page.getByTestId('mapping-workspace')).toBeVisible()
+})
+
+test('各视口宽度下数据映射页均不出现水平滚动条', async ({ page }) => {
+  await mockMappingPreview(page)
+  // 复现真实使用场景：顶栏多标签 + 常见窗口宽度扫描（MYW-77 三轮）
+  await page.addInitScript(() => {
+    const tabs = Array.from({ length: 8 }, (_, index) => ({
+      key: `tab-${index}`, title: `标签页标题较长的情况${index}`, path: '/agent', lastUsedAt: index,
+    }))
+    localStorage.setItem('nav-tabs', JSON.stringify({
+      state: { tabs, activeKey: 'tab-0', owner: 'tester' },
+      version: 0,
+    }))
+  })
+  for (const width of [960, 1024, 1100, 1180, 1240, 1280, 1366, 1440, 1536, 1600, 1920]) {
+    await page.setViewportSize({ width, height: 800 })
+    await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+    await page.waitForTimeout(500)
+    const overflow = await page.evaluate(() => ({
+      doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      body: document.body.scrollWidth - document.body.clientWidth,
+    }))
+    // 注：详情页根容器带 overflow-x-hidden 兜底，其内部偶发的隐藏元素溢出
+    // （如 opacity-0 的悬停提示）不会变成页面滚动条，故只断言页面级为零。
+    expect(overflow, `width=${width}`).toEqual({ doc: 0, body: 0 })
+  }
+})
+
+test('对象与关系很多时清单在卡片内细滚动，整页保持单页', async ({ page }) => {
+  await mockMappingPreview(page, { manyRows: true })
+  await page.setViewportSize({ width: 1440, height: 800 })
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+  await expect(page.getByText('映射结果清单')).toBeVisible()
+  await expect(page.getByText('批量对象01')).toBeVisible()
+
+  // 卡片定高一屏：页面级不出现纵向滚动
+  expect(await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight + 1)).toBeTruthy()
+  const viewportHeight = page.viewportSize()?.height ?? 800
+  const card = page.locator('.dmo-card')
+  const cardBox = await card.boundingBox()
+  expect(cardBox!.height).toBeLessThanOrEqual(viewportHeight - 200)
+
+  // 清单行数超出资时在行列表内部滚动（细滚动条），表头/筛选行保持可见
+  const rowList = page.locator('.dmo-row-list')
+  expect(await rowList.evaluate(element => element.scrollHeight > element.clientHeight)).toBeTruthy()
+  await expect(rowList).toHaveCSS('overflow-y', 'auto')
+  await expect(rowList).toHaveCSS('overflow-x', 'hidden')
+  await expect(rowList).toHaveCSS('scrollbar-width', 'thin')
+  // 断言范围限定在清单内，且用视口可见性判断（toBeVisible 不感知滚动裁剪）
+  await expect(rowList.getByText('批量对象24')).not.toBeInViewport()
+  await rowList.evaluate(element => { element.scrollTop = element.scrollHeight })
+  await expect(rowList.getByText('批量对象24')).toBeInViewport()
+  await expect(page.locator('.dmo-table-head')).toBeVisible()
 })
 
 test('数据供给全景：节点卡链路渲染，图与清单、血缘弹窗联动', async ({ page }) => {

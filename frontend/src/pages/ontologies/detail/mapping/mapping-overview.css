@@ -101,9 +101,10 @@
   border-radius: 14px;
   display: flex;
   flex-direction: column;
-  /* 单页展示：卡片撑满一屏可用高度（视口 − 页签栏/详情头部/内边距），
-     内容少时不再留大片页底空白；清单行多时在 .dmo-row-list 内部滚动 */
-  min-height: max(420px, calc(100dvh - 240px));
+  /* 单页展示（MYW-77 三轮）：卡片定高为一屏可用高度（视口 − 页签栏/详情头部/
+     内边距）——内容少不留页底空白，对象/关系多时也不再撑高页面，
+     而是在 .dmo-row-list 内部以细滚动条滚动 */
+  height: max(420px, calc(100dvh - 240px));
   overflow: hidden;
   color: var(--dmo-ink);
   background: var(--dmo-surface);
@@ -160,6 +161,7 @@
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   border-right: 1px solid var(--dmo-line);
   background: var(--dmo-panel);
 }
@@ -189,7 +191,7 @@
   display: flex;
   align-items: stretch;
   flex: 1 1 auto;
-  min-height: max(380px, calc(100dvh - 340px));
+  min-height: 0;
   background: var(--dmo-workspace-bg);
 }
 /* 清单是容器查询的容器：行网格的紧凑档位跟「栏宽」走而不是跟视口走
@@ -220,7 +222,7 @@
 .dmo-table-head, .dmo-map-row { display: grid; grid-template-columns: minmax(190px,1.25fr) minmax(155px,1fr) 100px 82px 108px 18px; align-items: center; gap: 10px; }
 .dmo-table-head { min-height: 36px; padding: 0 15px; border-bottom: 1px solid var(--dmo-line-soft); flex: none; color: var(--dmo-subtle); background: var(--dmo-workspace-bg); font-size: 11px; font-weight: 700; }
 /* 清单滚动容器：双栏限高时行列表在栏内滚动，表头与筛选行保持可见 */
-.dmo-row-list { min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: #c7d1d6 transparent; scrollbar-width: thin; }
+.dmo-row-list { min-height: 0; flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-color: #c7d1d6 transparent; scrollbar-width: thin; }
 .dark .dmo-row-list { scrollbar-color: #2a3342 transparent; }
 .dmo-table-head span:nth-child(3), .dmo-table-head span:nth-child(4) { text-align: center; }
 .dmo-map-row { width: 100%; min-height: 68px; padding: 8px 15px; border: 0; border-bottom: 1px solid var(--dmo-line-soft); color: inherit; text-align: left; background: var(--dmo-cell-bg); cursor: pointer; transition: background-color .16s ease, box-shadow .16s ease; }
@@ -457,8 +459,9 @@
   .dmo-search { margin-left: auto; }
 }
 @media (max-width: 1020px) {
-  /* 窄屏回退上下堆叠：解除同屏填充，两栏恢复内容自然高度；
-     全景在上（分隔线回到底部），清单随页面滚动 */
+  /* 窄屏回退上下堆叠：解除单页定高，两栏恢复内容自然高度随页面滚动；
+     全景在上（分隔线回到底部） */
+  .dmo-card { height: auto; }
   .dmo-workspace { flex-direction: column; min-height: 0; }
   .dmo-flow { flex: none; border-right: 0; border-bottom: 1px solid var(--dmo-line); }
   .dmo-register { min-width: 0; flex: none; }
