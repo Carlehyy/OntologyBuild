@@ -7,6 +7,8 @@ import type {
 
 export interface McpServerCreateInput {
   name: string
+  display_name?: string
+  description?: string
   transport: McpTransport
   url: string
   headers: Record<string, string>
@@ -18,6 +20,11 @@ export interface McpServerCreateInput {
 }
 
 export type McpServerUpdateInput = Partial<Omit<McpServerCreateInput, 'name'>>
+
+export interface McpExportResult {
+  created: Array<{ id: number; name: string; tool: string }>
+  skipped: Array<{ tool: string; reason: string }>
+}
 
 export interface McpManagementClient {
   createMcpServer: (body: McpServerCreateInput) => Promise<SuperMcpServer>
@@ -34,4 +41,8 @@ export const communityApi = {
   testMcpServer: (id: string) => apiClientV2.post<{ ok: boolean; message: string; tools: McpTool[] }>(
     `/community/mcp-servers/${id}/test`,
   ),
+  exportMcpTools: (id: string, toolNames: string[]) =>
+    apiClientV2.post<McpExportResult>(`/community/mcp-servers/${id}/export-interfaces`, {
+      tool_names: toolNames,
+    }),
 }

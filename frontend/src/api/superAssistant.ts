@@ -58,6 +58,8 @@ export type McpTransport = 'stdio' | 'sse' | 'streamable_http'
 export interface SuperMcpServer {
   id: string
   name: string
+  display_name: string
+  description: string
   builtin_key: string | null
   transport: McpTransport
   url: string
@@ -254,11 +256,13 @@ export const superAssistantApi = {
 
   mcpServers: () => apiClientV2.get<SuperMcpServer[]>('/super-assistant/mcp-servers'),
   createMcpServer: (body: {
-    name: string; transport: McpTransport; url: string; headers: Record<string, string>;
+    name: string; display_name?: string; description?: string;
+    transport: McpTransport; url: string; headers: Record<string, string>;
     command?: string | null; args?: string[]; env?: Record<string, string>;
     enabled: boolean; require_confirmation: boolean
   }) => apiClientV2.post<SuperMcpServer>('/super-assistant/mcp-servers', body),
   updateMcpServer: (id: string, body: Partial<{
+    display_name: string; description: string;
     transport: McpTransport; url: string; headers: Record<string, string>;
     command: string | null; args: string[]; env: Record<string, string>;
     enabled: boolean; require_confirmation: boolean

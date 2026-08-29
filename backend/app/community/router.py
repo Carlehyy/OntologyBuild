@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.auth.models import User
+from app.community import mcp_export
 from app.deps import get_current_user, get_db
 from app.super_assistant import mcp_server_service
 from app.super_assistant.schemas import (
@@ -107,6 +108,28 @@ async def test_mcp_server(
             current_user.id,
             server_id,
             include_builtins=False,
+        )
+    except mcp_server_service.McpServerServiceError as exc:
+        raise _mcp_http_error(exc) from exc
+
+
+@router.post(
+    "/mcp-servers/{server_id}/export-interfaces",
+    response_model=mcp_export.McpExportOut,
+)
+def export_mcp_tools(
+    server_id: str,
+    body: mcp_export.McpExportIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """把勾选的 MCP 工具生成为接口代理的 HTTP 接口（仅 streamable_http）。"""
+    try:
+        return mcp_export.export_server_tools(
+            db,
+            current_user.id,
+            server_id,
+            body.tool_names,
         )
     except mcp_server_service.McpServerServiceError as exc:
         raise _mcp_http_error(exc) from exc

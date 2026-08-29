@@ -230,6 +230,8 @@ class SuperAssistantMcpServer(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     owner_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     builtin_key: Mapped[str | None] = mapped_column(String(50), nullable=True)
     transport: Mapped[str] = mapped_column(String(30), nullable=False, default="streamable_http")
     url: Mapped[str] = mapped_column(String(1000), nullable=False)

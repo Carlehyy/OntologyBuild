@@ -95,6 +95,8 @@ def create_mcp_server(
     item = SuperAssistantMcpServer(
         owner_id=owner_id,
         name=body.name,
+        display_name=body.display_name,
+        description=body.description,
         builtin_key=None,
         transport=transport,
         url=url,
@@ -168,6 +170,10 @@ def update_mcp_server(
             item.tool_manifest = []
             item.last_test_status = None
             item.last_test_message = None
+        if body.display_name is not None:
+            item.display_name = body.display_name
+        if body.description is not None:
+            item.description = body.description
         if body.enabled is not None:
             item.enabled = body.enabled
         if body.require_confirmation is not None:

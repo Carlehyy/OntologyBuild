@@ -25,9 +25,12 @@ async function authenticate(page: Page) {
 test('开放社区导航、技能占位页与 MCP 完整生命周期可用', async ({ page }) => {
   await authenticate(page)
   let createBody: Record<string, unknown> | null = null
+  let exportBody: Record<string, unknown> | null = null
   let server = {
     id: 'mcp-1',
     name: 'weather_tools',
+    display_name: '天气工具集',
+    description: '提供城市天气查询能力',
     builtin_key: null,
     transport: 'streamable_http',
     url: 'https://mcp.example.com/mcp',
@@ -85,6 +88,13 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
       server = { ...server, ...body }
       return json(route, server)
     }
+    if (path === '/api/v2/community/mcp-servers/mcp-1/export-interfaces' && request.method() === 'POST') {
+      exportBody = request.postDataJSON() as Record<string, unknown>
+      return json(route, {
+        created: [{ id: 9, name: '天气工具集 · get_forecast', tool: 'get_forecast' }],
+        skipped: [],
+      })
+    }
     return route.fulfill({ status: 404, body: '{}' })
   })
   await page.route('**/api/v2/inbox/summary', route => json(route, { unread_count: 0 }))
@@ -117,7 +127,9 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   await page.getByRole('link', { name: '插件社区' }).click()
   await expect(page).toHaveURL(/#\/community\/plugins$/)
   await expect(page.getByRole('heading', { name: '插件社区' })).toBeVisible()
+  await expect(page.locator('table').getByText('天气工具集', { exact: true })).toBeVisible()
   await expect(page.locator('table').getByText('weather_tools', { exact: true })).toBeVisible()
+  await expect(page.locator('table').getByText('提供城市天气查询能力')).toBeVisible()
   await expect(page.getByText('platform_minio', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '添加平台 MinIO' })).toHaveCount(0)
   await expect(page.getByRole('columnheader', { name: '开放状态' })).toHaveCount(0)
@@ -132,10 +144,26 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   expect(viewportHeight - serverListBox!.y - serverListBox!.height).toBeLessThanOrEqual(28)
   await expect(page.getByTestId('mcp-server-stats')).toHaveCSS('justify-content', 'center')
 
-  await page.getByRole('button', { name: '测试 MCP weather_tools' }).click()
+  await page.getByRole('button', { name: '测试 MCP 天气工具集' }).click()
   await expect(page.locator('table').getByText('已通过', { exact: true })).toBeVisible()
   await expect(page.locator('table').getByText('共 1 个', { exact: true })).toBeVisible()
   await expect(page.getByRole('switch')).toHaveCount(0)
+
+  await page.getByRole('button', { name: '查看 天气工具集 的工具清单' }).click()
+  await expect(page.getByText('调用方式', { exact: true })).toBeVisible()
+  await expect(page.getByText(/tools\/call/).first()).toBeVisible()
+  await expect(page.getByText('https://mcp.example.com/mcp').first()).toBeVisible()
+  await page.getByText('输入参数（JSON Schema）').first().click()
+  await page.getByText('请求示例（tools/call）').first().click()
+  await expect(page.locator('pre').filter({ hasText: '"method": "tools/call"' }).first()).toBeVisible()
+  await page.getByRole('button', { name: '关闭工具清单' }).click()
+
+  await page.getByRole('button', { name: '转接口 天气工具集' }).click()
+  await expect(page.getByText('单发 JSON-RPC（tools/call）POST').first()).toBeVisible()
+  await page.getByRole('button', { name: '生成接口' }).click()
+  await expect.poll(() => exportBody).not.toBeNull()
+  expect(exportBody).toMatchObject({ tool_names: ['get_forecast'] })
+  await expect(page.getByText('工具已导出至接口代理')).toBeVisible()
 
   await page.getByRole('button', { name: '添加 MCP', exact: true }).click()
   await expect(page.getByText('开放到超级助手', { exact: true })).toHaveCount(0)
@@ -156,19 +184,29 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   }`)
   await page.getByRole('button', { name: '解析并填入下方表单' }).click()
   await expect(page.getByLabel('选择要填入的 MCP Server')).toBeVisible()
-  await expect(page.getByLabel(/名称/)).toHaveValue('Remote-Docs')
+  await expect(page.getByLabel(/标识/)).toHaveValue('Remote-Docs')
+  await expect(page.getByLabel(/名称/)).toHaveValue('')
+  await expect(page.getByLabel(/描述/)).toHaveValue('')
   await expect(page.getByLabel(/传输方式/)).toHaveValue('streamable_http')
   await expect(page.getByLabel(/MCP URL/)).toHaveValue('https://docs.example.com/mcp')
   await page.getByLabel('选择要填入的 MCP Server').selectOption('1')
   await expect(page.getByLabel(/传输方式/)).toHaveValue('stdio')
   await expect(page.getByLabel(/^command/)).toHaveValue('uvx')
   await page.getByLabel('选择要填入的 MCP Server').selectOption('0')
-  await page.getByLabel(/名称/).fill('knowledge_search')
+  await expect(page.getByLabel(/标识/)).toHaveValue('Remote-Docs')
+  await expect(page.getByRole('button', { name: '保存' })).toBeDisabled()
+  await page.getByLabel(/名称/).fill('知识检索服务')
+  await expect(page.getByRole('button', { name: '保存' })).toBeDisabled()
+  await page.getByLabel(/描述/).fill('企业知识库检索工具')
+  await expect(page.getByRole('button', { name: '保存' })).toBeEnabled()
+  await page.getByLabel(/标识/).fill('knowledge_search')
   await page.getByLabel(/MCP URL/).fill('https://knowledge.example.com/mcp')
   await page.getByRole('button', { name: '保存' }).click()
   await expect.poll(() => createBody).not.toBeNull()
   expect(createBody).toMatchObject({
     name: 'knowledge_search',
+    display_name: '知识检索服务',
+    description: '企业知识库检索工具',
     transport: 'streamable_http',
     url: 'https://knowledge.example.com/mcp',
     enabled: false,

@@ -89,6 +89,8 @@ class SkillFileContent(BaseModel):
 
 class McpServerCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+    display_name: str = Field(default="", max_length=200)
+    description: str = Field(default="", max_length=500)
     transport: Literal["stdio", "sse", "streamable_http"] = "streamable_http"
     url: str = Field(default="", max_length=1000)
     headers: dict[str, str] = Field(default_factory=dict)
@@ -97,6 +99,11 @@ class McpServerCreate(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
     require_confirmation: bool = True
+
+    @field_validator("display_name", "description", mode="before")
+    @classmethod
+    def strip_display_fields(cls, value: str) -> str:
+        return str(value).strip()
 
     @field_validator("transport", mode="before")
     @classmethod
@@ -124,6 +131,8 @@ class McpServerCreate(BaseModel):
 
 
 class McpServerUpdate(BaseModel):
+    display_name: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=500)
     transport: Literal["stdio", "sse", "streamable_http"] | None = None
     url: str | None = Field(default=None, max_length=1000)
     headers: dict[str, str] | None = None
@@ -132,6 +141,11 @@ class McpServerUpdate(BaseModel):
     env: dict[str, str] | None = None
     enabled: bool | None = None
     require_confirmation: bool | None = None
+
+    @field_validator("display_name", "description", mode="before")
+    @classmethod
+    def strip_display_fields(cls, value: str | None) -> str | None:
+        return str(value).strip() if value is not None else None
 
     @field_validator("transport", mode="before")
     @classmethod
@@ -154,6 +168,8 @@ class McpServerUpdate(BaseModel):
 class McpServerOut(ORMModel):
     id: str
     name: str
+    display_name: str
+    description: str
     builtin_key: str | None
     transport: str
     url: str

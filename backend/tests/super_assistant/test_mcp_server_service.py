@@ -49,12 +49,47 @@ async def test_mcp_server_lifecycle_preserves_owner_and_builtin_boundaries(
             "owner-1",
             McpServerCreate(
                 name="owner_tools",
+                display_name="OWNER 工具集",
+                description="owner 专用 MCP",
                 transport="stdio",
                 command="npx",
                 args=["-y", "@example/mcp-server"],
                 env={"API_KEY": "secret"},
             ),
         )
+        assert custom.display_name == "OWNER 工具集"
+        assert custom.description == "owner 专用 MCP"
+        legacy = mcp_server_service.create_mcp_server(
+            db,
+            "owner-1",
+            McpServerCreate(
+                name="legacy_tools",
+                transport="stdio",
+                command="npx",
+                args=["-y", "@example/legacy"],
+            ),
+        )
+        assert legacy.display_name == ""
+        assert legacy.description == ""
+        assert (
+            McpServerCreate(
+                name="blank_display",
+                display_name="   ",
+                transport="stdio",
+                command="npx",
+            ).display_name
+            == ""
+        )
+        renamed = mcp_server_service.update_mcp_server(
+            db,
+            "owner-1",
+            custom.id,
+            McpServerUpdate(display_name="OWNER 工具集 v2", description="更新后的说明"),
+            include_builtins=False,
+        )
+        assert renamed.display_name == "OWNER 工具集 v2"
+        assert renamed.description == "更新后的说明"
+        assert renamed.tool_manifest == []
         builtin = SuperAssistantMcpServer(
             owner_id="owner-1",
             name="platform_minio",
@@ -99,8 +134,8 @@ async def test_mcp_server_lifecycle_preserves_owner_and_builtin_boundaries(
                 include_builtins=True,
             )
         }
-        assert community_ids == {custom.id}
-        assert assistant_ids == {custom.id, builtin.id}
+        assert community_ids == {custom.id, legacy.id}
+        assert assistant_ids == {custom.id, legacy.id, builtin.id}
         assert foreign.id not in assistant_ids
 
         with pytest.raises(

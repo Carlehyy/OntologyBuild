@@ -30,7 +30,9 @@ export default function McpServerDialog({
   const descriptionId = useId()
   const dialogRef = useRef<HTMLElement>(null)
   const clientConfigRef = useRef<HTMLTextAreaElement>(null)
-  const [name, setName] = useState(server?.name || '')
+  const [identifier, setIdentifier] = useState(server?.name || '')
+  const [displayName, setDisplayName] = useState(server?.display_name || '')
+  const [descriptionText, setDescriptionText] = useState(server?.description || '')
   const [transport, setTransport] = useState<McpTransport>(server?.transport || 'streamable_http')
   const [url, setUrl] = useState(server?.url || '')
   const [command, setCommand] = useState(server?.command || '')
@@ -94,7 +96,7 @@ export default function McpServerDialog({
   }
 
   const fillFromClientConfig = (config: ParsedMcpClientServer) => {
-    setName(config.name)
+    setIdentifier(config.name)
     setTransport(config.transport)
     setUrl(config.url)
     setCommand(config.command)
@@ -102,7 +104,7 @@ export default function McpServerDialog({
     setHeaders(Object.keys(config.headers).length ? JSON.stringify(config.headers, null, 2) : '')
     setEnv(Object.keys(config.env).length ? JSON.stringify(config.env, null, 2) : '')
     setClientConfigMessage([
-      `已填入「${config.name}」，请检查后再保存。`,
+      `已按「${config.name}」填入标识与连接信息；名称和描述需要手动填写。`,
       ...config.warnings,
     ].join(' '))
   }
@@ -131,10 +133,12 @@ export default function McpServerDialog({
     setBusy(true)
     setError('')
     try {
-      const normalizedName = name.trim()
+      const normalizedName = identifier.trim()
       if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(normalizedName)) {
-        throw new Error('名称只能包含字母、数字、下划线和连字符，且必须以字母或数字开头')
+        throw new Error('标识只能包含字母、数字、下划线和连字符，且必须以字母或数字开头')
       }
+      if (!displayName.trim()) throw new Error('名称为必填项')
+      if (!descriptionText.trim()) throw new Error('描述为必填项')
       const parsedHeaders = parseStringMap(headers, 'Headers')
       const parsedEnv = parseStringMap(env, 'env')
       const parsedArgs = JSON.parse(args || '[]')
@@ -149,6 +153,8 @@ export default function McpServerDialog({
         : { transport, url: url.trim(), command: null, args: [] }
       if (server) {
         await client.updateMcpServer(server.id, {
+          display_name: displayName.trim(),
+          description: descriptionText.trim(),
           ...connection,
           ...(parsedHeaders ? { headers: parsedHeaders } : changedTransport && transport === 'stdio' ? { headers: {} } : {}),
           ...(parsedEnv ? { env: parsedEnv } : changedTransport && transport !== 'stdio' ? { env: {} } : {}),
@@ -156,6 +162,8 @@ export default function McpServerDialog({
       } else {
         await client.createMcpServer({
           name: normalizedName,
+          display_name: displayName.trim(),
+          description: descriptionText.trim(),
           ...connection,
           headers: parsedHeaders || {},
           env: parsedEnv || {},
@@ -190,7 +198,7 @@ export default function McpServerDialog({
       >
         <header className="flex shrink-0 items-start justify-between border-b border-slate-200 px-5 py-4 sm:px-6">
           <div>
-            <h2 id={titleId} className="text-base font-semibold text-slate-900">{server ? `编辑 MCP：${server.name}` : '添加 MCP Server'}</h2>
+            <h2 id={titleId} className="text-base font-semibold text-slate-900">{server ? `编辑 MCP：${server.display_name || server.name}` : '添加 MCP Server'}</h2>
             <p id={descriptionId} className="mt-1 text-xs leading-5 text-slate-500">支持粘贴客户端 JSON，也可直接配置 stdio、SSE 或 Streamable HTTP。</p>
           </div>
           <button type="button" onClick={onClose} aria-label="关闭添加 MCP 弹窗" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">
@@ -249,8 +257,20 @@ export default function McpServerDialog({
           <div className="grid gap-4 md:grid-cols-2">
             <label className="block text-xs font-medium text-slate-600">
               名称 <span className="text-red-500">*</span>
-              <input value={name} disabled={!!server} onChange={event => setName(event.target.value)} placeholder="knowledge_search" className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 disabled:bg-slate-100 disabled:text-slate-500" />
+              <input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder="如：DMP 数据服务" className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10" />
+              <span className="mt-1.5 block text-[11px] font-normal leading-4 text-slate-500">列表与工具清单中展示的可读名称，需手动填写。</span>
             </label>
+            <label className="block text-xs font-medium text-slate-600">
+              标识 <span className="text-red-500">*</span>
+              <input value={identifier} disabled={!!server} onChange={event => setIdentifier(event.target.value)} placeholder="dmp-mcp-server" className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 disabled:bg-slate-100 disabled:text-slate-500" />
+              <span className="mt-1.5 block text-[11px] font-normal leading-4 text-slate-500">唯一标识，可从客户端 JSON 解析；保存后不可修改。</span>
+            </label>
+          </div>
+          <label className="block text-xs font-medium text-slate-600">
+            描述 <span className="text-red-500">*</span>
+            <textarea value={descriptionText} onChange={event => setDescriptionText(event.target.value)} rows={2} placeholder="该 MCP Server 的用途说明，如：提供 DMP 平台的数据检索能力" className="mt-1.5 w-full resize-y rounded-xl border border-slate-200 bg-white p-3 text-sm leading-5 text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10" />
+          </label>
+          <div className="grid gap-4 md:grid-cols-2">
             <label className="block text-xs font-medium text-slate-600">
               传输方式 <span className="text-red-500">*</span>
               <select value={transport} onChange={event => setTransport(event.target.value as McpTransport)} className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10">
@@ -298,7 +318,7 @@ export default function McpServerDialog({
 
         <footer className="flex shrink-0 justify-center gap-3 border-t border-slate-200 bg-slate-50/70 px-5 py-4 sm:px-6">
           <button type="button" onClick={onClose} className="min-h-10 min-w-24 rounded-xl border border-slate-200 bg-white px-4 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400">取消</button>
-          <button type="button" onClick={save} disabled={busy || !name.trim() || (transport === 'stdio' ? !command.trim() : !url.trim())} className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-xs font-medium text-white transition-colors hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45">
+          <button type="button" onClick={save} disabled={busy || !identifier.trim() || !displayName.trim() || !descriptionText.trim() || (transport === 'stdio' ? !command.trim() : !url.trim())} className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-xs font-medium text-white transition-colors hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45">
             {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} 保存
           </button>
         </footer>
