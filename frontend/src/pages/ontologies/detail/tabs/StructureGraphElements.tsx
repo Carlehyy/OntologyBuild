@@ -70,11 +70,11 @@ export const StructureGraphNode = memo(({ data, selected }: NodeProps<StructureN
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <p className="truncate text-[13px] font-semibold text-slate-800">{data.label}</p>
+            <p className="truncate text-sm font-semibold text-slate-900">{data.label}</p>
             {data.emphasis === 'primary' && <KeyRound size={12} className="shrink-0 text-fuchsia-600" />}
           </div>
-          <p className="truncate font-mono text-[10px] text-slate-400">{data.technicalName}</p>
-          <p className="mt-0.5 truncate text-[10px] text-slate-500">{data.subtitle}</p>
+          {/* 画布节点只保留中文标识（英文技术名仍可在搜索候选与详情面板查看），字号与对比度上调保证清晰 */}
+          <p className="mt-0.5 truncate text-[11px] text-slate-600">{data.subtitle}</p>
         </div>
       </div>
     </div>
@@ -126,7 +126,7 @@ export function StructureGraphEdge({
         <EdgeLabelRenderer>
           <div
             data-testid="structure-edge-relation"
-            className={`nodrag nopan pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full border bg-white/95 px-2 py-0.5 text-[10px] font-medium shadow-sm ${emphasized ? 'border-cyan-300 text-cyan-800' : 'border-slate-200 text-slate-600'}`}
+            className={`nodrag nopan pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full border bg-white/95 px-2 py-0.5 text-[11px] font-semibold shadow-sm ${emphasized ? 'border-cyan-300 text-cyan-800' : 'border-slate-200 text-slate-700'}`}
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
           >
             {data.label}

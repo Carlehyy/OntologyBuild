@@ -155,6 +155,15 @@ test('结构说明按钮替换智能整理，弹窗展示需求文档并支持�
   await expect.poll(() => semanticRequests.length).toBe(1)
   expect(semanticRequests[0]).toBe(`/api/v2/ontologies/${ontologyId}/versions/release-1/semantic`)
 
+  // 顶栏标题为本体名称（不再是文档标题），发布版本徽章在其右侧
+  await expect(page.getByTestId('structure-doc-ontology-name')).toHaveText('结构说明弹窗测试本体')
+  await expect(page.getByText('发布版本 v1')).toBeVisible()
+  // 底部说明条已移除：不再出现快照说明文案
+  await expect(page.getByText('文档为生成该版本时的需求快照')).toHaveCount(0)
+  // 目录与正文使用细滚动条（odg-scroll：scrollbar-width thin + 4px webkit）
+  await expect(page.getByTestId('structure-doc-toc')).toHaveClass(/odg-scroll/)
+  await expect(page.getByTestId('structure-doc-content')).toHaveClass(/odg-scroll/)
+
   // 目录来自 Markdown 标题层级，代码围栏内的 # 注释不进目录
   const tocItems = page.getByTestId('structure-doc-toc-item')
   await expect(tocItems).toHaveCount(4)
@@ -174,7 +183,7 @@ test('结构说明按钮替换智能整理，弹窗展示需求文档并支持�
     { timeout: 5000 },
   ).toBeGreaterThan(0)
 
-  // 底部下载按钮：真实下载文件，文件名取文档标题，内容为 Markdown 原文
+  // 顶部下载按钮：真实下载文件，文件名取文档标题，内容为 Markdown 原文
   const downloadPromise = page.waitForEvent('download')
   await page.getByTestId('structure-doc-download').click()
   const download = await downloadPromise

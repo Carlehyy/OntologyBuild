@@ -8,10 +8,13 @@
   --ov-purple: #7658d8;
   --ov-amber: #f59b23;
   --ov-side-width: 34%;
+  /* 高度随视口弹性伸缩（总览页目标单页无滚轮），上下限保持原有大屏观感 */
+  --ov-gap: clamp(10px, 1.8vh, 14px);
+  --ov-mark: clamp(56px, 8vh, 72px);
   display: flex;
   min-height: 100%;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--ov-gap);
   color: var(--ov-ink);
   font-variant-numeric: tabular-nums;
 }
@@ -52,7 +55,7 @@
 
 .overview-panel-title {
   display: flex;
-  min-height: 28px;
+  min-height: 24px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -101,12 +104,13 @@
 .overview-hero-grid {
   display: grid;
   min-height: 0;
-  flex: 1 1 auto;
+  /* flex-basis 0（替代 auto）让网格只从外壳剩余空间取高：basis auto 时网格按
+     内容 max-content 解析，图表/演化画布的内在高度会把行高反哺膨胀、整页
+     超出可视区出现滚轮。行 2 用 minmax(0,1fr) 同理取消内容下限。 */
+  flex: 1 1 0;
   grid-template-columns: minmax(420px, var(--ov-side-width)) minmax(0, 1fr);
-  /* 视口有富余时运行汇总行吸收全部剩余高度（图表随之伸展），
-     高度不足时 min-content 保底，溢出交给外壳滚动，绝不压碎内容。 */
-  grid-template-rows: auto minmax(min-content, 1fr);
-  gap: 14px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: var(--ov-gap);
   align-items: stretch;
 }
 
@@ -116,7 +120,7 @@
   grid-row: 1 / span 2;
   min-height: 0;
   flex-direction: column;
-  padding: 18px 22px 16px;
+  padding: clamp(14px, 2vh, 18px) 22px clamp(12px, 1.8vh, 16px);
 }
 
 .profile-heading {
@@ -125,14 +129,14 @@
   min-width: 0;
   align-items: center;
   gap: 18px;
-  margin-top: 26px;
+  margin-top: clamp(10px, 2.4vh, 26px);
 }
 
 .profile-mark {
   display: grid;
-  width: 72px;
-  height: 72px;
-  flex: 0 0 72px;
+  width: var(--ov-mark);
+  height: var(--ov-mark);
+  flex: 0 0 var(--ov-mark);
   place-items: center;
   border: 1px solid #cdebe5;
   border-radius: 50%;
@@ -140,7 +144,7 @@
   color: var(--ov-teal);
 }
 
-.overview-network-mark { width: 52px; height: 52px; }
+.overview-network-mark { width: clamp(40px, 5.8vh, 52px); height: clamp(40px, 5.8vh, 52px); }
 .profile-heading > div:last-child { width: 100%; min-width: 0; overflow: hidden; text-align: left; }
 .profile-heading h1 {
   display: -webkit-box;
@@ -160,7 +164,7 @@
 .profile-description {
   display: -webkit-box;
   min-height: 0;
-  margin: 30px 0 18px;
+  margin: clamp(12px, 2.8vh, 30px) 0 clamp(8px, 1.8vh, 18px);
   overflow: hidden;
   color: #59667a;
   font-size: 13px;
@@ -169,19 +173,25 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
 }
-.profile-meta { display: grid; gap: 9px; margin: 18px 0 0; padding: 18px 0 0; border-top: 1px solid #edf1f5; }
+.profile-meta { display: grid; gap: 9px; margin: clamp(8px, 1.8vh, 18px) 0 0; padding: clamp(8px, 1.8vh, 18px) 0 0; border-top: 1px solid #edf1f5; }
 .profile-meta div { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; }
 .profile-meta dt { color: #8a96a8; font-size: 11px; }
 .profile-meta dd { overflow: hidden; margin: 0; color: #40506a; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .profile-meta--compact { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .profile-meta--compact div { grid-template-columns: auto minmax(0, 1fr); gap: 9px; }
 .profile-meta--compact div + div { padding-left: 18px; border-left: 1px solid #edf1f5; }
-.profile-evolution { min-height: 222px; flex: 1 1 222px; margin-top: 17px; padding-top: 13px; border-top: 1px solid #edf1f5; }
+.profile-evolution {
+  min-height: clamp(120px, 16vh, 222px);
+  flex: 1 1 clamp(120px, 16vh, 222px);
+  margin-top: clamp(6px, 1.4vh, 17px);
+  padding-top: clamp(6px, 1.3vh, 13px);
+  border-top: 1px solid #edf1f5;
+}
 
 .version-evolution-card {
   display: flex;
   height: 100%;
-  min-height: 222px;
+  min-height: clamp(120px, 16vh, 222px);
   flex-direction: column;
   overflow: hidden;
   background: transparent;
@@ -209,7 +219,7 @@
 
 .evolution-canvas {
   position: relative;
-  min-height: 157px;
+  min-height: clamp(88px, 12vh, 157px);
   flex: 1 1 auto;
   overflow: hidden;
   border-radius: 7px;
@@ -221,6 +231,9 @@
 }
 .evolution-canvas:active { cursor: grabbing; }
 .evolution-canvas > svg { display: block; width: 100%; height: 100%; }
+/* 演化画布主 SVG 绝对定位填充：viewBox 内在高度会把网格行的 min/max-content
+   撑大、整页超出可视区出现滚轮；绝对定位后高度只来自 flex 剩余空间。 */
+.evolution-canvas > svg:first-of-type { position: absolute; inset: 0; }
 .evolution-viewport { transition: transform .55s cubic-bezier(.4,0,.2,1); }
 .evolution-canvas.is-direct .evolution-viewport { transition: none; }
 .evolution-edge { fill: none; opacity: 1; stroke-width: 2; vector-effect: non-scaling-stroke; animation: evolution-edge-in .45s ease both; transition: opacity .35s ease; }
@@ -261,7 +274,7 @@
 .evolution-status { position: absolute; bottom: 6px; left: 7px; max-width: calc(100% - 135px); overflow: hidden; color: #5d9389; font-size: 10px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
 .evolution-hint { position: absolute; right: 7px; bottom: 7px; color: #a4aebb; font-size: 10px; pointer-events: none; }
 
-.evolution-footer { display: flex; min-height: 36px; flex: 0 0 36px; align-items: center; gap: 2px; padding: 5px 1px 0; }
+.evolution-footer { display: flex; min-height: 30px; flex: 0 0 30px; align-items: center; gap: 2px; padding: 5px 1px 0; }
 .evolution-footer button { min-width: 25px; height: 25px; gap: 3px; border-radius: 6px; padding: 0 5px; font-size: 10px; font-weight: 600; white-space: nowrap; }
 .evolution-footer .evolution-play-button { min-width: 47px; color: #178978; }
 .evolution-footer .evolution-play-button:hover { color: #0d7767; }
@@ -273,7 +286,7 @@
 .version-evolution-card.is-loading { justify-content: center; gap: 12px; padding: 14px; }
 .evolution-skeleton-line, .evolution-skeleton-canvas { border-radius: 7px; background: linear-gradient(90deg, #eef4f3 25%, #f8fbfa 50%, #eef4f3 75%); background-size: 200% 100%; animation: evolution-skeleton 1.5s infinite; }
 .evolution-skeleton-line { width: 44%; height: 12px; }.evolution-skeleton-canvas { height: 150px; }
-.evolution-empty { min-height: 180px; flex-direction: row; align-items: center; justify-content: center; gap: 12px; padding: 18px; color: #738497; }
+.evolution-empty { min-height: clamp(120px, 20vh, 180px); flex-direction: row; align-items: center; justify-content: center; gap: 12px; padding: 18px; color: #738497; }
 .evolution-empty > svg { width: 34px; height: 34px; overflow: visible; fill: white; stroke: #74a99f; stroke-width: 1.8; }
 .evolution-empty strong { display: block; color: #526276; font-size: 11px; }.evolution-empty span { display: block; margin-top: 3px; font-size: 9px; }
 
@@ -299,7 +312,7 @@
   border: 0;
   border-right: 1px solid var(--ov-border);
   background: transparent;
-  padding: 18px 20px 15px;
+  padding: clamp(8px, 1.6vh, 18px) 20px clamp(6px, 1.3vh, 15px);
   text-align: left;
   cursor: pointer;
   transition: background .18s ease;
@@ -319,24 +332,24 @@
 .kpi-cell:last-child { border-right: 0; }
 .kpi-cell:hover { background: #fbfdff; }
 .kpi-label { color: #3d485d; font-size: 14px; font-weight: 700; }
-.kpi-cell strong { display: flex; min-height: 43px; align-items: baseline; gap: 8px; margin-top: 10px; color: #172033; font-size: 34px; font-weight: 730; line-height: 1; }
+.kpi-cell strong { display: flex; min-height: clamp(24px, 4.2vh, 43px); align-items: baseline; gap: 8px; margin-top: clamp(4px, 1vh, 10px); color: #172033; font-size: clamp(24px, 3.2vh, 34px); font-weight: 730; line-height: 1; }
 .kpi-cell strong small { color: #47566d; font-size: 14px; font-weight: 600; }
-.kpi-cell p { min-height: 32px; margin: 2px 0 7px; color: #667388; font-size: 11px; line-height: 1.55; }
-.kpi-status { display: inline-flex; min-height: 24px; width: fit-content; max-width: 100%; align-items: center; gap: 5px; margin-top: auto; color: #15957f; font-size: 11px; font-style: normal; font-weight: 600; }
+.kpi-cell p { min-height: clamp(16px, 3vh, 32px); margin: 2px 0 7px; color: #667388; font-size: 11px; line-height: 1.55; }
+.kpi-status { display: inline-flex; min-height: 20px; width: fit-content; max-width: 100%; align-items: center; gap: 5px; margin-top: auto; color: #15957f; font-size: 11px; font-style: normal; font-weight: 600; }
 .kpi-status.is-warning { color: #ef8b17; }
 .kpi-status.is-neutral { color: #607086; font-weight: 500; }
 .kpi-status.is-purple { color: #755bd3; }
 .kpi-status.is-blue { color: var(--ov-blue); }
 .kpi-status.is-teal { color: var(--ov-teal); }
 /* 状态行 + 释义脚注两行并存时：脚注（末行）仍钉在卡底，状态行紧随内容之后 */
-.kpi-status:not(:last-child) { margin-top: 0; margin-bottom: 8px; }
+.kpi-status:not(:last-child) { margin-top: 0; margin-bottom: 6px; }
 
 .overview-hero-grid > .runtime-summary { grid-column: 2; grid-row: 2; }
 
-.runtime-summary { display: flex; flex-direction: column; padding: 20px 24px; }
+.runtime-summary { display: flex; flex-direction: column; padding: clamp(10px, 1.8vh, 20px) 24px; min-height: clamp(230px, 33vh, 320px); }
 
-.runtime-highlights { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 11px; }
-.runtime-highlight { display: grid; min-width: 0; grid-template-columns: 36px minmax(64px, .7fr) minmax(108px, 1fr); align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #e5ecef; border-radius: 11px; background: #f7fafb; }
+.runtime-highlights { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: clamp(6px, 1.2vh, 11px); }
+.runtime-highlight { display: grid; min-width: 0; grid-template-columns: 36px minmax(64px, .7fr) minmax(108px, 1fr); align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid #e5ecef; border-radius: 11px; background: #f7fafb; }
 .runtime-highlight--sentinel { border-color: #d9ece8; background: linear-gradient(120deg, #f1faf8, #f8fbfb 74%); }
 .runtime-highlight--action { border-color: #dfe8f7; background: linear-gradient(120deg, #f2f7ff, #f8fafc 74%); }
 .runtime-highlight-icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 10px; background: #fff; color: var(--ov-teal); box-shadow: 0 2px 8px rgba(21, 79, 91, .08); }
@@ -355,10 +368,14 @@
 .runtime-highlight .tone-blue { background: #3478ee; }
 .runtime-highlight .tone-amber { background: #e6a148; }
 
-.runtime-trend { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; margin-top: 10px; padding: 9px 12px 8px; border: 1px solid #e8edf2; border-radius: 11px; background-color: #fbfcfd; background-image: radial-gradient(circle at 88% -20%, rgba(52, 120, 238, .08), transparent 42%), radial-gradient(circle at 5% 120%, rgba(9, 155, 136, .08), transparent 38%); }
+.runtime-trend { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; margin-top: clamp(6px, 1.2vh, 10px); padding: 9px 12px 8px; border: 1px solid #e8edf2; border-radius: 11px; background-color: #fbfcfd; background-image: radial-gradient(circle at 88% -20%, rgba(52, 120, 238, .08), transparent 42%), radial-gradient(circle at 5% 120%, rgba(9, 155, 136, .08), transparent 38%); }
 .runtime-trend-heading { display: flex; min-height: 20px; align-items: center; justify-content: space-between; gap: 12px; }
 .runtime-trend-heading > span { color: #526076; font-size: 10px; font-weight: 700; }
-.runtime-trend-chart { position: relative; min-height: 212px; flex: 1 1 auto; margin-top: 6px; }
+.runtime-trend-chart { position: relative; min-height: clamp(96px, 13vh, 212px); flex: 1 1 auto; margin-top: 6px; }
+/* ECharts 根节点用绝对定位填充层：百分比高度容器在内容尺寸计算中会被画布
+   内联高度反哺成 max-content，导致网格行高失控出现整页滚动；
+   绝对定位让图表只从 flex 剩余空间取高（同 mapping-overview 的做法）。 */
+.runtime-trend-chart > div { position: absolute; inset: 0; }
 .runtime-empty-note { position: absolute; top: 50%; left: 50%; z-index: 3; display: flex; min-width: 260px; align-items: center; justify-content: center; gap: 8px; border: 1px solid rgba(215, 226, 233, .85); border-radius: 10px; padding: 8px 12px; background: rgba(255, 255, 255, .92); color: #7b8899; box-shadow: 0 8px 22px rgba(41, 63, 90, .07); transform: translate(-50%, -50%); pointer-events: none; }
 .runtime-empty-note svg { flex: 0 0 auto; color: #6b8dca; }
 .runtime-empty-note > span { color: #59687c; font-size: 10px; font-weight: 650; }

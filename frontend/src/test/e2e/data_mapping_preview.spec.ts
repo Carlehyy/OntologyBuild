@@ -221,6 +221,13 @@ test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async
   await expect(page.locator('.dmo-card')).not.toHaveCSS('overflow-y', 'auto')
   expect(await page.locator('.dmo-row-list').evaluate(element => element.scrollHeight <= element.clientHeight + 1)).toBeTruthy()
   expect(await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight + 1)).toBeTruthy()
+  // MYW-77：汇总带头部改 flex 换行、卡片撑满一屏，任何宽度都不出现左右滚动条
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBeTruthy()
+  expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth + 1)).toBeTruthy()
+  // MYW-77：卡片撑满一屏可用高度——内容少时不再留大片页底空白
+  const cardBox = await page.locator('.dmo-card').boundingBox()
+  expect(cardBox).not.toBeNull()
+  expect(cardBox!.height).toBeGreaterThanOrEqual(460)
 
   await lineage.getByRole('button', { name: '预览数据源 订单宽表' }).click()
   const dialog = page.getByRole('dialog', { name: '订单宽表' })

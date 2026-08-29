@@ -9,12 +9,13 @@ import '@xyflow/react/dist/style.css'
 import {
   AlertCircle, ArrowLeftRight, ArrowRight, Box, Braces, Check, ChevronDown, ChevronRight,
   FileText, Focus, FunctionSquare, GitBranch, KeyRound, Layers3, Loader2,
-  Maximize2, Route, Search, ShieldCheck, Sparkles, X, ZoomIn, ZoomOut,
+  Maximize2, Route, Search, Shapes, ShieldCheck, Sparkles, X, ZoomIn, ZoomOut,
   Bolt, Clock3, Database,
 } from 'lucide-react'
 import { agentApi, type DynamicSentinel } from '@/api/agent'
 import { apiClientV2 } from '@/api/client'
 import { saveCanvasLayout } from '@/palantir-graph/api/formalApi'
+import BusinessModelDialog from './BusinessModelDialog'
 import StructureDocDialog from './StructureDocDialog'
 import { StructureGraphEdge, StructureGraphNode } from './StructureGraphElements'
 import {
@@ -428,7 +429,11 @@ function DetailPanel({ workspace, selection, onClose }: {
   )
 }
 
-function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspace: PublishedWorkspace }) {
+function StructureGraph({ ontologyId, ontologyName, workspace }: {
+  ontologyId: string
+  ontologyName?: string
+  workspace: PublishedWorkspace
+}) {
   const { fitView, zoomIn, zoomOut } = useReactFlow<StructureNode, StructureEdge>()
   const [level, setLevel] = useState<Level>(1)
   const builtGraph = useMemo(() => buildStructureGraph(workspace, level), [level, workspace])
@@ -452,6 +457,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
   const [saveCountdownNonce, setSaveCountdownNonce] = useState(0)
   const [saveError, setSaveError] = useState('')
   const [structureDocOpen, setStructureDocOpen] = useState(false)
+  const [businessModelOpen, setBusinessModelOpen] = useState(false)
   const [toolbarMoreRight, setToolbarMoreRight] = useState(false)
   const groupDrag = useRef<{
     objectId: string
@@ -513,7 +519,9 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
     // corner instead of appearing centered.
     if (lastFittedGraph.current === builtGraph) return
     lastFittedGraph.current = builtGraph
-    const timer = window.setTimeout(() => void fitView({ padding: 0.2, minZoom: level === 2 ? 0.32 : 0.24, maxZoom: 0.9 }), 80)
+    // 初始适配的缩放下限比旧值（0.24/0.32）更高：避免整图缩得太小导致节点文字难以辨认；
+    // 视口装不下时用户可手动缩小或平移。
+    const timer = window.setTimeout(() => void fitView({ padding: 0.2, minZoom: level === 2 ? 0.34 : 0.35, maxZoom: 0.9 }), 80)
     return () => window.clearTimeout(timer)
   }, [builtGraph, fitView, level])
 
@@ -878,9 +886,19 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
         </div>
         <div className="flex shrink-0 items-center gap-1 border-l border-slate-200 bg-white px-2">
           <button type="button" onClick={() => setStructureDocOpen(true)} aria-label="结构说明" title="查看当前本体结构关联的需求文档" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:translate-y-px"><FileText size={13} />结构说明</button>
+          <button
+            type="button"
+            onClick={() => setBusinessModelOpen(true)}
+            aria-label="业务模型"
+            title="查看业务澄清沉淀的七类业务模型"
+            data-testid="open-business-model-dialog"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 text-xs font-medium text-emerald-700 transition-colors hover:border-emerald-300 hover:bg-emerald-100 active:translate-y-px"
+          >
+            <Shapes size={13} />业务模型
+          </button>
           <button type="button" onClick={() => void zoomOut({ duration: 160 })} aria-label="缩小" title="缩小" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomOut size={14} /></button>
           <button type="button" onClick={() => void zoomIn({ duration: 160 })} aria-label="放大" title="放大" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomIn size={14} /></button>
-          <button type="button" onClick={() => void fitView({ padding: 0.2, minZoom: level === 2 ? 0.32 : 0.24, maxZoom: 0.92, duration: 260 })} aria-label="适应画布" title="适应画布" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><Maximize2 size={14} /></button>
+          <button type="button" onClick={() => void fitView({ padding: 0.2, minZoom: level === 2 ? 0.34 : 0.35, maxZoom: 0.92, duration: 260 })} aria-label="适应画布" title="适应画布" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><Maximize2 size={14} /></button>
         </div>
       </div>
 
@@ -908,7 +926,7 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
           onEdgeClick={(_event, edge) => { if (edge.data?.kind === 'relation' && edge.data.entityId) setDetail({ kind: 'relation', id: edge.data.entityId }) }}
           onPaneClick={() => { setDetail(null); setSearchOpen(false) }}
           nodesDraggable nodesConnectable={false} elementsSelectable minZoom={0.2} maxZoom={2.4}
-          fitView fitViewOptions={{ padding: 0.2, minZoom: 0.24, maxZoom: 0.9 }}
+          fitView fitViewOptions={{ padding: 0.2, minZoom: 0.35, maxZoom: 0.9 }}
           proOptions={{ hideAttribution: true }}
         >
           <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#cbd5e1" />
@@ -980,15 +998,26 @@ function StructureGraph({ ontologyId, workspace }: { ontologyId: string; workspa
       <StructureDocDialog
         open={structureDocOpen}
         ontologyId={ontologyId}
+        ontologyName={ontologyName}
         versionId={workspace.versionId}
         versionLabel={workspace.version}
         onClose={() => setStructureDocOpen(false)}
+      />
+
+      <BusinessModelDialog
+        open={businessModelOpen}
+        ontologyId={ontologyId}
+        onClose={() => setBusinessModelOpen(false)}
       />
     </div>
   )
 }
 
-export default function ModelStructureView({ ontologyId }: { ontologyId: string }) {
+export default function ModelStructureView({ ontologyId, ontologyName }: {
+  ontologyId: string
+  /** 结构说明弹窗顶栏展示用：由详情页透传本体名称。 */
+  ontologyName?: string
+}) {
   const releaseQuery = useQuery<PublishedWorkspace>({
     queryKey: ['current-release-workspace', ontologyId],
     queryFn: () => apiClientV2.get(`/ontologies/${ontologyId}/current-release/workspace`),
@@ -1021,5 +1050,5 @@ export default function ModelStructureView({ ontologyId }: { ontologyId: string 
     ...(dynamicSentinelsQuery.data || []).map(dynamicStructureSentinel),
   ]
   const workspace = { ...releaseQuery.data, sentinels }
-  return <ReactFlowProvider><StructureGraph ontologyId={ontologyId} workspace={workspace} /></ReactFlowProvider>
+  return <ReactFlowProvider><StructureGraph ontologyId={ontologyId} ontologyName={ontologyName} workspace={workspace} /></ReactFlowProvider>
 }

@@ -115,8 +115,11 @@ async function mockOverview(page: Page, options?: { singleVersion?: boolean; wit
   })
 }
 
-test('矮屏（1280x720）下 KPI 栏不被压碎，内容改为滚动呈现', async ({ page }) => {
+test('矮屏（1280x720）下 KPI 栏不被压碎，内容单页呈现无滚轮', async ({ page }) => {
   await mockOverview(page)
+  // 面板入场动画播放中会把面板 translateY，瞬时扩大滚动区；以 reduced-motion
+  // 关闭动画后断言稳态布局（产品样式已适配该偏好）。
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.setViewportSize({ width: 1280, height: 720 })
   await page.goto(`/#/ontologies/${ontologyId}`, { waitUntil: 'domcontentloaded' })
 
@@ -127,8 +130,10 @@ test('矮屏（1280x720）下 KPI 栏不被压碎，内容改为滚动呈现', a
   expect(kpiBox).not.toBeNull()
   expect(kpiBox!.height).toBeGreaterThan(120)
   await expect(page.locator('.kpi-cell').first().locator('strong')).toBeVisible()
-  // 装不下时外壳必须可滚动，而不是 overflow:hidden 裁掉内容。
+  // MYW-77：面板高度随视口弹性压缩，矮屏下内容收敛在一页内——外壳保留
+  // overflow:auto 作为极矮视口的兜底，但正常矮屏不得出现实际滚动。
   await expect(shell).toHaveCSS('overflow-y', 'auto')
+  expect(await shell.evaluate(element => element.scrollHeight <= element.clientHeight + 1)).toBeTruthy()
   // 运行趋势图由 ECharts 渲染。
   await expect(page.locator('.runtime-trend-chart canvas').first()).toBeVisible()
   // 已下线的两个事实面板不再渲染。

@@ -43,6 +43,8 @@ export default defineConfig({
     '**/mcp-client-config.spec.ts',
     '**/models.spec.ts',
     '**/nav_tabs.spec.ts',
+    '**/ontology_business_model_dialog.spec.ts',
+    '**/ontology_card_interactions.spec.ts',
     '**/ontology_domain_source.spec.ts',
     '**/ontology_network_canvas.spec.ts',
     '**/ontology_overview_responsive.spec.ts',

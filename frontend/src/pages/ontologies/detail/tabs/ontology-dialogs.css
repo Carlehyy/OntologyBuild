@@ -1,0 +1,32 @@
+/* 本体结构页两个文档类弹窗（结构说明 / 业务模型）的共享视觉口径：
+   白 + 浅绿搭配、细滚动条、文字清晰度。变量经 --odg-* 作用域定义。 */
+
+.odg-dialog {
+  --odg-green-bg: #f2faf6;
+  --odg-green-line: #d5eae0;
+  --odg-green-active-bg: #dcf3ea;
+  --odg-green-ink: #0f766e;
+  --odg-ink: #1f2937;
+  --odg-ink-strong: #111827;
+  display: flex;
+  height: 78vh;
+  min-height: 520px;
+  width: 1040px;
+  max-width: 94vw;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid var(--odg-green-line);
+  background: #fff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.22);
+}
+
+/* 细滚动条：Firefox 走 scrollbar-width，WebKit 走 4px 自绘轨道 */
+.odg-scroll { scrollbar-width: thin; scrollbar-color: #a8d4c6 transparent; }
+.odg-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
+.odg-scroll::-webkit-scrollbar-thumb { background: #a8d4c6; border-radius: 999px; }
+.odg-scroll::-webkit-scrollbar-track { background: transparent; }
+.odg-scroll::-webkit-scrollbar-corner { background: transparent; }
+
+/* 弹窗正文文字：比 12px 灰阶更深的墨色与更大的行距，缓解“看着模糊” */
+.odg-body-text { color: var(--odg-ink); font-size: 14px; line-height: 1.85; }
+.odg-body-text strong { color: var(--odg-ink-strong); }

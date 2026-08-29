@@ -10,7 +10,11 @@ import { useToast } from '@/components/ui/Toast'
 import { ICON_OPTIONS, OntologyAvatar } from '@/components/OntologyAvatar'
 import type { OntologyListItem } from '@/types/ontology'
 import {
+  applyCardOrder, readSavedCardOrder, reorderCardIds, writeSavedCardOrder,
+} from './cardOrder'
+import {
   AlertCircle,
+  Eye,
   MessageCircle,
   Network,
   Pencil,
@@ -288,18 +292,72 @@ function OntologyCard({
   onDetail,
   onChat,
   onDelete,
+  draggable = false,
+  dragging = false,
+  dropPlace = null,
+  onCardDragStart,
+  onCardDragOver,
+  onCardDragLeave,
+  onCardDrop,
+  onCardDragEnd,
 }: {
   item: OntologyListItem
   onEdit: () => void
   onDetail: () => void
   onChat: () => void
   onDelete: () => void
+  draggable?: boolean
+  dragging?: boolean
+  dropPlace?: 'before' | 'after' | null
+  onCardDragStart?: (id: string) => void
+  onCardDragOver?: (id: string, before: boolean) => void
+  onCardDragLeave?: (id: string) => void
+  onCardDrop?: (id: string) => void
+  onCardDragEnd?: () => void
 }) {
   const chatAvailable = Boolean(item.current_release_id)
   const releaseVersion = chatAvailable ? item.current_release_version || item.version : null
+  // 时间语义显式化：有实质更新展示「更新于」，否则回退「创建于」，避免右下角时间歧义。
+  const hasUpdate = Boolean(item.updated_at) && item.updated_at !== item.created_at
+  const timeText = `${hasUpdate ? '更新于' : '创建于'} ${formatChangedAt(hasUpdate ? item.updated_at! : item.created_at)}`
+  const timeTitle = hasUpdate
+    ? `最近更新：${new Date(item.updated_at!).toLocaleString('zh-CN')}`
+    : `创建时间：${new Date(item.created_at).toLocaleString('zh-CN')}`
 
   return (
-    <article className="group flex min-h-[256px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-200 hover:shadow-lg">
+    <article
+      draggable={draggable}
+      onDragStart={event => {
+        if (!draggable) {
+          event.preventDefault()
+          return
+        }
+        event.dataTransfer.effectAllowed = 'move'
+        event.dataTransfer.setData('text/plain', item.id)
+        onCardDragStart?.(item.id)
+      }}
+      onDragOver={event => {
+        if (!draggable) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'move'
+        const rect = event.currentTarget.getBoundingClientRect()
+        onCardDragOver?.(item.id, event.clientX < rect.left + rect.width / 2)
+      }}
+      onDragLeave={() => onCardDragLeave?.(item.id)}
+      onDrop={event => {
+        if (!draggable) return
+        event.preventDefault()
+        onCardDrop?.(item.id)
+      }}
+      onDragEnd={() => onCardDragEnd?.()}
+      data-testid="ontology-card"
+      data-ontology-id={item.id}
+      className={`group flex min-h-[256px] flex-col overflow-hidden rounded-2xl border bg-white transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-200 hover:shadow-lg ${
+        draggable ? 'cursor-grab active:cursor-grabbing' : ''
+      } ${dragging ? 'opacity-40' : ''} ${
+        dropPlace ? 'outline-2 -outline-offset-2 outline-teal-400' : ''
+      } border-slate-200`}
+    >
       <div className="flex flex-col p-4 pb-2.5">
         <div className="flex min-h-11 items-start gap-3 overflow-hidden">
           <OntologyAvatar icon={item.icon} />
@@ -358,6 +416,14 @@ function OntologyCard({
         <div className="flex items-center gap-2">
           <button
             type="button"
+            onClick={onDetail}
+            aria-label={`查看本体 ${item.name} 详情`}
+            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
+          >
+            <Eye size={12} /> 查看
+          </button>
+          <button
+            type="button"
             onClick={onEdit}
             className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
           >
@@ -376,8 +442,12 @@ function OntologyCard({
           </span>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
-          <span className="hidden shrink-0 whitespace-nowrap text-[11px] tabular-nums text-slate-400 min-[1400px]:inline" title={`最近更新：${new Date(item.updated_at || item.created_at).toLocaleString('zh-CN')}`}>
-            {formatChangedAt(item.updated_at || item.created_at)}
+          <span
+            data-testid="ontology-card-time"
+            className="hidden shrink-0 whitespace-nowrap text-[11px] tabular-nums text-slate-400 min-[1400px]:inline"
+            title={timeTitle}
+          >
+            {timeText}
           </span>
           <button
             type="button"
@@ -400,6 +470,10 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
   const [createOpen, setCreateOpen] = useState(defaultCreateOpen)
   const [editTarget, setEditTarget] = useState<OntologyListItem | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<OntologyListItem | null>(null)
+  // 手动排序快照：localStorage 持久化（本浏览器），拖拽落位时更新。
+  const [cardOrder, setCardOrder] = useState<string[]>(() => readSavedCardOrder(window.localStorage))
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ id: string; before: boolean } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -421,12 +495,33 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
 
   const filteredItems = useMemo(() => {
     const keyword = nameFilter.trim().toLocaleLowerCase('zh-CN')
-    return [...allItems]
+    const matched = [...allItems]
       .filter(item => !keyword
         || `${item.name} ${item.description ?? ''}`.toLocaleLowerCase('zh-CN').includes(keyword))
       .filter(item => !domainFilter || item.domain === domainFilter)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-  }, [allItems, domainFilter, nameFilter])
+    // 有手动排序快照时按快照相对位置排列（未入序的新本体插最前）；无快照保持创建时间倒序。
+    return applyCardOrder(matched, cardOrder)
+  }, [allItems, cardOrder, domainFilter, nameFilter])
+
+  // 筛选/搜索激活时禁用拖拽：部分可见列表上落位会产生歧义顺序。
+  const dragEnabled = !nameFilter && !domainFilter
+
+  const orderedAllIds = useMemo(
+    () => applyCardOrder(allItems, cardOrder).map(item => item.id),
+    [allItems, cardOrder],
+  )
+
+  const handleCardDrop = (targetId: string) => {
+    const draggedId = draggingId
+    const place = dropTarget?.id === targetId && dropTarget.before ? 'before' : 'after'
+    setDraggingId(null)
+    setDropTarget(null)
+    if (!draggedId || !dragEnabled || draggedId === targetId) return
+    const next = reorderCardIds(orderedAllIds, draggedId, targetId, place)
+    if (next === orderedAllIds) return
+    setCardOrder(next)
+    writeSavedCardOrder(window.localStorage, next)
+  }
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['ontologies'] })
@@ -615,6 +710,16 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
               onDetail={() => navigate(`/ontologies/${item.id}`)}
               onChat={() => navigate(`/agent?ontology_id=${encodeURIComponent(item.id)}`)}
               onDelete={() => setDeleteTarget(item)}
+              draggable={dragEnabled}
+              dragging={draggingId === item.id}
+              dropPlace={dragEnabled && draggingId && draggingId !== item.id && dropTarget?.id === item.id
+                ? (dropTarget.before ? 'before' : 'after')
+                : null}
+              onCardDragStart={setDraggingId}
+              onCardDragOver={(id, before) => setDropTarget(draggingId && draggingId !== id ? { id, before } : null)}
+              onCardDragLeave={id => setDropTarget(current => current?.id === id ? null : current)}
+              onCardDrop={handleCardDrop}
+              onCardDragEnd={() => { setDraggingId(null); setDropTarget(null) }}
             />
           ))
         )}

@@ -286,7 +286,7 @@ export default function OntologyDetailPage() {
         </div>
       ) : activeGroup === 'design' ? (
         <div data-testid="ontology-detail-content" className="onto-glass-card onto-glass-in min-h-0 flex-1 overflow-hidden">
-          <ModelStructureView ontologyId={id!} />
+          <ModelStructureView ontologyId={id!} ontologyName={ontology.name} />
         </div>
       ) : activeGroup === 'data-mapping' ? (
         /* 数据映射:同治理页自然文档流,内容多高页面就多高,页面级滚动 */

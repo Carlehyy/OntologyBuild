@@ -8,6 +8,7 @@ import MermaidBlock from '@/components/MermaidBlock'
 import ZoomableImage from '@/components/ZoomableImage'
 import { ontologyVersionApi } from '@/api/v2/ontology-versions'
 import { splitMarkdownSections, tocSections } from './structureDocSections'
+import './ontology-dialogs.css'
 
 const isMermaidEl = (child: unknown) =>
   isValidElement(child) && String((child.props as any)?.className || '').includes('language-mermaid')
@@ -15,17 +16,18 @@ const isMermaidEl = (child: unknown) =>
 /**
  * 需求文档正文排版，与本体建模页需求文档弹窗（pages/explore/Md.tsx）同一套
  * 视觉口径；因页面域之间禁止相互导入，这里按 ontologies 域内渲染器维护。
+ * 文字取 odg-body-text（14px / 1.85 行距 / 深墨色）保证清晰易读。
  */
 function DocMarkdown({ text }: { text: string }) {
   const components = useMemo<Components>(() => ({
-    p: p => <p className="text-sm leading-[1.7] mb-2 last:mb-0" {...p} />,
-    strong: p => <strong className="font-semibold text-[var(--color-text-primary)]" {...p} />,
+    p: p => <p className="odg-body-text mb-2 last:mb-0" {...p} />,
+    strong: p => <strong className="odg-body-text font-semibold" {...p} />,
     h1: p => <h2 className="text-base font-semibold mt-4 mb-2" {...p} />,
     h2: p => <h3 className="text-sm font-semibold mt-3 mb-1.5" {...p} />,
     h3: p => <h4 className="text-sm font-semibold mt-2 mb-1" {...p} />,
     ul: p => <ul className="list-disc pl-5 mb-2 space-y-1" {...p} />,
     ol: p => <ol className="list-decimal pl-5 mb-2 space-y-1" {...p} />,
-    li: p => <li className="text-sm leading-relaxed" {...p} />,
+    li: p => <li className="odg-body-text leading-relaxed" {...p} />,
     code: ({ className, children, ...p }) => {
       if (String(className || '').includes('language-mermaid')) {
         return <MermaidBlock chart={String(children).trim()} />
@@ -84,11 +86,15 @@ function CenterHint({ icon, title, hint, testid, retry }: {
 
 /**
  * 本体结构的「结构说明」弹窗：查询并展示当前本体版本语义层冻结的需求文档
- * （快照口径，与建模页 DocumentsDrawer 同源同风格），目录跳转 + 底部下载。
+ * （快照口径，与建模页 DocumentsDrawer 同源同风格）。
+ * 视觉口径：白 + 浅绿搭配、左右细滚动条、正文文字清晰化；顶栏展示本体名称
+ * 与发布版本徽章，下载入口收进顶栏，底部说明条已移除。
  */
-export default function StructureDocDialog({ open, ontologyId, versionId, versionLabel, onClose }: {
+export default function StructureDocDialog({ open, ontologyId, ontologyName, versionId, versionLabel, onClose }: {
   open: boolean
   ontologyId: string
+  /** 顶栏标题：本体名称（替代旧版文档标题）。 */
+  ontologyName?: string
   /** 当前发布版本 id（语义层挂载点）。 */
   versionId: string
   versionLabel?: string
@@ -166,16 +172,16 @@ export default function StructureDocDialog({ open, ontologyId, versionId, versio
         role="dialog"
         aria-modal="true"
         aria-labelledby="structure-doc-dialog-title"
-        className="flex h-[78vh] min-h-[520px] w-[1040px] max-w-[94vw] overflow-hidden rounded-xl border border-white/60 bg-[var(--color-bg-elevated)] shadow-[0_24px_80px_rgba(15,23,42,0.22)]"
+        className="odg-dialog"
         onMouseDown={e => e.stopPropagation()}
       >
-        {/* 文档目录：点击跳转到正文具体位置 */}
-        <aside className="flex w-60 shrink-0 flex-col border-r border-[var(--color-border)] bg-slate-50/55">
-          <div className="flex h-16 shrink-0 flex-col justify-center border-b border-[var(--color-border)] px-4">
+        {/* 文档目录：白 + 浅绿导航，细滚动条，点击跳转到正文具体位置 */}
+        <aside className="flex w-60 shrink-0 flex-col border-r border-[#d5eae0] bg-[#f2faf6]">
+          <div className="flex h-16 shrink-0 flex-col justify-center border-b border-[#d5eae0] px-4">
             <div id="structure-doc-dialog-title" className="text-sm font-semibold text-[var(--color-text-primary)]">结构说明</div>
             <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">需求文档目录 · 共 {toc.length} 节</div>
           </div>
-          <nav data-testid="structure-doc-toc" aria-label="需求文档目录" className="flex-1 overflow-y-auto p-2">
+          <nav data-testid="structure-doc-toc" aria-label="需求文档目录" className="odg-scroll flex-1 overflow-y-auto p-2">
             {isLoading && <div className="px-2 py-1 text-xs text-[var(--color-text-tertiary)]">加载中…</div>}
             {!isLoading && toc.length === 0 && (
               <div className="px-2 py-1 text-xs leading-relaxed text-[var(--color-text-tertiary)]">
@@ -191,9 +197,9 @@ export default function StructureDocDialog({ open, ontologyId, versionId, versio
                 aria-current={activeId === section.id ? 'true' : undefined}
                 onClick={() => jumpTo(section.id)}
                 style={{ paddingLeft: 10 + (Math.min(section.level, 4) - 1) * 12 }}
-                className={`block w-full truncate rounded-md py-2 pr-2.5 text-left text-xs transition-colors ${activeId === section.id
-                  ? 'bg-teal-50 font-medium text-teal-800'
-                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'}`}
+                className={`block w-full truncate rounded-md py-2 pr-2.5 text-left text-[13px] transition-colors ${activeId === section.id
+                  ? 'bg-[#dcf3ea] font-medium text-teal-800'
+                  : 'text-[var(--color-text-secondary)] hover:bg-white/70'}`}
               >
                 {section.title}
               </button>
@@ -201,12 +207,16 @@ export default function StructureDocDialog({ open, ontologyId, versionId, versio
           </nav>
         </aside>
 
-        {/* 正文 + 底部操作 */}
+        {/* 正文 + 顶部操作（下载入口随标题区展示，底部说明条已移除） */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] px-5">
+          <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-[#d5eae0] px-5">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-xs font-medium text-[var(--color-text-primary)]">
-                {hasContent ? documentTitle : '暂无需求文档'}
+              <span
+                data-testid="structure-doc-ontology-name"
+                className="truncate text-sm font-semibold text-[var(--color-text-primary)]"
+                title={ontologyName || undefined}
+              >
+                {ontologyName || '本体'}
               </span>
               {versionLabel && (
                 <span
@@ -217,21 +227,33 @@ export default function StructureDocDialog({ open, ontologyId, versionId, versio
                 </span>
               )}
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="关闭结构说明"
-              className="shrink-0 rounded-md p-1.5 text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-            >
-              <X size={16} />
-            </button>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {hasContent && (
+                <button
+                  type="button"
+                  data-testid="structure-doc-download"
+                  onClick={download}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#bfe3d6] bg-[#eaf8f2] px-2.5 py-1.5 text-xs font-medium text-teal-800 transition-colors hover:bg-[#dcf3ea]"
+                >
+                  <Download size={12} /> 下载 .md
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="关闭结构说明"
+                className="shrink-0 rounded-md p-1.5 text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+              >
+                <X size={16} />
+              </button>
+            </div>
           </div>
 
           <div
             ref={scrollRef}
             onScroll={handleContentScroll}
             data-testid="structure-doc-content"
-            className="min-h-0 flex-1 overflow-y-auto px-6 py-4"
+            className="odg-scroll min-h-0 flex-1 overflow-y-auto px-6 py-4"
           >
             {isLoading && (
               <CenterHint
@@ -276,22 +298,6 @@ export default function StructureDocDialog({ open, ontologyId, versionId, versio
               </div>
             )}
           </div>
-
-          {hasContent && (
-            <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--color-border)] px-5 py-3.5">
-              <span className="text-[10px] leading-relaxed text-[var(--color-text-tertiary)]">
-                文档为生成该版本时的需求快照，与版本结构一一对应；在「本体建模」重新生成需求文档并发布新版本后，这里会随之更新。
-              </span>
-              <button
-                type="button"
-                data-testid="structure-doc-download"
-                onClick={download}
-                className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[var(--color-border)] px-2.5 py-1.5 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)]"
-              >
-                <Download size={12} /> 下载 .md
-              </button>
-            </div>
-          )}
         </div>
       </div>
     </div>,
