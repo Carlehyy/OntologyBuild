@@ -677,3 +677,161 @@ def test_summary_aggregation():
         rubric={"name": "标准", "rubrics": "1. a", "min_score": 0, "max_score": 5},
     )
     assert summary2["engine"] == "builtin"
+
+
+# ------------------------------------------------- 生产实测缺陷回归（MYW-79）
+
+
+class TestOpenaiParseCompat:
+    """P0-1：平台锁定 openai<2，py-openjudge 按新版 API 调 chat.completions.parse
+    会 AttributeError，官方评分器生产环境全挂。engine 导入时补委托兼容方法。"""
+
+    def test_async_completions_parse_available_after_engine_import(self):
+        from openai.resources.chat.completions import AsyncCompletions
+
+        import app.assistant_evaluation.engine  # noqa: F401
+
+        assert hasattr(AsyncCompletions, "parse")
+
+    @pytest.mark.asyncio
+    async def test_compat_parse_delegates_to_beta(self):
+        import app.assistant_evaluation.engine as eng
+
+        seen = {}
+
+        class _BetaCompletions:
+            @staticmethod
+            async def parse(**kwargs):
+                seen.update(kwargs)
+                return "PARSED"
+
+        fake_self = SimpleNamespace(
+            _client=SimpleNamespace(
+                beta=SimpleNamespace(
+                    chat=SimpleNamespace(completions=_BetaCompletions())
+                )
+            )
+        )
+        out = await eng._compat_async_parse(
+            fake_self, model="m", messages=[{"role": "user", "content": "hi"}]
+        )
+        assert out == "PARSED"
+        assert seen["model"] == "m"
+
+
+@pytest.mark.skipif(
+    not __import__("app.assistant_evaluation.engine",
+                   fromlist=["openjudge_available"]).openjudge_available(),
+    reason="py-openjudge 未安装（CI 环境）",
+)
+@pytest.mark.asyncio
+async def test_tool_dim_grader_internal_error_falls_back(monkeypatch):
+    """P0-2：评分器把内部异常包装成 score=0 + "Evaluation error" 理由时，
+    必须视为直评失败走网关降级，不得把 0 分当真实工具失败落库。"""
+    import app.assistant_evaluation.engine as eng
+
+    class InternalErrorGrader:
+        async def aevaluate(self, **kwargs):
+            return SimpleNamespace(
+                score=0.0,
+                reason="Evaluation error: 'AsyncCompletions' object has no attribute 'parse'",
+            )
+
+    engine = eng.OpenJudgeEngine.__new__(eng.OpenJudgeEngine)
+    engine._kwargs = {"provider": "compatible", "model_config_id": None}
+    engine._llm_graders = {}
+    engine._tool_success_grader = InternalErrorGrader()
+
+    monkeypatch.setattr(
+        eng, "_gateway_judge",
+        lambda llm_kwargs, system, user: json.dumps({"score": 1, "reason": "全部调用成功"}),
+    )
+
+    trace = _trace(actions=[{"name": "search_objects", "arguments": {},
+                             "failed": False, "status": "success", "preview": "ok"}])
+    out = await engine.evaluate(["tool_call_success"], trace)
+    assert out["tool_call_success"]["raw"] == 1
+    assert "内置评判" in out["tool_call_success"]["reason"]
+
+
+def test_scene_trace_without_steps(db):
+    """P0-3：SceneMessage 无 steps 字段（纯问答），场景适配不得访问 steps 而崩溃。"""
+    from app.assistant_evaluation.adapters import _load_scene_trace
+    from app.scenes.models import SceneConversation, SceneMessage
+
+    conv = SceneConversation(title="场景会话")
+    db.add(conv)
+    db.commit()
+    db.add_all([
+        SceneMessage(conversation_id=conv.id, role="user", content="建一个仓库场景"),
+        SceneMessage(conversation_id=conv.id, role="assistant", content="已生成白模场景。"),
+    ])
+    db.commit()
+
+    trace = _load_scene_trace(db, conv.id)
+    assert trace is not None
+    assert trace.query == "建一个仓库场景"
+    assert trace.response == "已生成白模场景。"
+    assert trace.actions == []
+    assert trace.tool_error_count == 0
+
+
+class TestGatewayRateLimitBackoff:
+    """P0-4：judge 通道 429 限流时退避重试，其余错误快速失败。"""
+
+    def test_429_retried_with_backoff_then_success(self, monkeypatch):
+        import app.assistant_evaluation.engine as eng
+
+        calls = {"n": 0}
+        sleeps = []
+
+        def fake_chat(kwargs, messages, tools):
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise RuntimeError("LLM 调用失败(openai/MiniMax-M3): Error code: 429 - rate limit")
+            return {"content": json.dumps({"score": 5, "reason": "ok"})}
+
+        monkeypatch.setattr("app.model_configs.llm_gateway.chat", fake_chat)
+        monkeypatch.setattr(eng.time, "sleep", lambda s: sleeps.append(s))
+
+        out = eng._gateway_judge({"model_config_id": None}, "system", "user")
+        assert json.loads(out)["score"] == 5
+        assert calls["n"] == 3
+        assert sleeps == list(eng._RATE_LIMIT_BACKOFF_SECONDS)
+
+    def test_non_rate_limit_error_not_retried(self, monkeypatch):
+        import app.assistant_evaluation.engine as eng
+
+        calls = {"n": 0}
+
+        def fake_chat(kwargs, messages, tools):
+            calls["n"] += 1
+            raise RuntimeError("LLM 调用失败(openai/MiniMax-M3): Error code: 401")
+
+        monkeypatch.setattr("app.model_configs.llm_gateway.chat", fake_chat)
+        monkeypatch.setattr(eng.time, "sleep", lambda s: pytest.fail("不应退避重试"))
+
+        with pytest.raises(RuntimeError):
+            eng._gateway_judge({"model_config_id": None}, "system", "user")
+        assert calls["n"] == 1
+
+
+class TestTaskSerialization:
+    """P0-4：评估任务全局串行闸门——多任务并发会把 judge 配额打爆（实测 44 条
+    只评成 9 条）。闸门互斥 + 单任务会话并发降为 2。"""
+
+    def test_task_gate_is_global_exclusive(self):
+        from app.assistant_evaluation import service as svc
+
+        assert svc._TASK_GATE.acquire(timeout=1)
+        try:
+            assert not svc._TASK_GATE.acquire(timeout=0.2)
+        finally:
+            svc._TASK_GATE.release()
+        assert svc._TASK_GATE.acquire(timeout=1)
+        svc._TASK_GATE.release()
+
+    def test_task_concurrency_lowered(self):
+        from app.assistant_evaluation import service as svc
+
+        assert svc.TASK_CONCURRENCY == 2
