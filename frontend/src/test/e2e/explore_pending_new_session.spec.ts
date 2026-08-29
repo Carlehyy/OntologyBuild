@@ -1,9 +1,9 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 
 /**
- * 业务澄清入口（本体管理首卡）端到端契约：
- * 1. 首卡按钮顺序为 立即创建 · 业务澄清 · 本地导入；
- * 2. 点击业务澄清跳转 /explore?session=new，进入待建新会话态 ——
+ * 业务探索待建新会话端到端契约（MYW-80 起本体管理首卡仅保留 立即创建 · 本地导入）：
+ * 1. 首卡按钮顺序为 立即创建 · 本地导入，不再有业务澄清按钮；
+ * 2. 深链 /explore?session=new 进入待建新会话态 ——
  *    不自动恢复最近会话，用户未输入内容前不发生 POST /exploration/sessions；
  * 3. 首条消息发出后经懒创建只产生一个会话；
  * 4. 普通 /explore 进入仍自动恢复最近会话（回归保护）。
@@ -115,17 +115,16 @@ async function mockPlatformWithExplore(page: Page) {
   return state
 }
 
-test.describe('业务澄清入口与待建新会话', () => {
-  test('业务澄清按钮位于两按钮之间，点击跳转后不输入不创建会话，输入后恰好创建一次', async ({ page }) => {
+test.describe('业务探索待建新会话', () => {
+  test('首卡仅保留立即创建与本地导入；深链进入待建态后不输入不创建会话，输入后恰好创建一次', async ({ page }) => {
     await authenticate(page)
     const state = await mockPlatformWithExplore(page)
 
     await page.goto('/#/ontologies')
     const firstCard = page.locator('article').filter({ hasText: '新建本体' })
-    await expect(firstCard.getByRole('button')).toHaveText(['立即创建', '业务澄清', '本地导入'])
+    await expect(firstCard.getByRole('button')).toHaveText(['立即创建', '本地导入'])
 
-    await firstCard.getByRole('button', { name: '业务澄清' }).click()
-    await expect(page).toHaveURL(/\/#\/explore\?session=new$/)
+    await page.goto('/#/explore?session=new')
 
     // 待建新会话态：空白欢迎语出现；既有会话未被恢复；未创建任何会话
     await expect(page.getByText('从描述你的业务开始')).toBeVisible()
@@ -144,7 +143,7 @@ test.describe('业务澄清入口与待建新会话', () => {
     expect(state.sessionCreates).toBe(1)
   })
 
-  test('重复点击业务澄清入口（深链重进）同样不堆积空会话', async ({ page }) => {
+  test('重复进入待建深链（整页重进）同样不堆积空会话', async ({ page }) => {
     await authenticate(page)
     const state = await mockPlatformWithExplore(page)
 
@@ -153,7 +152,7 @@ test.describe('业务澄清入口与待建新会话', () => {
     await page.waitForTimeout(400)
     expect(state.sessionCreates).toBe(0)
 
-    // 模拟再次点击入口：整页重新进入同一深链，仍是零创建
+    // 模拟再次进入同一深链：整页重新进入，仍是零创建
     await page.reload()
     await expect(page.getByText('从描述你的业务开始')).toBeVisible()
     await page.waitForTimeout(400)

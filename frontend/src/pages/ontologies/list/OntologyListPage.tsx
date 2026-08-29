@@ -239,17 +239,15 @@ function OntologyFormModal({
 
 function CreateOntologyCard({
   onCreate,
-  onClarify,
   onImport,
   importing,
 }: {
   onCreate: () => void
-  onClarify: () => void
   onImport: () => void
   importing: boolean
 }) {
   return (
-    <article className="group flex min-h-[256px] flex-col items-center justify-center rounded-2xl border border-dashed border-teal-300 bg-gradient-to-br from-teal-50/80 via-white to-cyan-50/60 p-6 text-center transition-all hover:-translate-y-0.5 hover:border-teal-500 hover:shadow-lg">
+    <article className="group flex min-h-[256px] flex-col items-center justify-center rounded-2xl border border-dashed border-teal-300 bg-gradient-to-br from-teal-50/80 via-white to-cyan-50/60 p-6 text-center transition-all hover:border-teal-500 hover:shadow-lg">
       <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-teal-600 text-white shadow-md shadow-teal-600/20 transition-transform group-hover:scale-105">
         <Plus size={25} />
       </div>
@@ -262,15 +260,6 @@ function CreateOntologyCard({
           className="rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm transition-colors hover:border-teal-300 hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
         >
           立即创建
-        </button>
-        {/* 业务澄清：跳转业务澄清页面并进入待建新会话态；用户未输入内容前不会创建空会话 */}
-        <button
-          type="button"
-          onClick={onClarify}
-          title="进入业务澄清，通过对话澄清业务后生成或完善本体模型"
-          className="rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm transition-colors hover:border-teal-300 hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
-        >
-          业务澄清
         </button>
         <button
           type="button"
@@ -655,7 +644,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
         <button
           type="button"
           onClick={openCreate}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--color-nav-bg)] px-4 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--color-nav-bg)] px-4 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
         >
           <Plus size={15} /> 立即创建
         </button>
@@ -672,7 +661,6 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         <CreateOntologyCard
           onCreate={openCreate}
-          onClarify={() => navigate('/explore?session=new')}
           onImport={() => {
             if (fileInputRef.current) fileInputRef.current.value = ''
             fileInputRef.current?.click()

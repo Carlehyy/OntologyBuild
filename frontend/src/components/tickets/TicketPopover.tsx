@@ -142,13 +142,6 @@ export default function TicketPopover({
                 </span>
                 <p className="text-sm font-medium text-[var(--color-text-primary)]">暂无处理中的工单</p>
                 <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">使用中遇到问题，随时可以提单</p>
-                <button
-                  type="button"
-                  onClick={() => { onOpenChange(false); setFormOpen(true) }}
-                  className="mt-3 inline-flex h-10 items-center gap-1.5 rounded-lg bg-[var(--color-nav-light)] px-3.5 text-xs font-medium text-[var(--color-nav-bg)] transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
-                >
-                  <Plus size={14} />提交工单
-                </button>
               </div>
             ) : (
               <div className="divide-y divide-[var(--color-border)]" role="list">
@@ -194,20 +187,21 @@ export default function TicketPopover({
           </div>
 
           <footer className="flex items-center justify-between gap-2 border-t border-[var(--color-border)] px-3 py-2.5">
+            {/* 两个入口统一为纯文字样式：不做悬浮按钮底色/位移等花哨反馈（MYW-80） */}
             <button
               type="button"
               onClick={() => { onOpenChange(false); setFormOpen(true) }}
-              className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
+              className="inline-flex h-10 items-center gap-1 rounded-lg px-3 text-xs font-medium text-[var(--color-nav-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
             >
               <Plus size={14} />提交工单
             </button>
             <button
               type="button"
               onClick={() => { onOpenChange(false); onNavigate('/tickets') }}
-              className="group inline-flex h-10 items-center gap-1 rounded-lg px-3 text-xs font-medium text-[var(--color-nav-bg)] transition-colors hover:bg-[var(--color-nav-light)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
+              className="inline-flex h-10 items-center gap-1 rounded-lg px-3 text-xs font-medium text-[var(--color-nav-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
             >
               查看全部工单
-              <ChevronRight size={14} className="transition-transform group-hover:translate-x-0.5 motion-reduce:transform-none" aria-hidden="true" />
+              <ChevronRight size={14} aria-hidden="true" />
             </button>
           </footer>
           {list.isFetching && !list.isLoading && (

@@ -111,8 +111,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       )}
       {/* Sidebar */}
       <aside className={`${mobileNavOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-50 flex w-56 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-all ${SIDEBAR_EASE} md:static md:z-auto md:translate-x-0 ${collapsed ? 'md:w-16' : 'md:w-56'}`}>
-        {/* Logo：点击同样收起/展开侧边栏 */}
-        <div className={`h-14 border-b border-[var(--color-border)] flex items-center transition-all ${SIDEBAR_EASE} ${collapsed ? 'justify-center px-0' : 'px-4'}`}>
+        {/* Logo：点击同样收起/展开侧边栏。图标左偏移恒为 px-4（折叠态 64px 侧栏内
+            恰好视觉居中）：不随折叠切换 justify/padding，避免布局属性跳变导致 logo 闪动 */}
+        <div className="h-14 border-b border-[var(--color-border)] flex items-center px-4">
           <button
             type="button"
             onClick={toggleSidebar}

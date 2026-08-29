@@ -303,3 +303,36 @@ test('左侧导航：「数据集成」显示新名称且收展行为与其他�
   await expect(dataGroup).toHaveAttribute('aria-expanded', 'true')
   await expect(page).toHaveURL(/\/#\/data\/pipelines$/)
 })
+
+test('左上角 Logo 折叠/展开侧边栏：图标水平位置全程稳定不闪动', async ({ page }) => {
+  await mockNavTabs(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/#/data/pipelines')
+
+  // Logo 区是侧栏第一个块；按钮的 aria-label 随折叠态切换，
+  // 因此用结构定位器（logo 按钮内第一个 div = Network 图标方块），点击前后同一节点
+  const logoButton = page.locator('aside > div').first().locator('button').first()
+  await expect(logoButton).toBeVisible()
+  const logoIcon = logoButton.locator('div').first()
+
+  const expandedBox = await logoIcon.boundingBox()
+  expect(expandedBox).not.toBeNull()
+
+  // 回归点：折叠态曾切换 justify-center/px-0（justify 不参与过渡、瞬时跳变），
+  // 图标先横跳到行中部再随宽度动画滑回，表现为 Logo 闪动。现在 px-4 恒定，
+  // 图标点击后与过渡结束后都应留在原位（折叠态 64px 侧栏内恰好居中）。
+  await logoButton.click()
+  const afterCollapseClick = await logoIcon.boundingBox()
+  await page.waitForTimeout(400)
+  const collapsedBox = await logoIcon.boundingBox()
+  expect(Math.abs(afterCollapseClick!.x - expandedBox!.x)).toBeLessThanOrEqual(1)
+  expect(Math.abs(collapsedBox!.x - expandedBox!.x)).toBeLessThanOrEqual(1)
+
+  // 展开方向同样稳定
+  await logoButton.click()
+  const afterExpandClick = await logoIcon.boundingBox()
+  await page.waitForTimeout(400)
+  const restoredBox = await logoIcon.boundingBox()
+  expect(Math.abs(afterExpandClick!.x - expandedBox!.x)).toBeLessThanOrEqual(1)
+  expect(Math.abs(restoredBox!.x - expandedBox!.x)).toBeLessThanOrEqual(1)
+})
