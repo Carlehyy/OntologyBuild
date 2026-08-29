@@ -47,6 +47,15 @@ def overview_cache_key(ontology_id: str) -> str:
     return f"ob:ont:overview:v{_version(_OVERVIEW_VERSION_KEY)}:{ontology_id}"
 
 
+def runtime_summary_cache_key(ontology_id: str, start: str, end: str) -> str:
+    """运行汇总按日聚合（显式时间窗）。
+
+    与 overview 同一版本键：统计口径同源（当前发布血缘的哨兵/动作日志），
+    发布、灌数、审批等写路径失效 overview 时必须同步失效这里。
+    """
+    return f"ob:ont:runtime-summary:v{_version(_OVERVIEW_VERSION_KEY)}:{ontology_id}:{start}:{end}"
+
+
 def pending_cache_key(ontology_id: str, release_id: Optional[str]) -> str:
     """待审批/待恢复动作队列；release 维度分键。"""
     scope = release_id or "any"

@@ -6,6 +6,7 @@
 """
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
+from datetime import datetime
 from typing import Optional
 
 from app.deps import get_db, get_current_user, require_admin
@@ -492,6 +493,11 @@ def object_set_aggregates(ontology_id: str, object_type_id: str,
 # ============================================================
 #  本体驾驶舱（Overview）— 详情页一屏看懂：模型 / 数据 / 运行 / 事实流 / 健康
 # ============================================================
+
+# 运行汇总显式时间窗的跨度上限（天）：覆盖"本月/上月/近30天"及自定义区间，
+# 同时约束单次按日聚合查询的成本。
+RUNTIME_SUMMARY_MAX_SPAN_DAYS = 92
+
 @router.get("/{ontology_id}/overview")
 def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
     """Latest-release dashboard backed by the immutable release snapshot.
@@ -501,6 +507,39 @@ def ontology_overview(ontology_id: str, db: Session = Depends(get_db), _=Depends
     constrained to identifiers/version lineage owned by that release.
     """
     return dashboard_queries.ontology_overview(ontology_id, db)
+
+
+@router.get("/{ontology_id}/runtime-summary")
+def ontology_runtime_summary(
+        ontology_id: str,
+        start: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
+        end: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
+        db: Session = Depends(get_db), _=Depends(get_current_user)):
+    """运行汇总按日聚合（显式时间窗）——总览「运行汇总」时间维度下拉的数据源。
+
+    口径与 overview 的 runtime 完全一致：仅统计当前发布血缘的哨兵评估与
+    动作执行；窗口跨度上限 RUNTIME_SUMMARY_MAX_SPAN_DAYS 天，防止任意
+    大范围拖垮详情页查询。
+    """
+    try:
+        start_day = datetime.strptime(start, "%Y-%m-%d").date()
+        end_day = datetime.strptime(end, "%Y-%m-%d").date()
+    except ValueError:
+        _raise_validation_failed(
+            [{"field": "start/end", "issue": "日期格式须为 YYYY-MM-DD"}],
+            message="运行汇总时间窗不合法",
+        )
+    if end_day < start_day:
+        _raise_validation_failed(
+            [{"field": "end", "issue": "结束日期早于开始日期"}],
+            message="运行汇总时间窗不合法",
+        )
+    if (end_day - start_day).days > RUNTIME_SUMMARY_MAX_SPAN_DAYS - 1:
+        _raise_validation_failed(
+            [{"field": "start/end", "issue": f"时间窗跨度不能超过 {RUNTIME_SUMMARY_MAX_SPAN_DAYS} 天"}],
+            message="运行汇总时间窗过长",
+        )
+    return dashboard_queries.runtime_daily_summary(ontology_id, start, end, db)
 
 
 @router.get("/{ontology_id}/facts/recent")

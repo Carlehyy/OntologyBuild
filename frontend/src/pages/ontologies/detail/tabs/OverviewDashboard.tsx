@@ -1,13 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Activity, CheckCircle2, ChevronRight, CircleAlert, Database,
-  GitBranch, Loader2, Sparkles, Workflow, Zap,
+  GitBranch, Layers, Loader2, Sparkles, Workflow, Zap,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 import type { OntologyDetail } from '@/types/ontology'
 import RuntimeTrendChart from './RuntimeTrendChart'
 import VersionEvolutionCard from './VersionEvolutionCard'
+import {
+  describeRuntimeRange, normalizeRuntimeRange,
+  resolveRuntimeRange, RUNTIME_DIMENSION_DEFAULT, RUNTIME_DIMENSION_OPTIONS,
+  type RuntimeDimension, type RuntimeRange,
+} from './runtimeSummaryRange'
 import './overview-dashboard.css'
 
 interface Overview {
@@ -38,6 +43,17 @@ interface Overview {
   health?: { level: 'info' | 'warn' | 'action'; message: string; hint?: string; target?: string }[]
 }
 
+/** runtime-summary 显式时间窗接口的按日桶，形状与 daily7d 一致。 */
+interface RuntimeSummary {
+  start: string
+  end: string
+  days: {
+    date: string
+    firings: { fired: number; error: number }
+    actionRuns: { success: number; failed: number }
+  }[]
+}
+
 const FACT_KIND_LABEL: Record<string, string> = {
   property: '属性', derived: '派生', link: '链接',
   decision: '决策', object: '存在', absence: '缺席',
@@ -54,12 +70,6 @@ const formatDateTime = (iso?: string | null, compact = false) => {
   return value.toLocaleString('zh-CN', compact
     ? { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }
     : { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
-}
-
-const formatRuntimeDay = (date: string) => {
-  const value = new Date(`${date}T00:00:00`)
-  if (Number.isNaN(value.getTime())) return date
-  return value.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
 }
 
 /* KPI 数字滚动：数据到达或变化时从旧值缓动到新值；
@@ -102,7 +112,7 @@ function NetworkMark() {
   )
 }
 
-function PanelTitle({ title, sub, action }: { title: string; sub?: string; action?: React.ReactNode }) {
+function PanelTitle({ title, sub, action }: { title: string; sub?: React.ReactNode; action?: React.ReactNode }) {
   return (
     <div className="overview-panel-title">
       <div className="overview-panel-title-copy">
@@ -119,17 +129,30 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   ontology: OntologyDetail
   onGoGroup: (group: string) => void
 }) {
-  const [runtimeRange, setRuntimeRange] = useState<[number, number]>([0, 6])
+  // 运行汇总时间维度：默认近7天走 overview 自带的 daily7d 桶（不额外发请求）；
+  // 其余维度走 runtime-summary 显式时间窗接口。
+  const [runtimeDimension, setRuntimeDimension] = useState<RuntimeDimension>(RUNTIME_DIMENSION_DEFAULT)
+  const [customRange, setCustomRange] = useState<RuntimeRange>(() => (
+    resolveRuntimeRange(RUNTIME_DIMENSION_DEFAULT, new Date(), { start: '', end: '' })
+  ))
+  const runtimeRange = useMemo(
+    () => resolveRuntimeRange(runtimeDimension, new Date(), customRange),
+    [runtimeDimension, customRange],
+  )
 
   const overviewQuery = useQuery<Overview>({
     queryKey: ['formal-overview', ontologyId],
     queryFn: () => apiClientV2.get(`/formal/ontologies/${ontologyId}/overview`) as Promise<Overview>,
     refetchInterval: 30000,
   })
-  const runtimeDayCount = overviewQuery.data?.runtime.daily7d?.length || 7
-  useEffect(() => {
-    setRuntimeRange([0, Math.max(runtimeDayCount - 1, 0)])
-  }, [ontologyId, runtimeDayCount])
+  const runtimeSummaryQuery = useQuery<RuntimeSummary>({
+    queryKey: ['formal-runtime-summary', ontologyId, runtimeRange.start, runtimeRange.end],
+    queryFn: () => apiClientV2.get(
+      `/formal/ontologies/${ontologyId}/runtime-summary?start=${runtimeRange.start}&end=${runtimeRange.end}`,
+    ) as Promise<RuntimeSummary>,
+    enabled: runtimeDimension !== 'last7',
+    refetchInterval: 30000,
+  })
 
   const kpiObjectTypes = useCountUp(overviewQuery.data?.model.objectTypes ?? 0)
   const kpiInstances = useCountUp(overviewQuery.data?.data.instances ?? 0)
@@ -162,13 +185,13 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
     .filter(([, value]) => value > 0)
     .sort(([a], [b]) => (FACT_KIND_LABEL[a] ? 0 : 1) - (FACT_KIND_LABEL[b] ? 0 : 1))
   const sourceEntries = Object.entries(ov.data.instancesBySource).sort((a, b) => b[1] - a[1])
-  // daily7d 只信后端按日返回的数据；没有就如实呈现空态，绝不把 7 日汇总堆到"今天"。
-  const runtimeDays = ov.runtime.daily7d ?? []
-  const hasRuntimeDays = runtimeDays.length > 0
-  const runtimeRangeEnd = hasRuntimeDays ? Math.min(runtimeRange[1], runtimeDays.length - 1) : 0
-  const runtimeRangeStart = hasRuntimeDays ? Math.min(runtimeRange[0], runtimeRangeEnd) : 0
-  const selectedRuntimeDays = runtimeDays.slice(runtimeRangeStart, runtimeRangeEnd + 1)
-  const selectedRuntime = selectedRuntimeDays.reduce((summary, day) => ({
+  // 近7天用 overview 自带的 daily7d 桶；其余维度信 runtime-summary 的显式时间窗，
+  // 两者都只呈现后端按日返回的数据，没有就如实呈现空态，绝不把汇总堆到某一天。
+  const runtimeDays = runtimeDimension === 'last7'
+    ? ov.runtime.daily7d ?? []
+    : runtimeSummaryQuery.data?.days ?? []
+  const runtimePending = runtimeDimension !== 'last7' && runtimeSummaryQuery.isPending
+  const selectedRuntime = runtimeDays.reduce((summary, day) => ({
     fired: summary.fired + day.firings.fired,
     error: summary.error + day.firings.error,
     success: summary.success + day.actionRuns.success,
@@ -176,14 +199,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   }), { fired: 0, error: 0, success: 0, failed: 0 })
   const selectedRuntimeTotal = selectedRuntime.fired + selectedRuntime.error
     + selectedRuntime.success + selectedRuntime.failed
-  const runtimeStartLabel = hasRuntimeDays ? formatRuntimeDay(runtimeDays[runtimeRangeStart].date) : ''
-  const runtimeEndLabel = hasRuntimeDays ? formatRuntimeDay(runtimeDays[runtimeRangeEnd].date) : ''
-  const runtimeRangeLabel = !hasRuntimeDays
-    ? '近 7 日'
-    : runtimeRangeStart === runtimeRangeEnd
-      ? runtimeStartLabel
-      : `${runtimeStartLabel} – ${runtimeEndLabel}`
-  const runtimeRangeSpan = Math.max(runtimeDays.length - 1, 1)
+  const runtimeRangeLabelText = describeRuntimeRange(runtimeDimension, runtimeRange)
 
   return (
     <main className="overview-dashboard" aria-label="本体总览">
@@ -237,6 +253,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             {ov.model.actions === 0 && (
               <em className="kpi-status is-neutral"><CircleAlert size={15} />暂无动作类型</em>
             )}
+            <em className="kpi-status is-blue"><Layers size={15} />结构冻结于版本，演进可对照</em>
           </button>
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('data')}>
             <span className="kpi-label">当前实例投影</span>
@@ -246,6 +263,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             <em className="kpi-status is-neutral">
               {sourceEntries.map(([source, count]) => `${SOURCE_LABEL[source] || source} ${count}`).join(' · ') || '暂无实例数据'}
             </em>
+            <em className="kpi-status is-teal"><Database size={15} />实例与当前结构对账，来源可追</em>
           </button>
           <button type="button" className="kpi-cell" onClick={() => onGoGroup('data-mapping')}>
             <span className="kpi-label">数据映射</span>
@@ -270,7 +288,47 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
         </section>
 
         <section className="overview-panel runtime-summary">
-          <PanelTitle title="近 7 日运行汇总" sub={hasRuntimeDays ? `${runtimeRangeLabel} · ${selectedRuntimeDays.length} 日聚合` : '暂无按日运行数据'} action={<button className="overview-link-button" onClick={() => onGoGroup('governance')}>查看运行记录 <ChevronRight size={15} /></button>} />
+          <PanelTitle
+            title="运行汇总"
+            sub={(
+              <span className="runtime-dimension">
+                <select
+                  className="runtime-dimension-select"
+                  value={runtimeDimension}
+                  aria-label="运行汇总时间维度"
+                  onChange={event => setRuntimeDimension(event.target.value as RuntimeDimension)}
+                >
+                  {RUNTIME_DIMENSION_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                {runtimeDimension === 'custom' && (
+                  <span className="runtime-custom-range">
+                    <input
+                      type="date"
+                      value={customRange.start}
+                      max={customRange.end}
+                      aria-label="自定义开始日期"
+                      onChange={event => setCustomRange(
+                        range => normalizeRuntimeRange({ ...range, start: event.target.value }),
+                      )}
+                    />
+                    <span aria-hidden="true">–</span>
+                    <input
+                      type="date"
+                      value={customRange.end}
+                      min={customRange.start}
+                      aria-label="自定义结束日期"
+                      onChange={event => setCustomRange(
+                        range => normalizeRuntimeRange({ ...range, end: event.target.value }),
+                      )}
+                    />
+                  </span>
+                )}
+              </span>
+            )}
+            action={<button className="overview-link-button" onClick={() => onGoGroup('governance')}>查看运行记录 <ChevronRight size={15} /></button>}
+          />
           <div className="runtime-highlights">
             <article className="runtime-highlight runtime-highlight--sentinel">
               <span className="runtime-highlight-icon"><Activity size={17} /></span>
@@ -300,9 +358,15 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             <div className="runtime-trend-heading">
               <span>每日运行趋势</span>
             </div>
-            <div className={`runtime-trend-chart ${selectedRuntimeTotal === 0 ? 'is-empty' : ''}`} role="img" aria-label={`${runtimeRangeLabel} 每日运行趋势`}>
-              <RuntimeTrendChart days={runtimeDays} rangeStart={runtimeRangeStart} rangeEnd={runtimeRangeEnd} />
-              {selectedRuntimeTotal === 0 && (
+            <div className={`runtime-trend-chart ${selectedRuntimeTotal === 0 && !runtimePending ? 'is-empty' : ''}`} role="img" aria-label={`${runtimeRangeLabelText} 每日运行趋势`}>
+              <RuntimeTrendChart days={runtimeDays} rangeLabel={runtimeRangeLabelText} />
+              {runtimePending && (
+                <div className="runtime-empty-note">
+                  <Loader2 size={17} className="spin" />
+                  <span>正在读取所选时段的运行记录…</span>
+                </div>
+              )}
+              {!runtimePending && selectedRuntimeTotal === 0 && (
                 <div className="runtime-empty-note">
                   <Sparkles size={17} />
                   <span>所选时段暂无运行记录<small>运行开始后将按日呈现命中、执行与异常趋势</small></span>
@@ -310,53 +374,6 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
               )}
             </div>
           </div>
-          {hasRuntimeDays && (
-          <div className="runtime-range" aria-label="运行汇总时间范围">
-            <div className="runtime-range-heading">
-              <span>时间范围</span>
-              <output aria-live="polite">{runtimeRangeLabel}</output>
-            </div>
-            <div
-              className="runtime-range-control"
-              style={{
-                '--runtime-range-start': `${runtimeRangeStart / runtimeRangeSpan * 100}%`,
-                '--runtime-range-end': `${runtimeRangeEnd / runtimeRangeSpan * 100}%`,
-              } as React.CSSProperties}
-            >
-              <span className="runtime-range-track" aria-hidden="true"><i /></span>
-              <input
-                className="runtime-range-input"
-                type="range"
-                min="0"
-                max={runtimeDays.length - 1}
-                value={runtimeRangeStart}
-                aria-label="运行汇总开始日期"
-                aria-valuetext={runtimeStartLabel}
-                onChange={event => {
-                  const next = Math.min(Number(event.target.value), runtimeRangeEnd)
-                  setRuntimeRange([next, runtimeRangeEnd])
-                }}
-              />
-              <input
-                className="runtime-range-input"
-                type="range"
-                min="0"
-                max={runtimeDays.length - 1}
-                value={runtimeRangeEnd}
-                aria-label="运行汇总结束日期"
-                aria-valuetext={runtimeEndLabel}
-                onChange={event => {
-                  const next = Math.max(Number(event.target.value), runtimeRangeStart)
-                  setRuntimeRange([runtimeRangeStart, next])
-                }}
-              />
-            </div>
-            <div className="runtime-range-bounds" aria-hidden="true">
-              <time dateTime={runtimeDays[0].date}>{formatRuntimeDay(runtimeDays[0].date)}</time>
-              <time dateTime={runtimeDays.at(-1)?.date}>{formatRuntimeDay(runtimeDays.at(-1)?.date || '')}</time>
-            </div>
-          </div>
-          )}
         </section>
       </div>
 

@@ -21,15 +21,14 @@ const SERIES = [
   { name: '动作失败', stack: 'action', color: '#e6a148', pick: (day: RuntimeDay) => day.actionRuns.failed },
 ] as const
 
-export default function RuntimeTrendChart({ days, rangeStart, rangeEnd }: {
+export default function RuntimeTrendChart({ days, rangeLabel = '所选时段' }: {
   days: RuntimeDay[]
-  rangeStart: number
-  rangeEnd: number
+  rangeLabel?: string
 }) {
   const option = useMemo<EChartsOption>(() => ({
     aria: {
       enabled: true,
-      description: '近 7 日每日运行趋势：哨兵命中与错误、动作成功与失败按日堆叠展示',
+      description: `${rangeLabel}每日运行趋势：哨兵命中与错误、动作成功与失败按日堆叠展示`,
     },
     animationDuration: 550,
     animationEasing: 'cubicOut',
@@ -70,12 +69,9 @@ export default function RuntimeTrendChart({ days, rangeStart, rangeEnd }: {
       barMaxWidth: 15,
       itemStyle: { color: def.color, borderRadius: [2, 2, 0, 0] as number[] },
       emphasis: { focus: 'series' as const },
-      data: days.map((day, index) => ({
-        value: def.pick(day),
-        itemStyle: index >= rangeStart && index <= rangeEnd ? undefined : { opacity: 0.18 },
-      })),
+      data: days.map(day => def.pick(day)),
     })),
-  }), [days, rangeStart, rangeEnd])
+  }), [days, rangeLabel])
 
   return (
     <ReactECharts
