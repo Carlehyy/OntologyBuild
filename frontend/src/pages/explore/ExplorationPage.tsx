@@ -27,7 +27,7 @@ import CanvasPanel from './CanvasPanel'
 import DocumentsDrawer from './DocumentsDrawer'
 import DraftReviewDrawer from './DraftReviewDrawer'
 import FileWorkspaceDrawer from './FileWorkspaceDrawer'
-import { parsePendingNewSession, parseSessionBinding, resolveBoundSession, sessionBindingKey, shouldAutoSelectLatestSession } from './sessionBinding'
+import { mergeDraftBindingOptions, parsePendingNewSession, parseSessionBinding, resolveBoundSession, sessionBindingKey, shouldAutoSelectLatestSession } from './sessionBinding'
 import { SplitHandle, useSplitLayout } from '@/hooks/useSplitLayout'
 import type { ModelConfig } from '@/types/ontology'
 
@@ -185,8 +185,9 @@ function QuickReplies({ questions, disabled, onAnswer, onCustom }: {
 export default function ExplorationPage() {
   const { containerRef, sizes, startResize } = useSplitLayout()
   const { toast } = useToast()
-  // -- URL 绑定锚点（/explore?ontologyId=…&versionId=…，来自版本试跑门禁的补齐入口） --
-  const [searchParams] = useSearchParams()
+  // -- URL 绑定锚点（/explore?ontologyId=…&versionId=…，来自版本试跑门禁的补齐
+  //    入口与页头「绑定本体」选择器） --
+  const [searchParams, setSearchParams] = useSearchParams()
   // -- 「业务澄清」待建新会话锚点（/explore?session=new，来自本体管理首卡入口）：
   //    进入时保持空白待建态、不恢复最近会话；真实会话由首条消息/首个附件懒创建。
   //    与绑定参数同现时待建意图优先，避免未经输入就创建绑定会话。
@@ -239,6 +240,10 @@ export default function ExplorationPage() {
   const sessionCreationRef = useRef<Promise<string> | null>(null)
   // 绑定态会话解析按绑定目标只执行一次，避免列表 refetch 与用户手动选择打架
   const bindingResolvedRef = useRef('')
+  // 待建新会话意图出现时清空解析记录：允许用户随后再次选择同一绑定目标
+  useEffect(() => {
+    if (pendingNewSession) bindingResolvedRef.current = ''
+  }, [pendingNewSession])
   const sendInFlightRef = useRef(false)
   const chatGenerationRef = useRef(0)
   const chatAbortRef = useRef<AbortController | null>(null)
@@ -464,6 +469,16 @@ export default function ExplorationPage() {
     v => v.id === currentSession?.ontologyVersionId,
   )?.version_number
 
+  // -- 页头「绑定本体」选择器（分支②入口）：列出有编辑中草稿版本、且当前用户
+  //    可写的本体；打开时才拉取，选中即带绑定参数进入绑定态会话。 --
+  const [showBindPopover, setShowBindPopover] = useState(false)
+  const { data: draftOntologyOptions = [], isLoading: draftOntologiesLoading } = useQuery({
+    queryKey: ['bx-draft-ontologies'],
+    queryFn: () => explorationApi.draftOntologies(),
+    enabled: showBindPopover,
+    select: data => mergeDraftBindingOptions(data.items || []),
+  })
+
   const pickFiles = () => fileInputRef.current?.click()
 
   const handleFiles = async (files: FileList | null) => {
@@ -648,9 +663,9 @@ export default function ExplorationPage() {
               </div>
               <div className="min-w-0">
                 <h3 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
-                  {sessions.find(s => s.id === sid)?.title || '本体建模'}
+                  {sessions.find(s => s.id === sid)?.title || '业务澄清'}
                 </h3>
-                <p className="truncate text-[11px] text-[var(--color-text-tertiary)]">通过对话澄清业务，从而生成本体模型</p>
+                <p className="truncate text-[11px] text-[var(--color-text-tertiary)]">通过对话澄清业务，沉淀七大模型与需求文档，生成或完善本体模型</p>
               </div>
               {boundOntologyId && (
                 <span
@@ -687,6 +702,90 @@ export default function ExplorationPage() {
                 <option value="">默认模型</option>
                 {llmModels.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
               </select>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowBindPopover(value => !value)}
+                  title="选择草稿态本体，继续业务澄清"
+                  aria-label="绑定草稿态本体"
+                  aria-expanded={showBindPopover}
+                  data-testid="bind-ontology-button"
+                  className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showBindPopover
+                    ? 'border-teal-300 bg-teal-100 text-teal-800'
+                    : 'border-teal-200 bg-teal-50 text-teal-700 hover:border-teal-300 hover:bg-teal-100 hover:text-teal-800'}`}
+                >
+                  <GitBranch size={15} />
+                  <span>绑定本体</span>
+                </button>
+                {showBindPopover && (
+                  <>
+                    <div className="fixed inset-0 z-20" onClick={() => setShowBindPopover(false)} />
+                    <div className="absolute right-0 top-full z-30 mt-[14px] w-[360px] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_18px_52px_rgba(15,23,42,0.16)] animate-slide-up">
+                      <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-2.5">
+                        <span className="shrink-0 text-sm font-semibold text-[var(--color-text-primary)]">绑定草稿态本体</span>
+                        <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-teal-700">
+                          <span className="h-1.5 w-1.5 rounded-full bg-teal-500" />
+                          共 <span className="font-semibold tabular-nums">{draftOntologyOptions.length}</span> 个
+                        </span>
+                      </div>
+                      <div className="scrollbar-thin max-h-[380px] overflow-y-auto overflow-x-hidden">
+                        {draftOntologiesLoading ? (
+                          <div className="flex items-center justify-center gap-2 px-6 py-12 text-xs text-[var(--color-text-tertiary)]">
+                            <Loader2 size={15} className="animate-spin" /> 正在加载草稿态本体…
+                          </div>
+                        ) : draftOntologyOptions.length === 0 ? (
+                          <div className="flex flex-col items-center px-6 py-12 text-center">
+                            <span className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--color-bg-base)] text-[var(--color-text-tertiary)]">
+                              <GitBranch size={21} />
+                            </span>
+                            <p className="text-sm font-medium text-[var(--color-text-secondary)]">暂无草稿态本体</p>
+                            <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">在本体管理为本体创建草稿版本后，可在此继续业务澄清。</p>
+                          </div>
+                        ) : (
+                          <div className="divide-y divide-[var(--color-border)]">{draftOntologyOptions.map(option => {
+                            const active = binding?.ontologyId === option.ontologyId && binding?.versionId === option.versionId
+                            return (
+                              <button
+                                key={option.versionId}
+                                type="button"
+                                data-testid="bind-ontology-option"
+                                onClick={() => {
+                                  setShowBindPopover(false)
+                                  setSearchParams({ ontologyId: option.ontologyId, versionId: option.versionId })
+                                }}
+                                className={`flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors focus-visible:outline-none ${active
+                                  ? 'bg-teal-50/70'
+                                  : 'hover:bg-[var(--color-bg-hover)]'}`}
+                              >
+                                <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${active ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-500'}`}>
+                                  <GitBranch size={16} />
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="flex min-w-0 items-center gap-1.5">
+                                    <span className={`truncate text-sm font-medium ${active ? 'text-teal-900' : 'text-[var(--color-text-primary)]'}`} title={option.ontologyName}>
+                                      {option.ontologyName}
+                                    </span>
+                                    <span className="shrink-0 truncate rounded-md border border-teal-100 bg-teal-50 px-1.5 py-px text-[10px] font-medium text-teal-700" title={option.domain}>
+                                      {option.domain || '未设置领域'}
+                                    </span>
+                                  </span>
+                                  <span className="mt-0.5 flex items-center gap-1.5">
+                                    <span className="shrink-0 font-mono text-[10px] tabular-nums text-[var(--color-text-tertiary)]">{option.versionNumber}</span>
+                                    {option.versionLabel && (
+                                      <span className="truncate text-[10px] text-[var(--color-text-tertiary)]" title={option.versionLabel}>{option.versionLabel}</span>
+                                    )}
+                                  </span>
+                                </span>
+                                {active && <span className="shrink-0 rounded-md bg-white/80 px-2 py-1 text-[10px] font-medium text-teal-700">已绑定</span>}
+                              </button>
+                            )
+                          })}</div>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
               <button
                 onClick={() => setWorkspaceOpen(true)}
                 disabled={!sid}

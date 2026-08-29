@@ -119,11 +119,11 @@ test('顶栏多标签页：打开、切换、域内路径恢复、关闭与刷�
   await expect(agentTab).toHaveAttribute('aria-selected', 'false')
   await expect(ontologiesTab).toHaveAttribute('aria-selected', 'true')
 
-  // 经子项打开本体建模标签，再收起该入口标签，聚焦本体助手与本体管理的双标签流转
-  await page.getByRole('navigation').getByRole('link', { name: '本体建模' }).click()
+  // 经子项打开业务澄清标签，再收起该入口标签，聚焦本体助手与本体管理的双标签流转
+  await page.getByRole('navigation').getByRole('link', { name: '业务澄清' }).click()
   await expect(page).toHaveURL(/\/#\/explore$/)
-  await tabList.getByRole('tab', { name: '本体模型 · 本体建模' })
-    .getByRole('button', { name: '关闭 本体模型 · 本体建模' }).click()
+  await tabList.getByRole('tab', { name: '本体模型 · 业务澄清' })
+    .getByRole('button', { name: '关闭 本体模型 · 业务澄清' }).click()
 
   // 点击标签切回本体助手
   await agentTab.click()
@@ -172,7 +172,7 @@ test('顶栏多标签页：按最近访问从左往右排序，最多保留 10 �
   // 依次访问 11 个不同页面
   const visited = [
     { path: '/agent', title: '本体助手' },
-    { path: '/explore', title: '本体模型 · 本体建模' },
+    { path: '/explore', title: '本体模型 · 业务澄清' },
     { path: '/ontologies', title: '本体模型 · 本体管理' },
     { path: '/world-model/models', title: '世界模型 · 推演模型' },
     { path: '/world-model/services', title: '世界模型 · 推演服务' },
@@ -260,7 +260,7 @@ test('左侧导航：本体模型分组在子页面收起后保持收起，再�
 
   const nav = page.getByRole('navigation')
   const ontologyGroup = nav.getByRole('button', { name: '本体模型' })
-  const exploreLink = nav.getByRole('link', { name: '本体建模' })
+  const exploreLink = nav.getByRole('link', { name: '业务澄清' })
 
   // 直接落在子页面 /explore（顶级路由、不在父路径前缀下）：分组应默认展开
   await page.goto('/#/explore')

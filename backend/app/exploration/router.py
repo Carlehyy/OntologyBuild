@@ -218,6 +218,12 @@ def create_session(
     )
 
 
+@router.get("/draft-ontologies")
+def list_draft_ontologies(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """业务澄清分支②入口：有编辑中草稿版本、且当前用户可写的本体清单。"""
+    return _session_service.list_draft_bindable_ontologies(db, current_user, ok_fn=_ok)
+
+
 @router.get("/sessions/{session_id}")
 def get_session(
     session_id: str,

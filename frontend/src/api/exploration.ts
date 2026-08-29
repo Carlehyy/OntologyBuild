@@ -121,6 +121,17 @@ export interface BxSessionDetail extends BxSession {
   messages: BxMessage[]
 }
 
+/** GET /exploration/draft-ontologies 行：有编辑中草稿版本、且当前用户可写的本体。 */
+export interface BxDraftOntology {
+  ontologyId: string
+  ontologyName: string
+  domain: string
+  versionId: string
+  versionNumber: string
+  versionLabel: string
+  draftCreatedAt: string | null
+}
+
 export type ExploreEvent =
   | { type: 'meta'; sessionId: string; model: string }
   | ({ type: 'step' } & BxStep)
@@ -376,6 +387,7 @@ export const explorationApi = {
     }),
   session: (sid: string) => apiClientV2.get<BxSessionDetail>(`/exploration/sessions/${sid}`),
   deleteSession: (sid: string) => apiClientV2.delete(`/exploration/sessions/${sid}`),
+  draftOntologies: () => apiClientV2.get<{ items: BxDraftOntology[] }>('/exploration/draft-ontologies'),
   canvas: (sid: string) =>
     apiClientV2.get<{ canvas: BusinessCanvas; version: number; completeness: Completeness; readiness: Readiness }>(
       `/exploration/sessions/${sid}/canvas`),

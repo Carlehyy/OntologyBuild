@@ -128,7 +128,7 @@ def _collection_issues(collection: str, expected_items: Any, actual_items: Any,
             issues.append(gate_error(
                 "semantic_business_missing", kind,
                 f"结构中的{label}「{_display(item)}」在业务画布中没有对应"
-                f"{_CANVAS_LABEL[collection]}，请到本体建模补齐业务语义",
+                f"{_CANVAS_LABEL[collection]}，请到业务澄清补齐业务语义",
                 item_id=_text(item.get("name")), name=_display(item)))
     # functions/sentinels 只比存在性，不参与签名比对
     if collection in ("functions", "sentinels"):

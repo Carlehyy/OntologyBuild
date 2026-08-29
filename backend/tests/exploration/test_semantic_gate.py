@@ -198,7 +198,7 @@ def test_extra_structure_elements_are_business_missing():
     assert set(by_id) == {"Legacy", "legacy_action"}
     assert by_id["Legacy"]["kind"] == "objectType"
     assert by_id["legacy_action"]["kind"] == "action"
-    assert "请到本体建模补齐业务语义" in by_id["legacy_action"]["message"]
+    assert "请到业务澄清补齐业务语义" in by_id["legacy_action"]["message"]
 
 
 # ---------------------------------------------------------------- 结构 ⊆ 画布
