@@ -623,7 +623,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                     navigate(`/explore?ontologyId=${ontologyId}&versionId=${gateVersionId}`)
                   }}
                 >
-                  <Compass size={14} /> 去本体建模补齐
+                  <Compass size={14} /> 去业务澄清补齐
                 </Button>
               )}
               <Button variant="outline" size="sm" onClick={() => {

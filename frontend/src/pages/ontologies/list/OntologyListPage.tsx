@@ -259,11 +259,11 @@ function CreateOntologyCard({
         >
           立即创建
         </button>
-        {/* 业务澄清：跳转本体建模并进入待建新会话态；用户未输入内容前不会创建空会话 */}
+        {/* 业务澄清：跳转业务澄清页面并进入待建新会话态；用户未输入内容前不会创建空会话 */}
         <button
           type="button"
           onClick={onClarify}
-          title="进入本体建模，通过对话澄清业务后生成本体模型"
+          title="进入业务澄清，通过对话澄清业务后生成或完善本体模型"
           className="rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm transition-colors hover:border-teal-300 hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
         >
           业务澄清

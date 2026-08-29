@@ -245,7 +245,7 @@ test('世界模型与本体模型为一级导航分组，本体管理为本体�
   await ontologyModelGroup.click()
   await expect(page).toHaveURL(/#\/ontologies$/)
   await expect(sidebar.getByRole('link', { name: '本体管理', exact: true })).toBeVisible()
-  await expect(sidebar.getByRole('link', { name: '本体建模', exact: true })).toBeVisible()
+  await expect(sidebar.getByRole('link', { name: '业务澄清', exact: true })).toBeVisible()
   await expect(sidebar.getByRole('link', { name: '本体网络', exact: true })).toBeVisible()
   // 世界模型是一级分组按钮，展开后出现三个子项并自动导航到推演模型
   const worldModelGroup = sidebar.getByRole('button', { name: '世界模型' })

@@ -60,7 +60,7 @@ const semanticGateDetail = {
       kind: 'objectType',
       id: 'Order',
       name: '订单',
-      message: '结构中的对象「订单」在业务画布中没有对应对象/主体，请到本体建模补齐业务语义',
+      message: '结构中的对象「订单」在业务画布中没有对应对象/主体，请到业务澄清补齐业务语义',
     },
     {
       code: 'semantic_document_missing',
@@ -186,7 +186,7 @@ async function mockSemanticGate(page: Page, state: { createPayload: Record<strin
   })
 }
 
-test('试跑门禁出现 semantic_* 问题时提供「去本体建模补齐」入口并绑定探索会话', async ({ page }) => {
+test('试跑门禁出现 semantic_* 问题时提供「去业务澄清补齐」入口并绑定探索会话', async ({ page }) => {
   const state: { createPayload: Record<string, unknown> | null } = { createPayload: null }
   await mockSemanticGate(page, state)
 
