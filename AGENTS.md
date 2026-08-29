@@ -153,6 +153,12 @@ app/services/v2/graph/neo4j_service.py
 相对 fixture 路径、Vite alias、Docker context 和 Compose 相对路径都会因
 移动而失效。
 
+自测结束后必须清理本次启动的进程：dev server、E2E、轮询任务和 watcher
+在退出会话前要按记录的 PID 或 `pkill -f` 精确终止，禁止遗留任何仍在监听
+端口的进程；多 worktree 并行自测须错开端口或限制并发。2026-08 曾因多路
+自测残留进程的短连接风暴耗尽本机 TCP 临时端口，导致整机 EADDRNOTAVAIL
+网络故障，本条为此类事故的硬性预防。
+
 ## 5. 测试门禁
 
 ### 所有源码变更
