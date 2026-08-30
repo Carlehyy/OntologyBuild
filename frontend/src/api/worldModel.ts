@@ -17,6 +17,8 @@ export interface WorldModelProjectSummary {
   engine_type: EngineType
   status: string
   version_count: number
+  /** 已发布服务总数（多本体发布后可 >1；下列摘要字段取最近更新的服务） */
+  service_count?: number
   /** 服务状态：null=未发布（草稿）；online=在线；offline=已下线 */
   service_status: 'online' | 'offline' | null
   /** 已发布服务摘要（未发布或详情接口为 null/缺省）：卡片服务快捷入口与删除影响提示 */
@@ -277,6 +279,9 @@ export const worldModelApi = {
 
   getService: (projectId: string) =>
     apiClientV2.get<WorldModelServiceInfo | null>(`/world-model/projects/${projectId}/service`),
+
+  getServices: (projectId: string) =>
+    apiClientV2.get<WorldModelServiceInfo[]>(`/world-model/projects/${projectId}/services`),
 
   publishService: (projectId: string, body: ServicePublishBody) =>
     apiClientV2.post<WorldModelServiceInfo>(`/world-model/projects/${projectId}/publish`, body),

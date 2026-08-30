@@ -36,6 +36,9 @@ from app.ontologies.versions.runtime_state_service import (
     _dynamic_sentinel_id_conflict_errors,
     _release_readiness,
 )
+from app.ontologies.versions.world_model_consumers import (
+    affected_services as world_model_affected_services,
+)
 
 
 def _trial_payload(run: OntologyTrialRun) -> dict:
@@ -969,6 +972,9 @@ def get_draft_impact(
     if semantic_overview_fn is not None:
         data["semanticOverview"] = semantic_overview_fn(
             draft.snapshot_semantic, complete_snapshot(draft.snapshot_formal))
+    # 世界模型消费方影响：实时查询、不参与 impact 哈希（哈希只覆盖纯结构 diff）
+    data["worldModelImpact"] = world_model_affected_services(
+        db, ontology_id, report)
     return {"data": data}
 
 

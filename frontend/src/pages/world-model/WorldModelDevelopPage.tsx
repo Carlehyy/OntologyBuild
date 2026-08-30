@@ -37,6 +37,7 @@ import {
   type WorldModelProjectDetail,
   type WorldModelServiceInfo,
 } from '@/api/worldModel'
+import { ontologyApi } from '@/api/ontologies'
 import { engineTypeLabel } from './WorldModelModelsPage'
 import PublishServiceDialog from './PublishServiceDialog'
 import TrajectoryPreview from './TrajectoryPreview'
@@ -131,10 +132,11 @@ export default function WorldModelDevelopPage() {
   const [showHelp, setShowHelp] = useState(false)
   const [confirmRevert, setConfirmRevert] = useState(false)
   const [confirmRestoreVersionId, setConfirmRestoreVersionId] = useState<string | null>(null)
-  const [service, setService] = useState<WorldModelServiceInfo | null>(null)
+  const [services, setServices] = useState<WorldModelServiceInfo[]>([])
+  const [ontologyNames, setOntologyNames] = useState<Record<string, string>>({})
+  const [copiedServiceId, setCopiedServiceId] = useState<string | null>(null)
   const [publishOpen, setPublishOpen] = useState(false)
   const [publishVersions, setPublishVersions] = useState<ScriptVersionItem[]>([])
-  const [endpointCopied, setEndpointCopied] = useState(false)
   const [insertingTs, setInsertingTs] = useState(false)
   const [confirmInsertTs, setConfirmInsertTs] = useState(false)
   // 测试入参编辑区放大模式：放大时隐藏结果面板，把整列让给入参编辑
@@ -189,10 +191,18 @@ export default function WorldModelDevelopPage() {
       })
       .catch(error => setLoadError(apiError(error)))
       .finally(() => setLoading(false))
-    worldModelApi.getService(modelId)
-      .then(info => setService(info))
-      .catch(() => setService(null))
+    worldModelApi.getServices(modelId)
+      .then(rows => setServices(rows))
+      .catch(() => setServices([]))
   }, [modelId])
+
+  // 本体 id → 名称映射（多服务面板标注各服务绑定的本体）
+  useEffect(() => {
+    ontologyApi.list({ page_size: 200 })
+      .then(result => setOntologyNames(
+        Object.fromEntries(result.items.map(item => [item.id, item.name]))))
+      .catch(() => setOntologyNames({}))
+  }, [])
 
   // 草稿自动保存（防抖 800ms）
   useEffect(() => {
@@ -382,24 +392,24 @@ export default function WorldModelDevelopPage() {
     }
   }, [dirty, insertTimeSeriesTemplate])
 
-  const toggleServiceStatus = useCallback(async () => {
-    if (!modelId || !service) return
-    const next = service.status === 'online' ? 'offline' : 'online'
+  const toggleServiceStatus = useCallback(async (svc: WorldModelServiceInfo) => {
+    const next = svc.status === 'online' ? 'offline' : 'online'
     try {
-      setService(await worldModelApi.setServiceStatus(modelId, next))
+      const updated = await worldModelApi.setServiceStatusById(svc.id, next)
+      setServices(current => current.map(item => (item.id === svc.id ? { ...item, status: updated.status } : item)))
       toast({ tone: 'success', title: next === 'online' ? '服务已上线' : '服务已下线' })
     } catch (error) {
       toast({ tone: 'error', title: '状态切换失败', description: apiError(error) })
     }
-  }, [modelId, service, toast])
+  }, [toast])
 
-  const copyEndpoint = useCallback(() => {
-    if (!service?.endpoint_path) return
-    writeTextToClipboard(service.endpoint_path).then(() => {
-      setEndpointCopied(true)
-      window.setTimeout(() => setEndpointCopied(false), 1400)
+  const copyEndpoint = useCallback((svc: WorldModelServiceInfo) => {
+    if (!svc.endpoint_path) return
+    writeTextToClipboard(svc.endpoint_path).then(() => {
+      setCopiedServiceId(svc.id)
+      window.setTimeout(() => setCopiedServiceId(null), 1400)
     }).catch(() => undefined)
-  }, [service])
+  }, [])
 
   if (loading) {
     return <div className="flex h-full items-center justify-center text-sm text-[var(--color-text-tertiary)]">正在加载推演模型…</div>
@@ -475,10 +485,10 @@ export default function WorldModelDevelopPage() {
             type="button"
             onClick={() => void openPublish()}
             disabled={project.version_count === 0}
-            title={project.version_count === 0 ? '先执行通过并保存一个版本，才能发布' : service ? '重新发布（覆盖更新当前服务）' : '发布为推演服务'}
+            title={project.version_count === 0 ? '先执行通过并保存一个版本，才能发布' : services.length ? '重新发布（同一本体重发覆盖，切换目标本体新增服务）' : '发布为推演服务'}
             className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-brand-line bg-brand-soft px-3 text-xs font-medium text-brand-ink transition-colors hover:bg-brand-mist focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <Rocket size={14} /> {service ? '重新发布' : '发布'}
+            <Rocket size={14} /> {services.length ? '重新发布' : '发布'}
           </button>
           {dirty && (
             <button
@@ -525,9 +535,10 @@ export default function WorldModelDevelopPage() {
         </div>
       </header>
 
-      {/* 推演服务面板：发布后展示端点 / 状态 / 上下线 */}
-      {service && (
+      {/* 推演服务面板：多本体发布后一个项目可有 N 个服务，逐个展示端点 / 状态 / 上下线 */}
+      {services.map(service => (
         <section
+          key={service.id}
           data-testid="world-model-service-panel"
           className={`mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-4 py-2.5 ${service.status === 'online'
             ? 'border-brand-line bg-brand-soft'
@@ -537,6 +548,15 @@ export default function WorldModelDevelopPage() {
             {service.status === 'online' ? '在线' : '已下线'}
           </span>
           <span className="text-sm font-medium text-[var(--color-text-primary)]">{service.name}</span>
+          {service.applicable_object_types?.ontology_id && (
+            <span
+              className="inline-flex items-center rounded-md border border-[var(--color-border)] bg-card px-1.5 py-0.5 text-[11px] text-[var(--color-text-secondary)]"
+              title={`绑定本体：${service.applicable_object_types.ontology_id}`}
+            >
+              {ontologyNames[service.applicable_object_types.ontology_id]
+                || service.applicable_object_types.ontology_id.slice(0, 8)}
+            </span>
+          )}
           {service.version_no !== null && (
             <span className="text-[11px] text-[var(--color-text-tertiary)]">v{service.version_no}</span>
           )}
@@ -545,26 +565,26 @@ export default function WorldModelDevelopPage() {
               <code className="truncate font-mono text-[11px] text-muted-foreground">POST {service.endpoint_path}</code>
               <button
                 type="button"
-                onClick={copyEndpoint}
-                aria-label={endpointCopied ? '端点已复制' : '复制调用端点'}
+                onClick={() => copyEndpoint(service)}
+                aria-label={copiedServiceId === service.id ? '端点已复制' : '复制调用端点'}
                 className="inline-flex shrink-0 items-center gap-1 rounded px-1 text-[10px] text-muted-foreground transition-colors hover:text-brand-ink"
               >
-                {endpointCopied ? <Check size={11} /> : <Copy size={11} />}
-                {endpointCopied ? '已复制' : '复制'}
+                {copiedServiceId === service.id ? <Check size={11} /> : <Copy size={11} />}
+                {copiedServiceId === service.id ? '已复制' : '复制'}
               </button>
             </span>
           )}
           <span className="ml-auto flex items-center gap-2">
             <button
               type="button"
-              onClick={() => void toggleServiceStatus()}
+              onClick={() => void toggleServiceStatus(service)}
               className="inline-flex h-7 items-center rounded-md border border-[var(--color-border)] bg-card px-2.5 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-muted"
             >
               {service.status === 'online' ? '下线' : '上线'}
             </button>
           </span>
         </section>
-      )}
+      ))}
 
       {/* 主区域：左编辑器，右入参+结果 */}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-2">
@@ -857,14 +877,22 @@ export default function WorldModelDevelopPage() {
           onClose={() => setPublishOpen(false)}
           project={project}
           versions={publishVersions}
-          service={service}
-          onPublished={published => {
-            setService(published)
-            setProject(current => current ? {
-              ...current,
-              status: 'published',
-              service_status: published.status === 'offline' ? 'offline' : 'online',
-            } : current)
+          service={services[0] ?? null}
+          onPublished={() => {
+            // 多本体发布：重新拉取服务列表，同步项目卡摘要（状态取最近更新的服务）
+            worldModelApi.getServices(project.id)
+              .then(rows => {
+                setServices(rows)
+                setProject(current => current ? {
+                  ...current,
+                  status: 'published',
+                  service_count: rows.length,
+                  service_status: rows.length
+                    ? (rows[0].status === 'offline' ? 'offline' as const : 'online' as const)
+                    : null,
+                } : current)
+              })
+              .catch(() => undefined)
           }}
         />
       )}

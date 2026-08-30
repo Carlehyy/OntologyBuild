@@ -28,6 +28,8 @@ class ProjectSummary(BaseModel):
     engine_type: str
     status: str
     version_count: int = 0
+    # 该项目已发布的服务总数（多本体发布后可 >1，摘要字段取最近更新的服务）
+    service_count: int = 0
     # 推演服务状态（null=未发布）；列表徽标据此展示 草稿/在线/已下线
     service_status: str | None = None
     # 已发布服务的摘要（null=未发布）：列表卡片的服务快捷入口与删除影响提示

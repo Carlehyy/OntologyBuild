@@ -332,13 +332,20 @@ def list_projects(
         .group_by(WorldModelScriptVersion.project_id)
         .all()
     )
-    # 页内项目的服务摘要（状态/名称/端点/冻结版本号），批量取数避免逐卡请求
+    # 页内项目的服务摘要（状态/名称/端点/冻结版本号），批量取数避免逐卡请求。
+    # 多本体发布后一个项目可有 N 个服务：摘要取最近更新的一个，service_count 给出总数。
     service_rows = (
         db.query(WorldModelService)
         .filter(WorldModelService.project_id.in_([row.id for row in rows]))
+        .order_by(WorldModelService.updated_at.desc())
         .all()
     ) if rows else []
-    services_by_project = {svc.project_id: svc for svc in service_rows}
+    services_by_project: dict[str, WorldModelService] = {}
+    service_counts: dict[str, int] = {}
+    for svc in service_rows:
+        pid = str(svc.project_id)
+        service_counts[pid] = service_counts.get(pid, 0) + 1
+        services_by_project.setdefault(pid, svc)  # 已按 updated_at 降序，首个即最新
     version_ids = [svc.version_id for svc in service_rows if svc.version_id]
     service_version_nos = dict(
         db.query(WorldModelScriptVersion.id, WorldModelScriptVersion.version_no)
@@ -355,6 +362,7 @@ def list_projects(
             engine_type=row.engine_type,
             status=row.status,
             version_count=int(version_counts.get(row.id, 0)),
+            service_count=service_counts.get(row.id, 0),
             service_status=svc.status if svc else None,
             service_name=svc.name if svc else None,
             service_endpoint=svc.endpoint_path if svc else None,
@@ -410,15 +418,16 @@ def delete_project(db: Session, project_id: str) -> None:
     版本与推演服务随项目删除；调用记录属于审计数据，保留但解除项目/服务关联。
     """
     project = _load_project(db, project_id)
-    svc = (
+    services = (
         db.query(WorldModelService)
         .filter(WorldModelService.project_id == project.id)
-        .first()
+        .all()
     )
-    if svc is not None and svc.status == SERVICE_STATUS_ONLINE:
+    online = [s for s in services if s.status == SERVICE_STATUS_ONLINE]
+    if online:
         raise HTTPException(
             409,
-            f"该模型存在在线推演服务「{svc.name}」，"
+            f"该模型存在 {len(online)} 个在线推演服务（如「{online[0].name}」），"
             "请先在「推演服务」页将服务下线后再删除。",
         )
     db.query(WorldModelScriptVersion).filter(
@@ -427,7 +436,7 @@ def delete_project(db: Session, project_id: str) -> None:
         WorldModelCallRecord.project_id == project.id).update(
         {WorldModelCallRecord.project_id: None,
          WorldModelCallRecord.service_id: None})
-    if svc is not None:
+    for svc in services:
         db.delete(svc)
     db.delete(project)
     db.commit()
@@ -713,11 +722,29 @@ def count_versions(db: Session, project_id: str) -> int:
 def get_project_service(
     db: Session, project_id: str,
 ) -> WorldModelService | None:
+    """兼容入口：返回该项目"代表性"服务（最近更新的一个）。
+
+    多本体发布上线后一个项目可有 N 个服务（每个绑定一个本体）；
+    单服务项目行为与历史完全一致。需要完整列表用 list_project_services。
+    """
     _load_project(db, project_id)
     return (
         db.query(WorldModelService)
         .filter(WorldModelService.project_id == project_id)
+        .order_by(WorldModelService.updated_at.desc())
         .first()
+    )
+
+
+def list_project_services(
+    db: Session, project_id: str,
+) -> list[WorldModelService]:
+    _load_project(db, project_id)
+    return (
+        db.query(WorldModelService)
+        .filter(WorldModelService.project_id == project_id)
+        .order_by(WorldModelService.updated_at.desc())
+        .all()
     )
 
 
@@ -726,7 +753,8 @@ def publish_service(
 ) -> WorldModelService:
     """发布为推演服务：冻结版本 + 本体语义注册，生成调用端点并上线。
 
-    一个项目对应一个在线服务（UI 合并语义）：重新发布 = 覆盖更新同一服务。
+    一个项目可发布多个服务，每个服务绑定恰好一个本体（模型复用、注册实例隔离）：
+    对同一本体重发布 = 覆盖更新该本体对应的服务，不影响发布到其他本体的服务。
     """
     project = _load_project(db, project_id)
     if body.version_id:
@@ -744,10 +772,16 @@ def publish_service(
             raise HTTPException(
                 400, "尚未保存任何脚本版本：请先在开发页执行通过并保存，再发布。")
 
-    service = (
+    services = (
         db.query(WorldModelService)
         .filter(WorldModelService.project_id == project.id)
-        .first()
+        .all()
+    )
+    service = next(
+        (s for s in services
+         if isinstance(s.applicable_object_types, dict)
+         and s.applicable_object_types.get("ontology_id") == body.applicable_ontology_id),
+        None,
     )
     if service is None:
         service = WorldModelService(
@@ -786,10 +820,18 @@ def _apply_service_status(
 def set_service_status(
     db: Session, project_id: str, status: str,
 ) -> WorldModelService:
-    service = get_project_service(db, project_id)
-    if service is None:
+    """项目级状态切换：批量作用于该项目全部服务（多本体发布后为 N 个）。
+
+    单服务项目行为与历史一致；返回代表性服务（最近更新）。
+    """
+    services = list_project_services(db, project_id)
+    if not services:
         raise HTTPException(404, "该项目尚未发布推演服务。")
-    return _apply_service_status(db, service, status)
+    for svc in services:
+        svc.status = status
+    db.commit()
+    db.refresh(services[0])
+    return services[0]
 
 
 def set_service_status_by_id(

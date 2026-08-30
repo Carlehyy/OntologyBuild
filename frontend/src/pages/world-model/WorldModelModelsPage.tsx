@@ -242,10 +242,11 @@ function ProjectCard({
                   : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'
             }`}>
               {item.service_status === 'online' ? '在线' : item.service_status === 'offline' ? '已下线' : '草稿'}
+              {item.service_count != null && item.service_count > 1 ? ` ×${item.service_count}` : ''}
             </span>
             {item.service_name && (
               <Tooltip
-                content={`推演服务${item.service_status === 'online' ? '（在线）' : '（已下线）'} · 点击进入「推演服务」页管理`}
+                content={`推演服务${item.service_status === 'online' ? '（在线）' : '（已下线）'}${item.service_count != null && item.service_count > 1 ? ` · 共 ${item.service_count} 个服务（多本体发布），状态为最近发布者` : ''} · 点击进入「推演服务」页管理`}
               >
                 <button
                   type="button"
