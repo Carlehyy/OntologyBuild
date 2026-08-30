@@ -14,6 +14,7 @@ OntologyBuild 是“本体即服务”平台。前端导航是代码发现入口
 |---|---|
 | 平台概览 | `backend/app/platform/` |
 | 超级助手 | `backend/app/super_assistant/` |
+| 助手会话评估（admin 旁路质量评估） | `backend/app/assistant_evaluation/` |
 | 三维场景（白模场景管理与建模） | `backend/app/scenes/` |
 | 业务探索 | `backend/app/exploration/` |
 | 本体、本体助手、治理与哨兵 | `backend/app/ontologies/` |
@@ -25,6 +26,7 @@ OntologyBuild 是“本体即服务”平台。前端导航是代码发现入口
 | 模型配置 | `backend/app/model_configs/` |
 | 系统设置 | `backend/app/settings/` |
 | 鉴权与收件箱 | `backend/app/auth/`、`backend/app/inbox/` |
+| 工单反馈（全角色） | `backend/app/tickets/` |
 
 业务探索与本体的依赖方向固定为 `exploration` → `ontologies`：版本语义一致性
 校验器位于 `backend/app/exploration/semantic_gate.py`，须经
@@ -32,6 +34,11 @@ OntologyBuild 是“本体即服务”平台。前端导航是代码发现入口
 `ontologies` 域不得反向 import `exploration`。探索"生成本体模型"落地只走
 版本正门：新建本体冻结 v0（携 `snapshot_semantic` 语义层），合并进已有本体
 写入 draft 版本快照，禁止直写 live `fo_*` 表。
+
+后端支撑基础设施不对外独立成业务域：`backend/app/bootstrap/`（健康探针与
+启动生命周期）、`backend/app/shared/`（配置、数据库、存储等共享能力）、
+`backend/app/tasks/`（Celery 任务入口）；`backend/app/engine/` 为空壳预留。
+模块级导览见 `backend/app/README.md`。
 
 `backend/app/routers/`、`models/`、`schemas/`、`services/` 以迁移期兼容层为主：
 
@@ -83,7 +90,9 @@ app/services/v2/graph/neo4j_service.py
 
 前端目标由 `frontend/src/app/`、`frontend/src/features/`、
 `frontend/src/shared/` 三层组成，但当前仍以 `pages/api/components` 等路径
-为权威。某业务域迁入 `frontend/src/features/<capability>/` 必须经维护者批准
+为权威（目标层当前仅 `features/` 落地 overview 一域，`app/`、`shared/` 尚未
+创建；结构权威说明与隐性契约见 `frontend/src/README.md`）。某业务域迁入
+`frontend/src/features/<capability>/` 必须经维护者批准
 并先建立目标骨架；此前继续维护现有路径，不得制造第三套并行实现。
 
 前端页面 UI 开发须遵循仓库根目录 `DESIGN.md`（平台设计语言唯一事实来源）：

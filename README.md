@@ -41,7 +41,7 @@ docker compose -f docker-compose.local.yml up --build
 ### 源码开发
 
 前置要求：Python 3.12、[uv](https://docs.astral.sh/uv/)、Node.js 22、npm，以及
-已经启动的 PostgreSQL、Redis、Neo4j、MinIO 和 n8n。Chromium CDP 地址必须
+已经启动的 PostgreSQL、Redis、NATS、Neo4j、MinIO 和 n8n。Chromium CDP 地址必须
 配置；它暂时不可达时仍可启动 API 用于诊断，但深度 readiness 保持失败。先运行
 本地配置中心并通过所有阻塞型外部依赖连通性检查：
 
@@ -58,6 +58,9 @@ uv run --directory backend python -m app.dev_server
 
 uv run --directory backend \
   celery -A app.tasks.celery_app:celery_app worker --loglevel=info
+
+# 流水线 executor：消费 NATS 派发的调度/手动触发与数据集导入任务
+uv run --directory backend python -m app.data_channel.pipeline_tasks.nats_executor
 
 npm --prefix frontend ci
 npm --prefix frontend run dev
@@ -78,8 +81,8 @@ npm --prefix frontend run dev
   → 数据刷新（Approved Version → Mapping → Formal → 查询投影 → Sentinel → Action）
 ```
 
-平台采用 fail-closed 依赖契约：PostgreSQL、Redis、Celery worker、Neo4j、
-MinIO 和 n8n 必须真实就绪，后端不会在依赖失败时静默切换到 SQLite、内存图或
+平台采用 fail-closed 依赖契约：PostgreSQL、Redis、Celery worker、NATS 与
+流水线 executor、Neo4j、MinIO 和 n8n 必须真实就绪，后端不会在依赖失败时静默切换到 SQLite、内存图或
 本地对象存储。语义搜索当前明确返回 `501 semantic_search_unsupported`，关键词
 搜索由 PostgreSQL 提供。事件登记是独立业务能力，当前没有可核验的
 RegisteredEvent → Formal/Sentinel 自动接线。状态门与发布契约的实现以
@@ -132,8 +135,10 @@ OntologyBuild/
 │   └── operations/          配置、部署、回滚、备份和排障
 ├── scripts/                 CI 与受控数据脚本
 ├── deploy/                  生产部署脚本与依赖清单（含受控临时例外的真实凭据）
+├── agentloop/               阿里云 AgentLoop 观测接入（探针镜像与 compose 覆盖层）
 ├── docker/                  容器初始化与运行资源
 ├── test_data/               受版本控制、已分类的测试 fixture
+├── uploads/                 运行期上传与过程产物输出（不入 Git）
 ├── .github/workflows/       PR 验证与自动部署
 ├── .env.example             本地/容器环境变量模板
 ├── AGENTS.md                强制开发和交付准则
@@ -150,6 +155,7 @@ OntologyBuild/
 ### 标准验证
 
 ```bash
+git diff --check
 node scripts/ci/check-markdown-links.mjs
 bash scripts/ci/check-repository-hygiene.sh
 
@@ -167,6 +173,8 @@ npm --prefix frontend run lint
 npm --prefix frontend run build
 npm --prefix frontend run test:e2e:mocked
 ```
+
+完整强制门禁矩阵以 [AGENTS.md](./AGENTS.md) 第 5 节为准。
 
 真实后端、浏览器接管、对象存储、n8n、LLM 和生产部署变更还需要隔离环境
 验收；不能用离线 mock 结果替代。详细矩阵见

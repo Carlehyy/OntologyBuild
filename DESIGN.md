@@ -19,6 +19,11 @@ description: >-
   「为什么、怎么用」，令牌文件定义「是什么」。改取值必须落在令牌文件里，
   不允许在页面里私改。
 - 新页面必须遵循本文档；存量页面的历史样式按业务域渐进迁移，不要求一次性重写。
+- 已知存量硬编码集中在 `palantir-graph/`、`pages/ontologies/mapping/`、
+  `pages/ontologies/detail/`、`pages/login/` 及两份待迁移页域主题
+  （`pages/ontologies/detail/tabs/chartTheme.ts`、
+  `pages/world-model/worldModelChartTheme.ts`，见 5.1/8.2）；这些文件不作为
+  取色参照，触碰时按迁移处理，不得在其上继续扩散。
 
 ## 1. 设计原则（源自 Supabase 模板）
 

@@ -61,6 +61,11 @@ uv run --directory backend jupyter kernelgateway --KernelGatewayApp.port=8088
 executor 被打断的执行由数据库租约兜底：租约最长 6 小时过期，API 进程内
 的对账器（默认每 5 分钟）把过期中断的任务/运行记录收口为 failed。
 
+宿主机源码运行时的 `NATS_URL` 由 `config/generated/local/.env` 提供（默认
+`nats://127.0.0.1:4222`）；compose 栈内由编排注入 `nats://nats:4222`。唯一的
+无 NATS 降级例外是超级助手反思任务（`SUPER_ASSISTANT_REFLECT_*`）：未配置
+`NATS_URL` 时降级为 Web 进程内联执行，其余派发一律 fail-closed。
+
 随后执行配置中心的“启动后复检”，确认后端深度 readiness、前端以及至少一个
 Celery worker PONG。复检未通过时平台不算启动完成。
 
@@ -71,6 +76,23 @@ n8n 地址、API Key 和超时由配置中心生成的启动环境统一托管�
 API、worker 和前端都启动后，再由管理员登录“模型配置”页面，按需配置 LLM
 提供商、模型和凭据。LLM 未配置不阻断基础平台启动；相关接口会明确报告未配置，
 或在已声明的文本抽取场景使用可识别的确定性规则模式，不会伪装成 LLM 结果。
+
+## 本地端口
+
+- 前端 Vite dev server：默认 `5173`，`strictPort`（被占用会明确失败），可用
+  `LOCAL_FRONTEND_PORT` 覆盖（见 `frontend/vite.config.ts`）；
+- 后端 dev_server：默认 `127.0.0.1:8000`（监听地址与端口由配置中心生成的
+  `.env` 决定，默认值见 `backend/app/shared/config.py`）；
+- NATS：`4222`（本机一行启动命令见 [config/README.md](../../config/README.md)）；
+- 可选 Jupyter Kernel Gateway：`8088`（见上文）。
+
+## 最小验证
+
+改动后先跑受影响范围，再执行 [AGENTS.md](../../AGENTS.md) 第 5 节完整门禁：
+
+- 后端：`uv run --directory backend pytest -q tests/<domain>`（测试套件按
+  AGENTS.md 第 5 节方式离线运行，无需真实依赖服务）；
+- 前端：`npm --prefix frontend run test:unit`（无 DOM、无网络的纯逻辑快检）。
 
 ## 搜索契约
 

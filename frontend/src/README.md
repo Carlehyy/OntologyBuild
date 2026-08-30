@@ -11,7 +11,7 @@ src/
 │   └── overview/      平台概览 canonical 实现
 ├── pages/             未迁移页面及迁移期兼容入口（见 pages/README.md）
 ├── palantir-graph/    本体图谱编辑与运行视图（见 palantir-graph/README.md）
-├── api/               API 客户端
+├── api/               API 客户端（v2 版本化接口封装位于 api/v2/）
 ├── assets/            由源码显式引用的静态资源
 ├── components/        UI 与跨页面组件
 ├── config/            导航等应用配置
@@ -79,6 +79,9 @@ npm run check:feature-boundaries
 npm run lint
 npm run build
 ```
+
+除上述命令外，`frontend/scripts/check-feature-boundaries.mjs` 还固化了 Steward
+域文件行数上限与职责 token 断言等隐性契约；编辑相关文件前先查看该脚本。
 
 当前唯一刻意不从应用入口导入的页面源码是
 `pages/overview/OverviewPage.tsx` 两行兼容 re-export，其删除条件按登记的

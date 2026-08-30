@@ -18,7 +18,6 @@ config/generated/
 
 # Uploads
 uploads/
-!uploads/.gitkeep
 storage/
 backend/data/
 
