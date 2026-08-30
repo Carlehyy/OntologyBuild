@@ -19,7 +19,7 @@ from urllib.parse import quote
 
 import requests
 
-from . import config, credential, db, tls
+from . import config, credential, db, mcp_bridge, tls
 from .outbound_security import OutboundTargetError, request_with_safe_redirects
 
 _LOGIN_HOST = "login.huawei.com"
@@ -430,6 +430,15 @@ def run_interface(
         return result
 
     try:
+        # mcp-bridge:// 接口不走出站 HTTP：进程内分发为服务端 MCP 调用，
+        # 与直连接口共享并发闸门和调用审计。
+        if mcp_bridge.is_bridge_url(url):
+            result, snapshot = mcp_bridge.run_bridge_interface(
+                iface, overrides, include_response_content=include_response_content,
+            )
+            _save_run(iface, result, overrides, snapshot)
+            return result
+
         # Take the gate before W3 preparation as well as before the upstream
         # request.  ``credential.refresh`` is serialized already, but without
         # this boundary a burst of expired W3 calls could still consume every

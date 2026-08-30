@@ -509,7 +509,8 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
             {draft.id && <Button variant="ghost" size="icon-sm" title="删除接口" className="text-[var(--color-danger)]" onClick={() => setDeleteOpen(true)}><Trash2 size={14} /></Button>}
             {draft.id && <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => setPublicationTarget(structuredClone(baseline))}><Share2 size={14} />HTTP 发布</Button>}
             {draft.id && draft.http_enabled && <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" loading={publicationCopying} onClick={copyPublishedExample} aria-label={'复制“' + draft.name + '”的 HTTP 调用示例'}>{publicationCopied ? <Check size={14} /> : <Copy size={14} />}{publicationCopied ? '已复制' : '复制 HTTP 示例'}<span className="sr-only" aria-live="polite">{publicationCopied ? 'HTTP 调用示例复制成功' : ''}</span></Button>}
-            <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => void showCallExample()}><FileCode2 size={14} />上游调试 cURL</Button>
+            {/* 桥接接口由平台进程内分发，外部 cURL 无法触达，不提供调试示例 */}
+            {!draft.url.trim().startsWith('mcp-bridge://') && <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => void showCallExample()}><FileCode2 size={14} />上游调试 cURL</Button>}
           </div>
         </div>
 

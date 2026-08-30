@@ -40,8 +40,12 @@ const endpointText = (server: SuperMcpServer) => {
   return server.url
 }
 
-const exportable = (server: SuperMcpServer) =>
-  server.transport === 'streamable_http' && server.tool_manifest.length > 0
+const exportable = (server: SuperMcpServer) => server.tool_manifest.length > 0
+
+const exportHint = (server: SuperMcpServer) =>
+  server.transport === 'streamable_http'
+    ? '生成的接口为单发 JSON-RPC（tools/call）POST 直连该 MCP Server，仅适用于无状态服务；要求握手/会话头的有状态服务可能无法直接调用。'
+    : '该传输无法直连导出：生成的接口由平台桥接调用（服务端以原生传输执行 MCP 调用后回传结果），凭据保留在服务端。'
 
 const schemaPlaceholder = (schema: any): unknown => {
   if (!schema || typeof schema !== 'object') return ''
@@ -219,7 +223,7 @@ function ExportToolsDialog({ server, onClose, onDone }: { server: SuperMcpServer
           <button type="button" onClick={onClose} disabled={busy} aria-label="关闭转接口弹窗" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><X size={17} /></button>
         </header>
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-5">
-          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">生成的接口为单发 JSON-RPC（tools/call）POST，仅适用于无状态 MCP Server；要求握手/会话头的有状态服务可能无法直接调用。</p>
+          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">{exportHint(server)}</p>
           {tools.map(tool => (
             <label key={tool.name} className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 text-xs transition-colors hover:border-teal-200">
               <input
@@ -352,9 +356,9 @@ export default function PluginCommunityPage() {
         <span className="text-[10px] leading-3">测试</span>
       </ActionButton>
       <ActionButton
-        title={server.transport === 'streamable_http'
-          ? (server.tool_manifest.length ? '转接口：将工具生成为接口代理的 HTTP 接口' : '尚未发现工具，请先执行连接测试')
-          : '仅 Streamable HTTP 传输支持导出为 HTTP 接口'}
+        title={server.tool_manifest.length
+          ? '转接口：将工具生成为接口代理的 HTTP 接口'
+          : '尚未发现工具，请先执行连接测试'}
         ariaLabel={`转接口 ${serverTitle(server)}`}
         onClick={() => setExportTarget(server)}
         disabled={!exportable(server)}

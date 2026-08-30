@@ -151,27 +151,48 @@ def test_export_skips_existing_name_and_reports(databases):
     ]
 
 
-def test_export_rejects_stdio_sse_and_unknown_tools(databases):
+def test_export_bridges_stdio_and_sse_without_leaking_credentials(databases):
     server = _http_server(databases)
     server.transport = "stdio"
+    server.url = ""
+    server.command = "npx"
+    server.args = ["-y", "worldbank-mcp"]
     databases.commit()
-    with pytest.raises(
-        mcp_server_service.McpServerValidationError,
-        match="仅 Streamable HTTP",
-    ):
-        mcp_export.export_server_tools(
-            databases, "owner-1", server.id, ["search_dmp"],
-        )
+    result = mcp_export.export_server_tools(
+        databases, "owner-1", server.id, ["search_dmp"],
+    )
+    assert [item["tool"] for item in result.created] == ["search_dmp"]
+    with api_hub_db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM interfaces WHERE id = ?",
+            (result.created[0]["id"],),
+        ).fetchone()
+    assert row["url"] == f"mcp-bridge://{server.id}/search_dmp"
+    assert row["method"] == "POST"
+    assert row["body_type"] == "json"
+    assert "tools/call" in row["body_content"]
+    assert "平台桥接" in row["description"]
+    # 桥接接口不携带 MCP 凭据：请求头只有协议所需的 Content-Type/Accept
+    assert "x-open-operator" not in row["headers"]
+    assert '"key": "Content-Type"' in row["headers"]
+
     server.transport = "sse"
+    server.url = "https://sse.example.com/mcp"
     databases.commit()
-    with pytest.raises(
-        mcp_server_service.McpServerValidationError,
-        match="仅 Streamable HTTP",
-    ):
-        mcp_export.export_server_tools(
-            databases, "owner-1", server.id, ["search_dmp"],
-        )
-    server.transport = "streamable_http"
+    sse_result = mcp_export.export_server_tools(
+        databases, "owner-1", server.id, ["list_tables"],
+    )
+    assert [item["tool"] for item in sse_result.created] == ["list_tables"]
+    with api_hub_db.get_conn() as conn:
+        sse_row = conn.execute(
+            "SELECT url FROM interfaces WHERE id = ?",
+            (sse_result.created[0]["id"],),
+        ).fetchone()
+    assert sse_row["url"] == f"mcp-bridge://{server.id}/list_tables"
+
+
+def test_export_rejects_unknown_tools(databases):
+    server = _http_server(databases)
     with pytest.raises(
         mcp_server_service.McpServerValidationError,
         match="未在工具清单中找到",

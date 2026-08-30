@@ -123,7 +123,7 @@ def export_mcp_tools(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """把勾选的 MCP 工具生成为接口代理的 HTTP 接口（仅 streamable_http）。"""
+    """把勾选的 MCP 工具生成为接口代理的 HTTP 接口（stdio/SSE 走平台桥接）。"""
     try:
         return mcp_export.export_server_tools(
             db,

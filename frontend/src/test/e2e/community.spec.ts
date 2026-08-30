@@ -26,6 +26,7 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   await authenticate(page)
   let createBody: Record<string, unknown> | null = null
   let exportBody: Record<string, unknown> | null = null
+  let stdioExportBody: Record<string, unknown> | null = null
   let server = {
     id: 'mcp-1',
     name: 'weather_tools',
@@ -47,6 +48,21 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
     created_at: now,
     updated_at: now,
   }
+  const stdioServer = {
+    ...server,
+    id: 'mcp-stdio-1',
+    name: 'worldbank_mcp',
+    display_name: '世界银行',
+    description: '世界银行开放数据',
+    transport: 'stdio',
+    url: '',
+    command: 'npx',
+    args: ['-y', 'worldbank-mcp'],
+    env_names: ['WORLDBANK_API_KEY'],
+    tool_manifest: [{ name: 'search_indicators', description: '检索指标', input_schema: { type: 'object' } }],
+    last_test_status: 'success' as const,
+    last_test_message: '连接成功，发现 1 个工具',
+  }
   const builtinMinio = {
     ...server,
     id: 'builtin-minio',
@@ -55,7 +71,7 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
     url: 'builtin://minio',
     enabled: true,
   }
-  const servers = () => [builtinMinio, server]
+  const servers = () => [builtinMinio, server, stdioServer]
 
   await page.route('**/api/v2/community/**', async route => {
     const request = route.request()
@@ -92,6 +108,13 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
       exportBody = request.postDataJSON() as Record<string, unknown>
       return json(route, {
         created: [{ id: 9, name: '天气工具集 · get_forecast', tool: 'get_forecast' }],
+        skipped: [],
+      })
+    }
+    if (path === '/api/v2/community/mcp-servers/mcp-stdio-1/export-interfaces' && request.method() === 'POST') {
+      stdioExportBody = request.postDataJSON() as Record<string, unknown>
+      return json(route, {
+        created: [{ id: 10, name: '世界银行 · search_indicators', tool: 'search_indicators' }],
         skipped: [],
       })
     }
@@ -163,6 +186,16 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   await page.getByRole('button', { name: '生成接口' }).click()
   await expect.poll(() => exportBody).not.toBeNull()
   expect(exportBody).toMatchObject({ tool_names: ['get_forecast'] })
+  await expect(page.getByText('工具已导出至接口代理')).toBeVisible()
+
+  // stdio 传输经平台桥接导出：按钮可点、弹窗展示桥接说明、导出请求正常发出
+  const stdioExportButton = page.getByRole('button', { name: '转接口 世界银行' })
+  await expect(stdioExportButton).toBeEnabled()
+  await stdioExportButton.click()
+  await expect(page.getByText('平台桥接调用').first()).toBeVisible()
+  await page.getByRole('button', { name: '生成接口' }).click()
+  await expect.poll(() => stdioExportBody).not.toBeNull()
+  expect(stdioExportBody).toMatchObject({ tool_names: ['search_indicators'] })
   await expect(page.getByText('工具已导出至接口代理')).toBeVisible()
 
   await page.getByRole('button', { name: '添加 MCP', exact: true }).click()

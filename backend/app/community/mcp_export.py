@@ -1,14 +1,18 @@
 """把插件社区 MCP Server 的工具导出为接口代理（API Hub）的 HTTP 接口。
 
-MCP streamable_http 的一次工具调用本质是一次 JSON-RPC POST：
-``{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":<tool>,"arguments":{...}}}``。
-据此为每个勾选工具生成一个 POST 接口存入接口管理；MCP 配置的请求头由
-后端解密后原样带入（接口管理本身即明文存储请求头，与平台现状一致）。
+两种导出形态：
 
-边界说明：仅 streamable_http 可导出——stdio 是本地进程、SSE 是双通道流式，
-都无法以单发 HTTP 表达；有状态 MCP Server（要求 initialize 握手 /
-Mcp-Session-Id 会话头）也无法用单发 POST 调用，该限制会写进生成接口的
-描述中，无状态网关类（如 mcpgateway、本平台 api-hub 自带 MCP）可直接调用。
+- streamable_http：生成直连 MCP Server 的单发 JSON-RPC POST 接口
+  （``{"jsonrpc":"2.0","method":"tools/call",...}``）。MCP 配置的请求头由
+  后端解密后原样带入（接口管理本身即明文存储请求头，与平台现状一致）。
+- stdio / sse：本地进程与流式双通道无法以直连单发 HTTP 表达，改为生成
+  ``mcp-bridge://<server_id>/<tool>`` 保留方案接口，由接口代理执行器在
+  服务端进程内代为调用 MCP 并回传 JSON-RPC 响应；凭据不出服务端。
+
+边界说明：直连形态仅适用于无状态 MCP Server——有状态 MCP Server（要求
+initialize 握手 / Mcp-Session-Id 会话头）无法用单发 POST 调用，该限制会写进
+生成接口的描述中，无状态网关类（如 mcpgateway、本平台 api-hub 自带 MCP）
+可直接调用；桥接形态由平台持有完整 MCP 会话，不受该限制约束。
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from pydantic import BaseModel, Field
 from app.api_hub import db as api_hub_db
 from app.api_hub.interface_contracts import InterfaceIn, KV
 from app.api_hub.interface_service import create_interface
+from app.api_hub.mcp_bridge import bridge_url
 from app.super_assistant import mcp_server_service
 from app.super_assistant.mcp_client import decrypt_headers
 from app.super_assistant.models import SuperAssistantMcpServer
@@ -30,6 +35,10 @@ EXPORT_GROUP_NAME = "MCP 插件"
 _STATELESS_HINT = (
     "注意：该接口为单发 JSON-RPC（tools/call），仅适用于无状态 MCP Server；"
     "要求 initialize 握手或会话头的有状态服务可能无法直接调用。"
+)
+_BRIDGED_HINT = (
+    "注意：该接口由平台桥接调用 MCP（服务端原生传输），凭据保留在服务端，"
+    "调用由平台进程代为执行。"
 )
 
 
@@ -88,17 +97,28 @@ def build_interface(
     tool_name = str(tool.get("name") or "")
     description = str(tool.get("description") or "").strip()
     summary = f"MCP 工具 {tool_name}（来自 {server.display_name or server.name}）。"
-    return InterfaceIn(
-        name=interface_name(server, tool_name),
-        description=f"{summary}{description} {_STATELESS_HINT}"[:20_000],
-        group_name=EXPORT_GROUP_NAME,
-        method="POST",
-        url=server.url,
-        headers=[
+    if server.transport == "streamable_http":
+        target_url = server.url
+        hint = _STATELESS_HINT
+        tool_headers = [
             KV(key="Content-Type", value="application/json"),
             KV(key="Accept", value="application/json, text/event-stream"),
             *(KV(key=key, value=value) for key, value in headers.items()),
-        ],
+        ]
+    else:
+        target_url = bridge_url(server.id, tool_name)
+        hint = _BRIDGED_HINT
+        tool_headers = [
+            KV(key="Content-Type", value="application/json"),
+            KV(key="Accept", value="application/json"),
+        ]
+    return InterfaceIn(
+        name=interface_name(server, tool_name),
+        description=f"{summary}{description} {hint}"[:20_000],
+        group_name=EXPORT_GROUP_NAME,
+        method="POST",
+        url=target_url,
+        headers=tool_headers,
         body_type="json",
         body_content=json_rpc_body(
             str(tool.get("name") or ""),
@@ -119,11 +139,6 @@ def export_server_tools(
         server_id,
         include_builtins=False,
     )
-    if server.transport != "streamable_http":
-        raise mcp_server_service.McpServerValidationError(
-            "仅 Streamable HTTP 传输的 MCP Server 支持导出为 HTTP 接口"
-            "（stdio 为本地进程、SSE 为流式双通道，无法以单发 HTTP 表达）"
-        )
     manifest = {str(tool.get("name") or ""): tool for tool in server.tool_manifest}
     if not manifest:
         raise mcp_server_service.McpServerValidationError(
