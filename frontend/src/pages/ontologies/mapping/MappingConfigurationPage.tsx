@@ -187,13 +187,17 @@ export interface MappingWorkspaceProps {
   onBack?: () => void
   /** 头部「模型结构」按钮行为；缺省回映射/版本概览 */
   onOpenModelStructure?: () => void
+  /** 嵌入工作台（业务澄清视图）时隐藏头部「返回 / 模型结构」导航按钮 */
+  hideChromeNavigation?: boolean
+  /** 首次进入是否自动弹出新手教程（嵌入工作台时关闭，保留手动入口） */
+  autoShowTutorial?: boolean
 }
 
 /**
  * 数据映射工作台（可嵌入）：路由页 MappingConfigurationPage、图谱页 ?view=mapping
  * 与业务澄清页「数据映射」视图共享同一组件，上下文经 props 注入。
  */
-export function MappingWorkspace({ ontologyId, versionId, focus, onBack, onOpenModelStructure }: MappingWorkspaceProps) {
+export function MappingWorkspace({ ontologyId, versionId, focus, onBack, onOpenModelStructure, hideChromeNavigation = false, autoShowTutorial = true }: MappingWorkspaceProps) {
   const focusParam = focus ?? null
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -209,7 +213,7 @@ export function MappingWorkspace({ ontologyId, versionId, focus, onBack, onOpenM
   const [saving, setSaving] = useState(false)
   const [saveIssues, setSaveIssues] = useState<SaveIssue[]>([])
   const [notice, setNotice] = useState<{ tone: 'good' | 'bad' | 'warn'; text: string } | null>(null)
-  const [tutorialStep, setTutorialStep] = useState<number | null>(() => localStorage.getItem(`mapping-tutorial:${ontologyId}`) ? null : 0)
+  const [tutorialStep, setTutorialStep] = useState<number | null>(() => (autoShowTutorial && !localStorage.getItem(`mapping-tutorial:${ontologyId}`)) ? 0 : null)
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null)
   const [focusedEdgeId, setFocusedEdgeId] = useState<string | null>(null)
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null)
@@ -901,9 +905,9 @@ export function MappingWorkspace({ ontologyId, versionId, focus, onBack, onOpenM
   return (
     <div className={`dmc-page ${editable ? '' : 'dmc-page--readonly'}`} data-testid="mapping-workspace" data-workspace-mode={data.workspaceMode || 'release'}>
       <header className="dmc-header">
-        <div className="dmc-brand"><button onClick={returnToPreviousPage} aria-label="返回上一页" title="返回上一页"><ArrowLeft size={16} /></button><span><Link2 size={18} /></span><div><b>数据映射</b><small>{editable ? '草稿可编辑 · 对象实体、实体关系与数据资产字段映射' : `${data.workspaceMode === 'trial' ? '试跑快照' : data.workspaceMode === 'archived' ? '归档快照' : '发布快照'} · 只读查看`}</small></div></div>
+        <div className="dmc-brand">{!hideChromeNavigation && <button onClick={returnToPreviousPage} aria-label="返回上一页" title="返回上一页"><ArrowLeft size={16} /></button>}<span><Link2 size={18} /></span><div><b>数据映射</b><small>{editable ? '草稿可编辑 · 对象实体、实体关系与数据资产字段映射' : `${data.workspaceMode === 'trial' ? '试跑快照' : data.workspaceMode === 'archived' ? '归档快照' : '发布快照'} · 只读查看`}</small></div></div>
         <label className="dmc-global-search"><Search size={14} /><input placeholder="搜索画布节点、数据集或本体属性…" onChange={event => { setLeftSearch(event.target.value); setRightSearch(event.target.value) }} /></label>
-        <div className="dmc-header-actions"><button className="dmc-model-switch" onClick={leaveWorkspace} title="返回模型结构"><Boxes size={15} /><span>模型结构</span></button><button onClick={() => setTutorialStep(0)} title="新手教程"><BookOpen size={15} /></button><button onClick={autoLayout} title="自动布局"><LayoutGrid size={15} /></button>{editable && <button onClick={clearCanvas} title="清空画布"><Trash2 size={15} /></button>}{editable && <button className="dmc-suggest-open" data-testid="mapping-suggest-open" disabled={!canvasDatasetIds.length || suggestionLoading} onClick={openSuggestions} title={canvasDatasetIds.length ? '基于历史映射知识、名称规则与大模型概念化生成字段映射建议' : '先把左侧数据集加入画布，再生成智能建议'}>{suggestionLoading ? <Loader2 className="animate-spin" size={15} /> : <Sparkles size={15} />}<span>智能建议</span></button>}<span className="dmc-divider" />{editable ? <button className="dmc-save" disabled={!dirty || saving} onClick={saveAll}>{saving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}{saving ? '正在保存…' : dirty ? '保存配置' : '已保存'}</button> : <span className="dmc-readonly-badge"><Eye size={14} />只读快照</span>}</div>
+        <div className="dmc-header-actions">{!hideChromeNavigation && <button className="dmc-model-switch" onClick={leaveWorkspace} title="返回模型结构"><Boxes size={15} /><span>模型结构</span></button>}<button onClick={() => setTutorialStep(0)} title="新手教程"><BookOpen size={15} /></button><button onClick={autoLayout} title="自动布局"><LayoutGrid size={15} /></button>{editable && <button onClick={clearCanvas} title="清空画布"><Trash2 size={15} /></button>}{editable && <button className="dmc-suggest-open" data-testid="mapping-suggest-open" disabled={!canvasDatasetIds.length || suggestionLoading} onClick={openSuggestions} title={canvasDatasetIds.length ? '基于历史映射知识、名称规则与大模型概念化生成字段映射建议' : '先把左侧数据集加入画布，再生成智能建议'}>{suggestionLoading ? <Loader2 className="animate-spin" size={15} /> : <Sparkles size={15} />}<span>智能建议</span></button>}<span className="dmc-divider" />{editable ? <button className="dmc-save" disabled={!dirty || saving} onClick={saveAll}>{saving ? <Loader2 className="animate-spin" size={15} /> : <Save size={15} />}{saving ? '正在保存…' : dirty ? '保存配置' : '已保存'}</button> : <span className="dmc-readonly-badge"><Eye size={14} />只读快照</span>}</div>
       </header>
 
       {notice && <div className={`dmc-notice dmc-notice--${notice.tone}`}>{notice.tone === 'good' ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}<span>{notice.text}</span><button onClick={() => setNotice(null)}><X size={13} /></button></div>}

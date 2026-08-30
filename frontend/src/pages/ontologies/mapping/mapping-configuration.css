@@ -19,6 +19,8 @@
   flex-direction: column;
   color: var(--dmc-ink);
   background: #edf3f2;
+  /* 嵌入业务澄清工作台时容器可能窄于视口：头部断点按容器宽度判定 */
+  container-type: inline-size;
 }
 
 .dmc-page button,
@@ -427,10 +429,15 @@
 .dmc-tutorial-card > footer .dmc-tutorial-next { padding: 0 13px; display: flex; align-items: center; gap: 5px; color: #fff; background: linear-gradient(135deg,#7380cf,#5f6cc0); box-shadow: 0 5px 12px rgba(101,114,197,.18); font-weight: 700; transition: background .15s ease, box-shadow .15s ease, transform .15s ease; }
 .dmc-tutorial-card > footer > span .dmc-tutorial-next:hover { color: #fff; background: linear-gradient(135deg,#6876ca,#5361b6); box-shadow: 0 7px 15px rgba(83,97,182,.28); transform: translateY(-1px); }
 
-@media (max-width:1150px) {
+@container (max-width: 1150px) {
   .dmc-workbench { grid-template-columns: 224px minmax(380px,1fr) 240px; }
   .dmc-header { grid-template-columns: minmax(235px,.8fr) minmax(230px,1fr) auto; }
   .dmc-brand small { display: none; }
+}
+/* 容器极窄（嵌入工作台被拖窄）时头部折行为两行 */
+@container (max-width: 850px) {
+  .dmc-header { height: auto; min-height: 112px; padding: 10px; grid-template-columns: 1fr auto; }
+  .dmc-global-search { grid-row: 2; grid-column: 1/-1; }
 }
 @media (max-width:850px) {
   .dmc-page { height: auto; min-height: 900px; }
@@ -505,3 +512,14 @@
 .dmc-suggest-foot .dmc-suggest-apply:disabled { opacity: .5; cursor: not-allowed; }
 .dmc-suggest-open { display: inline-flex; align-items: center; gap: 6px; }
 .dmc-suggest-open span { font-size: 12px; }
+.dmc-header-actions > .dmc-suggest-open:not(.dmc-save) {
+  width: auto;
+  padding: 0 9px;
+  gap: 5px;
+  color: #52616c;
+  border-color: #d7e2e3;
+  background: #f7f9f9;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
