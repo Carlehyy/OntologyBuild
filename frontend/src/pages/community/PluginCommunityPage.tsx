@@ -28,19 +28,28 @@ import {
 } from '@/components/motion-ui/center-morph-modal'
 import { IconButton } from '@/components/motion-ui/icon-button'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/motion-ui/select'
+  MultiSelect,
+  MultiSelectContent,
+  MultiSelectEmpty,
+  MultiSelectInput,
+  MultiSelectItem,
+  MultiSelectList,
+  MultiSelectTrigger,
+  MultiSelectValue,
+} from '@/components/motion-ui/multi-select'
 import { SPRING_LAYOUT } from '@/components/motion-ui/ease'
 import { Tooltip } from '@/components/motion-ui/tooltip'
 import { Modal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
 
 
-type StatusFilter = 'all' | 'success' | 'error' | 'untested'
+type StatusKey = 'success' | 'error' | 'untested'
+
+const statusKeyOf = (server: SuperMcpServer): StatusKey => {
+  if (server.last_test_status === 'success') return 'success'
+  if (server.last_test_status === 'error') return 'error'
+  return 'untested'
+}
 
 const errorText = (error: any, fallback = '操作失败') =>
   error?.detail || error?.message || fallback
@@ -320,7 +329,7 @@ export default function PluginCommunityPage() {
   const [servers, setServers] = useState<SuperMcpServer[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [statusFilter, setStatusFilter] = useState<StatusKey[]>([])
   const [editing, setEditing] = useState<SuperMcpServer | 'new' | null>(null)
   const [testingId, setTestingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<SuperMcpServer | null>(null)
@@ -353,10 +362,8 @@ export default function PluginCommunityPage() {
         transportLabel(server),
         ...server.tool_manifest.flatMap(tool => [tool.name, tool.description]),
       ].some(value => String(value || '').toLowerCase().includes(keyword))
-      const matchesStatus = statusFilter === 'all'
-        || (statusFilter === 'success' && server.last_test_status === 'success')
-        || (statusFilter === 'error' && server.last_test_status === 'error')
-        || (statusFilter === 'untested' && !server.last_test_status)
+      // 多选状态筛选：未勾选视为不过滤（全部）
+      const matchesStatus = statusFilter.length === 0 || statusFilter.includes(statusKeyOf(server))
       return matchesKeyword && matchesStatus
     })
   }, [search, servers, statusFilter])
@@ -399,6 +406,8 @@ export default function PluginCommunityPage() {
     }
   }
 
+  // 操作列四个操作完全同构：beUI IconButton + Tooltip（default h-8 w-8、14px 图标），
+  // 悬停色仅按语义区分（转接口品牌色、删除危险色），结构零混搭
   const renderActions = (server: SuperMcpServer) => (
     <div className="flex items-center justify-center gap-1">
       <Tooltip content="测试连接并刷新工具清单">
@@ -407,33 +416,30 @@ export default function PluginCommunityPage() {
           reduce={reduce}
           onClick={() => void testServer(server)}
           disabled={testingId === server.id}
-          className="h-7 w-7"
         >
           {testingId === server.id
-            ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />
-            : <Wrench size={13} />}
+            ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" />
+            : <Wrench size={14} />}
         </IconButton>
       </Tooltip>
-      {/* 转接口为主操作（世界模型卡片 footer 配方）：Tooltip 悬停挂在包装 span 上，
-          disabled 状态下置灰原因仍可悬停查看 */}
       <Tooltip
         content={exportable(server)
           ? '将勾选工具生成为接口代理的 HTTP 接口'
           : '尚未发现工具，请先执行连接测试'}
       >
-        <button
-          type="button"
+        <IconButton
+          label={`转接口 ${serverTitle(server)}`}
+          reduce={reduce}
           onClick={() => setExportTarget(server)}
           disabled={!exportable(server)}
-          aria-label={`转接口 ${serverTitle(server)}`}
-          className="inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md bg-brand px-2.5 text-xs font-medium text-white transition-colors hover:bg-brand-deep focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
+          className="hover:bg-brand-soft hover:text-brand-ink"
         >
-          <FileUp size={13} /> 转接口
-        </button>
+          <FileUp size={14} />
+        </IconButton>
       </Tooltip>
       <Tooltip content="编辑名称、描述与连接配置">
-        <IconButton label={`编辑 MCP ${serverTitle(server)}`} reduce={reduce} onClick={() => setEditing(server)} className="h-7 w-7">
-          <Pencil size={13} />
+        <IconButton label={`编辑 MCP ${serverTitle(server)}`} reduce={reduce} onClick={() => setEditing(server)}>
+          <Pencil size={14} />
         </IconButton>
       </Tooltip>
       <Tooltip content="删除该 MCP Server 及其工具清单">
@@ -441,9 +447,9 @@ export default function PluginCommunityPage() {
           label={`删除 MCP ${serverTitle(server)}`}
           reduce={reduce}
           onClick={() => setDeleteTarget(server)}
-          className="h-7 w-7 hover:bg-[var(--color-danger-bg)] hover:text-destructive focus-visible:ring-destructive"
+          className="hover:bg-[var(--color-danger-bg)] hover:text-destructive focus-visible:ring-destructive"
         >
-          <Trash2 size={13} />
+          <Trash2 size={14} />
         </IconButton>
       </Tooltip>
     </div>
@@ -475,19 +481,22 @@ export default function PluginCommunityPage() {
             </button>
           )}
         </div>
-        <Select value={statusFilter} onValueChange={value => setStatusFilter(value as StatusFilter)}>
-          <SelectTrigger aria-label="筛选 MCP 状态" className="h-[38px] w-36 rounded-xl">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部状态</SelectItem>
-            <SelectItem value="success">测试通过</SelectItem>
-            <SelectItem value="error">连接异常</SelectItem>
-            <SelectItem value="untested">未测试</SelectItem>
-          </SelectContent>
-        </Select>
-        {(search || statusFilter !== 'all') && (
-          <button type="button" onClick={() => { setSearch(''); setStatusFilter('all') }} className="shrink-0 px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
+          <MultiSelect value={statusFilter} onValueChange={values => setStatusFilter(values as StatusKey[])}>
+            <MultiSelectTrigger className="min-h-[38px] w-56 rounded-xl bg-background">
+              <MultiSelectValue placeholder="全部状态" />
+              <MultiSelectInput aria-label="筛选 MCP 状态" placeholder="筛选状态…" />
+            </MultiSelectTrigger>
+            <MultiSelectContent>
+              <MultiSelectList ariaLabel="MCP 状态">
+                <MultiSelectItem value="success">测试通过</MultiSelectItem>
+                <MultiSelectItem value="error">连接异常</MultiSelectItem>
+                <MultiSelectItem value="untested">未测试</MultiSelectItem>
+              </MultiSelectList>
+              <MultiSelectEmpty />
+            </MultiSelectContent>
+          </MultiSelect>
+        {(search || statusFilter.length > 0) && (
+          <button type="button" onClick={() => { setSearch(''); setStatusFilter([]) }} className="shrink-0 px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
             清除筛选
           </button>
         )}

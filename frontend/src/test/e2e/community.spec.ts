@@ -266,3 +266,60 @@ test('插件社区在窄屏下不产生页面横向溢出', async ({ page }) => 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
   expect(overflow).toBeLessThanOrEqual(1)
 })
+
+test('MCP 状态筛选支持多选并集与 chip 移除恢复', async ({ page }) => {
+  await authenticate(page)
+  const mk = (id: string, name: string, status: 'success' | 'error' | null) => ({
+    id,
+    name,
+    display_name: name,
+    description: `${name} 描述`,
+    builtin_key: null,
+    transport: 'streamable_http',
+    url: `https://${id}.example.com/mcp`,
+    header_names: [],
+    command: null,
+    args: [],
+    env_names: [],
+    enabled: true,
+    require_confirmation: true,
+    tool_manifest: [{ name: `${id}_tool`, description: '示例工具', input_schema: { type: 'object' } }],
+    last_test_status: status,
+    last_test_message: null,
+    last_tested_at: null,
+    created_at: now,
+    updated_at: now,
+  })
+  await page.route('**/api/v2/community/mcp-servers', route => json(route, [
+    mk('mcp-ok', '已通过服务', 'success'),
+    mk('mcp-bad', '异常服务', 'error'),
+    mk('mcp-new', '未测试服务', null),
+  ]))
+  await page.route('**/api/v2/inbox/summary', route => json(route, { unread_count: 0 }))
+  await page.goto('/#/community/plugins')
+
+  // 未勾选 = 不过滤：三行齐全
+  await expect(page.getByRole('row', { name: /已通过服务/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /异常服务/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /未测试服务/ })).toBeVisible()
+
+  // 勾选「测试通过 + 未测试」：异常行隐藏，其余保留；chip 成对展示
+  const filterInput = page.getByRole('combobox', { name: '筛选 MCP 状态' })
+  await filterInput.click()
+  await page.getByRole('option', { name: '测试通过', exact: true }).click()
+  await page.getByRole('option', { name: '未测试', exact: true }).click()
+  await expect(page.getByRole('row', { name: /异常服务/ })).toBeHidden()
+  await expect(page.getByRole('row', { name: /已通过服务/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /未测试服务/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: '移除 测试通过' })).toBeVisible()
+
+  // chip 移除「未测试」：仅剩测试通过
+  await page.getByRole('button', { name: '移除 未测试' }).click()
+  await expect(page.getByRole('row', { name: /未测试服务/ })).toBeHidden()
+  await expect(page.getByRole('row', { name: /已通过服务/ })).toBeVisible()
+
+  // 移除最后一个 chip：回到全部
+  await page.getByRole('button', { name: '移除 测试通过' }).click()
+  await expect(page.getByRole('row', { name: /异常服务/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /未测试服务/ })).toBeVisible()
+})

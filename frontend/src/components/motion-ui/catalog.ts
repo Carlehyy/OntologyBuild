@@ -37,6 +37,7 @@ export const MOTION_UI_CATALOG: CatalogEntry[] = [
   { name: 'center-morph-modal', desc: '中心展开 morph 弹窗，焦点圈定', status: 'vendored' },
   { name: 'tilt-card', desc: '指针跟随 3D 倾转卡（glare 建议关）', status: 'vendored' },
   { name: 'select', desc: '动效下拉，gooey 连体面板', status: 'vendored' },
+  { name: 'multi-select', desc: '多选筛选：chip 逐项移除、输入即过滤、键盘 ↑↓/Enter/Backspace', status: 'vendored', note: '闭包含上游 combobox 的 use-active-option hook（hooks/use-active-option.ts）' },
   { name: 'tooltip', desc: '动效提示，替代原生 title', status: 'vendored' },
   { name: 'popover-morph', desc: '从触发角展开的气泡面板', status: 'vendored' },
   { name: 'switch', desc: '动效开关', status: 'vendored' },

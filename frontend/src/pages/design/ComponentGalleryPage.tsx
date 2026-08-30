@@ -6,6 +6,16 @@ import {
   type WeekAvailability,
 } from '@/components/availability-scheduler'
 import { AnimatedNumber } from '@/components/motion-ui/animated-number'
+import {
+  MultiSelect,
+  MultiSelectContent,
+  MultiSelectEmpty,
+  MultiSelectInput,
+  MultiSelectItem,
+  MultiSelectList,
+  MultiSelectTrigger,
+  MultiSelectValue,
+} from '@/components/motion-ui/multi-select'
 import { TiltCard } from '@/components/motion-ui/tilt-card'
 import { Switch } from '@/components/motion-ui/switch'
 import { Checkbox } from '@/components/motion-ui/checkbox'
@@ -32,6 +42,7 @@ export default function ComponentGalleryPage() {
   const [demoChecked, setDemoChecked] = useState(false)
   const [demoSelect, setDemoSelect] = useState('statistical')
   const [demoModalOpen, setDemoModalOpen] = useState(false)
+  const [tags, setTags] = useState<string[]>(['frontend'])
 
   const available = MOTION_UI_CATALOG.filter(entry => entry.status === 'available')
   const vendored = MOTION_UI_CATALOG.filter(entry => entry.status === 'vendored')
@@ -126,6 +137,31 @@ export default function ComponentGalleryPage() {
               </MorphPopoverContent>
             </MorphPopover>
           </div>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-6 shadow-sm sm:col-span-2">
+          <p className="text-xs font-medium text-muted-foreground">MultiSelect · 多选筛选</p>
+          <div className="mt-3 max-w-sm">
+            <MultiSelect value={tags} onValueChange={setTags}>
+              <MultiSelectTrigger className="bg-background">
+                <MultiSelectValue placeholder="全部方向" />
+                <MultiSelectInput aria-label="筛选方向" placeholder="搜索方向…" />
+              </MultiSelectTrigger>
+              <MultiSelectContent>
+                <MultiSelectList ariaLabel="方向">
+                  <MultiSelectItem value="frontend">前端</MultiSelectItem>
+                  <MultiSelectItem value="backend">后端</MultiSelectItem>
+                  <MultiSelectItem value="platform">平台</MultiSelectItem>
+                  <MultiSelectItem value="algorithm">算法</MultiSelectItem>
+                </MultiSelectList>
+                <MultiSelectEmpty />
+              </MultiSelectContent>
+            </MultiSelect>
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            当前值：<span data-testid="multiselect-value" className="font-mono">{tags.length ? tags.join(', ') : '（空）'}</span>
+            ；输入即过滤，键盘 ↑↓ 移动、Enter 勾选、Backspace 逐个回退，chip 可单独移除。
+          </p>
         </div>
 
         <div className="rounded-xl border border-border bg-card p-6 shadow-sm sm:col-span-2">

@@ -27,6 +27,7 @@
 
 ## beUI 目录与清单（单一事实源）
 
+
 - **上游目录速查（含 B 端适配策展）**：[`motion-ui/catalog.ts`](./motion-ui/catalog.ts)
   ——上游全部 motion 组件的「已引入 / 可按需引入 / 不适用 B 端」三态标注，
   钉死在上游 commit `afba7fa055dd`，agent 选型时直接读它；
@@ -36,6 +37,7 @@
   未引入组件按 catalog 条目的上游路径取源码评估依赖闭包；
 - beui.dev 仅作人类浏览参考；机器选型一律走 catalog.ts 或上游仓库树
   （`api.github.com/repos/starc007/ui-components/git/trees/main?recursive=1`）。
+
 
 ## 引入下一个 beUI 组件的流程
 
