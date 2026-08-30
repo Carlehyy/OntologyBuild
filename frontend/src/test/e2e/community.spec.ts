@@ -168,8 +168,10 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   await expect(page.getByTestId('mcp-server-stats')).toHaveCSS('justify-content', 'center')
 
   await page.getByRole('button', { name: '测试 MCP 天气工具集' }).click()
-  await expect(page.locator('table').getByText('已通过', { exact: true })).toBeVisible()
-  await expect(page.locator('table').getByText('共 1 个', { exact: true })).toBeVisible()
+  // 列表含多条已测试数据（stdio 桥接用例），状态/工具数断言须限定在目标行内
+  const weatherRow = page.getByRole('row', { name: /天气工具集/ })
+  await expect(weatherRow.getByText('已通过', { exact: true })).toBeVisible()
+  await expect(weatherRow.getByText('共 1 个', { exact: true })).toBeVisible()
   await expect(page.getByRole('switch')).toHaveCount(0)
 
   await page.getByRole('button', { name: '查看 天气工具集 的工具清单' }).click()
@@ -196,7 +198,8 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   await page.getByRole('button', { name: '生成接口' }).click()
   await expect.poll(() => stdioExportBody).not.toBeNull()
   expect(stdioExportBody).toMatchObject({ tool_names: ['search_indicators'] })
-  await expect(page.getByText('工具已导出至接口代理')).toBeVisible()
+  // 前一次导出的 toast 可能仍在栈中未消退，断言最新一条即可
+  await expect(page.getByText('工具已导出至接口代理').last()).toBeVisible()
 
   await page.getByRole('button', { name: '添加 MCP', exact: true }).click()
   await expect(page.getByText('开放到超级助手', { exact: true })).toHaveCount(0)
