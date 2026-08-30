@@ -4,16 +4,17 @@
  * 数据口径：探索会话可绑定本体（ontologyId）；同一本体存在多个会话时取
  * 最近更新的一支，读取其画布（对象/主体/行为/事件/规则/流程/场景）。
  * 左侧目录按模型类别归纳，点击具体模型后在右侧查看详情；没有业务模型
- * 时呈现空态。视觉与「业务文档」弹窗同口径（白 + 浅绿、细滚动条）。
+ * 时呈现空态。视觉与「业务文档」弹窗同口径：beUI CenterMorphModal 弹窗壳 +
+ * 白底 teal 目录导航 + 细滚动条。
  */
 import { useEffect, useMemo, useState, type ElementType } from 'react'
-import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   AlertCircle, Box, CircleHelp, GitBranch, Loader2, Map as MapIcon,
-  Play, Scale, Users, X, Zap,
+  Play, Scale, Users, Zap,
 } from 'lucide-react'
 import { explorationApi, type BusinessCanvas, type CanvasElement } from '@/api/exploration'
+import { CenterMorphModal, CenterMorphModalContent } from '@/components/motion-ui/center-morph-modal'
 import './ontology-dialogs.css'
 
 type CanvasKey = keyof BusinessCanvas & ('objects' | 'actors' | 'behaviors' | 'events' | 'rules' | 'processes' | 'scenarios')
@@ -189,17 +190,6 @@ export default function BusinessModelDialog({ open, ontologyId, onClose }: {
     })
   }, [sectionEntries])
 
-  useEffect(() => {
-    if (!open) return undefined
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose, open])
-
-  if (!open) return null
-
   const selectedEntry = selected
     ? sectionEntries
       .find(entry => entry.section.key === selected.key)?.elements
@@ -207,19 +197,19 @@ export default function BusinessModelDialog({ open, ontologyId, onClose }: {
     : null
   const selectedSection = selected ? MODEL_SECTIONS.find(section => section.key === selected.key) : null
 
-  return createPortal(
-    <div className="fixed inset-0 z-[90] flex items-start justify-center bg-slate-950/30 px-4 pt-[7vh] backdrop-blur-[1px]" onMouseDown={onClose}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="business-model-dialog-title"
-        className="odg-dialog"
-        onMouseDown={event => event.stopPropagation()}
+  return (
+    <CenterMorphModal open={open} onOpenChange={next => { if (!next) onClose() }}>
+      {/* odg-scope：beUI 语义令牌在本域钉为浅色（固定浅色作用域，见 ontology-dialogs.css）。
+          尺寸/圆角以 !important 覆盖组件默认的 max-w-[26rem]/rounded-[30px]。 */}
+      <CenterMorphModalContent
+        ariaLabel="业务模型"
+        closeButtonLabel="关闭业务模型"
+        className="odg-scope flex h-[78vh] min-h-[520px] !max-w-[min(94vw,1040px)] !rounded-[14px] shadow-[0_24px_80px_rgba(15,23,42,0.22)]"
       >
         {/* 目录：按七类模型归纳 */}
-        <aside className="flex w-64 shrink-0 flex-col border-r border-[var(--odg-green-line,#d5eae0)] bg-[var(--odg-green-bg,#f2faf6)]">
-          <div className="flex h-16 shrink-0 flex-col justify-center border-b border-[#d5eae0] px-4">
-            <div id="business-model-dialog-title" className="text-sm font-semibold text-[var(--color-text-primary)]">业务模型</div>
+        <aside className="flex w-64 shrink-0 flex-col border-r border-teal-100 bg-teal-50/60">
+          <div className="flex h-16 shrink-0 flex-col justify-center border-b border-teal-100 px-4">
+            <div className="text-sm font-semibold text-[var(--color-text-primary)]">业务模型</div>
             <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
               {totalModels > 0 ? `七类模型目录 · 共 ${totalModels} 个` : '七类模型目录'}
             </div>
@@ -244,7 +234,7 @@ export default function BusinessModelDialog({ open, ontologyId, onClose }: {
                         onClick={() => setSelected({ key: section.key, id: el.id })}
                         className={`block w-full truncate rounded-md py-2 pl-7 pr-2.5 text-left text-[13px] transition-colors ${
                           active
-                            ? 'bg-[var(--odg-green-active-bg,#dcf3ea)] font-medium text-teal-800'
+                            ? 'odg-toc-active bg-teal-100 font-medium text-teal-800'
                             : 'text-[var(--color-text-secondary)] hover:bg-white/70'
                         }`}
                         title={displayName(el)}
@@ -264,20 +254,12 @@ export default function BusinessModelDialog({ open, ontologyId, onClose }: {
           </nav>
         </aside>
 
-        {/* 正文：选中模型详情 / 加载 / 空态 */}
+        {/* 正文：选中模型详情 / 加载 / 空态（右上角为弹窗内置关闭按钮，留出让位） */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-[#d5eae0] px-5">
+          <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-teal-100 py-0 pl-5 pr-14">
             <span className="truncate text-xs font-medium text-[var(--color-text-primary)]">
               {boundSession ? `来源：业务澄清会话「${boundSession.title || '未命名会话'}」` : '业务模型'}
             </span>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="关闭业务模型"
-              className="shrink-0 rounded-md p-1.5 text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-            >
-              <X size={16} />
-            </button>
           </div>
 
           <div data-testid="business-model-content" className="odg-scroll min-h-0 flex-1 overflow-y-auto px-6 py-4">
@@ -317,8 +299,7 @@ export default function BusinessModelDialog({ open, ontologyId, onClose }: {
             )}
           </div>
         </div>
-      </div>
-    </div>,
-    document.body,
+      </CenterMorphModalContent>
+    </CenterMorphModal>
   )
 }
