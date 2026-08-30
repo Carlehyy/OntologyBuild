@@ -109,7 +109,7 @@ export interface PublishedWorkspace {
 
 export type StructureKind = 'object' | 'property' | 'action'
 export type StructureLevel = 1 | 2
-export type StructureEmphasis = 'search' | 'path' | 'dependency' | 'context' | 'primary' | null
+export type StructureEmphasis = 'search' | 'dependency' | 'context' | 'primary' | null
 
 export interface StructureNodeData extends Record<string, unknown> {
   kind: StructureKind
@@ -141,11 +141,6 @@ export interface HighlightSet {
   contextNodes: Set<string>
   primaryNodes: Set<string>
   summary: string
-}
-
-export interface GraphPath {
-  nodes: string[]
-  edges: string[]
 }
 
 export const propertyNodeId = (objectId: string, property: StructureProperty) =>
@@ -625,50 +620,6 @@ export function buildStructureGraph(
     }
   })
   return { nodes: positioned, edges: routeStructureEdges(offsetParallelRelations(edges), positioned) }
-}
-
-export function findPaths(
-  links: StructureLink[], sourceId: string, targetId: string, direction: 'outgoing' | 'both',
-  maxDepth?: number, maxPaths = 5,
-): GraphPath[] {
-  if (!sourceId || !targetId || sourceId === targetId) return []
-  // A simple path can contain at most N-1 edges. Deriving the limit from the
-  // actual graph avoids silently missing valid long paths while still making
-  // the breadth-first enumeration finite.
-  const objectIds = new Set([sourceId, targetId])
-  links.forEach(link => {
-    objectIds.add(link.sourceObjectTypeId)
-    objectIds.add(link.targetObjectTypeId)
-  })
-  const depthLimit = maxDepth ?? Math.max(1, objectIds.size - 1)
-  const adjacency = new Map<string, Array<{ next: string; edge: string }>>()
-  links.forEach(link => {
-    adjacency.set(link.sourceObjectTypeId, [
-      ...(adjacency.get(link.sourceObjectTypeId) || []),
-      { next: link.targetObjectTypeId, edge: relationEdgeId(link.id) },
-    ])
-    if (direction === 'both') {
-      adjacency.set(link.targetObjectTypeId, [
-        ...(adjacency.get(link.targetObjectTypeId) || []),
-        { next: link.sourceObjectTypeId, edge: relationEdgeId(link.id) },
-      ])
-    }
-  })
-  const queue: GraphPath[] = [{ nodes: [sourceId], edges: [] }]
-  const results: GraphPath[] = []
-  while (queue.length && results.length < maxPaths) {
-    const path = queue.shift()!
-    if (path.edges.length >= depthLimit) continue
-    const current = path.nodes[path.nodes.length - 1]
-    for (const candidate of adjacency.get(current) || []) {
-      if (path.nodes.includes(candidate.next)) continue
-      const nextPath = { nodes: [...path.nodes, candidate.next], edges: [...path.edges, candidate.edge] }
-      if (candidate.next === targetId) results.push(nextPath)
-      else queue.push(nextPath)
-      if (results.length >= maxPaths) break
-    }
-  }
-  return results
 }
 
 function containsFunctionReference(value: unknown, functionId: string): boolean {

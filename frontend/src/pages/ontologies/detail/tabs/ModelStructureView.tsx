@@ -7,9 +7,9 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import {
-  AlertCircle, ArrowLeftRight, ArrowRight, Box, Braces, Check, ChevronDown, ChevronRight,
-  FileText, Focus, FunctionSquare, GitBranch, KeyRound, Layers3, Loader2,
-  Maximize2, Route, Search, Shapes, ShieldCheck, Sparkles, X, ZoomIn, ZoomOut,
+  AlertCircle, ArrowRight, Box, Braces, Check, ChevronDown, ChevronRight,
+  FileText, FunctionSquare, GitBranch, KeyRound, Layers3, Loader2,
+  Search, Shapes, ShieldCheck, Sparkles, X,
   Bolt, Clock3, Database,
 } from 'lucide-react'
 import { agentApi, type DynamicSentinel } from '@/api/agent'
@@ -19,15 +19,14 @@ import BusinessModelDialog from './BusinessModelDialog'
 import StructureDocDialog from './StructureDocDialog'
 import { StructureGraphEdge, StructureGraphNode } from './StructureGraphElements'
 import {
-  actionNodeId, buildStructureGraph, findPaths, functionUsage, propertyNodeId,
+  actionNodeId, buildStructureGraph, functionUsage, propertyNodeId,
   relationEdgeId, routeStructureEdges, sentinelUsage,
-  type GraphPath, type HighlightSet, type PublishedWorkspace, type StructureEdge,
+  type HighlightSet, type PublishedWorkspace, type StructureEdge,
   type StructureNode, type StructureSentinel,
 } from './structureGraphModel'
 import { saveStatusLabel, type StructureSaveState } from './saveStatus'
 
 type Level = 1 | 2
-type Direction = 'outgoing' | 'both'
 type SearchKind = 'object' | 'relation' | 'property' | 'action'
 type DetailSelection = { kind: SearchKind; id: string; parentObjectId?: string } | null
 
@@ -418,7 +417,7 @@ function DetailPanel({ workspace, selection, onClose }: {
   }
 
   return (
-    <aside data-testid="structure-detail-panel" className="absolute bottom-3 right-3 top-3 z-30 flex w-[340px] max-w-[calc(100%-24px)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white/95 shadow-[0_20px_60px_rgba(15,23,42,0.18)] backdrop-blur-xl">
+    <aside data-testid="structure-detail-panel" className="absolute bottom-3 right-3 top-[3.25rem] z-30 flex w-[340px] max-w-[calc(100%-24px)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white/95 shadow-[0_20px_60px_rgba(15,23,42,0.18)] backdrop-blur-xl">
       <div className="flex shrink-0 items-start gap-3 border-b border-slate-100 px-4 py-4">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-100">{panel.icon}</span>
         <div className="min-w-0 flex-1"><h3 className="truncate text-sm font-semibold text-slate-800">{panel.title}</h3><p className="truncate font-mono text-[10px] text-slate-400">{panel.technicalName}</p></div>
@@ -434,21 +433,14 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
   ontologyName?: string
   workspace: PublishedWorkspace
 }) {
-  const { fitView, zoomIn, zoomOut } = useReactFlow<StructureNode, StructureEdge>()
+  const { fitView } = useReactFlow<StructureNode, StructureEdge>()
   const [level, setLevel] = useState<Level>(1)
   const builtGraph = useMemo(() => buildStructureGraph(workspace, level), [level, workspace])
   const [allNodes, setAllNodes] = useState<StructureNode[]>(builtGraph.nodes)
-  const [mode, setMode] = useState<'browse' | 'path'>('browse')
   const [detail, setDetail] = useState<DetailSelection>(null)
   const [searchText, setSearchText] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchFocus, setSearchFocus] = useState<{ type: 'node' | 'edge'; id: string; context: string[] } | null>(null)
-  const [pathSource, setPathSource] = useState('')
-  const [pathTarget, setPathTarget] = useState('')
-  const [direction, setDirection] = useState<Direction>('both')
-  const [paths, setPaths] = useState<GraphPath[]>([])
-  const [activePathIndex, setActivePathIndex] = useState(0)
-  const [pathAttempted, setPathAttempted] = useState(false)
   const [functionId, setFunctionId] = useState('')
   const [sentinelId, setSentinelId] = useState('')
   const [openDependency, setOpenDependency] = useState<'function' | 'sentinel' | null>(null)
@@ -529,7 +521,6 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
     setDetail(null)
     setSearchText('')
     setSearchFocus(null)
-    setPaths([])
     setFunctionId('')
     setSentinelId('')
     setOpenDependency(null)
@@ -718,7 +709,6 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
   const chooseSearchResult = useCallback((result: SearchResult) => {
     setSearchText(result.label)
     setSearchOpen(false)
-    setPaths([])
     setFunctionId('')
     setSentinelId('')
     if (result.kind === 'relation') {
@@ -734,27 +724,13 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
     void fitView({ nodes: [node], padding: 1.4, maxZoom: 1.35, duration: 320 })
   }, [allNodes, builtGraph.edges, fitView])
 
-  const runPathSearch = useCallback(() => {
-    setPathAttempted(true)
-    setSearchFocus(null)
-    setFunctionId('')
-    setSentinelId('')
-    const nextPaths = findPaths(workspace.linkTypes, pathSource, pathTarget, direction)
-    setPaths(nextPaths)
-    setActivePathIndex(0)
-    if (nextPaths[0]) {
-      void fitView({ nodes: allNodes.filter(node => nextPaths[0].nodes.includes(node.id)), padding: 0.45, maxZoom: 1.05, duration: 340 })
-    }
-  }, [allNodes, direction, fitView, pathSource, pathTarget, workspace.linkTypes])
-
   const dependencyHighlight = useMemo(() => {
     if (functionId) return functionUsage(workspace, functionId)
     if (sentinelId) return sentinelUsage(workspace, sentinelId)
     return EMPTY_HIGHLIGHT
   }, [functionId, sentinelId, workspace])
-  const activePath = paths[activePathIndex]
   const hasDependency = Boolean(functionId || sentinelId)
-  const hasHighlight = hasDependency || Boolean(activePath) || Boolean(searchFocus)
+  const hasHighlight = hasDependency || Boolean(searchFocus)
 
   const visibleNodes = useMemo(() => allNodes
     .filter(node => level === 2 || node.data.kind === 'object')
@@ -764,11 +740,10 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
         if (dependencyHighlight.primaryNodes.has(node.id)) emphasis = 'primary'
         else if (dependencyHighlight.nodes.has(node.id)) emphasis = 'dependency'
         else if (dependencyHighlight.contextNodes.has(node.id)) emphasis = 'context'
-      } else if (activePath?.nodes.includes(node.id)) emphasis = 'path'
-      else if (searchFocus?.type === 'node' && searchFocus.id === node.id) emphasis = 'search'
+      } else if (searchFocus?.type === 'node' && searchFocus.id === node.id) emphasis = 'search'
       else if (searchFocus?.context.includes(node.id)) emphasis = 'context'
       return { ...node, data: { ...node.data, emphasis, dimmed: hasHighlight && !emphasis } }
-    }), [activePath, allNodes, dependencyHighlight, hasDependency, hasHighlight, level, searchFocus])
+    }), [allNodes, dependencyHighlight, hasDependency, hasHighlight, level, searchFocus])
 
   const routedEdges = useMemo(() => routeStructureEdges(builtGraph.edges, allNodes), [allNodes, builtGraph.edges])
   const visibleEdges = useMemo(() => routedEdges
@@ -776,11 +751,10 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
     .map((edge): StructureEdge => {
       let emphasis = null as NonNullable<StructureEdge['data']>['emphasis']
       if (hasDependency && dependencyHighlight.edges.has(edge.id)) emphasis = 'dependency'
-      else if (!hasDependency && activePath?.edges.includes(edge.id)) emphasis = 'path'
       else if (!hasDependency && searchFocus?.type === 'edge' && searchFocus.id === edge.id) emphasis = 'search'
       const contextualRelation = searchFocus?.type === 'node' && searchFocus.context.length === 0 && (edge.source === searchFocus.id || edge.target === searchFocus.id)
       return { ...edge, data: { ...edge.data!, emphasis, dimmed: hasHighlight && !emphasis && !contextualRelation } }
-    }), [activePath, dependencyHighlight.edges, hasDependency, hasHighlight, level, routedEdges, searchFocus])
+    }), [dependencyHighlight.edges, hasDependency, hasHighlight, level, routedEdges, searchFocus])
 
   const selectNode = useCallback((node: StructureNode) => {
     if (node.data.kind === 'property') setDetail({ kind: 'property', id: node.data.entityId, parentObjectId: node.data.parentObjectId })
@@ -795,18 +769,7 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
     setFunctionId('')
     setSentinelId('')
     setOpenDependency(null)
-    setPaths([])
     setDetail(null)
-  }, [])
-
-  const changeMode = useCallback((nextMode: 'browse' | 'path') => {
-    setMode(nextMode)
-    setOpenDependency(null)
-    if (nextMode === 'path') {
-      setSearchFocus(null)
-      setFunctionId('')
-      setSentinelId('')
-    }
   }, [])
 
   const chooseDependency = useCallback((kind: 'function' | 'sentinel', id: string) => {
@@ -817,11 +780,8 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
       return
     }
     setLevel(2)
-    setMode('browse')
     setSearchText('')
     setSearchFocus(null)
-    setPaths([])
-    setPathAttempted(false)
     if (kind === 'function') { setFunctionId(id); setSentinelId('') }
     else { setSentinelId(id); setFunctionId('') }
     window.setTimeout(() => void fitView({ padding: 0.2, maxZoom: 0.88, duration: 280 }), 30)
@@ -844,12 +804,6 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
           label="图谱视角"
           items={[{ value: 1, label: 'L1 结构概览' }, { value: 2, label: 'L2 结构展开' }]}
           onChange={changeLevel}
-        />
-        <AnimatedSegmentedControl<'browse' | 'path'>
-          value={mode}
-          label="图谱模式"
-          items={[{ value: 'browse', label: '浏览', icon: Focus }, { value: 'path', label: '路径', icon: Route }]}
-          onChange={changeMode}
         />
         <div className="relative w-[240px] min-w-[170px] shrink">
           <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -885,7 +839,7 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1 border-l border-slate-200 bg-white px-2">
-          <button type="button" onClick={() => setStructureDocOpen(true)} aria-label="结构说明" title="查看当前本体结构关联的需求文档" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:translate-y-px"><FileText size={13} />结构说明</button>
+          <button type="button" onClick={() => setStructureDocOpen(true)} aria-label="业务文档" title="查看当前本体结构关联的需求文档" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:translate-y-px"><FileText size={13} />业务文档</button>
           <button
             type="button"
             onClick={() => setBusinessModelOpen(true)}
@@ -896,27 +850,8 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
           >
             <Shapes size={13} />业务模型
           </button>
-          <button type="button" onClick={() => void zoomOut({ duration: 160 })} aria-label="缩小" title="缩小" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomOut size={14} /></button>
-          <button type="button" onClick={() => void zoomIn({ duration: 160 })} aria-label="放大" title="放大" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><ZoomIn size={14} /></button>
-          <button type="button" onClick={() => void fitView({ padding: 0.2, minZoom: level === 2 ? 0.34 : 0.35, maxZoom: 0.92, duration: 260 })} aria-label="适应画布" title="适应画布" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><Maximize2 size={14} /></button>
         </div>
       </div>
-
-      {mode === 'path' && (
-        <div className="z-30 flex shrink-0 items-center gap-2 border-b border-cyan-100 bg-cyan-50/70 px-3 py-2">
-          <Route size={14} className="shrink-0 text-cyan-700" /><span className="shrink-0 text-xs font-semibold text-cyan-800">对象路径</span>
-          <select value={pathSource} onChange={event => { setPathSource(event.target.value); setPaths([]); setPathAttempted(false) }} aria-label="路径起点" className="h-8 min-w-[160px] rounded-lg border border-cyan-200 bg-white px-2 text-xs text-slate-700"><option value="">选择起点（对象实体）</option>{workspace.objectTypes.map(item => <option key={item.id} value={item.id}>{item.displayName || item.name}</option>)}</select>
-          <ArrowRight size={13} className="text-cyan-500" />
-          <select value={pathTarget} onChange={event => { setPathTarget(event.target.value); setPaths([]); setPathAttempted(false) }} aria-label="路径终点" className="h-8 min-w-[160px] rounded-lg border border-cyan-200 bg-white px-2 text-xs text-slate-700"><option value="">选择终点（对象实体）</option>{workspace.objectTypes.map(item => <option key={item.id} value={item.id}>{item.displayName || item.name}</option>)}</select>
-          <div className="ml-1 flex rounded-lg border border-cyan-200 bg-white p-0.5">
-            <button type="button" onClick={() => { setDirection('outgoing'); setPaths([]) }} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] ${direction === 'outgoing' ? 'bg-cyan-100 font-semibold text-cyan-800' : 'text-slate-500'}`}><ArrowRight size={11} />单向</button>
-            <button type="button" onClick={() => { setDirection('both'); setPaths([]) }} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] ${direction === 'both' ? 'bg-cyan-100 font-semibold text-cyan-800' : 'text-slate-500'}`}><ArrowLeftRight size={11} />双向</button>
-          </div>
-          <button type="button" disabled={!pathSource || !pathTarget || pathSource === pathTarget} onClick={runPathSearch} className="h-8 rounded-lg bg-cyan-700 px-3 text-xs font-semibold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-40">查找路径</button>
-          {paths.length > 0 && <span className="ml-1 text-[11px] text-cyan-700">找到 {paths.length} 条（最多展示 5 条）</span>}
-          {pathAttempted && paths.length === 0 && <span className="ml-1 text-[11px] text-amber-700">未找到可达路径</span>}
-        </div>
-      )}
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
         <ReactFlow<StructureNode, StructureEdge>
@@ -933,7 +868,7 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
           <MiniMap pannable zoomable position="bottom-left" style={{ width: 150, height: 96 }} className="!m-3 !rounded-xl !border !border-slate-200 !bg-white/90 !shadow-sm" nodeColor={node => node.data?.kind === 'object' ? '#047857' : node.data?.kind === 'property' ? '#8b5cf6' : '#f59e0b'} maskColor="rgba(241,245,249,0.72)" />
         </ReactFlow>
 
-        <div className="pointer-events-none absolute left-3 top-3 z-20 flex items-center gap-2 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-[11px] text-slate-500 shadow-sm backdrop-blur">
+        <div className="pointer-events-none absolute right-3 top-3 z-20 flex items-center gap-2 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-[11px] text-slate-500 shadow-sm backdrop-blur">
           <Layers3 size={13} className="text-teal-600" /><span>L{level} · {workspace.objectTypes.length} 对象 · {workspace.linkTypes.length} 关系{level === 2 ? ` · ${workspace.objectTypes.reduce((sum, item) => sum + item.properties.length, 0)} 属性 · ${workspace.actions.length} 动作` : ''}</span>
           <span className="h-3 w-px bg-slate-200" />
           {saveState === 'error' ? (
@@ -974,13 +909,9 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
           </span>
         </div>
 
-        {(hasDependency || paths.length > 0) && (
+        {hasDependency && (
           <div className="absolute bottom-4 left-1/2 z-20 max-w-[min(720px,calc(100%-360px))] -translate-x-1/2 rounded-xl border border-slate-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
-            {hasDependency ? (
-              <div className="flex items-center gap-2 text-xs text-slate-700"><Sparkles size={14} className={sentinelId ? 'text-fuchsia-600' : 'text-violet-600'} /><span className="font-medium">{dependencyHighlight.summary || '没有找到直接使用节点'}</span><button type="button" onClick={() => { setFunctionId(''); setSentinelId('') }} className="ml-1 rounded p-1 text-slate-400 hover:bg-slate-100"><X size={12} /></button></div>
-            ) : (
-              <div className="flex items-center gap-2"><span className="text-[11px] font-medium text-slate-500">路径</span>{paths.map((path, index) => <button key={`${path.edges.join(':')}:${index}`} type="button" onClick={() => { setActivePathIndex(index); void fitView({ nodes: allNodes.filter(node => path.nodes.includes(node.id)), padding: 0.45, maxZoom: 1.05, duration: 280 }) }} className={`rounded-md px-2 py-1 text-[11px] ${activePathIndex === index ? 'bg-cyan-100 font-semibold text-cyan-800' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>{index + 1} · {path.edges.length} 跳</button>)}</div>
-            )}
+            <div className="flex items-center gap-2 text-xs text-slate-700"><Sparkles size={14} className={sentinelId ? 'text-fuchsia-600' : 'text-violet-600'} /><span className="font-medium">{dependencyHighlight.summary || '没有找到直接使用节点'}</span><button type="button" onClick={() => { setFunctionId(''); setSentinelId('') }} className="ml-1 rounded p-1 text-slate-400 hover:bg-slate-100"><X size={12} /></button></div>
           </div>
         )}
 
@@ -1015,7 +946,7 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
 
 export default function ModelStructureView({ ontologyId, ontologyName }: {
   ontologyId: string
-  /** 结构说明弹窗顶栏展示用：由详情页透传本体名称。 */
+  /** 业务文档弹窗顶栏展示用：由详情页透传本体名称。 */
   ontologyName?: string
 }) {
   const releaseQuery = useQuery<PublishedWorkspace>({
