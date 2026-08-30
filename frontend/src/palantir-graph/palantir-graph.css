@@ -123,8 +123,8 @@ body.palantir-graph-root,
 }
 
 /* 浅色系：嵌入式工作台（业务澄清页"本体模型"视图）。
-   surface 刻度整体反转（深→浅映射文字/边框/背景层级），
-   onto/fn 强调色与语义色在两套主题下通用，无需覆盖。 */
+   取平台浅色基调：画布 slate-50、面板/卡片纯白、边框 slate-200/300，
+   文字按反转后的 surface 刻度取色；onto/fn 强调色与语义色两主题通用。 */
 .palantir-graph-root.pg-light {
   --pg-surface-50: 2 6 23;
   --pg-surface-100: 15 23 42;
@@ -132,33 +132,33 @@ body.palantir-graph-root,
   --pg-surface-300: 51 65 85;
   --pg-surface-400: 71 85 105;
   --pg-surface-500: 100 116 139;
-  --pg-surface-600: 148 163 184;
-  --pg-surface-700: 203 213 225;
-  --pg-surface-800: 226 232 240;
-  --pg-surface-900: 241 245 249;
+  --pg-surface-600: 203 213 225;
+  --pg-surface-700: 226 232 240;
+  --pg-surface-800: 255 255 255;
+  --pg-surface-900: 255 255 255;
   --pg-surface-950: 248 250 252;
 
-  --color-bg: #f1f5f9;
-  --color-surface: #f1f5f9;
+  --color-bg: #f8fafc;
+  --color-surface: #f8fafc;
   --color-surface-elevated: #ffffff;
   --color-surface-100: #0f172a;
   --color-surface-200: #1e293b;
   --color-surface-400: #475569;
   --color-surface-500: #64748b;
-  --color-surface-600: #94a3b8;
-  --color-surface-700: #cbd5e1;
-  --color-surface-800: #e2e8f0;
-  --color-border: #cbd5e1;
+  --color-surface-600: #cbd5e1;
+  --color-surface-700: #e2e8f0;
+  --color-surface-800: #ffffff;
+  --color-border: #e2e8f0;
   --color-text: #0f172a;
   --color-text-secondary: #475569;
 
   --color-glass: rgba(255, 255, 255, 0.85);
-  --color-canvas-dot: rgba(15, 23, 42, 0.08);
-  --color-minimap-mask: rgba(241, 245, 249, 0.75);
+  --color-canvas-dot: rgba(15, 23, 42, 0.07);
+  --color-minimap-mask: rgba(248, 250, 252, 0.75);
   --color-minimap-node-alt: #94a3b8;
   --color-edge-label-bg: #ffffff;
   --color-edge-label-text: #1e293b;
-  --color-node-shadow: rgba(15, 23, 42, 0.08);
+  --color-node-shadow: rgba(15, 23, 42, 0.1);
   --color-code-bg: #f8fafc;
   --color-code-text: #1e293b;
 }

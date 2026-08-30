@@ -6,7 +6,7 @@ import { ontologyVersionApi } from '@/api/v2/ontology-versions';
 import './palantir-graph.css';
 
 import Canvas from './components/Canvas';
-import Header from './components/Header';
+import Header, { LintBadge, SaveButton } from './components/Header';
 import { useOntologyStore, attachAutoSave, attachHistory } from './store/ontologyStore';
 import Toolbar from './components/Toolbar';
 import Panel from './components/Panel';
@@ -46,6 +46,8 @@ export interface GraphWorkspaceProps {
   theme?: 'dark' | 'light';
   /** fullpage=fixed 整页接管；embedded=填满父容器（fixed 面板经 transform 收编进容器） */
   layout?: 'fullpage' | 'embedded';
+  /** 是否渲染编辑器自带 Header（嵌入浅色工作台时关闭，保存/校验入口转为浮动簇） */
+  showHeader?: boolean;
   /** Header「数据映射」入口；不传则隐藏该按钮 */
   onOpenMapping?: () => void;
   /** stage 徽章「返回版本演进」；不传则该按钮不渲染 */
@@ -63,6 +65,7 @@ export default function GraphWorkspace({
   versionId,
   theme = 'dark',
   layout = 'fullpage',
+  showHeader = true,
   onOpenMapping,
   onBackToVersions,
   onDraftCreated,
@@ -93,6 +96,7 @@ export default function GraphWorkspace({
   const loadFromBackend = useOntologyStore((s) => s.loadFromBackend);
   const syncStatus = useOntologyStore((s) => s.syncStatus);
   const isDirty = useOntologyStore((s) => s.isDirty);
+  const syncError = useOntologyStore((s) => s.syncError);
   const workspaceMode = useOntologyStore((s) => s.workspaceMode);
   const ontology = useOntologyStore((s) => s.ontology);
   const capabilities = useMemo(() => getGraphWorkspaceCapabilities(workspaceMode), [workspaceMode]);
@@ -248,12 +252,19 @@ export default function GraphWorkspace({
           ? { tone: 'slate', text: `已归档分支 ${ontology?.version || ''} · 可查看定义并保存画布布局` }
           : { tone: 'emerald', text: `当前发布 ${ontology?.version || ''} · 可查看定义并保存画布布局，正式数据与本体网络持续运行` };
 
-  const stageClass = {
-    sky: 'border-sky-500/40 bg-sky-950/90 text-sky-200',
-    amber: 'border-amber-500/40 bg-amber-950/90 text-amber-200',
-    slate: 'border-slate-500/40 bg-slate-950/90 text-slate-200',
-    emerald: 'border-emerald-500/40 bg-emerald-950/90 text-emerald-200',
-  }[stage.tone];
+  const stageClass = theme === 'light'
+    ? {
+        sky: 'border-sky-200 bg-sky-50/95 text-sky-700',
+        amber: 'border-amber-200 bg-amber-50/95 text-amber-700',
+        slate: 'border-slate-200 bg-white/95 text-slate-600',
+        emerald: 'border-emerald-200 bg-emerald-50/95 text-emerald-700',
+      }[stage.tone]
+    : {
+        sky: 'border-sky-500/40 bg-sky-950/90 text-sky-200',
+        amber: 'border-amber-500/40 bg-amber-950/90 text-amber-200',
+        slate: 'border-slate-500/40 bg-slate-950/90 text-slate-200',
+        emerald: 'border-emerald-500/40 bg-emerald-950/90 text-emerald-200',
+      }[stage.tone];
 
   return (
     <ReactFlowProvider>
@@ -299,20 +310,39 @@ export default function GraphWorkspace({
           </div>
         )}
 
-        <Header
-          readOnly={schemaReadOnly}
-          stageLabel={workspaceMode === 'runtime' ? '当前发布' : workspaceMode === 'draft' ? '草稿编辑' : workspaceMode === 'trial' ? '试跑快照' : '历史快照'}
-          onToggleActions={() => setShowActionPanel(v => !v)}
-          onToggleFunctions={() => setShowFunctionPanel(v => !v)}
-          showActions={showActionPanel}
-          showFunctions={showFunctionPanel}
-          onToggleLinks={() => setShowLinkPanel(v => !v)}
-          showLinks={showLinkPanel}
-          onToggleObjects={() => setShowObjectPanel(v => !v)}
-          showObjects={showObjectPanel}
-          onOpenMapping={onOpenMapping}
-        />
-        <main className="h-full pt-16">
+        {showHeader ? (
+          <Header
+            readOnly={schemaReadOnly}
+            stageLabel={workspaceMode === 'runtime' ? '当前发布' : workspaceMode === 'draft' ? '草稿编辑' : workspaceMode === 'trial' ? '试跑快照' : '历史快照'}
+            onToggleActions={() => setShowActionPanel(v => !v)}
+            onToggleFunctions={() => setShowFunctionPanel(v => !v)}
+            showActions={showActionPanel}
+            showFunctions={showFunctionPanel}
+            onToggleLinks={() => setShowLinkPanel(v => !v)}
+            showLinks={showLinkPanel}
+            onToggleObjects={() => setShowObjectPanel(v => !v)}
+            showObjects={showObjectPanel}
+            onOpenMapping={onOpenMapping}
+          />
+        ) : (
+          /* 无 Header 时（嵌入浅色工作台）：保存/校验入口浮动在画布右上 */
+          ontology && (
+            <div className="fixed right-4 top-3 z-40 flex items-center gap-2">
+              <LintBadge readOnly={schemaReadOnly} />
+              {!schemaReadOnly && (
+                <SaveButton
+                  syncStatus={syncStatus}
+                  isDirty={isDirty}
+                  syncError={syncError}
+                  onSave={() => void useOntologyStore.getState().saveToBackend()}
+                  onForceSave={() => void useOntologyStore.getState().saveToBackend({ force: true })}
+                  onReload={() => void useOntologyStore.getState().discardAndReload()}
+                />
+              )}
+            </div>
+          )
+        )}
+        <main className={showHeader ? 'h-full pt-16' : 'h-full'}>
           <Canvas
             schemaReadOnly={schemaReadOnly}
             layoutScope={`${ontologyId || 'ontology'}:${versionId || 'runtime'}`}

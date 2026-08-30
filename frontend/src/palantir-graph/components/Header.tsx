@@ -135,7 +135,7 @@ export default function Header({ readOnly = false, stageLabel, onToggleActions, 
 }
 
 // Schema Lint 徽标：实时校验建模问题，点击展开问题列表，点条目跳转到对应元素
-function LintBadge({ readOnly = false }: { readOnly?: boolean }) {
+export function LintBadge({ readOnly = false }: { readOnly?: boolean }) {
   const ontology = useOntologyStore((s) => s.ontology);
   const { setSelectedNode, setSelectedEdge, setSelectedAction, setSelectedFunction, openPanel } = useOntologyStore();
   const [open, setOpen] = useState(false);
@@ -235,7 +235,7 @@ function LintBadge({ readOnly = false }: { readOnly?: boolean }) {
 }
 
 // 手动保存按钮：承载 idle/dirty/saving/saved/error/conflict 六态
-function SaveButton({
+export function SaveButton({
   syncStatus,
   isDirty,
   syncError,

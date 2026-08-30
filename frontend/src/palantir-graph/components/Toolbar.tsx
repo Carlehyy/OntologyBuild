@@ -214,10 +214,10 @@ export default function Toolbar({ capabilities, onOpenSearch, onBack, showBack =
             {showLayoutMenu && (
               <div className="absolute left-full ml-3 top-1/2 -translate-y-1/2 bg-surface-800 border border-surface-600 rounded-xl shadow-2xl p-4 min-w-[280px] z-50 animate-fade-in">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-white">自动布局</h3>
+                  <h3 className="text-sm font-semibold text-surface-100">自动布局</h3>
                   <button
                     onClick={() => setShowLayoutMenu(false)}
-                    className="text-gray-400 hover:text-white"
+                    className="text-surface-400 hover:text-surface-100"
                   >
                     ×
                   </button>
@@ -225,7 +225,7 @@ export default function Toolbar({ capabilities, onOpenSearch, onBack, showBack =
 
                 {/* Algorithm Selection */}
                 <div className="mb-4">
-                  <label className="text-xs text-gray-400 mb-2 block">布局算法</label>
+                  <label className="text-xs text-surface-400 mb-2 block">布局算法</label>
                   <div className="space-y-1">
                     {LAYOUT_ALGORITHMS.map((algo) => (
                       <button
@@ -234,12 +234,12 @@ export default function Toolbar({ capabilities, onOpenSearch, onBack, showBack =
                         className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors
                           ${selectedAlgorithm === algo.id
                             ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                            : 'bg-surface-700/50 text-gray-300 hover:bg-surface-700 border border-transparent'}`}
+                            : 'bg-surface-700/50 text-surface-300 hover:bg-surface-700 border border-transparent'}`}
                       >
                         <span className="text-lg">{algo.icon}</span>
                         <div className="flex-1">
                           <div className="text-sm font-medium">{algo.name}</div>
-                          <div className="text-xs text-gray-500">{algo.description}</div>
+                          <div className="text-xs text-surface-500">{algo.description}</div>
                         </div>
                         {selectedAlgorithm === algo.id && (
                           <ChevronRightIcon className="w-4 h-4 text-emerald-400" />
@@ -252,7 +252,7 @@ export default function Toolbar({ capabilities, onOpenSearch, onBack, showBack =
                 {/* Direction (only for dagre) */}
                 {selectedAlgorithm === 'dagre' && (
                   <div className="mb-4">
-                    <label className="text-xs text-gray-400 mb-2 block">布局方向</label>
+                    <label className="text-xs text-surface-400 mb-2 block">布局方向</label>
                     <div className="flex gap-2">
                       {LAYOUT_DIRECTIONS.map((dir) => (
                         <button
@@ -261,7 +261,7 @@ export default function Toolbar({ capabilities, onOpenSearch, onBack, showBack =
                           className={`flex-1 flex flex-col items-center gap-1 px-2 py-2 rounded-lg transition-colors
                             ${selectedDirection === dir.id
                               ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                              : 'bg-surface-700/50 text-gray-400 hover:bg-surface-700 border border-transparent'}`}
+                              : 'bg-surface-700/50 text-surface-400 hover:bg-surface-700 border border-transparent'}`}
                           title={dir.name}
                         >
                           <span className="text-lg">{dir.icon}</span>

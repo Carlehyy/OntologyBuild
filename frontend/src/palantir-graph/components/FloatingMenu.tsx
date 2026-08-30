@@ -170,10 +170,10 @@ export const FloatingMenu = ({
             data-read-only={item.disabledReason ? 'true' : 'false'}
             className={`
               flex items-center gap-3 px-4 py-2.5 rounded-xl text-left
-              bg-slate-800/95 backdrop-blur-sm border border-slate-700/50
+              bg-surface-800/95 backdrop-blur-sm border border-surface-700/50
               shadow-lg shadow-black/30 hover:shadow-xl
               transition-all duration-200 hover:scale-[1.02]
-              ${item.disabledReason ? 'border-slate-600/70 bg-slate-800/80' : ''}
+              ${item.disabledReason ? 'border-surface-600/70 bg-surface-800/80' : ''}
               ${isOpen ? 'translate-y-0' : 'translate-y-4'}
             `}
             style={{
@@ -184,9 +184,9 @@ export const FloatingMenu = ({
               <item.icon className={`w-5 h-5 ${item.color}`} />
             </div>
             <span className="max-w-64 whitespace-nowrap">
-              <span className="block text-sm font-medium text-white">{item.label}</span>
+              <span className="block text-sm font-medium text-surface-100">{item.label}</span>
               {item.disabledReason && (
-                <span className="block max-w-60 truncate text-[10px] text-slate-400">
+                <span className="block max-w-60 truncate text-[10px] text-surface-400">
                   仅查看 · {item.disabledReason}
                 </span>
               )}
@@ -201,7 +201,7 @@ export const FloatingMenu = ({
           w-14 h-14 rounded-full flex items-center justify-center
           shadow-lg transition-all duration-300 hover:scale-105
           ${isOpen
-            ? 'bg-slate-700 hover:bg-slate-600 shadow-slate-900/50'
+            ? 'bg-surface-700 hover:bg-surface-600 shadow-black/30'
             : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 shadow-indigo-900/40'
           }
         `}
