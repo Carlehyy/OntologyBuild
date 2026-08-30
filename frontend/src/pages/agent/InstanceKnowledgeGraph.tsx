@@ -44,7 +44,7 @@ interface Props {
 type WorkMode = 'browse' | 'path' | 'impact'
 type Direction = 'both' | 'outgoing' | 'incoming'
 
-const TYPE_COLORS = ['#0f766e', '#0369a1', '#7c3aed', '#b45309', '#be123c', '#15803d']
+const TYPE_COLORS = ['#047857', '#0369a1', '#7c3aed', '#b45309', '#be123c', '#15803d']
 const EMPTY_GRAPH: AgentGraphData = {
   ontologyId: '',
   ontologyName: '',
@@ -401,7 +401,7 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
             width: 76,
             height: 76,
             'background-color': '#ffffff',
-            'border-color': '#14b8a6',
+            'border-color': '#10b981',
           },
         },
         {
@@ -515,7 +515,7 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
         {
           selector: ':selected',
           style: {
-            'border-color': '#0f766e',
+            'border-color': '#047857',
             'border-width': 5,
             'underlay-color': '#99f6e4',
             'underlay-opacity': 0.34,

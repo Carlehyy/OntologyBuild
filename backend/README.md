@@ -8,26 +8,9 @@
 
 ## 当前模块边界
 
-优先从业务域查找实现：
-
-```text
-app/
-├── bootstrap/         FastAPI 健康检查、生命周期与启动 seed
-├── platform/          平台概览
-├── super_assistant/   超级助手、Skill、MCP
-├── exploration/       业务探索
-├── ontologies/        本体、映射、图、Agent、Sentinel
-├── events/            事件登记
-├── data_channel/      连接、数据集、流水线、数据管家
-├── api_hub/           接口定义、发布与代理
-├── community/         开放社区
-├── model_configs/     模型配置
-├── settings/          系统设置
-├── auth/              身份与菜单授权
-├── inbox/             收件箱契约
-├── shared/            迁移期共享基础能力
-└── tasks/             Celery 任务入口
-```
+优先从业务域查找实现：完整业务域表（含支撑基础设施与兼容层例外台账）以根
+[AGENTS.md](../AGENTS.md) 第 1 节为唯一权威；`app/` 内逐目录导览见
+[`app/README.md`](./app/README.md)。
 
 `app/routers`、`models`、`schemas`、`services` 以兼容转发为主，但仍有少量
 真实实现；不要批量删除或假设它们都是 facade。例外和迁移协议见
@@ -53,6 +36,14 @@ uv run python -m app.dev_server
 ```bash
 uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=info
 ```
+
+本地完整开发还需要流水线 executor（经 NATS 消费派发任务）：
+
+```bash
+uv run python -m app.data_channel.pipeline_tasks.nats_executor
+```
+
+完整启动顺序与依赖见 [本地开发](../docs/development/setup.md)。
 
 ## 验证
 

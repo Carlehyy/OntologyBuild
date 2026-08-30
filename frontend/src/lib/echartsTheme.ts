@@ -13,7 +13,7 @@
 import type { EChartsOption } from 'echarts'
 
 /* ── 分类序列色（标准色板，语义映射见 DESIGN.md §5.3） ── */
-export const CHART_TEAL = '#0D9488'
+export const CHART_TEAL = '#059669'
 export const CHART_BLUE = '#3B82F6'
 export const CHART_VIOLET = '#8B5CF6'
 export const CHART_AMBER = '#F59E0B'

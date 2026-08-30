@@ -126,7 +126,7 @@
 .chain-tone-pending { border-color: #fcd34d; background: var(--chain-pending-tint); }
 .chain-node-dim { opacity: .22; }
 .chain-node-hot {
-  border-color: #14b8a6;
+  border-color: #10b981;
   box-shadow: 0 0 0 2px rgba(20, 184, 166, .25), 0 6px 18px rgba(13, 148, 136, .14);
 }
 /* 待审批节点持续脉冲:当前瓶颈的呼吸光晕 */

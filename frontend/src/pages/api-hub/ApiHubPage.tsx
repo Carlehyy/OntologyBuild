@@ -46,11 +46,11 @@ export default function ApiHubPage() {
     <div
       className="relative h-full min-h-0 bg-[var(--color-bg-base)]"
       style={{
-        '--color-primary': '#0d9488',
-        '--color-primary-hover': '#0f766e',
+        '--color-primary': '#059669',
+        '--color-primary-hover': '#047857',
         '--color-primary-active': '#115e59',
-        '--color-primary-light': '#ccfbf1',
-        '--color-border-active': '#0d9488',
+        '--color-primary-light': '#d1fae5',
+        '--color-border-active': '#059669',
       } as CSSProperties}
     >
       {error && (

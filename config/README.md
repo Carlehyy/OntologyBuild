@@ -45,7 +45,8 @@ config/generated/local/.env
 ## 本机默认值
 
 配置中心已经内置常用的非敏感默认值：PostgreSQL 主机
-`127.0.0.1:5432`、账号 `postgres`、数据库 `openontology`，Redis
+`127.0.0.1:5432`、账号 `postgres`、数据库 `openontology`（源码运行口径；
+`docker-compose.local.yml` 完整栈使用独立的 `ontoprompt` 库），Redis
 `localhost:6379`，NATS `127.0.0.1:4222`（本机默认无认证，需以 `-js` 启用
 JetStream），Neo4j `neo4j://localhost:7687`，MinIO
 `localhost:9000`、账号 `admin`，以及默认的 CDP、n8n、平台端口和项目相对目录。

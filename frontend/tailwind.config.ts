@@ -40,6 +40,16 @@ const config: Config = {
           DEFAULT: 'var(--accent)',
           foreground: 'var(--accent-foreground)',
         },
+        // 品牌强调色阶（emerald）：DEFAULT 与导航同值，其余为明暗自适应语义档，
+        // 取值事实源 tokens.css 的 --color-accent-*（口径见 DESIGN.md §2.2）
+        brand: {
+          DEFAULT: 'var(--color-nav-bg)',
+          deep: 'var(--color-accent-deep)',
+          soft: 'var(--color-accent-soft)',
+          mist: 'var(--color-accent-mist)',
+          line: 'var(--color-accent-line)',
+          ink: 'var(--color-accent-ink)',
+        },
         destructive: {
           DEFAULT: 'var(--destructive)',
           foreground: 'var(--destructive-foreground)',

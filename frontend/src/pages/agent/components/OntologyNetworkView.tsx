@@ -39,7 +39,7 @@ const itemLabel = (item: { displayName?: string; name?: string }) => item.displa
 
 const NETWORK_PALETTE = [
   { fill: '#eff8ff', stroke: '#38bdf8', accent: '#0284c7', soft: '#e0f2fe' },
-  { fill: '#f0fdfa', stroke: '#2dd4bf', accent: '#0f766e', soft: '#ccfbf1' },
+  { fill: '#ecfdf5', stroke: '#34d399', accent: '#047857', soft: '#d1fae5' },
   { fill: '#fffbeb', stroke: '#fbbf24', accent: '#b45309', soft: '#fef3c7' },
   { fill: '#f5f3ff', stroke: '#a78bfa', accent: '#7c3aed', soft: '#ede9fe' },
   { fill: '#fff1f2', stroke: '#fb7185', accent: '#e11d48', soft: '#ffe4e6' },

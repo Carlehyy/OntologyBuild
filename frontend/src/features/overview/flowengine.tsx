@@ -120,11 +120,11 @@ export function GovernanceHub({ stages, onNavigate }: { stages: FlowStage[]; onN
             </radialGradient>
             <radialGradient id="floorGlow" cx="50%" cy="50%" r="50%">
               <stop offset="0%" stopColor="#0891b2" stopOpacity="0.30" />
-              <stop offset="55%" stopColor="#0d9488" stopOpacity="0.09" />
+              <stop offset="55%" stopColor="#059669" stopOpacity="0.09" />
               <stop offset="100%" stopColor="#eef1f5" stopOpacity="0" />
             </radialGradient>
             <linearGradient id="orbitStroke" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stopColor="#0d9488" /><stop offset="50%" stopColor="#0891b2" /><stop offset="100%" stopColor="#6366f1" />
+              <stop offset="0%" stopColor="#059669" /><stop offset="50%" stopColor="#0891b2" /><stop offset="100%" stopColor="#6366f1" />
             </linearGradient>
             {nodes.map((n, i) => (
               <radialGradient key={i} id={`glassNode-${i}`} cx="38%" cy="32%" r="72%">

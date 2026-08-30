@@ -11,8 +11,10 @@ app/
 ├── bootstrap/         FastAPI 健康检查、生命周期与启动 seed
 ├── platform/          平台概览
 ├── super_assistant/   超级助手、Skill 与 MCP
+├── assistant_evaluation/  助手会话质量旁路评估（admin）
 ├── exploration/       业务探索
 ├── ontologies/        本体、映射、图、Agent 与 Sentinel
+├── world_model/       世界模型（推演模型/推演服务/调用记录）
 ├── scenes/            三维场景（白模场景管理与建模）
 ├── events/            事件登记
 ├── tickets/           工单（使用反馈）
@@ -35,6 +37,12 @@ app/
 不要根据目录名猜测 canonical。兼容例外、特殊模块身份和迁移顺序见
 [AGENTS.md 兼容层例外台账](../../AGENTS.md)。HTTP、menu key、
 Alembic revision、Celery task name 和 patch 路径都可能是兼容契约。
+
+`main.py` 对部分 v1 域仍经 `app/routers/` facade 挂载（如 auth：`main.py` →
+`routers/auth.py` → `auth/router.py` 两跳）；实现改动落在 canonical 包，
+facade 只作转发。`settings/` 无顶层 router：HTTP 入口经 compat facade
+（`routers/users.py`、`routers/domains.py`）转发至 `settings/users`、
+`settings/domains`，`routers/settings.py` 聚合器仅挂 monitoring。
 
 两条最复杂的核心链路另有目录入口：
 

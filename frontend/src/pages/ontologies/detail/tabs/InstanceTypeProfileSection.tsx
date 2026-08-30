@@ -55,7 +55,7 @@ export default function InstanceTypeProfileSection({
   const stats = normalizeInstanceTypeStats(statsQuery.data)
   const statsFailed = statsQuery.isError
     || (statsQuery.isSuccess && statsQuery.data !== undefined && !stats)
-  const color = typeNode?.color || '#0D9488'
+  const color = typeNode?.color || '#059669'
   const fields = stats?.fields ?? []
   const categoryFields = fields.filter(field => field.kind === 'category' && (field.values?.length ?? 0) > 0)
   const numberFields = fields.filter(field => field.kind === 'number' && field.histogram)

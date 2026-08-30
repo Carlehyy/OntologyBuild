@@ -20,6 +20,7 @@ pages/
 ├── settings/          用户、Agent、工作流、领域与存储设置
 ├── inbox/             跨业务收件箱
 ├── login|errors/      登录和授权错误页
+├── design/            组件预览页（components/ 共享组件的可达挂载点，不进导航）
 └── overview/          仅兼容 re-export；canonical 在 features/overview
 ```
 

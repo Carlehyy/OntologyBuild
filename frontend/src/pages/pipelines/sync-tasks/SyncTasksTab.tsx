@@ -359,7 +359,7 @@ export default function SyncTasksTab() {
     const success = s?.success ?? 0
     const idle = s?.idle ?? Math.max(0, (s?.total ?? 0) - (s?.running ?? 0) - (s?.failed ?? 0) - success)
     const data = [
-      { name: '运行中', value: s?.running ?? 0, itemStyle: { color: '#0D9488' } },
+      { name: '运行中', value: s?.running ?? 0, itemStyle: { color: '#059669' } },
       { name: '上次成功', value: success, itemStyle: { color: '#34D399' } },
       { name: '上次失败', value: s?.failed ?? 0, itemStyle: { color: '#F87171' } },
       { name: '空闲', value: idle, itemStyle: { color: '#CBD5E1' } },
@@ -785,7 +785,7 @@ export default function SyncTasksTab() {
                 </div>
               </div>
               <div className="flex flex-1 flex-col gap-2 pl-3">
-                <LegendRow color="#0D9488" label="运行中" value={stats?.running ?? 0} />
+                <LegendRow color="#059669" label="运行中" value={stats?.running ?? 0} />
                 <LegendRow color="#34D399" label="上次成功" value={stats?.success ?? 0} />
                 <LegendRow color="#F87171" label="上次失败" value={stats?.failed ?? 0} />
                 <LegendRow color="#CBD5E1" label="空闲" value={stats?.idle ?? Math.max(0, (stats?.total ?? 0) - (stats?.running ?? 0) - (stats?.failed ?? 0) - (stats?.success ?? 0))} />

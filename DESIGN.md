@@ -3,10 +3,10 @@ version: alpha
 name: OntologyBuild-Design-Language
 description: >-
   OntologyBuild（本体即服务平台）的统一设计语言。基于 VoltAgent/awesome-design-md
-  收录的 Supabase 设计分析骨架适配：白底近单色画布、单一绿系强调、克制 chrome、
-  数据密度优先。本文档是前端 UI 的唯一设计事实来源，供人类开发者与 AI 编码代理
-  共同遵循；取值的可执行载体是 frontend/src/styles/tokens.css 与
-  frontend/src/lib/echartsTheme.ts。
+  （站点形式 getdesign.md）收录的 Supabase 设计分析骨架适配：白底近单色画布、
+  单一绿系强调、克制 chrome、数据密度优先。本文档是前端 UI 的唯一设计事实
+  来源，供人类开发者与 AI 编码代理共同遵循；取值的可执行载体是
+  frontend/src/styles/tokens.css 与 frontend/src/lib/echartsTheme.ts。
 ---
 
 # OntologyBuild 设计语言（DESIGN.md）
@@ -19,6 +19,11 @@ description: >-
   「为什么、怎么用」，令牌文件定义「是什么」。改取值必须落在令牌文件里，
   不允许在页面里私改。
 - 新页面必须遵循本文档；存量页面的历史样式按业务域渐进迁移，不要求一次性重写。
+- 已知存量硬编码集中在 `palantir-graph/`、`pages/ontologies/mapping/`、
+  `pages/ontologies/detail/`、`pages/login/` 及两份待迁移页域主题
+  （`pages/ontologies/detail/tabs/chartTheme.ts`、
+  `pages/world-model/worldModelChartTheme.ts`，见 5.1/8.2）；这些文件不作为
+  取色参照，触碰时按迁移处理，不得在其上继续扩散。
 
 ## 1. 设计原则（源自 Supabase 模板）
 
@@ -43,12 +48,13 @@ description: >-
 | `--primary` | `#1a1a2e` | `#e6e9ef` | 主按钮/主操作 |
 | `--muted-foreground` | `#5a5a72` | `#98a2b3` | 次要文字 |
 | `--border` | `#e2e4e9` | `#2a3342` | 发丝边框 |
-| `--ring` | `#0d9488` | `#14b8a6` | 焦点环/强调 |
+| `--ring` | `#059669` | `#3ecf8e` | 焦点环/强调 |
 
-### 2.2 平台强调色（teal 系）
+### 2.2 平台强调色（emerald 系，源自 Supabase 祖母绿）
 
-- 品牌强调：teal `#0d9488`（浅）/ `#14b8a6`（深），用于导航底色
-  （`--color-nav-bg`）、焦点环、选中态、图表主序列。
+- 品牌强调：emerald `#059669`（浅）/ `#3ecf8e`（深，Supabase 祖母绿原值），
+  用于导航底色（`--color-nav-bg`）、焦点环、选中态、图表主序列；浅档取
+  emerald-600 以维持浅底 3:1 对比度（与历史 teal 同级），暗底直接用原值。
 - 使用纪律：强调色是「信号」不是「装饰」——同一视图只给最重要的元素。
 
 ### 2.3 语义色
@@ -71,6 +77,9 @@ success `--color-success #2d8a4e` · warning `#c9861a` · danger
 - 字号阶梯（`--font-*`）：12 / 13 / 14(基准) / 16 / 18 / 20 / 24px；
   字重只用 400 / 500 / 600；行高 tight 1.25 / normal 1.5 / relaxed 1.75。
 - 中文排版：标题不加负字距；数字密集列用等宽字体 + 右对齐。
+- 「技术标签」模式（吸收自上游 Supabase 的等宽标签惯例）：JetBrains Mono
+  11–12px、全大写、字距约 0.1em、`muted-foreground` 色，用于区块小标题、
+  ID 与状态组标签；不引入新字体，继续用 `@fontsource/jetbrains-mono`。
 
 ## 4. 组件规范
 
@@ -81,7 +90,11 @@ success `--color-success #2d8a4e` · warning `#c9861a` · danger
 | 基础件 | `components/ui/*`（shadcn 语义约定） | Button/Card/Badge/Input/Dialog 等，样式全部走 token |
 | 复杂件 | antd 6 | 表格/树/穿梭等重组件，经 ConfigProvider token 对齐平台色 |
 | 样例库 | ReUI（shadcn 注册表扩展） | 按需拷贝源码，拷贝后按 4.2 规则换肤 |
+| 动效组件 | beUI（beui.dev，MIT 开源） | shadcn 式源码拷贝，按 4.2 映射平台 token；动效依赖 `motion`，文案默认中文、可用 props 覆盖；首个落地 `components/availability-scheduler`，预览路由 `/design/components` |
 | 表格块参考 | Tremor Blocks | 只参考布局结构，配色按 4.2 映射 |
+
+组件清单、引入流程与存量页面渐进采用策略见
+[`frontend/src/components/README.md`](./frontend/src/components/README.md)。
 
 ### 4.2 外部样例拷贝规则（治理条款）
 
@@ -105,10 +118,13 @@ success `--color-success #2d8a4e` · warning `#c9861a` · danger
 分类序列色板（按序轮转，勿在页面重排）：
 
 ```
-CHART_TEAL #0D9488 · CHART_BLUE #3B82F6 · CHART_VIOLET #8B5CF6 · CHART_AMBER #F59E0B
+CHART_TEAL #059669 · CHART_BLUE #3B82F6 · CHART_VIOLET #8B5CF6 · CHART_AMBER #F59E0B
 CHART_RED #F43F5E · CHART_EMERALD #10B981 · CHART_INDIGO #6366F1 · CHART_ORANGE #F97316
 CHART_CYAN #14B8A6 · CHART_PINK #EC4899      （扩展位：CHART_SKY #0EA5E9）
 ```
+
+CHART_TEAL 为历史导出名，取值已随品牌强调切换为 emerald-600；与序列位 6
+的 CHART_EMERALD 同族但明度可区分，多序列图避免相邻使用两者表达不同语义。
 
 文本/轴/网格：`CHART_TEXT #64748B` · `CHART_TEXT_STRONG #334155` ·
 `CHART_AXIS #CBD5E1` · `CHART_SPLIT #F1F5F9`；紧凑图的半透明轴线/虚线网格用
@@ -150,6 +166,9 @@ ECharts 关系图能力不足时可选 G6（图可视化）/X6（图编辑），
 
 - 切换机制：`<html class="dark">`（`lib/theme.ts` + tailwind `darkMode: ['class']`）。
 - **任何 token 改动必须 `:root` 与 `.dark` 成对维护**（AGENTS.md 亦有所述）。
+- 深色模式的层级表达优先用边框与表面色阶（`--card`/`--border`/`--accent`），
+  阴影只作极轻辅助（对齐上游 Supabase「深度靠边框层级、不靠阴影」的治理）；
+  禁止在深色下叠加重阴影制造层级。
 - 图表现状为固定浅色作用域；新增深色图表支持时优先把取值改为 CSS 变量注入，
   不要再复制第二套主题文件。
 
@@ -171,6 +190,9 @@ ECharts 关系图能力不足时可选 G6（图可视化）/X6（图编辑），
 
 - 风格骨架改编自 [VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md)
   收录的 Supabase 设计分析（white canvas + near-black ink + 单一绿色 CTA + 数据平台气质）。
+- 上游站点形式：[getdesign.md 的 Supabase 设计分析](https://getdesign.md/supabase/design-md)
+  （同源内容；本平台适配保留 light 优先与数据密度取向，未照搬其营销站排版尺度，
+  差异与可吸收项见 2026-08-30 对比记录）。
 - 组件生态参照：shadcn/ui 主题约定、[reui.io](https://reui.io)、
   [blocks.tremor.so](https://blocks.tremor.so)、[ECharts](https://echarts.apache.org/)、
   [AntV G6](https://g6.antv.antgroup.com) / [AntV X6](https://x6.antv.antgroup.com)。

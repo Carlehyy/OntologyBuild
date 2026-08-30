@@ -110,7 +110,7 @@ export function StructureGraphEdge({
       ? '#7c3aed'
       : data?.emphasis === 'search'
         ? '#d97706'
-        : selected ? '#0f766e' : relation ? '#64748b' : data?.kind === 'property' ? '#c4b5fd' : '#fcd34d'
+        : selected ? '#047857' : relation ? '#64748b' : data?.kind === 'property' ? '#c4b5fd' : '#fcd34d'
   const opacity = data?.dimmed ? 0.12 : relation ? 0.9 : 0.62
 
   return (

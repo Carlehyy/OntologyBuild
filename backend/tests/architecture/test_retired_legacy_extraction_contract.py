@@ -126,5 +126,13 @@ def test_retired_runtime_modules_do_not_return_as_compatibility_facades():
         APP_DIR / "models" / "mcp.py",
         APP_DIR / "models" / "prompt.py",
         APP_DIR / "models" / "rules_config.py",
+        APP_DIR / "settings" / "agents" / "models.py",
+        APP_DIR / "settings" / "agents" / "schemas.py",
+        APP_DIR / "ontologies" / "audit" / "models.py",
+        APP_DIR / "ontologies" / "audit" / "router.py",
+        APP_DIR / "ontologies" / "audit" / "schemas.py",
+        APP_DIR / "ontologies" / "audit" / "service.py",
+        APP_DIR / "services" / "v2" / "vector" / "__init__.py",
+        APP_DIR / "services" / "v2" / "vector" / "chroma_service.py",
     )
     assert not [path for path in retired_modules if path.exists()]

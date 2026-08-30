@@ -17,8 +17,9 @@
 完整流程，手动触发（workflow_dispatch）始终全量：
 
 1. 使用 Python 3.12 和各自 `uv.lock` 并行执行后端（pytest-xdist 多进程 +
-   pytest-split 按已记录时长分四个时长均衡的分片，时长数据见
-   `backend/.test_durations`；测试环境使用最低 bcrypt 轮次）与配置中心回归；
+   pytest-split 按已记录时长均衡分片，分片数以该 workflow 的 matrix 定义
+   为准，时长数据见 `backend/.test_durations`；测试环境使用最低 bcrypt
+   轮次）与配置中心回归；
 2. 运行 Alembic 新库升级与单 head 检查；
 3. 使用当前已跟踪的生产依赖清单验证 PostgreSQL、Redis/Celery worker、
    Neo4j、MinIO、n8n 和 Chromium CDP 配置；
@@ -44,6 +45,10 @@
 
 PR 到 `nano-ontoprompt` 时，独立的 `.github/workflows/ci.yml` 会并行执行
 文档/仓库卫生、后端、配置中心和前端门禁，但不会执行部署。
+
+生产编排可能按需叠加观测层：`deploy/deploy-prod.sh` 检测到 `ARMS_LICENSE_KEY`
+时自动合并 `agentloop/compose.agentloop.yml`（阿里云 AgentLoop 探针后端），
+详见 [agentloop/README.md](../../agentloop/README.md)。
 
 生产 Nginx 对 `/api/`、`/api-hub/` 和 `/proxy/` 使用各自的后端代理契约。
 已退役的通用 `/mcp` 与全部 `/mcp/` 子路径（含已移除的外部 MinIO MCP

@@ -3,11 +3,11 @@
 import type { EChartsOption } from 'echarts'
 
 export const CHART_PALETTE = [
-  '#0D9488', '#3B82F6', '#8B5CF6', '#F59E0B', '#F43F5E',
+  '#059669', '#3B82F6', '#8B5CF6', '#F59E0B', '#F43F5E',
   '#10B981', '#6366F1', '#F97316', '#14B8A6', '#EC4899',
 ]
 
-export const CHART_TEAL = '#0D9488'
+export const CHART_TEAL = '#059669'
 export const CHART_TEXT = '#64748B'
 export const CHART_TEXT_STRONG = '#334155'
 export const CHART_AXIS = '#CBD5E1'

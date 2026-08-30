@@ -221,7 +221,7 @@ export function WaveSignal({ height = 150 }: { height?: number }) {
             <stop offset="100%" stopColor="#d97706" stopOpacity="0" />
           </linearGradient>
           <linearGradient id="wfStroke" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#0d9488" />
+            <stop offset="0%" stopColor="#059669" />
             <stop offset="55%" stopColor="#0891b2" />
             <stop offset="100%" stopColor="#6366f1" />
           </linearGradient>
@@ -277,7 +277,7 @@ export function WaveSignal({ height = 150 }: { height?: number }) {
 }
 
 /* ═══ 多层流光数据流丝带（治理数据流 · 无缝横向流动） ═══ */
-const RIBBON_COLORS = ['#0891b2', '#0d9488', '#0891b2', '#0891b2', '#d97706', '#0d9488', '#6366f1', '#0891b2', '#0d9488', '#d97706']
+const RIBBON_COLORS = ['#0891b2', '#059669', '#0891b2', '#0891b2', '#d97706', '#059669', '#6366f1', '#0891b2', '#059669', '#d97706']
 export function DataFlowRibbon({ height = 96 }: { height?: number }) {
   const W = 560, H = height
   const bands = useMemo(() => {
