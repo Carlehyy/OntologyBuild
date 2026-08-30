@@ -360,6 +360,9 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page).toHaveURL(new RegExp(`/explore\\?ontologyId=${ontology.id}&versionId=${draft.id}`))
   await page.getByTestId('explore-view-mapping').click()
   await expect(page).toHaveURL(new RegExp(`/explore\\?ontologyId=${ontology.id}&versionId=${draft.id}&view=mapping`))
+  // 嵌入工作台不自动弹新手教程（保留手动入口），打开后仍居中于工作台
+  await expect(page.locator('.dmc-tutorial-card')).toHaveCount(0)
+  await page.getByTitle('新手教程').click()
   const mappingWorkspaceBox = await page.getByTestId('mapping-workspace').boundingBox()
   const tutorialCardBox = await page.locator('.dmc-tutorial-card').boundingBox()
   expect(mappingWorkspaceBox).toBeTruthy()
@@ -435,7 +438,7 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(assetPreviewButton).toHaveAttribute('aria-pressed', 'false')
   await expect(page.getByTestId('mapping-dataset-preview')).toHaveCount(0)
 
-  await page.getByRole('button', { name: '模型结构', exact: true }).click()
+  await page.getByTestId('explore-view-model').click()
   await expect(page).toHaveURL(new RegExp(`/explore\\?ontologyId=${ontology.id}&versionId=${draft.id}&view=model`))
   await expect(page.getByTestId('graph-workspace-stage')).toContainText('草稿', { timeout: 20_000 })
   await page.goto(`/#/ontologies/${ontology.id}`)

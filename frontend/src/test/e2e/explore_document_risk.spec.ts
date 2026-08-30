@@ -168,7 +168,7 @@ async function mockExplore(
   })
 
   await page.goto('/#/explore', { waitUntil: 'domcontentloaded' })
-  await page.getByTestId('requirements-document-button').click()
+  await page.getByTestId('explore-view-docs').click()
   await expect(page.getByTestId('requirements-view')).toBeVisible()
   await expect(page.getByTestId('explore-view-docs')).toHaveAttribute('aria-pressed', 'true')
 }

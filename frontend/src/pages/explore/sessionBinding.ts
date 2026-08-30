@@ -1,6 +1,6 @@
 /* 探索会话的本体版本绑定纯逻辑：URL 参数解析与绑定会话选择。
    与 ExplorationPage.tsx 解耦（无 React 依赖），便于 node:test 单测。 */
-import type { BxSession, BxDraftOntology } from '@/api/exploration'
+import type { BxSession } from '@/api/exploration'
 
 /** URL 绑定锚点：/explore?ontologyId=…&versionId=…（HashRouter，query 在 hash 内）。 */
 export interface SessionBinding {
@@ -75,46 +75,4 @@ export function resolveBoundSession(
   const existing = sessions.find(matches)
   if (existing) return { action: 'select', sessionId: existing.id }
   return { action: 'create' }
-}
-
-/** 「绑定本体」选择器选项：同一本体已收敛为最新编辑中草稿。 */
-export interface DraftBindingOption {
-  ontologyId: string
-  ontologyName: string
-  domain: string
-  versionId: string
-  versionNumber: string
-  versionLabel: string
-}
-
-/**
- * 收敛「草稿态本体」选择器选项：同一本体保留 draftCreatedAt 最新的编辑中草稿
- * （缺失时间或同刻时先到者优先），整体按最近草稿活动倒序（稳定排序，同刻保持
- * 后端返回顺序）。输入即后端 /draft-ontologies 的 items；纯函数便于 node:test 单测。
- */
-export function mergeDraftBindingOptions(items: BxDraftOntology[]): DraftBindingOption[] {
-  const byOntology = new Map<string, { option: DraftBindingOption; at: string }>()
-  for (const item of items || []) {
-    if (!item?.ontologyId || !item.versionId) continue
-    const at = item.draftCreatedAt || ''
-    const existing = byOntology.get(item.ontologyId)
-    if (existing && existing.at >= at) continue
-    byOntology.set(item.ontologyId, {
-      option: {
-        ontologyId: item.ontologyId,
-        ontologyName: item.ontologyName,
-        domain: item.domain,
-        versionId: item.versionId,
-        versionNumber: item.versionNumber,
-        versionLabel: item.versionLabel,
-      },
-      at,
-    })
-  }
-  return [...byOntology.values()]
-    .sort((a, b) => {
-      if (a.at !== b.at) return a.at < b.at ? 1 : -1
-      return 0
-    })
-    .map(entry => entry.option)
 }

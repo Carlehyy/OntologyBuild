@@ -156,11 +156,12 @@ test.describe('业务探索流程模型面板', () => {
     await expect(processCard.getByText('1 指标', { exact: true })).toBeVisible()
     await expect(processCard.getByText('含异常路径', { exact: true })).toBeVisible()
 
-    // 图示弹窗：flow/sequence 的 target 下拉合并场景名与流程名
-    const diagramModal = page.locator('div.fixed.inset-0').filter({ has: page.getByTestId('canvas-diagram-title') })
+    // 图示视图（目录树底部「图示」目录）：flow/sequence 的 target 下拉合并场景名与流程名
+    const diagramPane = page.getByTestId('canvas-diagram-pane')
     await page.getByTestId('business-flow-button').click()
+    await expect(diagramPane).toBeVisible()
     await page.getByRole('button', { name: '流程图', exact: true }).click()
-    const flowSelect = diagramModal.locator('select')
+    const flowSelect = diagramPane.locator('select')
     await expect(flowSelect.locator('option')).toContainText([
       '默认场景或流程（第一个）', '紧急采购', '采购到付款',
     ])
@@ -168,7 +169,7 @@ test.describe('业务探索流程模型面板', () => {
     await expect.poll(() => flowTargets.at(-1)).toBe('采购到付款')
 
     await page.getByRole('button', { name: '时序图', exact: true }).click()
-    const sequenceSelect = diagramModal.locator('select')
+    const sequenceSelect = diagramPane.locator('select')
     await expect(sequenceSelect.locator('option')).toContainText([
       '默认场景或流程（第一个）', '紧急采购', '采购到付款',
     ])
@@ -177,7 +178,7 @@ test.describe('业务探索流程模型面板', () => {
 
     // 状态图仍为对象口径，不混入流程名
     await page.getByRole('button', { name: '状态图', exact: true }).click()
-    const stateSelect = diagramModal.locator('select')
+    const stateSelect = diagramPane.locator('select')
     await expect(stateSelect.locator('option')).toContainText(['自动选择对象', '采购订单'])
   })
 })

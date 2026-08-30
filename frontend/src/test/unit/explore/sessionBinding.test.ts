@@ -3,7 +3,6 @@ import { describe, it } from 'node:test'
 
 import {
   EXPLORE_VIEWS,
-  mergeDraftBindingOptions,
   parseExploreView,
   parsePendingNewSession,
   parseSessionBinding,
@@ -106,56 +105,6 @@ describe('shouldAutoSelectLatestSession', () => {
   it('待建新会话态保持空白，不恢复最近会话', () => {
     assert.equal(shouldAutoSelectLatestSession(true, false), false)
     assert.equal(shouldAutoSelectLatestSession(true, true), false)
-  })
-})
-
-describe('mergeDraftBindingOptions', () => {
-  const item = (ontologyId: string, versionId: string, draftCreatedAt: string | null, ontologyName = `本体-${ontologyId}`) => ({
-    ontologyId,
-    ontologyName,
-    domain: '测试领域',
-    versionId,
-    versionNumber: 'v1.1',
-    versionLabel: '业务探索合并',
-    draftCreatedAt,
-  })
-
-  it('空列表与缺失字段：空输入返回空数组，缺 ontologyId/versionId 的行被丢弃', () => {
-    assert.deepEqual(mergeDraftBindingOptions([]), [])
-    assert.deepEqual(mergeDraftBindingOptions([
-      item('', 'ver-1', '2026-01-01T00:00:00Z'),
-      item('ont-1', '', '2026-01-01T00:00:00Z'),
-    ]), [])
-  })
-
-  it('同一本体只保留最新编辑中草稿（draftCreatedAt 降序取首个）', () => {
-    const options = mergeDraftBindingOptions([
-      item('ont-1', 'ver-old', '2026-01-01T00:00:00Z'),
-      item('ont-1', 'ver-new', '2026-02-01T00:00:00Z'),
-    ])
-    assert.equal(options.length, 1)
-    assert.equal(options[0].versionId, 'ver-new')
-  })
-
-  it('整体按最近草稿活动倒序；缺失时间或同刻保持后端返回顺序', () => {
-    const options = mergeDraftBindingOptions([
-      item('ont-a', 'ver-a', null),
-      item('ont-b', 'ver-b', '2026-03-01T00:00:00Z'),
-      item('ont-c', 'ver-c', '2026-02-01T00:00:00Z'),
-    ])
-    assert.deepEqual(options.map(o => o.ontologyId), ['ont-b', 'ont-c', 'ont-a'])
-    const tied = mergeDraftBindingOptions([
-      item('ont-x', 'ver-x', '2026-01-01T00:00:00Z'),
-      item('ont-y', 'ver-y', '2026-01-01T00:00:00Z'),
-    ])
-    assert.deepEqual(tied.map(o => o.ontologyId), ['ont-x', 'ont-y'])
-  })
-
-  it('选项只携带渲染所需字段，不含时间戳', () => {
-    const [option] = mergeDraftBindingOptions([item('ont-1', 'ver-1', '2026-01-01T00:00:00Z')])
-    assert.deepEqual(Object.keys(option).sort(), [
-      'domain', 'ontologyId', 'ontologyName', 'versionId', 'versionLabel', 'versionNumber',
-    ])
   })
 })
 

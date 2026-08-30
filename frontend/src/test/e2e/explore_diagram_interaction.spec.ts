@@ -236,14 +236,13 @@ test.describe('业务探索图表与图片交互', () => {
     await expect(page.getByTestId('diagram-preview-modal')).toBeHidden()
   })
 
-  test('业务画布弹窗和 Markdown 图片使用同一套自适应交互', async ({ page }) => {
+  test('业务画布图示与 Markdown 图片使用同一套自适应交互', async ({ page }) => {
     await page.getByRole('button', { name: '图示', exact: true }).click()
     await page.getByRole('button', { name: '状态图', exact: true }).click()
     await expect(page.getByTestId('canvas-diagram-title')).toHaveText('工单状态图')
     await page.waitForTimeout(300)
     await expect(page.getByTestId('canvas-diagram-title')).toHaveText('工单状态图')
     await expectWheelAndDrag(page, 'diagram-inline-canvas')
-    await page.getByRole('button', { name: '关闭业务建模图表' }).click()
 
     await page.getByRole('button', { name: '预览图片：业务示意图' }).click()
     await expectWheelAndDrag(page, 'image-preview-viewport')
@@ -297,20 +296,28 @@ test.describe('业务探索图表与图片交互', () => {
     await expect(shell).toHaveCSS('border-color', 'rgb(20, 184, 166)')
   })
 
-  test('模型分组进入和切换会话后默认折叠，可由用户自行展开', async ({ page }) => {
+  test('模型分组默认展开且可折叠，切换会话后回到对象模型总览', async ({ page }) => {
     const objectSection = page.getByRole('button', { name: /对象模型/ })
-    const objectCard = page.getByTitle('查看详情')
-    await expect(objectSection).toHaveAttribute('aria-expanded', 'false')
-    await expect(objectCard).toBeHidden()
+    const objectItem = page.getByRole('button', { name: '工单', exact: true })
 
+    // 目录树分组默认展开，子项与右侧清单同现
+    await expect(objectSection).toHaveAttribute('aria-expanded', 'true')
+    await expect(objectItem).toBeVisible()
+
+    // 点击分组头折叠，子项隐藏
+    await objectSection.click()
+    await expect(objectSection).toHaveAttribute('aria-expanded', 'false')
+    await expect(objectItem).toHaveCount(0)
+
+    // 再次点击恢复展开
     await objectSection.click()
     await expect(objectSection).toHaveAttribute('aria-expanded', 'true')
-    await expect(objectCard).toBeVisible()
+    await expect(objectItem).toBeVisible()
 
+    // 切换会话后回到对象模型总览，分组恢复默认展开
     await page.getByRole('button', { name: '查看历史会话' }).click()
     await page.getByRole('button', { name: /^第二个业务会话/ }).click()
-    await expect(objectSection).toHaveAttribute('aria-expanded', 'false')
-    await expect(objectCard).toBeHidden()
+    await expect(objectSection).toHaveAttribute('aria-expanded', 'true')
   })
 
   test('文件清单中的 HTML 使用隔离网页预览并保留源码编辑', async ({ page }) => {
@@ -396,20 +403,24 @@ test.describe('业务探索图表与图片交互', () => {
     await expect(drawer).toBeHidden()
   })
 
-  test('四个工作区入口展示明确标签并使用不同状态色', async ({ page }) => {
+  test('工作区四视图标签清晰，会话文件与历史会话入口使用不同状态色', async ({ page }) => {
+    const canvasTab = page.getByTestId('explore-view-canvas')
+    const modelTab = page.getByTestId('explore-view-model')
+    const mappingTab = page.getByTestId('explore-view-mapping')
+    const docsTab = page.getByTestId('explore-view-docs')
+    await expect(canvasTab).toContainText('业务场景')
+    await expect(modelTab).toContainText('本体模型')
+    await expect(mappingTab).toContainText('数据映射')
+    await expect(docsTab).toContainText('需求文档')
+
     const fileButton = page.getByTestId('workspace-files-button')
     const historyButton = page.getByTestId('session-history-button')
-    const flowButton = page.getByTestId('business-flow-button')
-    const documentButton = page.getByTestId('requirements-document-button')
-
     await expect(fileButton).toContainText('会话文件')
     await expect(historyButton).toContainText('历史会话')
-    await expect(flowButton).toContainText('图示')
-    await expect(documentButton).toContainText('需求文档')
 
-    const colors = await Promise.all([fileButton, historyButton, flowButton, documentButton]
+    const colors = await Promise.all([fileButton, historyButton]
       .map(button => button.evaluate(element => getComputedStyle(element).color)))
-    expect(new Set(colors).size).toBe(4)
+    expect(new Set(colors).size).toBe(2)
   })
 
   test('用户消息和助手回复均可一键复制，聊天区域滚动条隐藏', async ({ page }) => {
@@ -430,7 +441,7 @@ test.describe('业务探索图表与图片交互', () => {
   })
 
   test('需求文档历史版本与详情标题栏的分割线保持水平对齐', async ({ page }) => {
-    await page.getByRole('button', { name: '查看需求文档' }).click()
+    await page.getByTestId('explore-view-docs').click()
     await expect(page.getByTestId('requirements-view')).toBeVisible()
     await expect(page.getByTestId('explore-view-docs')).toHaveAttribute('aria-pressed', 'true')
 

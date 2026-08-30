@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Box, Users, Play, Zap, Scale, Map as MapIcon, ChevronDown, ChevronRight, CircleAlert,
-  CircleCheck, CircleHelp, GitBranch, Share2, ShieldAlert, ShieldCheck, X, Copy, Loader2, FileText,
+  CircleCheck, CircleHelp, GitBranch, Share2, ShieldAlert, ShieldCheck, Copy, Loader2, FileText,
 } from 'lucide-react'
 import {
   explorationApi, type BusinessCanvas, type BxQuestion, type CanvasElement,
@@ -9,7 +9,7 @@ import {
 } from '@/api/exploration'
 import MermaidBlock from '@/components/MermaidBlock'
 import { writeTextToClipboard } from '@/utils/clipboard'
-import ElementDetailModal from './ElementDetailModal'
+import ElementDetailView from './ElementDetailView'
 import {
   DIAGRAM_TABS, canvasProcessNames, diagramTargetOptions, diagramTargetPlaceholder,
   elementBadges, type CanvasKey,
@@ -197,18 +197,24 @@ function LedgerPanel({ questions, onAsk }: {
   )
 }
 
-/** 业务画布面板：七类模型分组卡片 + 澄清账本 + 质量门，随 SSE canvas 事件实时刷新 */
-export default function CanvasPanel({ sessionId, canvas, completeness, readiness, onAsk, onOpenDocuments }: {
+type TreeSelection =
+  | { kind: 'section'; key: CanvasKey }
+  | { kind: 'diagram' }
+
+/**
+ * 业务场景视图：左侧模型目录树（七类模型 + 底部「图示」目录），右侧内容展示。
+ * 质量门与澄清账本置顶在目录树上方，随 SSE canvas 事件实时刷新。
+ */
+export default function CanvasPanel({ sessionId, canvas, completeness, readiness, onAsk }: {
   sessionId?: string
   canvas: BusinessCanvas | null
   completeness: Completeness | null
   readiness?: Readiness | null
   onAsk?: (text: string) => void
-  onOpenDocuments?: () => void
 }) {
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
-  const [detailStack, setDetailStack] = useState<{ section: typeof SECTIONS[number]; el: CanvasElement }[]>([])
-  const [dgOpen, setDgOpen] = useState(false)
+  const [sel, setSel] = useState<TreeSelection>({ kind: 'section', key: 'objects' })
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [elementStack, setElementStack] = useState<{ key: CanvasKey; el: CanvasElement }[]>([])
   const [dgKind, setDgKind] = useState<DiagramKind>('er')
   const [dgTarget, setDgTarget] = useState('')
   const [dgMermaid, setDgMermaid] = useState('')
@@ -220,9 +226,18 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
   const counts = completeness?.counts || {}
   const total = Object.values(counts).reduce((a, b) => a + b, 0)
 
-  // 每次切换会话都从折叠态开始；当前会话内仍保留用户手动展开的选择。
+  // 每次切换会话都回到对象模型总览；图示请求代际递增防串会话。
   useEffect(() => {
-    setCollapsed({})
+    setSel({ kind: 'section', key: 'objects' })
+    setExpanded({})
+    setElementStack([])
+    setDgKind('er')
+    setDgTarget('')
+    setDgMermaid('')
+    setDgWarnings([])
+    setDgError('')
+    setDgBusy(false)
+    dgRequestSeq.current += 1
   }, [sessionId])
 
   const scenarioNames = (canvas?.scenarios || []).map(s => String(s.display_name || s.name))
@@ -232,7 +247,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
       .some(a => (a.enum?.length || 0) > 0 && /状态|阶段|status|state|stage/i.test(`${a.name || ''}${a.display_name || ''}`)))
     .map(o => String(o.display_name || o.name))
 
-  const loadDiagram = async (kind: DiagramKind, target: string) => {
+  const loadDiagram = useCallback(async (kind: DiagramKind, target: string) => {
     if (!sessionId) return
     const requestSeq = ++dgRequestSeq.current
     setDgBusy(true)
@@ -251,176 +266,143 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
     } finally {
       if (requestSeq === dgRequestSeq.current) setDgBusy(false)
     }
-  }
+  }, [sessionId])
 
-  const openDiagram = () => {
-    setDgKind('er')
-    setDgTarget('')
-    setDgOpen(true)
-    void loadDiagram('er', '')
-  }
-
-  const closeDiagram = () => {
-    dgRequestSeq.current += 1
-    setDgBusy(false)
-    setDgOpen(false)
-  }
+  // 选中「图示」目录且尚无内容时自动加载当前图种
+  useEffect(() => {
+    if (sel.kind === 'diagram' && !dgMermaid && !dgBusy && !dgError) {
+      void loadDiagram(dgKind, dgTarget)
+    }
+  }, [sel.kind, dgMermaid, dgBusy, dgError, dgKind, dgTarget, loadDiagram])
 
   const targetSpec = DIAGRAM_TABS.find(t => t.kind === dgKind)?.needsTarget
   const targetOptions = diagramTargetOptions(targetSpec, { scenarioNames, objectNames, processNames })
-  const detail = detailStack[detailStack.length - 1] || null
+  const topElement = elementStack[elementStack.length - 1] || null
+
+  const selectSection = (key: CanvasKey) => {
+    setElementStack([])
+    setSel({ kind: 'section', key })
+    setExpanded(e => ({ ...e, [key]: !(e[key] ?? true) }))
+  }
+  const openElement = (key: CanvasKey, el: CanvasElement) => {
+    setSel({ kind: 'section', key })
+    setElementStack([{ key, el }])
+  }
 
   return (
-    <div className="workspace-topology-surface flex h-full flex-col">
-      <div className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-white px-4">
-        <div className="text-sm font-semibold text-[var(--color-text-primary)]">业务场景</div>
-        <div className="flex shrink-0 items-center gap-1.5">
+    <div className="workspace-topology-surface flex h-full min-h-0" data-testid="business-scenario-region">
+      {/* 左：模型目录树 */}
+      <div className="flex w-60 shrink-0 flex-col border-r border-[var(--color-border)] bg-slate-50/55">
+        <div className="flex-1 space-y-1.5 overflow-y-auto p-2">
+          {readiness && total > 0 && <GatePanel readiness={readiness} />}
+          <LedgerPanel questions={canvas?.questions || []} onAsk={onAsk} />
+
+          <div className="px-2 pt-1 text-[10px] font-semibold tracking-[0.1em] text-[var(--color-text-tertiary)]">业务模型</div>
+          {SECTIONS.map(section => {
+            const { key, label, icon: Icon, tint } = section
+            const items = (canvas?.[key] || []) as CanvasElement[]
+            const selected = sel.kind === 'section' && sel.key === key
+            const isExpanded = expanded[key] ?? true
+            return (
+              <div key={key}>
+                <button
+                  onClick={() => selectSection(key)}
+                  aria-expanded={isExpanded}
+                  className={`w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${selected
+                    ? 'bg-teal-50 text-teal-800'
+                    : 'text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'}`}
+                >
+                  <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${tint}`}>
+                    <Icon size={12} />
+                  </span>
+                  <span className="flex-1 truncate text-xs font-medium">{label}</span>
+                  <span className="text-[11px] text-[var(--color-text-tertiary)]">{items.length}</span>
+                  {isExpanded
+                    ? <ChevronDown size={12} className="shrink-0 text-[var(--color-text-tertiary)]" />
+                    : <ChevronRight size={12} className="shrink-0 text-[var(--color-text-tertiary)]" />}
+                </button>
+                {isExpanded && items.length > 0 && (
+                  <div className="ml-[18px] mt-0.5 space-y-0.5 border-l border-[var(--color-border)] pl-2">
+                    {items.map(el => {
+                      const activeElement = topElement?.key === key && topElement.el.id === el.id
+                      return (
+                        <button
+                          key={el.id}
+                          onClick={() => openElement(key, el)}
+                          title="查看详情"
+                          className={`block w-full truncate rounded px-2 py-1 text-left text-[11px] transition-colors ${activeElement
+                            ? 'bg-teal-50 font-medium text-teal-800'
+                            : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'}`}
+                        >
+                          {el.display_name || el.name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        {/* 目录树底部：图示（由画布确定性生成的 ER/流程/时序/状态图） */}
+        <div className="shrink-0 border-t border-[var(--color-border)] p-2">
           <button
-            onClick={openDiagram}
+            onClick={() => { setElementStack([]); setSel({ kind: 'diagram' }) }}
             disabled={!sessionId || (counts.objects || 0) === 0}
             title={(counts.objects || 0) === 0 ? '画布还没有对象模型' : '从画布确定性生成 ER/流程/时序/状态图（不经 LLM）'}
             data-testid="business-flow-button"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2 text-[11px] font-medium text-emerald-700 transition-colors hover:border-emerald-300 hover:bg-emerald-100 hover:text-emerald-800 active:scale-[0.98] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+            className={`w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors disabled:opacity-40 ${sel.kind === 'diagram'
+              ? 'bg-emerald-50 text-emerald-800'
+              : 'text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'}`}
           >
-            <Share2 size={13} /> 图示
-          </button>
-          <button
-            type="button"
-            onClick={onOpenDocuments}
-            disabled={!sessionId}
-            title="查看需求文档"
-            aria-label="查看需求文档"
-            data-testid="requirements-document-button"
-            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 text-[11px] font-medium text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100 hover:text-amber-800 active:scale-[0.98] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
-          >
-            <FileText size={13} />
-            <span>需求文档</span>
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-600">
+              <Share2 size={12} />
+            </span>
+            <span className="flex-1 truncate text-xs font-medium">图示</span>
           </button>
         </div>
       </div>
 
-      <div
-        data-testid="business-scenario-region"
-        className="workspace-topology-surface flex-1 space-y-2 overflow-y-auto px-3 pb-3 pt-3"
-      >
-        {/* 质量门：与草稿生成闸门同一口径 */}
-        {readiness && total > 0 && <GatePanel readiness={readiness} />}
-
-        {/* 澄清账本：开放问题点选即答 */}
-        <LedgerPanel questions={canvas?.questions || []} onAsk={onAsk} />
-
-        {SECTIONS.map((section) => {
-          const { key, label, icon: Icon, tint } = section
-          const items = (canvas?.[key] || []) as CanvasElement[]
-          const isCollapsed = collapsed[key] ?? true
-          return (
-            <div key={key} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
-              <button
-                onClick={() => setCollapsed(c => ({ ...c, [key]: !isCollapsed }))}
-                aria-expanded={!isCollapsed}
-                className="w-full flex items-center gap-2 px-3 py-2 text-left"
-              >
-                <span className={`w-5 h-5 rounded-md flex items-center justify-center ${tint}`}>
-                  <Icon size={12} />
-                </span>
-                <span className="text-xs font-medium text-[var(--color-text-primary)] flex-1">{label}</span>
-                <span className="text-[11px] text-[var(--color-text-tertiary)]">{items.length}</span>
-                {isCollapsed
-                  ? <ChevronRight size={13} className="text-[var(--color-text-tertiary)]" />
-                  : <ChevronDown size={13} className="text-[var(--color-text-tertiary)]" />}
-              </button>
-              {!isCollapsed && items.length > 0 && (
-                <div className="px-3 pb-2.5 space-y-1.5">
-                  {items.map(el => (
-                    <button
-                      key={el.id}
-                      onClick={() => setDetailStack([{ section, el }])}
-                      title="查看详情"
-                      className="group block w-full text-left rounded-md bg-[var(--color-bg-base)] px-2.5 py-1.5 transition-colors hover:bg-[var(--color-bg-hover)] hover:ring-1 hover:ring-teal-200"
-                    >
-                      <div className="flex items-center gap-1 text-xs font-medium text-[var(--color-text-primary)]">
-                        <span className="truncate">
-                          {el.display_name || el.name}
-                          {el.display_name && el.display_name !== el.name && (
-                            <span className="ml-1.5 font-normal text-[var(--color-text-tertiary)] font-mono text-[11px]">{el.name}</span>
-                          )}
-                        </span>
-                        <ChevronRight size={12} className="ml-auto shrink-0 text-[var(--color-text-tertiary)] opacity-0 transition-opacity group-hover:opacity-100" />
-                      </div>
-                      {(el.description || elementBadges(key, el).length > 0) && (
-                        <div className="mt-0.5 flex flex-wrap items-center gap-1">
-                          {elementBadges(key, el).map((b, i) => (
-                            <span key={i} className="text-[10px] px-1.5 py-px rounded bg-black/[0.04] text-[var(--color-text-secondary)]">{b}</span>
-                          ))}
-                          {el.description && (
-                            <span className="text-[11px] text-[var(--color-text-tertiary)] truncate max-w-full">{el.description}</span>
-                          )}
-                        </div>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-
-      {/* 元素详情弹窗：点击画布卡片查看完整字段，引用可下钻 */}
-      {detail && (
-        <ElementDetailModal
-          sectionKey={detail.section.key}
-          el={detail.el}
-          canvas={canvas}
-          onClose={() => setDetailStack([])}
-          onBack={detailStack.length > 1
-            ? () => setDetailStack(stack => stack.slice(0, -1))
-            : undefined}
-          onNavigate={(key, el) => {
-            const sec = SECTIONS.find(s => s.key === key)
-            if (sec) {
-              setDetailStack(stack => {
+      {/* 右：内容展示 */}
+      <div className="min-h-0 min-w-0 flex-1">
+        {topElement ? (
+          <ElementDetailView
+            sectionKey={topElement.key}
+            el={topElement.el}
+            canvas={canvas}
+            onBack={() => setElementStack(stack => stack.slice(0, -1))}
+            onNavigate={(key, el) => {
+              setElementStack(stack => {
                 const current = stack[stack.length - 1]
-                if (current?.section.key === key && current.el.id === el.id) return stack
-                return [...stack, { section: sec, el }]
+                if (current?.key === key && current.el.id === el.id) return stack
+                return [...stack, { key, el }]
               })
-            }
-          }}
-        />
-      )}
-
-      {/* 图表模态：ER/流程/时序/状态，全部由画布确定性生成 */}
-      {dgOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-6"
-             onClick={closeDiagram}>
-          <div className="w-[860px] max-w-[94vw] max-h-[86vh] rounded-xl bg-[var(--color-bg-elevated)] shadow-2xl flex flex-col"
-               onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-[var(--color-border)]">
+            }}
+          />
+        ) : sel.kind === 'diagram' ? (
+          /* 图示视图：ER/流程/时序/状态，全部由画布确定性生成 */
+          <div className="flex h-full min-h-0 flex-col" data-testid="canvas-diagram-pane">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] px-5 py-3">
               <div className="min-w-0">
                 <div data-testid="canvas-diagram-title" className="text-sm font-semibold text-[var(--color-text-primary)] truncate">
                   {dgTitle || '业务建模图表'}
                 </div>
-                <div className="text-[11px] text-[var(--color-text-tertiary)] mt-0.5">
+                <div className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">
                   由画布确定性生成（不经 LLM），与画布严格一致
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                {dgMermaid && (
-                  <button
-                    onClick={() => { void writeTextToClipboard(dgMermaid).catch(() => undefined) }}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]"
-                  >
-                    <Copy size={12} /> 复制源码
-                  </button>
-                )}
-                <button aria-label="关闭业务建模图表" onClick={closeDiagram}
-                        className="p-1.5 rounded-md hover:bg-[var(--color-bg-hover)] text-[var(--color-text-tertiary)]">
-                  <X size={15} />
+              {dgMermaid && (
+                <button
+                  onClick={() => { void writeTextToClipboard(dgMermaid).catch(() => undefined) }}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[var(--color-border)] px-2.5 py-1.5 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]"
+                >
+                  <Copy size={12} /> 复制源码
                 </button>
-              </div>
+              )}
             </div>
-            <div className="flex items-center gap-2 px-5 py-2.5 border-b border-[var(--color-border)]">
-              <div className="flex rounded-md border border-[var(--color-border)] overflow-hidden">
+            <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-5 py-2.5">
+              <div className="flex overflow-hidden rounded-md border border-[var(--color-border)]">
                 {DIAGRAM_TABS.map(t => (
                   <button
                     key={t.kind}
@@ -428,7 +410,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
                       setDgKind(t.kind); setDgTarget(''); void loadDiagram(t.kind, '')
                     }}
                     className={`px-3 py-1.5 text-xs transition-colors ${dgKind === t.kind
-                      ? 'bg-teal-600 text-white font-medium'
+                      ? 'bg-teal-600 font-medium text-white'
                       : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'}`}
                   >
                     {t.label}
@@ -462,8 +444,64 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
               )}
             </div>
           </div>
-        </div>
-      )}
+        ) : (
+          /* 分组总览：该模型的元素清单，点击进入元素详情 */
+          (() => {
+            const section = SECTIONS.find(s => s.key === (sel.kind === 'section' ? sel.key : 'objects'))!
+            const items = (canvas?.[section.key] || []) as CanvasElement[]
+            const { icon: SectionIcon, tint } = section
+            return (
+              <div className="flex h-full min-h-0 flex-col">
+                <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-[var(--color-border)] bg-white px-5">
+                  <span className={`flex h-7 w-7 items-center justify-center rounded-lg ${tint}`}>
+                    <SectionIcon size={15} />
+                  </span>
+                  <div className="text-sm font-semibold text-[var(--color-text-primary)]">{section.label}</div>
+                  <span className="text-xs text-[var(--color-text-tertiary)]">共 {items.length} 项</span>
+                </div>
+                <div className="flex-1 space-y-2 overflow-y-auto px-5 py-4">
+                  {items.length === 0 && (
+                    <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+                      <FileText size={20} className="text-[var(--color-text-tertiary)]" />
+                      <p className="text-xs text-[var(--color-text-tertiary)]">
+                        还没有{section.label}内容，在右侧对话中澄清业务后自动沉淀。
+                      </p>
+                    </div>
+                  )}
+                  {items.map(el => (
+                    <button
+                      key={el.id}
+                      onClick={() => openElement(section.key, el)}
+                      title="查看详情"
+                      className="group block w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-3.5 py-2.5 text-left transition-colors hover:border-teal-300 hover:bg-teal-50/40"
+                    >
+                      <div className="flex items-center gap-1 text-xs font-medium text-[var(--color-text-primary)]">
+                        <span className="truncate">
+                          {el.display_name || el.name}
+                          {el.display_name && el.display_name !== el.name && (
+                            <span className="ml-1.5 font-mono text-[11px] font-normal text-[var(--color-text-tertiary)]">{el.name}</span>
+                          )}
+                        </span>
+                        <ChevronRight size={12} className="ml-auto shrink-0 text-[var(--color-text-tertiary)] opacity-0 transition-opacity group-hover:opacity-100" />
+                      </div>
+                      {(el.description || elementBadges(section.key, el).length > 0) && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          {elementBadges(section.key, el).map((b, i) => (
+                            <span key={i} className="rounded bg-black/[0.04] px-1.5 py-px text-[10px] text-[var(--color-text-secondary)]">{b}</span>
+                          ))}
+                          {el.description && (
+                            <span className="max-w-full truncate text-[11px] text-[var(--color-text-tertiary)]">{el.description}</span>
+                          )}
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )
+          })()
+        )}
+      </div>
     </div>
   )
 }

@@ -1,5 +1,5 @@
 /**
- * 业务画布元素详情弹窗
+ * 业务画布元素详情视图（内联版，业务场景视图右栏）
  *
  * 详情页的首要任务是帮助用户理解“这个模型如何运转”，而不是复述字段。
  * 七类模型各自使用不同的逻辑表达：
@@ -13,12 +13,12 @@
  *
  * 结构缺口只做简短提示；具体澄清问题仍统一留在画布的“澄清账本”中处理。
  */
-import { useEffect, useMemo, type ElementType, type ReactNode } from 'react'
+import { useMemo, type ElementType, type ReactNode } from 'react'
 import {
   ArrowLeft, ArrowRight, Box, Building2, Calendar, CircleAlert, CircleCheck, Coins,
   CornerDownRight, Flag, GitBranch, Hash, Key, List, ListChecks, Map as MapIcon,
   Package, Play, Route, Rows3, Scale, Server, Share2, ShieldCheck, Target,
-  ToggleLeft, Type, User, UserCog, Users, X, Zap,
+  ToggleLeft, Type, User, UserCog, Users, Zap,
 } from 'lucide-react'
 import type { BusinessCanvas, CanvasElement } from '@/api/exploration'
 
@@ -1268,22 +1268,13 @@ function ModelAside({ sectionKey, el, canvas, ctx }: {
   )
 }
 
-export default function ElementDetailModal({ sectionKey, el, canvas, onClose, onNavigate, onBack }: {
+export default function ElementDetailView({ sectionKey, el, canvas, onBack, onNavigate }: {
   sectionKey: CanvasKey
   el: CanvasElement
   canvas: BusinessCanvas | null
-  onClose: () => void
-  onNavigate?: (key: CanvasKey, el: CanvasElement) => void
   onBack?: () => void
+  onNavigate?: (key: CanvasKey, el: CanvasElement) => void
 }) {
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
-
   const index = useMemo(() => {
     const result = new Map<string, Hit[]>()
     const keys: CanvasKey[] = ['objects', 'actors', 'behaviors', 'events', 'rules', 'processes', 'scenarios']
@@ -1316,82 +1307,57 @@ export default function ElementDetailModal({ sectionKey, el, canvas, onClose, on
   const style = KIND_STYLE[sectionKey]
   const Icon = style.Icon
   const description = str(el.description)
-  const titleId = `element-detail-${el.id || norm(el.name)}`
 
   return (
-    <div
-      className="modal-overlay fixed inset-0 z-[300] flex items-center justify-center bg-slate-950/45 p-3 backdrop-blur-[2px] sm:p-6"
-      onMouseDown={event => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className="modal-content flex max-h-[90vh] w-[980px] max-w-[96vw] flex-col overflow-hidden rounded-[22px] border border-white/80 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.24)]"
-      >
-        <header className="relative shrink-0 border-b border-[var(--color-border)] bg-white px-5 py-4 sm:px-6">
-          <div className={`absolute inset-y-0 left-0 w-1 ${style.accent}`} />
-          <div className="flex items-start gap-3.5">
-            {onBack && (
-              <button
-                type="button"
-                onClick={onBack}
-                aria-label="返回上一个模型"
-                title="返回上一个模型"
-                className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--color-border)] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
-              >
-                <ArrowLeft size={15} />
-              </button>
-            )}
-            <span className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white ${style.accent}`}>
-              <Icon size={18} />
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3
-                  id={titleId}
-                  className="text-xl font-semibold tracking-[-0.025em] text-[var(--color-text-primary)] sm:text-[22px]"
-                >
-                  {displayName(el)}
-                </h3>
-                <span className={`rounded-md border px-2 py-0.5 text-[10px] font-semibold ${style.soft} ${style.text} ${style.border}`}>
-                  {style.label}
-                </span>
-              </div>
-              <div className="mt-0.5 flex flex-wrap items-center gap-2">
-                {str(el.display_name) && str(el.display_name) !== el.name && (
-                  <code className="font-mono text-[11px] text-[var(--color-text-tertiary)]">{el.name}</code>
-                )}
-              </div>
-              <HeaderMeta sectionKey={sectionKey} el={el} />
-            </div>
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="relative shrink-0 border-b border-[var(--color-border)] bg-white px-5 py-4">
+        <div className={`absolute inset-y-0 left-0 w-1 ${style.accent}`} />
+        <div className="flex items-start gap-3.5">
+          {onBack && (
             <button
               type="button"
-              onClick={onClose}
-              aria-label="关闭模型详情"
-              autoFocus
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
+              onClick={onBack}
+              aria-label="返回上一个模型"
+              title="返回上一个模型"
+              className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--color-border)] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
             >
-              <X size={17} />
+              <ArrowLeft size={15} />
             </button>
-          </div>
-        </header>
-
-        <div className="flex-1 overflow-y-auto bg-[#f5f7f9] p-4 sm:p-5 dark:bg-[#121820]">
-          <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_250px]">
-            <main className="min-w-0 rounded-2xl border border-[var(--color-border)] bg-white p-4 sm:p-5">
-              {description && (
-                <section className="mb-5 border-b border-[var(--color-border)] pb-5">
-                  <div className="text-[10px] font-semibold tracking-[0.12em] text-[var(--color-text-tertiary)]">业务定义</div>
-                  <p className="mt-2 max-w-[68ch] text-sm leading-7 text-[var(--color-text-secondary)]">{description}</p>
-                </section>
+          )}
+          <span className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white ${style.accent}`}>
+            <Icon size={18} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-xl font-semibold tracking-[-0.025em] text-[var(--color-text-primary)] sm:text-[22px]">
+                {displayName(el)}
+              </h3>
+              <span className={`rounded-md border px-2 py-0.5 text-[10px] font-semibold ${style.soft} ${style.text} ${style.border}`}>
+                {style.label}
+              </span>
+            </div>
+            <div className="mt-0.5 flex flex-wrap items-center gap-2">
+              {str(el.display_name) && str(el.display_name) !== el.name && (
+                <code className="font-mono text-[11px] text-[var(--color-text-tertiary)]">{el.name}</code>
               )}
-              <ElementBody sectionKey={sectionKey} el={el} ctx={ctx} />
-            </main>
-            <ModelAside sectionKey={sectionKey} el={el} canvas={canvas} ctx={ctx} />
+            </div>
+            <HeaderMeta sectionKey={sectionKey} el={el} />
           </div>
+        </div>
+      </header>
+
+      <div className="flex-1 overflow-y-auto bg-[#f5f7f9] p-4 sm:p-5 dark:bg-[#121820]">
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_250px]">
+          <main className="min-w-0 rounded-2xl border border-[var(--color-border)] bg-white p-4 sm:p-5">
+            {description && (
+              <section className="mb-5 border-b border-[var(--color-border)] pb-5">
+                <div className="text-[10px] font-semibold tracking-[0.12em] text-[var(--color-text-tertiary)]">业务定义</div>
+                <p className="mt-2 max-w-[68ch] text-sm leading-7 text-[var(--color-text-secondary)]">{description}</p>
+              </section>
+            )}
+            <ElementBody sectionKey={sectionKey} el={el} ctx={ctx} />
+          </main>
+          <ModelAside sectionKey={sectionKey} el={el} canvas={canvas} ctx={ctx} />
         </div>
       </div>
     </div>
