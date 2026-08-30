@@ -666,11 +666,21 @@ test('发布为推演服务：语义注册、服务面板与状态切换', async
     if (path === `/api/v2/world-model/projects/${projectRow.id}/service` && request.method() === 'GET') {
       return json(route, published)
     }
+    // 多本体发布：开发页服务面板从复数端点拉取项目全部已发布服务
+    if (path === `/api/v2/world-model/projects/${projectRow.id}/services` && request.method() === 'GET') {
+      return json(route, published ? [published] : [])
+    }
     if (path === `/api/v2/world-model/projects/${projectRow.id}/publish` && request.method() === 'POST') {
       published = serviceOut('online')
       return json(route, published, 201)
     }
     if (path === `/api/v2/world-model/projects/${projectRow.id}/service/status`) {
+      const body = request.postDataJSON() as { status: string }
+      published = serviceOut(body.status)
+      return json(route, published)
+    }
+    // 面板内逐服务上下线走服务级端点
+    if (path === '/api/v2/world-model/services/svc-1/status' && request.method() === 'POST') {
       const body = request.postDataJSON() as { status: string }
       published = serviceOut(body.status)
       return json(route, published)

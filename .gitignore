@@ -66,3 +66,4 @@ test_data/screenshots/
 .omo/
 .playwright-mcp/
 .codegraph/
+.zcode/

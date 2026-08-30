@@ -959,6 +959,19 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                         <div key={index} className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900"><AlertTriangle size={16} className="mt-0.5 shrink-0" />{item.message}</div>
                       ))}</div>}
                   </div>
+                  {(promotion.impact.worldModelImpact?.length ?? 0) > 0 && (
+                    <div className="mt-3">
+                      <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-800">
+                        <p className="flex items-center gap-2 text-sm font-medium">
+                          <AlertTriangle size={16} className="shrink-0" />
+                          本次删除将使 {promotion.impact.worldModelImpact!.length} 个已发布推演服务失效
+                        </p>
+                        <p className="mt-1 text-xs text-red-700">
+                          {promotion.impact.worldModelImpact!.map(item => item.name).join('、')}：这些世界模型服务声明的适用对象类型在本版本中被删除，发布后本体助手将无法再调用它们，需服务维护者重新发布。
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </section>
 
                 {!blocked && <p className="text-xs text-slate-500">确认后，只有本次试跑验证过的那份内容会被发布；之后任何改动都需要重新验证。</p>}
