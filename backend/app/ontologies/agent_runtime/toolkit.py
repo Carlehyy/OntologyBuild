@@ -1471,16 +1471,20 @@ class ToolRunner:
             detail = exc.detail
             message = str(detail.get("message") or detail) if isinstance(detail, dict) else str(detail)
             raise ToolError(f"推演服务调用失败：{message}") from exc
-        return {
+        out = {
             "kind": "world_model_simulation",
             "serviceId": service_id,
             "serviceName": svc.name,
             "ok": bool(result.ok),
             "payload": result.payload,
-            "error": result.error,
             "durationMs": result.duration_ms,
             "callId": result.call_id,
         }
+        # 失败才带 error 键：orchestrator._summarize / step.error 都按"键存在"判定错误，
+        # 成功时带 error=None 会把步骤摘要变成字符串 'None'（线上验收实测发现）。
+        if result.error:
+            out["error"] = result.error
+        return out
 
     def _tool_list_dynamic_sentinels(self, args: dict) -> dict:
         if self.scope.release is None:
