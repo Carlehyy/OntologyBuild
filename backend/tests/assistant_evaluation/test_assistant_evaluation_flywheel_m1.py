@@ -254,9 +254,11 @@ def test_benchmark_crud_and_stable_split(client, auth_headers, db, admin_user):
                       headers=auth_headers).status_code == 404
 
 
-def test_benchmark_rejects_foreign_conversation(client, auth_headers, db, admin_user):
+def test_benchmark_rejects_foreign_conversation(client, auth_headers, db, admin_user,
+                                                ontology):
     r = client.post("/api/v1/assistant-evaluation/benchmarks", json={
-        "assistant_key": "ontology_agent", "name": "错误归属",
+        "assistant_key": "ontology_agent", "ontology_id": ontology["id"],
+        "name": "错误归属",
         "items": [{"conversation_id": str(uuid.uuid4())}],
     }, headers=auth_headers)
     assert r.status_code == 400

@@ -36,7 +36,11 @@ from app.ontologies.agent_runtime.boundary import ToolError, build_scope
 from app.ontologies.agent_runtime.chat_cancel import chat_cancel_registry
 from app.ontologies.agent_runtime.chat_runs import chat_run_registry
 from app.ontologies.agent_runtime.limits import limit
-from app.ontologies.agent_runtime.models import AgentConversation, AgentMessage
+from app.ontologies.agent_runtime.models import (
+    AgentConversation,
+    AgentMessage,
+    AgentProfile,
+)
 from app.ontologies.agent_runtime.toolkit import TOOL_DEFS, ToolRunner
 
 logger = logging.getLogger(__name__)
@@ -280,11 +284,16 @@ def run_agent_turn(db: Session, ontology_id: str, user, question: str,
                    conversation_id: Optional[str] = None,
                    model_id: Optional[str] = None,
                    release_id: Optional[str] = None,
-                   run_id: Optional[str] = None) -> Iterator[dict]:
+                   run_id: Optional[str] = None,
+                   profile_override: Optional[AgentProfile] = None,
+                   sandbox: bool = False) -> Iterator[dict]:
     """执行一个回合，yield 事件流。所有异常都转成 error 事件，绝不让 SSE 中途裸断。
 
     回合状态同步写入 chat_run_registry：SSE 推送与执行解耦后（MYW-71），前端
     在离开页面后凭 run_id 轮询回合状态，即可恢复「正在处理」的展示。
+
+    profile_override / sandbox 仅供评估沙箱试跑（assistant_evaluation 双臂
+    实验）使用：草稿 profile 不落库；sandbox 会话打标记、对用户侧列表不可见。
     """
     if run_id:
         chat_cancel_registry.register(run_id)
@@ -293,7 +302,7 @@ def run_agent_turn(db: Session, ontology_id: str, user, question: str,
     try:
         for event in _run(
             db, ontology_id, user, question, conversation_id, model_id,
-            release_id, run_id):
+            release_id, run_id, profile_override, sandbox):
             event_type = event.get("type")
             if event_type == "meta" and run_id:
                 chat_run_registry.attach_conversation(
@@ -321,13 +330,20 @@ def run_agent_turn(db: Session, ontology_id: str, user, question: str,
 
 def _run(db: Session, ontology_id: str, user, question: str,
          conversation_id: Optional[str], model_id: Optional[str],
-         release_id: Optional[str], run_id: Optional[str]) -> Iterator[dict]:
+         release_id: Optional[str], run_id: Optional[str],
+         profile_override: Optional[AgentProfile] = None,
+         sandbox: bool = False) -> Iterator[dict]:
     try:
         ontology, profile, scope = build_scope(
             db, ontology_id, release_id=release_id)
     except ToolError as e:
         yield {"type": "error", "message": str(e)}
         return
+
+    if profile_override is not None:
+        # 评估沙箱试跑：同一本体与 release 界内换用草稿 profile（只读、不落库）
+        profile = profile_override
+        scope = scope.with_profile(profile_override)
 
     if not profile.enabled:
         yield {"type": "error", "message": "该本体的智能体已被停用，请联系管理员在边界配置中启用。"}
@@ -354,7 +370,9 @@ def _run(db: Session, ontology_id: str, user, question: str,
                                  ontology_id=ontology_id,
                                  ontology_release_id=scope.release_id,
                                  user_id=user_id,
-                                 title=question.strip()[:60] or "新对话")
+                                 title=(f"[评估沙箱] {question.strip()[:50]}" if sandbox
+                                        else question.strip()[:60] or "新对话"),
+                                 is_sandbox=bool(sandbox))
         db.add(conv)
         db.flush()
 

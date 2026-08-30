@@ -6,7 +6,13 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.assistant_evaluation import benchmark_service, calibration_service, service, timeline
+from app.assistant_evaluation import (
+    benchmark_service,
+    calibration_service,
+    experiment_service,
+    service,
+    timeline,
+)
 from app.assistant_evaluation.adapters import get_adapters
 from app.assistant_evaluation.dimensions import BASE_DIMENSION_KEYS, DIMENSIONS
 from app.assistant_evaluation.engine import openjudge_available
@@ -149,6 +155,8 @@ class BenchmarkSetIn(BaseModel):
     assistant_key: str
     name: str
     description: str = ""
+    # 本体助手必填：基准会话与沙箱回放所属本体
+    ontology_id: str | None = None
     items: list[BenchmarkItemIn] = Field(default_factory=list)
 
 
@@ -175,6 +183,7 @@ class BenchmarkItemOut(BaseModel):
 class BenchmarkSetOut(BaseModel):
     id: str
     assistant_key: str
+    ontology_id: str | None = None
     name: str
     description: str
     source_task_id: str | None
@@ -220,6 +229,71 @@ class TimelineEventOut(BaseModel):
     ref_id: str | None
     detail: dict
     created_at: str | None = None
+
+
+class ProposalIn(BaseModel):
+    ontology_id: str
+    type: str                       # prompt_patch | model_swap
+    title: str = ""
+    rationale: str = ""
+    payload: dict = Field(default_factory=dict)
+    evidence: dict = Field(default_factory=dict)
+
+
+class ProposalOut(BaseModel):
+    id: str
+    ontology_id: str
+    assistant_key: str
+    type: str
+    title: str
+    rationale: str
+    payload: dict
+    evidence: dict
+    status: str
+    created_by: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class ExperimentIn(BaseModel):
+    proposal_id: str
+    benchmark_set_id: str
+    dimension_keys: list[str] = Field(default_factory=list)
+    threshold: float = 5.0          # 留出集增量的门禁阈值（实际下界为 max(threshold, 2×噪声地板))
+    model_config_id: str | None = None
+
+
+class ExperimentOut(BaseModel):
+    id: str
+    ontology_id: str
+    proposal_id: str
+    benchmark_set_id: str | None
+    status: str
+    params: dict
+    judge_model_name: str
+    result: dict
+    error: str | None
+    created_by: str | None = None
+    created_at: str | None = None
+    finished_at: str | None = None
+    duration_ms: int | None = None
+
+
+class ExperimentItemOut(BaseModel):
+    id: str
+    arm: str
+    conversation_id: str
+    conversation_title: str
+    split: str
+    overall_score: float | None
+    scores: dict
+    flags: dict
+    transcript: dict = Field(default_factory=dict)
+    created_at: str | None = None
+
+
+class ExperimentDetailOut(ExperimentOut):
+    items: list[ExperimentItemOut]
 
 
 # ---------------------------------------------------------------- helpers
@@ -458,6 +532,7 @@ def _benchmark_out(row, counts: dict | None = None) -> BenchmarkSetOut:
     return BenchmarkSetOut(
         id=row.id,
         assistant_key=row.assistant_key,
+        ontology_id=row.ontology_id,
         name=row.name,
         description=row.description,
         source_task_id=row.source_task_id,
@@ -510,6 +585,7 @@ def create_benchmark_set(payload: BenchmarkSetIn, db: Session = Depends(get_db),
             assistant_key=payload.assistant_key,
             name=payload.name,
             description=payload.description,
+            ontology_id=payload.ontology_id,
             entries=[item.model_dump() for item in payload.items],
             created_by=str(admin.id),
         )
@@ -651,3 +727,137 @@ def get_timeline(assistant_key: str | None = None, ref_type: str | None = None,
         detail=e.detail or {},
         created_at=_iso(e.created_at),
     ) for e in events])
+
+
+# ---------------------------------------------------------------- 优化提案 / 双臂实验（飞轮 M2 沙箱验证）
+
+
+def _proposal_out(row) -> ProposalOut:
+    return ProposalOut(
+        id=row.id,
+        ontology_id=row.ontology_id,
+        assistant_key=row.assistant_key,
+        type=row.type,
+        title=row.title,
+        rationale=row.rationale or "",
+        payload=row.payload or {},
+        evidence=row.evidence or {},
+        status=row.status,
+        created_by=row.created_by,
+        created_at=_iso(row.created_at),
+        updated_at=_iso(row.updated_at),
+    )
+
+
+def _experiment_out(row) -> ExperimentOut:
+    return ExperimentOut(
+        id=row.id,
+        ontology_id=row.ontology_id,
+        proposal_id=row.proposal_id,
+        benchmark_set_id=row.benchmark_set_id,
+        status=row.status,
+        params=row.params or {},
+        judge_model_name=row.judge_model_name,
+        result=row.result or {},
+        error=row.error,
+        created_by=row.created_by,
+        created_at=_iso(row.created_at),
+        finished_at=_iso(row.finished_at),
+        duration_ms=row.duration_ms,
+    )
+
+
+@router.post("/proposals")
+def create_proposal(payload: ProposalIn, db: Session = Depends(get_db),
+                    admin: User = Depends(require_admin)):
+    try:
+        row = experiment_service.create_proposal(
+            db,
+            ontology_id=payload.ontology_id,
+            type=payload.type,
+            title=payload.title,
+            rationale=payload.rationale,
+            payload=payload.payload,
+            evidence=payload.evidence,
+            created_by=str(admin.id),
+        )
+    except (service.ServiceError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _ok(_proposal_out(row))
+
+
+@router.get("/proposals")
+def list_proposals(ontology_id: str | None = None, limit: int = 20,
+                   db: Session = Depends(get_db)):
+    return _ok([_proposal_out(row) for row in
+                experiment_service.list_proposals(db, ontology_id, limit=limit)])
+
+
+@router.get("/proposals/{proposal_id}")
+def get_proposal_detail(proposal_id: str, db: Session = Depends(get_db)):
+    row = experiment_service.get_proposal(db, proposal_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="提案不存在")
+    return _ok(_proposal_out(row))
+
+
+@router.post("/experiments")
+def create_experiment(payload: ExperimentIn, db: Session = Depends(get_db),
+                      admin: User = Depends(require_admin)):
+    try:
+        row = experiment_service.create_experiment(
+            db,
+            proposal_id=payload.proposal_id,
+            benchmark_set_id=payload.benchmark_set_id,
+            dimension_keys=payload.dimension_keys,
+            threshold=payload.threshold,
+            model_config_id=payload.model_config_id,
+            created_by=str(admin.id),
+        )
+    except (service.ServiceError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.refresh(row)  # 内联 worker 可能已推进状态
+    return _ok(_experiment_out(row))
+
+
+@router.get("/experiments")
+def list_experiments(ontology_id: str | None = None, limit: int = 20,
+                     db: Session = Depends(get_db)):
+    return _ok([_experiment_out(row) for row in
+                experiment_service.list_experiments(db, ontology_id, limit=limit)])
+
+
+@router.get("/experiments/{experiment_id}")
+def get_experiment_detail(experiment_id: str, arm: str | None = None,
+                          db: Session = Depends(get_db)):
+    row = experiment_service.get_experiment(db, experiment_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="实验不存在")
+    detail = _experiment_out(row).model_dump()
+    detail["items"] = [
+        ExperimentItemOut(
+            id=item.id,
+            arm=item.arm,
+            conversation_id=item.conversation_id,
+            conversation_title=item.conversation_title,
+            split=item.split,
+            overall_score=item.overall_score,
+            scores=item.scores or {},
+            flags=item.flags or {},
+            transcript=item.transcript or {},
+            created_at=_iso(item.created_at),
+        )
+        for item in experiment_service.experiment_items(db, experiment_id, arm=arm)
+    ]
+    return _ok(ExperimentDetailOut(**detail))
+
+
+@router.delete("/experiments/{experiment_id}")
+def delete_experiment(experiment_id: str, db: Session = Depends(get_db)):
+    try:
+        deleted = experiment_service.delete_experiment(db, experiment_id)
+    except service.ServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="实验不存在")
+    return _ok({"deleted": True})

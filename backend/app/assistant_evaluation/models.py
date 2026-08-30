@@ -104,12 +104,19 @@ class AssistantEvalBenchmarkSet(Base):
     条目引用活会话（不快照轨迹），按 conversation_id 稳定哈希切分
     train / heldout：train 供优化迭代参考，heldout 只作投产前门禁，
     两者互不流动。源会话被删除时条目在复评时自然失效。
+    本体助手的基准集必须绑定 ontology_id（回放需要本体上下文）。
     """
 
     __tablename__ = "assistant_eval_benchmark_sets"
+    __table_args__ = (
+        # 索引名与迁移 0086 严格一致（初始迁移按 metadata 建表时同名）
+        Index("ix_ae_bench_sets_ontology", "ontology_id"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     assistant_key: Mapped[str] = mapped_column(String(50), nullable=False)
+    # 本体助手专用：基准会话与沙箱回放所属的本体
+    ontology_id: Mapped[str | None] = mapped_column(String, nullable=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     # 由评估任务坏例沉淀时记录来源任务，保证可追溯
@@ -196,8 +203,120 @@ class AssistantEvalTimelineEvent(Base):
     actor_user_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    # task | benchmark_set | calibration | proposal（M2）
+    # task | benchmark_set | calibration | proposal | experiment
     ref_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
     ref_id: Mapped[str | None] = mapped_column(String, nullable=True)
     detail: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+
+
+class AssistantEvalProposal(Base):
+    """优化提案（草稿变更）— M2 覆盖 prompt_patch / model_swap 两根杠杆。
+
+    payload 保存目标值全量快照：prompt_patch 存替换后的完整
+    system_prompt_extra 与提案时基线；model_swap 存目标模型配置。
+    沙箱回放（M2）与投产（M3）消费同一份 payload，杜绝"验证的
+    与投产的不一致"。
+    """
+
+    __tablename__ = "assistant_eval_proposals"
+    __table_args__ = (
+        Index("ix_ae_proposals_ontology_created", "ontology_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    ontology_id: Mapped[str] = mapped_column(String, nullable=False)
+    # M2 固定 ontology_agent；预留其它助手接入沙箱回放后扩展
+    assistant_key: Mapped[str] = mapped_column(String(50), nullable=False,
+                                               default="ontology_agent")
+    # prompt_patch | model_swap
+    type: Mapped[str] = mapped_column(String(20), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    rationale: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # prompt_patch: {system_prompt_extra, base_system_prompt_extra}
+    # model_swap:   {model_config_id, model_name, base_model_config_id}
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # {task_id, badcase_conversation_ids, categories}
+    evidence: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # draft | validated | superseded（M3 扩展 applied | rolled_back）
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    created_by: Mapped[str | None] = mapped_column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_now, onupdate=_now
+    )
+
+
+class AssistantEvalExperiment(Base):
+    """双臂沙箱实验：基准集 × {当前生产配置臂, 草稿提案配置臂} 同天回放对比。
+
+    门禁只认留出集（heldout）增量，阈值下界为 max(入参 threshold,
+    2×最近一次噪声校准 overall_noise)——既防基准过拟合，也防 judge
+    抖动被误读为优化。
+    """
+
+    __tablename__ = "assistant_eval_experiments"
+    __table_args__ = (
+        Index("ix_ae_experiments_ontology_created", "ontology_id", "created_at"),
+        # 索引名与迁移 0086 严格一致（初始迁移按 metadata 建表时同名）
+        Index("ix_ae_experiments_proposal", "proposal_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    ontology_id: Mapped[str] = mapped_column(String, nullable=False)
+    proposal_id: Mapped[str] = mapped_column(
+        String, ForeignKey("assistant_eval_proposals.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    benchmark_set_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("assistant_eval_benchmark_sets.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # queued → running → success | error
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    # {dimension_keys, threshold, benchmark_set_id, sandbox_conversation_ids}
+    params: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    judge_model_config_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    judge_model_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    # {baseline, trial, by_split, gate}，各臂含 per_dim/overall/scored/failed
+    result: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class AssistantEvalExperimentItem(Base):
+    """单条基准会话在某臂的回放评分与轨迹快照。
+
+    沙箱会话在评分后即删除，完整轨迹只以本表快照形式存在——实验
+    结果自包含，不依赖任何活会话。
+    """
+
+    __tablename__ = "assistant_eval_experiment_items"
+    __table_args__ = (
+        Index("ix_ae_exp_items_experiment", "experiment_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    experiment_id: Mapped[str] = mapped_column(
+        String, ForeignKey("assistant_eval_experiments.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # baseline | trial
+    arm: Mapped[str] = mapped_column(String(10), nullable=False)
+    conversation_id: Mapped[str] = mapped_column(String, nullable=False)
+    conversation_title: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    split: Mapped[str] = mapped_column(String(10), nullable=False, default="train")
+    overall_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    scores: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # {engine_error}
+    flags: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # {query, response, openai_messages, actions, tool_error_count}
+    transcript: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)

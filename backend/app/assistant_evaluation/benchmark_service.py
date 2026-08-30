@@ -41,8 +41,15 @@ def split_for(conversation_id: str, heldout_ratio: float = HELDOUT_RATIO) -> str
     return "heldout" if (int(digest[:8], 16) % 1000) / 1000 < heldout_ratio else "train"
 
 
-def _validate_entries(db: Session, adapter, entries: list[dict]) -> list[dict]:
-    """校验会话归属与字段合法性，返回去重后的标准条目。"""
+def _validate_entries(db: Session, adapter, entries: list[dict],
+                      ontology_id: str | None = None) -> list[dict]:
+    """校验会话归属与字段合法性，返回去重后的标准条目。
+
+    本体助手集合（ontology_id 非空）额外校验每条会话属于该本体——
+    沙箱回放依赖本体上下文，跨本体会话会让双臂实验失真。
+    """
+    from app.ontologies.agent_runtime.models import AgentConversation
+
     seen: set[str] = set()
     normalized: list[dict] = []
     for entry in entries:
@@ -54,6 +61,16 @@ def _validate_entries(db: Session, adapter, entries: list[dict]) -> list[dict]:
             raise ServiceError(
                 f"会话 {conversation_id[:8]} 不属于「{adapter.label}」或已不存在。"
             )
+        if ontology_id:
+            conv = (
+                db.query(AgentConversation)
+                .filter(AgentConversation.id == conversation_id)
+                .first()
+            )
+            if conv is None or conv.ontology_id != ontology_id:
+                raise ServiceError(
+                    f"会话 {conversation_id[:8]} 不属于所选本体，无法进入该本体的基准集。"
+                )
         split = entry.get("split") or split_for(conversation_id)
         if split not in _SPLITS:
             raise ServiceError(f"非法切分标记：{split}（仅支持 train / heldout）。")
@@ -75,6 +92,7 @@ def _validate_entries(db: Session, adapter, entries: list[dict]) -> list[dict]:
 def create_set(db: Session, *, assistant_key: str, name: str, description: str,
                entries: list[dict] | None, created_by: str | None,
                source_task_id: str | None = None,
+               ontology_id: str | None = None,
                actor: str = ACTOR_ADMIN) -> AssistantEvalBenchmarkSet:
     adapter = get_adapters().get(assistant_key)
     if not adapter:
@@ -82,8 +100,18 @@ def create_set(db: Session, *, assistant_key: str, name: str, description: str,
     name = (name or "").strip()
     if not name:
         raise ServiceError("基准集名称不能为空。")
+    if assistant_key == "ontology_agent":
+        if not ontology_id:
+            raise ServiceError("本体助手的基准集必须绑定本体（ontology_id）。")
+        from app.ontologies.projects.models import OntologyProject
 
-    normalized = _validate_entries(db, adapter, list(entries or []))
+        if db.query(OntologyProject).filter(OntologyProject.id == ontology_id).first() is None:
+            raise ServiceError("所选本体不存在。")
+    elif ontology_id:
+        raise ServiceError("仅本体助手的基准集需要绑定本体。")
+
+    normalized = _validate_entries(db, adapter, list(entries or []),
+                                   ontology_id=ontology_id)
     if not normalized:
         raise ServiceError("基准集至少需要一条会话条目。")
     if len(normalized) > MAX_ITEMS_PER_SET:
@@ -91,7 +119,7 @@ def create_set(db: Session, *, assistant_key: str, name: str, description: str,
 
     row = AssistantEvalBenchmarkSet(
         assistant_key=assistant_key, name=name, description=description or "",
-        source_task_id=source_task_id, created_by=created_by,
+        source_task_id=source_task_id, ontology_id=ontology_id, created_by=created_by,
     )
     db.add(row)
     db.flush()  # 取 row.id 供条目外键使用
@@ -102,6 +130,7 @@ def create_set(db: Session, *, assistant_key: str, name: str, description: str,
                  ref_type="benchmark_set", ref_id=row.id,
                  detail={
                      "name": name,
+                     "ontology_id": ontology_id,
                      "item_count": len(normalized),
                      "train_count": sum(1 for i in normalized if i["split"] == "train"),
                      "heldout_count": sum(1 for i in normalized if i["split"] == "heldout"),
@@ -143,6 +172,19 @@ def create_from_task(db: Session, *, task_id: str, name: str | None,
     adapter = get_adapters().get(task.assistant_key)
     if adapter is None:
         raise ServiceError(f"未知的助手类型：{task.assistant_key}")
+    ontology_id = None
+    if task.assistant_key == "ontology_agent":
+        # 基准会话同属一个本体：从首条会话推导绑定（跨本体任务在评估侧不存在）
+        from app.ontologies.agent_runtime.models import AgentConversation
+
+        conv = (
+            db.query(AgentConversation)
+            .filter(AgentConversation.id == picked[0].conversation_id)
+            .first()
+        )
+        if conv is None:
+            raise ServiceError("基准来源会话已不存在，无法确定所属本体。")
+        ontology_id = conv.ontology_id
     entries = [{
         "conversation_id": i.conversation_id,
         "split": split_for(i.conversation_id),
@@ -151,7 +193,8 @@ def create_from_task(db: Session, *, task_id: str, name: str | None,
     fallback_name = name or f"{adapter.label} · {task.title} · {'坏例' if include == 'badcase' else '全量'}基准"
     return create_set(db, assistant_key=task.assistant_key, name=fallback_name,
                       description=description or "", entries=entries,
-                      created_by=created_by, source_task_id=task.id)
+                      created_by=created_by, source_task_id=task.id,
+                      ontology_id=ontology_id)
 
 
 def add_items(db: Session, set_id: str, entries: list[dict],
@@ -162,7 +205,7 @@ def add_items(db: Session, set_id: str, entries: list[dict],
         raise ServiceError(f"未知的助手类型：{row.assistant_key}")
 
     existing = {i.conversation_id for i in items_of(db, row.id)}
-    normalized = _validate_entries(db, adapter, entries)
+    normalized = _validate_entries(db, adapter, entries, ontology_id=row.ontology_id)
     fresh = [e for e in normalized if e["conversation_id"] not in existing]
     if not fresh:
         raise ServiceError("条目已全部存在于基准集中。")
