@@ -1,11 +1,11 @@
 import { Children, isValidElement, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { AlertCircle, Download, FileText, Loader2, X } from 'lucide-react'
+import { AlertCircle, Download, FileText, Loader2 } from 'lucide-react'
 import MermaidBlock from '@/components/MermaidBlock'
 import ZoomableImage from '@/components/ZoomableImage'
+import { CenterMorphModal, CenterMorphModalContent } from '@/components/motion-ui/center-morph-modal'
 import { ontologyVersionApi } from '@/api/v2/ontology-versions'
 import { splitMarkdownSections, tocSections } from './structureDocSections'
 import './ontology-dialogs.css'
@@ -87,8 +87,10 @@ function CenterHint({ icon, title, hint, testid, retry }: {
 /**
  * 本体结构的「业务文档」弹窗：查询并展示当前本体版本语义层冻结的需求文档
  * （快照口径，与建模页 DocumentsDrawer 同源同风格）。
- * 视觉口径：白 + 浅绿搭配、左右细滚动条、正文文字清晰化；顶栏展示本体名称
- * 与发布版本徽章，下载入口收进顶栏，底部说明条已移除。
+ * 弹窗壳走 beUI CenterMorphModal（morph 展开、焦点圈定、Esc/遮罩关闭、
+ * 滚动锁），内置关闭按钮经 closeButtonLabel 中文化；目录导航为白底 + teal
+ * 色族（与工具栏按钮同口径）；顶栏展示本体名称与发布版本徽章，下载入口
+ * 收进顶栏。
  */
 export default function StructureDocDialog({ open, ontologyId, ontologyName, versionId, versionLabel, onClose }: {
   open: boolean
@@ -119,19 +121,8 @@ export default function StructureDocDialog({ open, ontologyId, ontologyName, ver
   const [activeId, setActiveId] = useState('')
 
   useEffect(() => {
-    if (!open) return undefined
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose, open])
-
-  useEffect(() => {
     setActiveId(toc[0]?.id || '')
   }, [toc])
-
-  if (!open) return null
 
   const jumpTo = (id: string) => {
     setActiveId(id)
@@ -163,22 +154,19 @@ export default function StructureDocDialog({ open, ontologyId, ontologyName, ver
     URL.revokeObjectURL(anchor.href)
   }
 
-  // 详情页外层的 onto-glass-card 带 backdrop-filter，会把 fixed 定罪为局部
-  // 包含块、裁掉弹窗底部；挂到 body 上保证弹窗相对视口定位（与结构页其他
-  // 浮层同一惯例）。
-  return createPortal(
-    <div className="fixed inset-0 z-[90] flex items-start justify-center bg-slate-950/30 px-4 pt-[7vh] backdrop-blur-[1px]" onMouseDown={onClose}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="structure-doc-dialog-title"
-        className="odg-dialog"
-        onMouseDown={e => e.stopPropagation()}
+  return (
+    <CenterMorphModal open={open} onOpenChange={next => { if (!next) onClose() }}>
+      {/* odg-scope：beUI 语义令牌在本域钉为浅色（固定浅色作用域，见 ontology-dialogs.css）。
+          尺寸/圆角以 !important 覆盖组件默认的 max-w-[26rem]/rounded-[30px]。 */}
+      <CenterMorphModalContent
+        ariaLabel="业务文档"
+        closeButtonLabel="关闭业务文档"
+        className="odg-scope flex h-[78vh] min-h-[520px] !max-w-[min(94vw,1040px)] !rounded-[14px] shadow-[0_24px_80px_rgba(15,23,42,0.22)]"
       >
-        {/* 文档目录：白 + 浅绿导航，细滚动条，点击跳转到正文具体位置 */}
-        <aside className="flex w-60 shrink-0 flex-col border-r border-[#d5eae0] bg-[#f2faf6]">
-          <div className="flex h-16 shrink-0 flex-col justify-center border-b border-[#d5eae0] px-4">
-            <div id="structure-doc-dialog-title" className="text-sm font-semibold text-[var(--color-text-primary)]">业务文档</div>
+        {/* 文档目录：白 + teal 导航，细滚动条，点击跳转到正文具体位置 */}
+        <aside className="flex w-60 shrink-0 flex-col border-r border-teal-100 bg-teal-50/60">
+          <div className="flex h-16 shrink-0 flex-col justify-center border-b border-teal-100 px-4">
+            <div className="text-sm font-semibold text-[var(--color-text-primary)]">业务文档</div>
             <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">需求文档目录 · 共 {toc.length} 节</div>
           </div>
           <nav data-testid="structure-doc-toc" aria-label="需求文档目录" className="odg-scroll flex-1 overflow-y-auto p-2">
@@ -198,7 +186,7 @@ export default function StructureDocDialog({ open, ontologyId, ontologyName, ver
                 onClick={() => jumpTo(section.id)}
                 style={{ paddingLeft: 10 + (Math.min(section.level, 4) - 1) * 12 }}
                 className={`block w-full truncate rounded-md py-2 pr-2.5 text-left text-[13px] transition-colors ${activeId === section.id
-                  ? 'bg-[#dcf3ea] font-medium text-teal-800'
+                  ? 'odg-toc-active bg-teal-100 font-medium text-teal-800'
                   : 'text-[var(--color-text-secondary)] hover:bg-white/70'}`}
               >
                 {section.title}
@@ -207,9 +195,9 @@ export default function StructureDocDialog({ open, ontologyId, ontologyName, ver
           </nav>
         </aside>
 
-        {/* 正文 + 顶部操作（下载入口随标题区展示，底部说明条已移除） */}
+        {/* 正文 + 顶部操作（下载入口随标题区展示；右上角为弹窗内置关闭按钮，留出让位） */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-[#d5eae0] px-5">
+          <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-teal-100 py-0 pl-5 pr-14">
             <div className="flex min-w-0 items-center gap-2">
               <span
                 data-testid="structure-doc-ontology-name"
@@ -233,19 +221,11 @@ export default function StructureDocDialog({ open, ontologyId, ontologyName, ver
                   type="button"
                   data-testid="structure-doc-download"
                   onClick={download}
-                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#bfe3d6] bg-[#eaf8f2] px-2.5 py-1.5 text-xs font-medium text-teal-800 transition-colors hover:bg-[#dcf3ea]"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2.5 py-1.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100"
                 >
                   <Download size={12} /> 下载 .md
                 </button>
               )}
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="关闭业务文档"
-                className="shrink-0 rounded-md p-1.5 text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-              >
-                <X size={16} />
-              </button>
             </div>
           </div>
 
@@ -299,8 +279,7 @@ export default function StructureDocDialog({ open, ontologyId, ontologyName, ver
             )}
           </div>
         </div>
-      </div>
-    </div>,
-    document.body,
+      </CenterMorphModalContent>
+    </CenterMorphModal>
   )
 }
