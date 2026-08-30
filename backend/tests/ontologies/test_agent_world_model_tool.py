@@ -181,6 +181,12 @@ def test_run_invokes_service_and_writes_call_record(
 
     assert result["kind"] == "world_model_simulation"
     assert result["ok"] is True
+    # 成功结果不得带 error 键：_summarize/step.error 按"键存在"判错，
+    # error=None 会把步骤摘要渲染成 'None'（线上验收实测回归）
+    assert "error" not in result
+    from app.ontologies.agent_runtime.orchestrator import _summarize
+    assert _summarize("run_world_model_simulation", result) == \
+        "世界模型推演「订单态势推演」完成（5ms）"
     assert result["payload"]["trajectory"][0]["value"] == 12.5
     assert result["callId"]
     record = db.query(WorldModelCallRecord).filter(
