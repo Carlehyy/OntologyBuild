@@ -352,6 +352,127 @@ def get_trial_run(
     return {"data": _trial_payload(run)}
 
 
+def _preflight_gate_error(exc: HTTPException) -> dict:
+    """把 create_trial_run 链路抛出的结构化 HTTPException 转成 gate_error 形状。"""
+    detail = exc.detail if isinstance(exc.detail, dict) else {}
+    error = _gate_error(
+        str(detail.get("code") or "unknown"),
+        "",
+        str(detail.get("message") or exc.detail),
+    )
+    for key, value in detail.items():
+        if key not in ("code", "message"):
+            error[key] = value
+    return error
+
+
+def trial_preflight(
+    db: Session,
+    ontology_id: str,
+    version_id: str,
+    *,
+    _active_trial_run,
+    _current_release,
+    _ensure_editable_draft,
+    _raise_trial_already_running,
+    _snapshot_sentinel_models,
+    _validate_sentinels,
+    semantic_consistency_fn=None,
+):
+    """试跑前只读预检：按 create_trial_run 的同一批门禁逐项检查并汇总。
+
+    advisory 语义：不创建试跑记录、不回收过期租约、不取行锁，唯一的
+    权威入口仍然是 create_trial_run。
+    """
+    project = db.query(OntologyProject).filter(
+        OntologyProject.id == ontology_id,
+    ).first()
+    if project is None:
+        raise HTTPException(404, "Ontology not found")
+    draft = db.query(OntologyVersion).filter(
+        OntologyVersion.id == version_id,
+        OntologyVersion.ontology_id == ontology_id,
+    ).first()
+    if draft is None:
+        raise HTTPException(404, "Version not found")
+
+    checks: list[dict] = []
+
+    def record(check_id: str, label: str, errors: list[dict]) -> None:
+        checks.append({
+            "id": check_id,
+            "label": label,
+            "status": "fail" if errors else "pass",
+            "errors": errors,
+        })
+
+    editable_errors: list[dict] = []
+    try:
+        if draft.node_kind != "draft":
+            raise HTTPException(409, detail={
+                "code": "trial_requires_draft", "message": "只有草稿分支可以试跑",
+            })
+        _ensure_editable_draft(draft)
+    except HTTPException as exc:
+        editable_errors.append(_preflight_gate_error(exc))
+    record("editable_draft", "草稿可编辑性", editable_errors)
+
+    # 不调用 _recover_expired_trial_runs（它会写库）；租约回收仍由权威试跑入口负责。
+    single_flight_errors: list[dict] = []
+    active = _active_trial_run(db, ontology_id, version_id)
+    if active is not None:
+        try:
+            _raise_trial_already_running(active)
+        except HTTPException as exc:
+            single_flight_errors.append(_preflight_gate_error(exc))
+    record("single_flight", "无进行中的试跑", single_flight_errors)
+
+    base_errors: list[dict] = []
+    current = _current_release(db, project)
+    if draft.base_release_id != current.id:
+        try:
+            raise HTTPException(409, detail={
+                "code": "draft_base_outdated",
+                "message": "当前发布版已变化，请从最新发布版创建草稿并合并改动后再试跑",
+                "draftBaseReleaseId": draft.base_release_id,
+                "currentReleaseId": current.id,
+            })
+        except HTTPException as exc:
+            base_errors.append(_preflight_gate_error(exc))
+    record("base_up_to_date", "基线未过期", base_errors)
+
+    snap = complete_snapshot(draft.snapshot_formal)
+    structure_errors = validate_snapshot(snap)
+    structure_errors.extend(_dynamic_sentinel_id_conflict_errors(
+        db, ontology_id, snap["sentinels"],
+    ))
+    try:
+        models = snapshot_models(snap)
+        structure_errors.extend(_validate_sentinels(
+            _snapshot_sentinel_models(snap), models["objectTypes"],
+            models["linkTypes"], models["actions"],
+        ))
+    except Exception as exc:
+        structure_errors.append(_gate_error(
+            "sentinel_validation_failed", "sentinel", str(exc)))
+    record("structure", "结构校验", structure_errors)
+
+    record("mapping_contract", "试跑映射契约", validate_trial_mapping_contract(snap))
+
+    # 业务语义层一致性：结构元素必须在业务画布中有对应语义，反之亦然。
+    semantic_errors: list[dict] = []
+    if semantic_consistency_fn is not None:
+        semantic_errors = semantic_consistency_fn(draft.snapshot_semantic, snap)
+    record("semantic_consistency", "业务语义一致性", semantic_errors)
+
+    return {"data": {
+        "ok": all(check["status"] == "pass" for check in checks),
+        "versionId": draft.id,
+        "revision": f"{draft.revision or 0}:{draft.snapshot_hash or snapshot_hash(snap)}",
+        "checks": checks,
+    }}
+
+
 def create_trial_run(
     db: Session,
     ontology_id: str,
