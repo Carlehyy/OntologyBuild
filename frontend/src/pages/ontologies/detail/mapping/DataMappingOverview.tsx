@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import { motion, useReducedMotion } from 'motion/react'
 import {
   AlertCircle, AlertTriangle, ArrowRight, Boxes, CheckCircle2, ChevronLeft,
   ChevronRight, Database, Eye, ExternalLink, GitBranch, Link2, Loader2,
@@ -10,6 +11,8 @@ import {
 import { apiClientV2 } from '@/api/client'
 import curatedApi from '@/api/v2/curated'
 import datasetsApi from '@/api/v2/datasets'
+import { AnimatedNumber } from '@/components/motion-ui/animated-number'
+import { SPRING_LAYOUT } from '@/components/motion-ui/ease'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import {
@@ -22,38 +25,6 @@ import type { ChainFlowRow } from './MappingChainPanorama'
 import './mapping-overview.css'
 
 const MappingChainPanorama = lazy(() => import('./MappingChainPanorama'))
-
-/** KPI 数字：首个有效数据帧直出终值——进页/刷新/从字段级映射页返回都不再从 0 重放；
-    之后真实数据变化（如灌入后 refetch）才播放 600ms ease-out 过渡；reduced-motion 直出终值。
-    `active=false`（数据尚未就绪）期间只跟随目标值，不建立动画基准。 */
-function useCountUp(target: number, active = true, duration = 600): number {
-  const [display, setDisplay] = useState(target)
-  // null 表示尚未确立动画基准：首次拿到有效数据时直出终值而非从占位值起播
-  const previous = useRef<number | null>(null)
-  useEffect(() => {
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      previous.current = target
-      setDisplay(target)
-      return undefined
-    }
-    if (!active) { setDisplay(target); return undefined }
-    const from = previous.current
-    previous.current = target
-    if (from == null || from === target) { setDisplay(target); return undefined }
-    const start = performance.now()
-    let frame = 0
-    const tick = (now: number) => {
-      const progress = Math.min(1, (now - start) / duration)
-      const eased = 1 - Math.pow(1 - progress, 3)
-      setDisplay(Math.round(from + (target - from) * eased))
-      if (progress < 1) frame = requestAnimationFrame(tick)
-      else previous.current = target
-    }
-    frame = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(frame)
-  }, [target, duration])
-  return display
-}
 
 type TargetSelection = { kind: 'object'; id: string } | { kind: 'relation'; id: string }
 const PREVIEW_PAGE_SIZES = [10, 20, 50]
@@ -793,10 +764,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
     () => flowRows.filter(row => row.mappingExists && row.datasets.length > 0).length,
     [flowRows],
   )
-  const kpiReady = useCountUp(readyCount, !data.isLoading)
-  const kpiCoverage = useCountUp(fieldCoverage, !data.isLoading)
-  const kpiInstances = useCountUp(totalInstances, !data.isLoading)
-  const kpiAssets = useCountUp(usedDatasetIds.size, !data.isLoading)
+  const reduce = useReducedMotion() ?? false
   const readinessTitle = allHealthy
     ? '当前数据链路可用'
     : reviewOnlyIssue
@@ -829,29 +797,41 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
           </div>
         </div>
         <div className="dmo-kpis" aria-label="映射关键指标">
-          <div><span>可用链路</span><b>{kpiReady}<i> / {mappingRows.length}</i></b></div>
+          <motion.div initial={reduce ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ ...SPRING_LAYOUT, delay: reduce ? 0 : 0.05 }}>
+            <span>可用链路</span><b><AnimatedNumber value={readyCount} duration={0.9} /><i> / {mappingRows.length}</i></b>
+          </motion.div>
           {totalTargetFields > 0 ? (
-            <div><span>字段已连接</span><b>{kpiCoverage}<i>%</i></b><small>{mappedFields} / {totalTargetFields} 个字段</small></div>
+            <motion.div initial={reduce ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ ...SPRING_LAYOUT, delay: reduce ? 0 : 0.1 }}>
+              <span>字段已连接</span><b><AnimatedNumber value={fieldCoverage} duration={0.9} /><i>%</i></b><small>{mappedFields} / {totalTargetFields} 个字段</small>
+            </motion.div>
           ) : (
-            <div><span>字段已连接</span><b>—</b><small>暂无可连接字段</small></div>
+            <motion.div initial={reduce ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ ...SPRING_LAYOUT, delay: reduce ? 0 : 0.1 }}>
+              <span>字段已连接</span><b>—</b><small>暂无可连接字段</small>
+            </motion.div>
           )}
-          <div><span>实例已产出</span><b>{kpiInstances.toLocaleString()}</b><small>对象与关系实例</small></div>
-          <div><span>来源数据资产</span><b>{kpiAssets}</b><small>{usedDatasetIds.size > 0 ? `成品 ${usedCuratedCount} · 人工 ${usedManualCount}` : '尚未连接数据资产'}</small></div>
+          <motion.div initial={reduce ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ ...SPRING_LAYOUT, delay: reduce ? 0 : 0.15 }}>
+            <span>实例已产出</span><b><AnimatedNumber value={totalInstances} duration={0.9} /></b><small>对象与关系实例</small>
+          </motion.div>
+          <motion.div initial={reduce ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ ...SPRING_LAYOUT, delay: reduce ? 0 : 0.2 }}>
+            <span>来源数据资产</span><b><AnimatedNumber value={usedDatasetIds.size} duration={0.9} /></b><small>{usedDatasetIds.size > 0 ? `成品 ${usedCuratedCount} · 人工 ${usedManualCount}` : '尚未连接数据资产'}</small>
+          </motion.div>
         </div>
         <button type="button" className="dmo-primary-button" onClick={() => openMappingWorkspace()}>
           <Workflow size={15} />查看字段级映射
         </button>
       </header>
 
-      {/* ═══ 数据供给全景（左）+ 映射结果清单（右）：同屏双栏，一屏读完“总-分” ═══
-          全景是横向链路（两列节点 + 连线），宽度收益更高，占左栏稍宽份额；
-          清单是六列定宽网格，右栏保底不塌缩。窄屏（≤1020px）回退上下堆叠。 */}
+      {/* ═══ 纵向三段：KPI 顶带 / 数据供给全景（全宽）/ 映射结果清单（全宽）═══
+          全景链路拿全宽横向展开，清单六列网格随页面纵向滚动；
+          窄屏无需再降档（天然单列）。 */}
       <div className="dmo-workspace">
         {/* MYW-77 二轮：卡片顶部说明文字按用户要求移除，画布内容直接铺满面板 */}
         <section className="dmo-flow" aria-label="数据供给全景">
           {mappedFlowCount === 0 ? (
             <div className="dmo-flow-empty">
-              <Link2 size={22} />
+              <motion.div animate={reduce ? undefined : { y: [0, -6, 0] }} transition={{ repeat: Infinity, duration: 3, ease: 'easeInOut' }}>
+                <Link2 size={22} />
+              </motion.div>
               <b>暂无数据流</b>
               <span>当前发布版本尚未建立可见的映射链路；完成映射配置并发布后，这里会呈现数据资产流入本体的全景。</span>
             </div>
@@ -900,11 +880,11 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
             <span>本体元素</span><span>真实数据来源</span><span>字段连接</span><span>实例产出</span><span>当前状态</span><i />
           </div>
           <div className="dmo-row-list">
-            {filteredRows.map(row => {
+            {filteredRows.map((row, index) => {
               const active = dialogRow?.key === row.key
               const rowReview = worstReviewState(row.datasets)
               return (
-                <div
+                <motion.div
                   role="button"
                   tabIndex={0}
                   className="dmo-map-row"
@@ -915,6 +895,9 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
                     if (element) rowRefs.current.set(row.key, element)
                     else rowRefs.current.delete(row.key)
                   }}
+                  initial={reduce ? false : { opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ ...SPRING_LAYOUT, delay: reduce ? 0 : Math.min(index * 0.035, 0.35) }}
                   onClick={() => selectElement(row.selection)}
                   onKeyDown={event => {
                     if (event.key === 'Enter' || event.key === ' ') {
@@ -959,18 +942,27 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
                   </span>
                   <span className="dmo-status" data-status={row.status}>{row.status === 'ready' && <CheckCircle2 size={12} />}{STATUS_COPY[row.status].label}</span>
                   <ArrowRight size={14} className="dmo-row-arrow" />
-                </div>
+                </motion.div>
               )
             })}
             {filteredRows.length === 0 && mappingRows.length === 0 && (
               <div className="dmo-list-empty dmo-list-empty--onboarding">
-                <Boxes size={22} />
+                <motion.div animate={reduce ? undefined : { y: [0, -6, 0] }} transition={{ repeat: Infinity, duration: 3, ease: 'easeInOut' }}>
+                  <Boxes size={22} />
+                </motion.div>
                 <b>该本体还没有对象实体或实体关系</b>
                 <span>请先在「本体结构」中完成建模，再回到这里连接真实数据。</span>
                 <button type="button" onClick={() => navigate(`/ontologies/${ontologyId}?tab=design`)}>前往本体结构</button>
               </div>
             )}
-            {filteredRows.length === 0 && mappingRows.length > 0 && <div className="dmo-list-empty"><Search size={20} /><span>没有符合条件的映射</span></div>}
+            {filteredRows.length === 0 && mappingRows.length > 0 && (
+              <div className="dmo-list-empty">
+                <motion.div animate={reduce ? undefined : { y: [0, -6, 0] }} transition={{ repeat: Infinity, duration: 3, ease: 'easeInOut' }}>
+                  <Search size={20} />
+                </motion.div>
+                <span>没有符合条件的映射</span>
+              </div>
+            )}
           </div>
         </main>
       </div>

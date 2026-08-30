@@ -416,29 +416,24 @@ test('各视口宽度下数据映射页均不出现水平滚动条', async ({ pa
   }
 })
 
-test('对象与关系很多时清单在卡片内细滚动，整页保持单页', async ({ page }) => {
+test('对象与关系很多时纵向三段完整呈现：卡片随内容撑高、清单随页面滚动', async ({ page }) => {
   await mockMappingPreview(page, { manyRows: true })
   await page.setViewportSize({ width: 1440, height: 800 })
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
   await expect(page.getByText('映射结果清单')).toBeVisible()
   await expect(page.getByText('批量对象01')).toBeVisible()
 
-  // 卡片定高一屏：页面级不出现纵向滚动
-  expect(await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight + 1)).toBeTruthy()
+  // 纵向三段（beUI 重排）：卡片不再定高一屏，行多时随内容自然撑高
   const viewportHeight = page.viewportSize()?.height ?? 800
   const card = page.locator('.dmo-card')
   const cardBox = await card.boundingBox()
-  expect(cardBox!.height).toBeLessThanOrEqual(viewportHeight - 200)
+  expect(cardBox!.height).toBeGreaterThan(viewportHeight - 200)
 
-  // 清单行数超出资时在行列表内部滚动（细滚动条），表头/筛选行保持可见
+  // 清单不再承担内部滚动（自然高度，仅容忍亚像素级伪差——旧单页布局下此处
+  // 内滚达上千像素）：末行经页面滚动可达，表头/筛选行仍随清单呈现
   const rowList = page.locator('.dmo-row-list')
-  expect(await rowList.evaluate(element => element.scrollHeight > element.clientHeight)).toBeTruthy()
-  await expect(rowList).toHaveCSS('overflow-y', 'auto')
-  await expect(rowList).toHaveCSS('overflow-x', 'hidden')
-  await expect(rowList).toHaveCSS('scrollbar-width', 'thin')
-  // 断言范围限定在清单内，且用视口可见性判断（toBeVisible 不感知滚动裁剪）
-  await expect(rowList.getByText('批量对象24')).not.toBeInViewport()
-  await rowList.evaluate(element => { element.scrollTop = element.scrollHeight })
+  expect(await rowList.evaluate(element => element.scrollHeight - element.clientHeight < 24)).toBeTruthy()
+  await rowList.getByText('批量对象24').scrollIntoViewIfNeeded()
   await expect(rowList.getByText('批量对象24')).toBeInViewport()
   await expect(page.locator('.dmo-table-head')).toBeVisible()
 })
@@ -494,14 +489,15 @@ test('实例数链接跳转实例数据 Tab 并选中对应类型', async ({ pag
   await expect.poll(() => requests.objectsTypeId).toBe('object-order')
 })
 
-test('深色模式：页面与链路全景随主题渲染', async ({ page }) => {
+test('深色模式下数据映射页保持固定浅色作用域（DESIGN.md §5.4）', async ({ page }) => {
   await mockMappingPreview(page, { darkTheme: true })
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
   await expect(page.locator('html')).toHaveClass(/dark/)
   await expect(page.getByTestId('mapping-chain-panorama')).toBeVisible()
   await expect.poll(async () => page.locator('.dmo-flow-canvas svg path').count()).toBeGreaterThan(0)
-  await expect(page.locator('.dmo-card')).toHaveCSS('background-color', 'rgb(22, 28, 38)')
+  // 本体详情域为固定浅色：html.dark 下映射卡片不翻深（--dmo-surface 浅色钉死）
+  await expect(page.locator('.dmo-card')).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.9)')
 })
 
 test('详情页头部操作区：映射入口跳转、悬停即时提示、导出反馈不再推挤页面', async ({ page }) => {
@@ -583,16 +579,15 @@ test('element 深链在页面已打开时同样生效（同文档路由更新直
   expect(decodeURIComponent(page.url())).toContain('element=object:object-log')
 })
 
-test('KPI 首个数据帧直出终值：进页不再从 0 重放', async ({ page }) => {
+test('KPI 数字 beUI 滚动入场，数据就绪后短时内落到终值', async ({ page }) => {
   await mockMappingPreview(page, { withInstances: true })
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
-  // 清单可见即代表数据已就绪；此刻 KPI 必须已是终值（1/3 可用、100% 字段连接），
-  // 不允许先渲染一帧全 0 再动画过渡（快速扫读会误读为链路全断）。
+  // 清单可见即代表数据已就绪；KPI 经 AnimatedNumber 滚动（约 0.9s）后落在
+  // 终值（1/3 可用、100% 字段连接），不允许长时间停留在 0 造成链路全断误读。
   await expect(page.getByText('映射结果清单')).toBeVisible()
-  const kpiText = await page.locator('.dmo-kpis').innerText()
-  expect(kpiText).toContain('1 /')
-  expect(kpiText).toContain('100%')
+  await expect.poll(async () => page.locator('.dmo-kpis').innerText(), { timeout: 3000 }).toContain('1 /')
+  await expect.poll(async () => page.locator('.dmo-kpis').innerText(), { timeout: 3000 }).toContain('100%')
 })
 
 test('悬停全景节点卡时静止非聚焦连线粒子，移开后恢复流动', async ({ page }) => {

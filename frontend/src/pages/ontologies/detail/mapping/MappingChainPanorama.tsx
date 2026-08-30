@@ -72,11 +72,18 @@ function writeChainPositions(ontologyId: string, positions: Record<string, { x: 
 }
 
 const COLUMN_X = 300
+const COLUMN_X_MAX = 620
 const NODE_W = 220
 const NODE_H = 66
 const NODE_GAP = 14
 const HEADER_Y = 0
 const FIRST_NODE_Y = 48
+
+/** 两列链路的列距随容器宽度自适应：全宽画布下两列拉开（横向链路更舒展），
+    窄容器回落到历史默认 300。已持久化的节点拖拽位置不受影响（绝对坐标优先）。 */
+const resolveColumnX = (containerWidth: number) => (
+  containerWidth > 0 ? Math.max(COLUMN_X, Math.min(COLUMN_X_MAX, containerWidth - NODE_W - 96)) : COLUMN_X
+)
 
 type BadgeTone = 'ok' | 'warn' | 'danger' | 'muted'
 
@@ -265,6 +272,7 @@ function MappingChainPanoramaInner({
   const flowNodes = useMemo<Node[]>(() => {
     const datasets = model.nodes.filter(node => node.kind === 'dataset')
     const elements = model.nodes.filter(node => node.kind !== 'dataset')
+    const columnX = resolveColumnX(containerSize.width)
     // 按列垂直居中：矮列相对最高列的卡片堆居中，整图重心均衡，不再都从顶部堆起
     const stackHeight = (count: number) => count * NODE_H + Math.max(count - 1, 0) * NODE_GAP
     const centerOffset = (count: number) =>
@@ -276,7 +284,7 @@ function MappingChainPanoramaInner({
       },
       {
         id: 'header:element', type: 'mappingChainHeader', draggable: false, selectable: false,
-        position: { x: COLUMN_X, y: HEADER_Y }, data: { label: '本体元素', count: elements.length },
+        position: { x: columnX, y: HEADER_Y }, data: { label: '本体元素', count: elements.length },
       },
     ]
     const push = (nodeId: string, column: number, index: number, card: ChainCardFields, offsetY: number) => {
@@ -285,7 +293,7 @@ function MappingChainPanoramaInner({
         id: nodeId,
         type: 'mappingChainNode',
         position: dragPositions[nodeId] ?? {
-          x: column * COLUMN_X,
+          x: column * columnX,
           y: FIRST_NODE_Y + offsetY + index * (NODE_H + NODE_GAP),
         },
         data: { ...card, highlighted, dimmed: highlightSet ? !highlightSet.has(nodeId) : false } satisfies ChainCardData,
@@ -312,7 +320,7 @@ function MappingChainPanoramaInner({
       }, elementOffsetY)
     })
     return result
-  }, [model, rows, datasetCards, highlightSet, hoverKey, selectedKey, dragPositions])
+  }, [model, rows, datasetCards, highlightSet, hoverKey, selectedKey, dragPositions, containerSize.width])
 
   // 高亮集合以稳定字符串参与依赖：成员不变时重建的 Set 不再触发连线数组重算
   const highlightSetKey = useMemo(
