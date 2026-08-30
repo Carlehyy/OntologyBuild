@@ -68,7 +68,7 @@ export default function TrialPreflightDialog({ open, ontologyId, versionId, read
       title={trialRun ? '隔离试跑结果' : '转为试跑态 · 发起前检查'}
       description={trialRun
         ? '试跑在隔离环境完成，真实数据与外部副作用均未受影响。'
-        : '权威门禁全部通过后才能发起试跑；业务语义质量仅供参考，不阻断试跑。'}
+        : '试跑门禁全部通过后才能发起；预检为只读快照，以发起时服务端校验为准；业务语义质量仅供参考。'}
       size="2xl"
       footer={trialRun ? (
         <Button variant="outline" onClick={onClose}>关闭</Button>
@@ -132,8 +132,8 @@ export default function TrialPreflightDialog({ open, ontologyId, versionId, read
             )
           )}
 
-          <section aria-label="权威门禁">
-            <h4 className="mb-2 text-xs font-semibold text-slate-800">权威门禁</h4>
+          <section aria-label="试跑门禁">
+            <h4 className="mb-2 text-xs font-semibold text-slate-800">试跑门禁</h4>
             {preflight.isPending && (
               <div className="flex items-center gap-2 text-xs text-slate-500">
                 <Loader2 size={13} className="animate-spin" /> 正在检查试跑条件…

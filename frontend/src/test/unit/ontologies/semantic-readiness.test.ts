@@ -164,17 +164,18 @@ describe('composeBackTranslateMessage · 回译消息拼装', () => {
     ]), null)
   })
 
-  it('列出受影响元素的中文类别与名称，要求先复述再更新画布', () => {
+  it('逐项列出受影响元素的中文类别、名称与期望动作，要求先复述再更新画布', () => {
     const message = composeBackTranslateMessage([
       { code: 'semantic_business_missing', kind: 'objectType', id: 'Order', name: '订单', message: 'm' },
       { code: 'semantic_signature_mismatch', kind: 'action', id: 'Approve', name: '审批', message: 'm' },
       { code: 'semantic_document_stale', kind: 'document', id: 'doc', name: '需求文档', message: 'm' },
     ])
     assert.ok(message)
-    assert.ok(message.includes('我在本体模型中做了人工修改'))
-    assert.ok(message.includes('对象类型「订单」、动作「审批」'))
+    assert.ok(message.includes('我在本体模型视图中人工修改了本体结构'))
+    assert.ok(message.includes('- 对象类型「订单」：结构有、画布无，请补全对应业务语义'))
+    assert.ok(message.includes('- 动作「审批」：同名但签名不一致，请核对差异并对齐画布'))
     assert.ok(!message.includes('需求文档「需求文档」'))
-    assert.ok(message.endsWith('请先用业务语言复述你的理解，再更新画布。'))
+    assert.ok(message.endsWith('请先用业务语言复述你对每项改动的理解，确认无误后再用 upsert_elements 更新画布。'))
   })
 
   it('name 缺省时回退到 id，未知 kind 原样展示', () => {
