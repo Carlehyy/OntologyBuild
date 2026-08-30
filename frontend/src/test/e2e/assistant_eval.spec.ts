@@ -126,6 +126,28 @@ async function mockAssistantEvalApi(page: Page) {
         judge_model_name: '（仅代码型维度，无需 judge 模型）',
       }])
     }
+    // ---- 数据飞轮（M1-M3）----
+    if (method === 'GET' && path === '/api/v1/ontologies') {
+      return json({ items: [{ id: 'ont-1', name: '供应链本体', domain: '供应链' }], total: 1, page: 1, page_size: 100 })
+    }
+    if (method === 'GET' && path === '/api/v1/assistant-evaluation/benchmarks') {
+      return json([{
+        id: 'bench-1', assistant_key: 'ontology_agent', ontology_id: 'ont-1',
+        name: '飞轮基准集', description: '', source_task_id: null,
+        item_count: 4, train_count: 3, heldout_count: 1, created_at: now,
+      }])
+    }
+    if (method === 'GET' && path === '/api/v1/assistant-evaluation/calibrations') return json([])
+    if (method === 'GET' && path === '/api/v1/assistant-evaluation/proposals') return json([])
+    if (method === 'GET' && path === '/api/v1/assistant-evaluation/experiments') return json([])
+    if (method === 'GET' && path === '/api/v1/assistant-evaluation/timeline') {
+      return json([
+        { id: 'e2', assistant_key: 'ontology_agent', event_type: 'cycle_started', actor: 'autopilot', actor_user_id: null, ref_type: 'autopilot_config', ref_id: 'cfg-1', detail: { ontology_id: 'ont-1' }, created_at: now },
+        { id: 'e1', assistant_key: 'ontology_agent', event_type: 'task_succeeded', actor: 'system', actor_user_id: null, ref_type: 'task', ref_id: 'task-1', detail: { title: '超级助手 · 1 条会话', overall: 100 }, created_at: now },
+      ])
+    }
+    if (method === 'GET' && path.startsWith('/api/v1/assistant-evaluation/profile-versions')) return json([])
+    if (method === 'GET' && path.startsWith('/api/v1/assistant-evaluation/autopilot/config/')) return json(null)
     return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ data: null }) })
   })
 }
@@ -158,4 +180,23 @@ test('助手评估：发起抽样评估并查看质量报告', async ({ page }) 
 
   // 导出按钮存在（success 状态）
   await expect(page.getByRole('button', { name: '导出 Markdown' })).toBeVisible()
+})
+
+test('数据飞轮：基准集与时间线视图', async ({ page }) => {
+  await mockAssistantEvalApi(page)
+  await page.goto('/#/settings/assistant-eval')
+
+  // 切到数据飞轮页签
+  await page.getByText('数据飞轮').click()
+
+  // 基准集视图：切分计数与留出标记
+  await expect(page.getByText('飞轮基准集')).toBeVisible()
+  await expect(page.getByText('训练 3')).toBeVisible()
+  await expect(page.getByText('留出 1')).toBeVisible()
+
+  // 时间线视图：事件与 actor 标记
+  await page.getByRole('button', { name: '时间线' }).click()
+  await expect(page.getByText('值守轮开始')).toBeVisible()
+  await expect(page.getByText('评估完成')).toBeVisible()
+  await expect(page.getByText('autopilot_config')).toBeVisible()
 })

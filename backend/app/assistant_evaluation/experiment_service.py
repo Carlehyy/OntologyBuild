@@ -61,7 +61,8 @@ ARMS = ("baseline", "trial")
 
 def create_proposal(db: Session, *, ontology_id: str, type: str, title: str,
                     rationale: str, payload: dict, evidence: dict,
-                    created_by: str | None) -> AssistantEvalProposal:
+                    created_by: str | None,
+                    actor: str = ACTOR_ADMIN) -> AssistantEvalProposal:
     from app.ontologies.projects.models import OntologyProject
     from app.ontologies.agent_runtime.models import AgentProfile
 
@@ -112,7 +113,7 @@ def create_proposal(db: Session, *, ontology_id: str, type: str, title: str,
     db.flush()
     record_event(db, event_type=EVENT_PROPOSAL_CREATED,
                  assistant_key=EXPERIMENT_ASSISTANT_KEY,
-                 actor=ACTOR_ADMIN, actor_user_id=created_by,
+                 actor=actor, actor_user_id=created_by if actor == ACTOR_ADMIN else None,
                  ref_type="proposal", ref_id=row.id,
                  detail={"ontology_id": ontology_id, "type": type,
                          "title": row.title, "payload": payload})
@@ -170,7 +171,8 @@ def _draft_profile(base_profile, proposal: AssistantEvalProposal):
 def create_experiment(db: Session, *, proposal_id: str, benchmark_set_id: str,
                       dimension_keys: list[str], threshold: float,
                       model_config_id: str | None,
-                      created_by: str | None) -> AssistantEvalExperiment:
+                      created_by: str | None,
+                      purpose: str | None = None) -> AssistantEvalExperiment:
     proposal = get_proposal(db, proposal_id)
     if proposal is None:
         raise ServiceError("提案不存在。")
@@ -225,6 +227,7 @@ def create_experiment(db: Session, *, proposal_id: str, benchmark_set_id: str,
             "benchmark_set_id": benchmark_set_id,
             "engine": "openjudge" if openjudge_available() else "builtin",
             "splits": {i.conversation_id: i.split for i in items},
+            **({"purpose": purpose} if purpose else {}),
         },
         judge_model_config_id=(str(judge.id) if judge is not None else None),
         judge_model_name=(getattr(judge, "name", "") or "") if judge is not None

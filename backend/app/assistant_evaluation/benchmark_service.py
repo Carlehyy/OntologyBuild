@@ -198,7 +198,7 @@ def create_from_task(db: Session, *, task_id: str, name: str | None,
 
 
 def add_items(db: Session, set_id: str, entries: list[dict],
-              actor_user_id: str | None) -> AssistantEvalBenchmarkSet:
+              actor_user_id: str | None, actor: str = ACTOR_ADMIN) -> AssistantEvalBenchmarkSet:
     row = get_set(db, set_id)
     adapter = get_adapters().get(row.assistant_key)
     if adapter is None:
@@ -214,7 +214,7 @@ def add_items(db: Session, set_id: str, entries: list[dict],
     for item in fresh:
         db.add(AssistantEvalBenchmarkItem(set_id=row.id, **item))
     record_event(db, event_type=EVENT_BENCHMARK_ITEMS_ADDED, assistant_key=row.assistant_key,
-                 actor=ACTOR_ADMIN, actor_user_id=actor_user_id,
+                 actor=actor, actor_user_id=actor_user_id if actor == ACTOR_ADMIN else None,
                  ref_type="benchmark_set", ref_id=row.id,
                  detail={"added": len(fresh),
                          "conversation_ids": [i["conversation_id"] for i in fresh][:20]})

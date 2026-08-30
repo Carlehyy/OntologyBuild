@@ -26,9 +26,16 @@ EVENT_PROPOSAL_CREATED = "proposal_created"
 EVENT_EXPERIMENT_CREATED = "experiment_created"
 EVENT_EXPERIMENT_SUCCEEDED = "experiment_succeeded"
 EVENT_EXPERIMENT_FAILED = "experiment_failed"
+EVENT_PROPOSAL_APPLIED = "proposal_applied"
+EVENT_VERSION_ROLLED_BACK = "version_rolled_back"
+EVENT_CYCLE_STARTED = "cycle_started"
+EVENT_CYCLE_SKIPPED = "cycle_skipped"
+EVENT_CYCLE_SUCCEEDED = "cycle_succeeded"
+EVENT_CYCLE_FAILED = "cycle_failed"
 
 ACTOR_ADMIN = "admin"
 ACTOR_SYSTEM = "system"
+ACTOR_AUTOPILOT = "autopilot"
 
 
 def record_event(db: Session, *, event_type: str, assistant_key: str | None = None,

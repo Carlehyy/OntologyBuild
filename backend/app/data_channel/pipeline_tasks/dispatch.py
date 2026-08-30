@@ -26,6 +26,7 @@ DATASET_MIGRATE_SUBJECT = "task.dataset.migrate"
 SUPER_ASSISTANT_REFLECT_MICRO_SUBJECT = "super_assistant.reflect.micro"
 SUPER_ASSISTANT_REFLECT_FULL_SUBJECT = "super_assistant.reflect.full"
 SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT = "super_assistant.reflect.focused"
+ASSISTANT_EVAL_AUTOPILOT_SUBJECT = "assistant_evaluation.autopilot.cycle"
 # 流的全部订阅主题：扩容只能追加，旧 subject 与旧 durable 保持不变
 PIPELINE_STREAM_SUBJECTS = (
     PIPELINE_EXECUTE_SUBJECT,
@@ -35,6 +36,8 @@ PIPELINE_STREAM_SUBJECTS = (
     SUPER_ASSISTANT_REFLECT_FULL_SUBJECT,
     SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT,
     DATASET_MIGRATE_SUBJECT,
+    # 只能追加：值守循环（助手评估数据飞轮 M3）
+    ASSISTANT_EVAL_AUTOPILOT_SUBJECT,
 )
 
 # 进程内缓存：每个进程只在首次派发时确保一次 Stream
@@ -174,3 +177,16 @@ def dispatch_super_assistant_reflection(kind: str, payload: dict) -> None:
     if subject is None:
         raise ValueError(f"未知的反思任务类型: {kind!r}")
     dispatch_task(subject, payload)
+
+
+def dispatch_assistant_eval_autopilot(config_id: str) -> None:
+    """助手评估值守循环派发入口（APScheduler 调度线程 / 手动触发共用）。
+
+    payload 约定：config_id 必填。重复触发由三重防线兜底——JetStream
+    Msg-Id 去重窗、配置行的 last_dispatched_at 时段标记、消费侧 DB
+    防重入检查。
+    """
+    dispatch_task(
+        ASSISTANT_EVAL_AUTOPILOT_SUBJECT,
+        {"config_id": config_id},
+    )

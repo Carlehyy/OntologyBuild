@@ -70,7 +70,8 @@ def _start_worker(task_id: str) -> None:
 def create_task(db: Session, *, assistant_key: str, conversation_ids: list[str] | None,
                 sample_size: int, sample_days: int, dimension_keys: list[str],
                 model_config_id: str | None, rubric_id: str | None,
-                created_by: str | None) -> AssistantEvalTask:
+                created_by: str | None,
+                purpose: str | None = None) -> AssistantEvalTask:
     adapter = get_adapters().get(assistant_key)
     if not adapter:
         raise ServiceError(f"未知的助手类型：{assistant_key}")
@@ -122,6 +123,7 @@ def create_task(db: Session, *, assistant_key: str, conversation_ids: list[str] 
             "dimension_keys": list(dimension_keys),
             "conversation_ids": list(conversation_ids),
             "engine": "openjudge" if openjudge_available() else "builtin",
+            **({"purpose": purpose} if purpose else {}),
             **({"rubric": rubric} if rubric else {}),
         },
         judge_model_config_id=(str(judge.id) if judge is not None else None),

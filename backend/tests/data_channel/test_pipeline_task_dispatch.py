@@ -130,6 +130,7 @@ def test_dispatch_ensures_work_queue_stream_once(fake_nats, monkeypatch):
         "super_assistant.reflect.full",
         "super_assistant.reflect.focused",
         "task.dataset.migrate",
+        "assistant_evaluation.autopilot.cycle",
     ]
     assert config.subjects == list(PIPELINE_STREAM_SUBJECTS)
     assert config.retention == RetentionPolicy.WORK_QUEUE
@@ -219,15 +220,7 @@ async def test_ensure_stream_evolves_legacy_stream_subjects():
 
     (config,), = [calls["update_stream"]]
     # 旧 subject 保留在前，新增 subject 合并入流，旧 durable 不受影响
-    assert config.subjects == [
-        "pipeline.task.execute",
-        "super_assistant.reflect.focused",
-        "super_assistant.reflect.full",
-        "super_assistant.reflect.micro",
-        "task.dataset.import",
-        "task.dataset.migrate",
-        "task.pipeline.run",
-    ]
+    assert config.subjects == sorted(set(PIPELINE_STREAM_SUBJECTS) | {"pipeline.task.execute"})
     assert set(config.subjects) == set(PIPELINE_STREAM_SUBJECTS)
 
 

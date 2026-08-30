@@ -3,8 +3,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, \
-    UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, \
+    String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.database import Base
@@ -203,7 +203,7 @@ class AssistantEvalTimelineEvent(Base):
     actor_user_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    # task | benchmark_set | calibration | proposal | experiment
+    # task | benchmark_set | calibration | proposal | experiment | profile_version | autopilot_config
     ref_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
     ref_id: Mapped[str | None] = mapped_column(String, nullable=True)
     detail: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
@@ -320,3 +320,82 @@ class AssistantEvalExperimentItem(Base):
     # {query, response, openai_messages, actions, tool_error_count}
     transcript: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+
+
+class AssistantEvalProfileVersion(Base):
+    """AgentProfile 版本快照 — 自动投产的回退锚点与审计链。
+
+    snapshot 保存变更前的全量 PROFILE_FIELDS；投产前先对近期生产会话
+    抽样评分作为看守基线（pre_apply_stats，无样本时回退用实验 baseline
+    臂统计）。回退 = 把 snapshot 写回 profile，前一版本恢复 active。
+    """
+
+    __tablename__ = "assistant_eval_profile_versions"
+    __table_args__ = (
+        Index("ix_ae_versions_ontology_created", "ontology_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    ontology_id: Mapped[str] = mapped_column(String, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 变更前 AgentProfile 全量字段快照
+    snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # {proposal_id, experiment_id, trigger: manual|autopilot}
+    source: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # active | superseded | rolled_back
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    # 投产前生产会话抽样评分：{overall, per_dim, conversations}
+    pre_apply_stats: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # 投产后看守已确认未劣化
+    verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_by: Mapped[str | None] = mapped_column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+
+
+class AssistantEvalAutopilotConfig(Base):
+    """值守开关 — 每个本体一条：定时自转的优化循环（无人值守投产）。
+
+    循环：投产後看守（劣化即回退）→ 采样评估 → 坏例并基准 → LLM 生成
+    prompt_patch 提案 → 双臂沙箱实验 → 门禁通过且预算未耗尽 → 自动投产。
+    连续失败 3 轮自动熔断（suspended），等待人工介入。
+    """
+
+    __tablename__ = "assistant_eval_autopilot_configs"
+    __table_args__ = (
+        UniqueConstraint("ontology_id", name="uq_ae_autopilot_ontology"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    ontology_id: Mapped[str] = mapped_column(String, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # 每天本地时区该时刻（HH:MM）触发一轮
+    run_at: Mapped[str] = mapped_column(String(5), nullable=False, default="03:00")
+    benchmark_set_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("assistant_eval_benchmark_sets.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    dimension_keys: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    model_config_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 留出集增量门禁阈值（下界仍为 max(threshold, 2×噪声地板)）
+    threshold: Mapped[float] = mapped_column(Float, nullable=False, default=5.0)
+    # 预算硬顶：滚动 7 天内自动投产次数上限
+    max_applies_per_week: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    # 每轮评估的采样窗口（天）
+    sample_days: Mapped[int] = mapped_column(Integer, nullable=False, default=14)
+    # 连续失败熔断
+    suspended: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    suspend_reason: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    last_dispatched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_cycle_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # success | skipped_busy | skipped_no_badcase | skipped_budget | rolled_back | error
+    last_cycle_status: Mapped[str] = mapped_column(String(30), nullable=False, default="")
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by: Mapped[str | None] = mapped_column(
+        String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_now, onupdate=_now
+    )

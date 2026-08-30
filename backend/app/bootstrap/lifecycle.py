@@ -154,6 +154,18 @@ async def application_lifespan(
             except Exception as exc:
                 _main_logger.warning("助手评估任务恢复失败: %s", exc)
 
+        # 助手评估值守定时器（APScheduler 进程内定时 + NATS 派发；旁路能力，
+        # 失败不阻断启动——与任务恢复同策略）
+        if settings.environment != "test":
+            try:
+                from app.assistant_evaluation.autopilot_scheduler import (
+                    start as start_autopilot_scheduler,
+                )
+
+                start_autopilot_scheduler()
+            except Exception as exc:
+                _main_logger.warning("助手评估值守定时器启动失败: %s", exc)
+
         from app.api_hub import mcp_server as api_hub_mcp
 
         # session manager 每实例只能 run 一次；重复进入 lifespan（如测试）需重建

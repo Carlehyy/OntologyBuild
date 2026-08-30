@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.assistant_evaluation import (
+    apply_service,
+    autopilot_service,
     benchmark_service,
     calibration_service,
     experiment_service,
@@ -294,6 +296,55 @@ class ExperimentItemOut(BaseModel):
 
 class ExperimentDetailOut(ExperimentOut):
     items: list[ExperimentItemOut]
+
+
+class AutopilotConfigIn(BaseModel):
+    enabled: bool = False
+    run_at: str = "03:00"           # 本地时区 HH:MM
+    benchmark_set_id: str | None = None
+    dimension_keys: list[str] = Field(default_factory=list)
+    model_config_id: str | None = None
+    threshold: float = 5.0
+    max_applies_per_week: int = 3
+    sample_days: int = 14
+
+
+class AutopilotConfigOut(BaseModel):
+    id: str
+    ontology_id: str
+    enabled: bool
+    run_at: str
+    benchmark_set_id: str | None
+    dimension_keys: list
+    model_config_id: str | None
+    threshold: float
+    max_applies_per_week: int
+    sample_days: int
+    suspended: bool
+    suspend_reason: str
+    last_dispatched_at: str | None = None
+    last_cycle_at: str | None = None
+    last_cycle_status: str
+    consecutive_failures: int
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class ProfileVersionOut(BaseModel):
+    id: str
+    ontology_id: str
+    version: int
+    snapshot: dict
+    source: dict
+    status: str
+    pre_apply_stats: dict
+    verified: bool
+    created_by: str | None = None
+    created_at: str | None = None
+
+
+class RollbackIn(BaseModel):
+    reason: str = ""
 
 
 # ---------------------------------------------------------------- helpers
@@ -861,3 +912,127 @@ def delete_experiment(experiment_id: str, db: Session = Depends(get_db)):
     if not deleted:
         raise HTTPException(status_code=404, detail="实验不存在")
     return _ok({"deleted": True})
+
+
+# ---------------------------------------------------------------- 候守自动化（飞轮 M3）
+
+
+def _autopilot_config_out(row) -> AutopilotConfigOut:
+    return AutopilotConfigOut(
+        id=row.id,
+        ontology_id=row.ontology_id,
+        enabled=row.enabled,
+        run_at=row.run_at,
+        benchmark_set_id=row.benchmark_set_id,
+        dimension_keys=row.dimension_keys or [],
+        model_config_id=row.model_config_id,
+        threshold=row.threshold,
+        max_applies_per_week=row.max_applies_per_week,
+        sample_days=row.sample_days,
+        suspended=row.suspended,
+        suspend_reason=row.suspend_reason or "",
+        last_dispatched_at=_iso(row.last_dispatched_at),
+        last_cycle_at=_iso(row.last_cycle_at),
+        last_cycle_status=row.last_cycle_status or "",
+        consecutive_failures=row.consecutive_failures or 0,
+        created_at=_iso(row.created_at),
+        updated_at=_iso(row.updated_at),
+    )
+
+
+def _profile_version_out(row) -> ProfileVersionOut:
+    return ProfileVersionOut(
+        id=row.id,
+        ontology_id=row.ontology_id,
+        version=row.version,
+        snapshot=row.snapshot or {},
+        source=row.source or {},
+        status=row.status,
+        pre_apply_stats=row.pre_apply_stats or {},
+        verified=bool(row.verified),
+        created_by=row.created_by,
+        created_at=_iso(row.created_at),
+    )
+
+
+@router.get("/autopilot/config/{ontology_id}")
+def get_autopilot_config(ontology_id: str, db: Session = Depends(get_db)):
+    row = autopilot_service.get_config(db, ontology_id)
+    if row is None:
+        return _ok(None)
+    return _ok(_autopilot_config_out(row))
+
+
+@router.put("/autopilot/config/{ontology_id}")
+def save_autopilot_config(ontology_id: str, payload: AutopilotConfigIn,
+                          db: Session = Depends(get_db),
+                          admin: User = Depends(require_admin)):
+    try:
+        row = autopilot_service.save_config(
+            db,
+            ontology_id=ontology_id,
+            enabled=payload.enabled,
+            run_at=payload.run_at,
+            benchmark_set_id=payload.benchmark_set_id,
+            dimension_keys=payload.dimension_keys,
+            model_config_id=payload.model_config_id,
+            threshold=payload.threshold,
+            max_applies_per_week=payload.max_applies_per_week,
+            sample_days=payload.sample_days,
+            actor_user_id=str(admin.id),
+        )
+    except (service.ServiceError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _ok(_autopilot_config_out(row))
+
+
+@router.post("/autopilot/config/{ontology_id}/trigger")
+def trigger_autopilot_cycle(ontology_id: str, db: Session = Depends(get_db),
+                            admin: User = Depends(require_admin)):
+    """手动触发一轮值守循环（管理调试入口，走同一 NATS 链路）。"""
+    row = autopilot_service.get_config(db, ontology_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="该本体尚未配置值守")
+    try:
+        from app.data_channel.pipeline_tasks.dispatch import (
+            dispatch_assistant_eval_autopilot,
+        )
+
+        dispatch_assistant_eval_autopilot(row.id)
+    except Exception as exc:  # noqa: BLE001 — NATS 不可用等环境问题如实返回
+        raise HTTPException(status_code=400,
+                            detail=f"派发失败：{exc}") from exc
+    return _ok({"dispatched": True, "config_id": row.id})
+
+
+@router.get("/profile-versions")
+def list_profile_versions(ontology_id: str, db: Session = Depends(get_db)):
+    return _ok([_profile_version_out(row)
+                for row in apply_service.list_versions(db, ontology_id)])
+
+
+@router.post("/proposals/{proposal_id}/apply")
+def apply_eval_proposal(proposal_id: str, db: Session = Depends(get_db),
+                        admin: User = Depends(require_admin)):
+    """人工投产：门禁通过的提案写入生产并登记版本快照（可回退）。"""
+    try:
+        row = apply_service.apply_proposal(
+            db, proposal_id=proposal_id, trigger="manual",
+            actor_user_id=str(admin.id))
+    except (service.ServiceError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _ok(_profile_version_out(row))
+
+
+@router.post("/profile-versions/{version_id}/rollback")
+def rollback_profile_version(version_id: str, payload: RollbackIn,
+                             db: Session = Depends(get_db),
+                             admin: User = Depends(require_admin)):
+    """人工回退：把生效版本的快照写回生产 profile，前一版本恢复 active。"""
+    try:
+        row = apply_service.rollback_version(
+            db, version_id=version_id, reason=payload.reason or "管理员手动回退",
+            trigger="manual", actor_user_id=str(admin.id))
+    except (service.ServiceError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _ok(_profile_version_out(row))

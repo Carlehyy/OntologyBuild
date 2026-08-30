@@ -161,6 +161,10 @@ def _make_list(conv_model, msg_model, conv_field: str, title_col: str,
               since=None) -> tuple[int, list[ConversationRef]]:
         total_query = db.query(func.count(conv_model.id))
         rows_query = db.query(conv_model)
+        if hasattr(conv_model, "is_sandbox"):
+            # 评估面向真实生产会话；沙箱回放会话（本体助手）不进入样本
+            total_query = total_query.filter(conv_model.is_sandbox.is_(False))
+            rows_query = rows_query.filter(conv_model.is_sandbox.is_(False))
         if since is not None:
             total_query = total_query.filter(conv_model.created_at >= since)
             rows_query = rows_query.filter(conv_model.created_at >= since)
