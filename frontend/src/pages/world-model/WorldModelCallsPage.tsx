@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { motion, useReducedMotion } from 'motion/react'
+import { SPRING_LAYOUT } from '@/components/motion-ui/ease'
 import {
   AlertCircle,
   CheckCircle2,
@@ -26,7 +28,7 @@ import { Button } from '@/components/ui/Button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/motion-ui/select'
 import CallsTrendChart from './CallsTrendChart'
 import StatCard from './StatCard'
-import { formatDurationMs, formatSuccessRate } from './statsFormat'
+import { formatDurationMs } from './statsFormat'
 
 const PAGE_SIZE = 20
 /** 趋势图窗口：近 N 天按日分桶 */
@@ -56,6 +58,7 @@ function formatDateTime(iso?: string | null): string {
 }
 
 export default function WorldModelCallsPage() {
+  const reduce = useReducedMotion() ?? false
   const [searchParams] = useSearchParams()
   const [items, setItems] = useState<CallRecordItem[]>([])
   const [overview, setOverview] = useState<CallRecordOverview | null>(null)
@@ -172,13 +175,18 @@ export default function WorldModelCallsPage() {
     <div className="space-y-4">
       {/* 概览统计 */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard icon={<Route size={17} />} label="总调用次数" value={String(overview?.total ?? 0)} />
-        <StatCard icon={<AlertCircle size={17} />} label="失败次数" value={String(overview?.failed ?? 0)} tone="danger" />
-        <StatCard icon={<Gauge size={17} />} label="平均耗时" value={formatDurationMs(overview?.avg_duration_ms ?? 0)} />
+        <StatCard icon={<Route size={17} />} label="总调用次数" value={overview?.total ?? 0} />
+        <StatCard icon={<AlertCircle size={17} />} label="失败次数" value={overview?.failed ?? 0} tone="danger" />
+        <StatCard icon={<Gauge size={17} />} label="平均耗时" value={overview?.avg_duration_ms ?? 0} format={formatDurationMs} />
         <StatCard
           icon={<CheckCircle2 size={17} />}
           label="成功率"
-          value={formatSuccessRate((overview?.total ?? 0) - (overview?.failed ?? 0), overview?.total ?? 0)}
+          value={
+            (overview?.total ?? 0) > 0
+              ? (((overview?.total ?? 0) - (overview?.failed ?? 0)) / (overview?.total ?? 1)) * 100
+              : 0
+          }
+          format={n => ((overview?.total ?? 0) > 0 ? `${n.toFixed(1).replace(/\.0$/, '')}%` : '—')}
         />
       </div>
 
@@ -289,7 +297,12 @@ export default function WorldModelCallsPage() {
           </div>
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
-            <ScrollText size={28} className="text-muted-foreground" />
+            <motion.div
+              animate={reduce ? undefined : { y: [0, -6, 0] }}
+              transition={{ repeat: Infinity, duration: 3, ease: 'easeInOut' }}
+            >
+              <ScrollText size={28} className="text-muted-foreground" />
+            </motion.div>
             <p className="mt-3 text-sm font-medium text-muted-foreground">暂无调用记录</p>
             <p className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
               发布推演服务后，每次经 HTTP 接口或 Agent 调用都会在此留下含输入快照、耗时与结果的审计记录。
@@ -308,9 +321,12 @@ export default function WorldModelCallsPage() {
                 </tr>
               </thead>
               <tbody>
-                {items.map(item => (
-                  <tr
+                {items.map((item, index) => (
+                  <motion.tr
                     key={item.id}
+                    initial={reduce ? false : { opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ ...SPRING_LAYOUT, delay: Math.min(index * 0.035, 0.35) }}
                     onClick={() => void openDetail(item)}
                     className="cursor-pointer border-b border-border transition-colors hover:bg-muted"
                   >
@@ -323,7 +339,7 @@ export default function WorldModelCallsPage() {
                         : <span className="inline-flex items-center gap-1 text-xs text-destructive"><XCircle size={13} /> 失败</span>}
                     </td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{item.duration_ms} ms</td>
-                  </tr>
+                  </motion.tr>
                 ))}
               </tbody>
             </table>

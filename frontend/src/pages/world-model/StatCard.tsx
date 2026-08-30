@@ -1,13 +1,16 @@
 import type { ReactNode } from 'react'
+import { AnimatedNumber } from '@/components/motion-ui/animated-number'
 
 /**
- * 世界模型三页共用的统计概览卡：图标 + 指标名 + 数值（+ 可选补充说明）。
- * 视觉与调用记录页原 OverviewCard 一致。
+ * 世界模型三页共用的统计概览卡：图标 + 指标名 + 数值（beUI AnimatedNumber
+ * 滚动入场，遵循"减少动态效果"）+ 可选补充说明。
+ * value 为数值，format 决定展示（如百分比/耗时）；无 format 时千分位取整。
  */
-export default function StatCard({ icon, label, value, sub, tone }: {
+export default function StatCard({ icon, label, value, format, sub, tone }: {
   icon: ReactNode
   label: string
-  value: string
+  value: number
+  format?: (n: number) => string
   sub?: string
   tone?: 'default' | 'danger'
 }) {
@@ -18,7 +21,9 @@ export default function StatCard({ icon, label, value, sub, tone }: {
       </span>
       <div className="min-w-0">
         <p className="text-[11px] text-muted-foreground">{label}</p>
-        <p className="text-base font-semibold tabular-nums text-foreground">{value}</p>
+        <p className="text-base font-semibold text-foreground">
+          <AnimatedNumber value={value} format={format} duration={0.9} />
+        </p>
         {sub && <p className="truncate text-[11px] text-muted-foreground" title={sub}>{sub}</p>}
       </div>
     </div>

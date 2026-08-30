@@ -32,6 +32,11 @@ import { SPRING_LAYOUT } from '@/components/motion-ui/ease'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/motion-ui/select'
 import { Tooltip } from '@/components/motion-ui/tooltip'
 import { IconButton } from '@/components/motion-ui/icon-button'
+import { TiltCard } from '@/components/motion-ui/tilt-card'
+import {
+  CenterMorphModal,
+  CenterMorphModalContent,
+} from '@/components/motion-ui/center-morph-modal'
 
 /** 列表走服务端分页：每页卡片数（含新建卡占位的网格为 4 列） */
 const PAGE_SIZE = 12
@@ -215,7 +220,8 @@ function ProjectCard({
 }) {
   const reduce = useReducedMotion() ?? false
   return (
-    <article className="flex h-full min-h-[190px] flex-col rounded-2xl border border-border bg-card p-5 shadow-sm/50 transition-shadow hover:shadow-md">
+    <TiltCard className="h-full" max={8}>
+      <article className="flex h-full min-h-[190px] flex-col rounded-2xl border border-border bg-card p-5 shadow-sm/50 transition-shadow hover:shadow-md">
       <header className="flex items-start gap-3">
         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand-ink">
           <Orbit size={20} />
@@ -289,6 +295,7 @@ function ProjectCard({
         </span>
       </footer>
     </article>
+    </TiltCard>
   )
 }
 
@@ -441,7 +448,12 @@ export default function WorldModelModelsPage() {
         ) : items.length === 0 ? (
           keyword || engineFilter ? (
             <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-border bg-card px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3">
-              <Boxes size={28} className="text-muted-foreground" />
+              <motion.div
+                animate={reduce ? undefined : { y: [0, -6, 0] }}
+                transition={{ repeat: Infinity, duration: 3, ease: 'easeInOut' }}
+              >
+                <Boxes size={28} className="text-muted-foreground" />
+              </motion.div>
               <p className="mt-3 text-sm font-medium text-muted-foreground">没有符合条件的推演模型</p>
               <p className="mt-1 text-xs text-muted-foreground">请调整名称或引擎类型筛选条件</p>
             </div>
@@ -548,30 +560,40 @@ export default function WorldModelModelsPage() {
       )}
 
       {/* 在线模型删除保护：服务未下线时不开放删除，引导先去推演服务页下线 */}
-      <Modal
+      <CenterMorphModal
         open={!!deleteTarget && deleteTarget.service_status === 'online'}
-        onClose={() => setDeleteTarget(null)}
-        title={deleteTarget ? `删除「${deleteTarget.name}」？` : '删除推演模型？'}
-        headerIcon={<AlertTriangle size={19} className="text-[var(--color-warning)]" />}
-        size="sm"
-        footer={(
-          <>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)}>取消</Button>
-            <Button
-              onClick={() => { setDeleteTarget(null); navigate('/world-model/services') }}
-              className="bg-brand text-white hover:bg-brand-deep"
-            >
-              前往推演服务
-            </Button>
-          </>
-        )}
+        onOpenChange={open => { if (!open) setDeleteTarget(null) }}
       >
-        <div className="rounded-xl border border-[var(--color-warning)] bg-[var(--color-warning-bg)] px-4 py-3 text-sm leading-6 text-[var(--color-warning)]">
-          该模型的推演服务{deleteTarget?.service_name ? `「${deleteTarget.service_name}」` : ''}当前在线，
-          调用端点仍可被访问。删除会立即移除在线端点、服务与全部历史版本，
-          请先在「推演服务」页将服务下线，再删除模型。
-        </div>
-      </Modal>
+        <CenterMorphModalContent
+          ariaLabel={deleteTarget ? `删除「${deleteTarget.name}」？` : '删除推演模型？'}
+          className="max-w-sm"
+        >
+          <div className="p-6">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-warning-bg)] text-[var(--color-warning)]">
+                <AlertTriangle size={18} />
+              </span>
+              <h2 className="text-sm font-semibold text-foreground">
+                {deleteTarget ? `删除「${deleteTarget.name}」？` : '删除推演模型？'}
+              </h2>
+            </div>
+            <div className="mt-3 rounded-xl border border-[var(--color-warning)] bg-[var(--color-warning-bg)] px-4 py-3 text-sm leading-6 text-[var(--color-warning)]">
+              该模型的推演服务{deleteTarget?.service_name ? `「${deleteTarget.service_name}」` : ''}当前在线，
+              调用端点仍可被访问。删除会立即移除在线端点、服务与全部历史版本，
+              请先在「推演服务」页将服务下线，再删除模型。
+            </div>
+            <div className="mt-5 flex justify-end gap-2 pr-8">
+              <Button variant="outline" onClick={() => setDeleteTarget(null)}>取消</Button>
+              <Button
+                onClick={() => { setDeleteTarget(null); navigate('/world-model/services') }}
+                className="bg-brand text-white hover:bg-brand-deep"
+              >
+                前往推演服务
+              </Button>
+            </div>
+          </div>
+        </CenterMorphModalContent>
+      </CenterMorphModal>
 
       {/* 草稿/已下线模型：常规永久删除确认 */}
       <ConfirmModal

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { motion, useReducedMotion } from 'motion/react'
+import { SPRING_LAYOUT } from '@/components/motion-ui/ease'
 import {
   Activity,
   AlertTriangle,
@@ -81,6 +83,7 @@ function statusBadge(status: string) {
 }
 
 export default function WorldModelServicesPage() {
+  const reduce = useReducedMotion() ?? false
   const { toast } = useToast()
   const navigate = useNavigate()
   const [items, setItems] = useState<WorldModelServiceSummary[]>([])
@@ -352,34 +355,37 @@ export default function WorldModelServicesPage() {
           <StatCard
             icon={<Rocket size={17} />}
             label="服务总数"
-            value={String(overview?.total ?? 0)}
+            value={overview?.total ?? 0}
             sub={`已下线 ${overview?.offline ?? 0}`}
           />
           <StatCard
             icon={<Power size={17} />}
             label="在线服务"
-            value={String(overview?.online ?? 0)}
+            value={overview?.online ?? 0}
             sub="端点可对外调用"
           />
           <StatCard
             icon={<Route size={17} />}
             label="总调用次数"
-            value={String(overview?.call_total ?? 0)}
+            value={overview?.call_total ?? 0}
             sub={`失败 ${overview?.call_failed ?? 0}`}
           />
           <StatCard
             icon={<CheckCircle2 size={17} />}
             label="全局成功率"
-            value={formatSuccessRate(
-              (overview?.call_total ?? 0) - (overview?.call_failed ?? 0),
-              overview?.call_total ?? 0,
-            )}
+            value={
+              (overview?.call_total ?? 0) > 0
+                ? (((overview?.call_total ?? 0) - (overview?.call_failed ?? 0)) / (overview?.call_total ?? 1)) * 100
+                : 0
+            }
+            format={n => ((overview?.call_total ?? 0) > 0 ? `${n.toFixed(1).replace(/\.0$/, '')}%` : '—')}
             tone={(overview?.call_failed ?? 0) > 0 ? 'danger' : 'default'}
           />
           <StatCard
             icon={<Gauge size={17} />}
             label="平均耗时"
-            value={formatDurationMs(overview?.avg_duration_ms ?? 0)}
+            value={overview?.avg_duration_ms ?? 0}
+            format={formatDurationMs}
             sub="按全部调用记录计算"
           />
         </section>
@@ -448,7 +454,12 @@ export default function WorldModelServicesPage() {
           </div>
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
-            <Rocket size={28} className="text-muted-foreground" />
+            <motion.div
+              animate={reduce ? undefined : { y: [0, -6, 0] }}
+              transition={{ repeat: Infinity, duration: 3, ease: 'easeInOut' }}
+            >
+              <Rocket size={28} className="text-muted-foreground" />
+            </motion.div>
             <p className="mt-3 text-sm font-medium text-muted-foreground">{keyword || status ? '没有符合条件的推演服务' : '暂无推演服务'}</p>
             <p className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
               {keyword || status
@@ -471,8 +482,13 @@ export default function WorldModelServicesPage() {
                 </tr>
               </thead>
               <tbody>
-                {items.map(item => (
-                  <tr key={item.id} className="border-b border-border transition-colors hover:bg-muted">
+                {items.map((item, index) => (
+                  <motion.tr
+                    key={item.id}
+                    initial={reduce ? false : { opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ ...SPRING_LAYOUT, delay: Math.min(index * 0.035, 0.35) }}
+                    className="border-b border-border transition-colors hover:bg-muted">
                     <td className="max-w-[240px] px-4 py-2.5">
                       <p className="truncate font-medium text-foreground" title={item.name}>{item.name}</p>
                       {item.description && (
@@ -551,7 +567,7 @@ export default function WorldModelServicesPage() {
                         </Tooltip>
                       </span>
                     </td>
-                  </tr>
+                  </motion.tr>
                 ))}
               </tbody>
             </table>

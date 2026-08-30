@@ -4,6 +4,8 @@ import {
   defaultWeek,
   type WeekAvailability,
 } from '@/components/availability-scheduler'
+import { AnimatedNumber } from '@/components/motion-ui/animated-number'
+import { TiltCard } from '@/components/motion-ui/tilt-card'
 
 /**
  * 平台共享组件预览路由（/design/components，不进入导航）。
@@ -33,6 +35,25 @@ export default function ComponentGalleryPage() {
 
       <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
         <AvailabilityScheduler value={week} onChange={setWeek} />
+      </section>
+
+      <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
+          <p className="text-xs font-medium text-muted-foreground">AnimatedNumber · 数字滚动</p>
+          <p className="mt-2 text-3xl font-semibold text-foreground">
+            <AnimatedNumber value={42857} duration={1.2} />
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">进入视口时从 0 滚入，遵循「减少动态效果」</p>
+        </div>
+        <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
+          <p className="text-xs font-medium text-muted-foreground">TiltCard · 3D 悬停倾转</p>
+          <div className="mt-3">
+            <TiltCard max={10} className="rounded-xl border border-border bg-muted p-5">
+              <p className="text-sm font-medium text-foreground">鼠标悬停试试</p>
+              <p className="mt-1 text-xs text-muted-foreground">指针跟随倾转 + 高光，仅桌面悬停设备生效</p>
+            </TiltCard>
+          </div>
+        </div>
       </section>
 
       <section className="mt-6">
