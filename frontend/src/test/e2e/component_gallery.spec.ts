@@ -15,6 +15,31 @@ async function authenticate(page: Page) {
 
 test.use({ viewport: { width: 1440, height: 1000 } })
 
+test('组件预览：multi-select 多选、chip 移除与选项勾选态', async ({ page }) => {
+  await authenticate(page)
+  await page.goto('/#/design/components')
+
+  const input = page.getByRole('combobox', { name: '筛选方向' })
+  await expect(page.getByTestId('multiselect-value')).toHaveText('frontend')
+
+  // 打开面板，追加勾选两项（多选不关面板）
+  await input.click()
+  await page.getByRole('option', { name: '平台', exact: true }).click()
+  await page.getByRole('option', { name: '算法', exact: true }).click()
+  await expect(page.getByTestId('multiselect-value')).toHaveText('frontend, platform, algorithm')
+  await expect(page.getByRole('option', { name: '平台', exact: true })).toHaveAttribute('aria-selected', 'true')
+
+  // 触发器内搜索过滤：只匹配项可见
+  await input.fill('后')
+  await expect(page.getByRole('option', { name: '后端', exact: true })).toBeVisible()
+  await expect(page.getByRole('option', { name: '前端', exact: true })).toBeHidden()
+
+  // chip 上的移除按钮退选一项
+  await input.fill('')
+  await page.getByRole('button', { name: '移除 算法' }).click()
+  await expect(page.getByTestId('multiselect-value')).toHaveText('frontend, platform')
+})
+
 test('组件预览：availability-scheduler 渲染、开关、加时段与复制到每天', async ({ page }) => {
   await authenticate(page)
   await page.goto('/#/design/components')

@@ -34,6 +34,7 @@
 | TiltCard | [`motion-ui/tilt-card.tsx`](./motion-ui/tilt-card.tsx) | 指针跟随 3D 倾转 + 高光；仅真悬停设备生效，展示型卡片用 |
 | CenterMorphModal | [`motion-ui/center-morph-modal.tsx`](./motion-ui/center-morph-modal.tsx) | 中心展开式 morph 弹窗（role=dialog、焦点圈定）；轻量告知类弹窗可用，重表单仍用平台 Modal |
 | motion 原语（Switch、Checkbox、Tooltip、Select、MorphPopover、IconButton） | [`motion-ui/`](./motion-ui/) | 共享层，页面可直接使用；同类控件与 antd/shadcn 不得在同一子树混用 |
+| MultiSelect | [`motion-ui/multi-select/`](./motion-ui/multi-select/) | 多选筛选/多选标签（受控 `value: string[]`、chip 逐项移除、输入即过滤、键盘 ↑↓/Enter/Backspace）；闭包含 [`hooks/use-active-option.ts`](./motion-ui/hooks/use-active-option.ts)。活示例：组件预览页「MultiSelect · 多选筛选」与插件社区状态筛选 |
 | 动效基础设施（ease 弹性曲线、touch 手势工具、use-dismiss 等 hooks、presence-gate） | [`motion-ui/`](./motion-ui/) | 同上 |
 
 **API 文档就是源码**（shadcn 哲学：代码归你，直接读文件）；上游浏览与官方演示

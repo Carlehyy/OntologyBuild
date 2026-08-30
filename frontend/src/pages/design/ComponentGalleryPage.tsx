@@ -5,6 +5,16 @@ import {
   type WeekAvailability,
 } from '@/components/availability-scheduler'
 import { AnimatedNumber } from '@/components/motion-ui/animated-number'
+import {
+  MultiSelect,
+  MultiSelectContent,
+  MultiSelectEmpty,
+  MultiSelectInput,
+  MultiSelectItem,
+  MultiSelectList,
+  MultiSelectTrigger,
+  MultiSelectValue,
+} from '@/components/motion-ui/multi-select'
 import { TiltCard } from '@/components/motion-ui/tilt-card'
 
 /**
@@ -12,10 +22,11 @@ import { TiltCard } from '@/components/motion-ui/tilt-card'
  *
  * 作用：给 components/ 下的共享组件一个从 main.tsx 可达的真实挂载点
  * （feature-boundaries 门禁要求生产源码可达），同时供开发与验收直观查看。
- * 当前展示：AvailabilityScheduler（vendored 自 beUI，MIT）。
+ * 当前展示：AvailabilityScheduler、MultiSelect（vendored 自 beUI，MIT）。
  */
 export default function ComponentGalleryPage() {
   const [week, setWeek] = useState<WeekAvailability>(defaultWeek)
+  const [tags, setTags] = useState<string[]>(['frontend'])
 
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-10">
@@ -54,6 +65,31 @@ export default function ComponentGalleryPage() {
             </TiltCard>
           </div>
         </div>
+      </section>
+
+      <section className="mt-6 rounded-xl border border-border bg-card p-6 shadow-sm">
+        <p className="text-xs font-medium text-muted-foreground">MultiSelect · 多选筛选（vendored beUI）</p>
+        <div className="mt-3 max-w-sm">
+          <MultiSelect value={tags} onValueChange={setTags}>
+            <MultiSelectTrigger className="bg-background">
+              <MultiSelectValue placeholder="全部方向" />
+              <MultiSelectInput aria-label="筛选方向" placeholder="搜索方向…" />
+            </MultiSelectTrigger>
+            <MultiSelectContent>
+              <MultiSelectList ariaLabel="方向">
+                <MultiSelectItem value="frontend">前端</MultiSelectItem>
+                <MultiSelectItem value="backend">后端</MultiSelectItem>
+                <MultiSelectItem value="platform">平台</MultiSelectItem>
+                <MultiSelectItem value="algorithm">算法</MultiSelectItem>
+              </MultiSelectList>
+              <MultiSelectEmpty />
+            </MultiSelectContent>
+          </MultiSelect>
+        </div>
+        <p className="mt-3 text-xs text-muted-foreground">
+          当前值：<span data-testid="multiselect-value" className="font-mono">{tags.length ? tags.join(', ') : '（空）'}</span>
+          ；输入框可搜索过滤，键盘 ↑↓ 移动、Enter 勾选、Backspace 逐个回退。
+        </p>
       </section>
 
       <section className="mt-6">
