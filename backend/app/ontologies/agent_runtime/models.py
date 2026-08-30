@@ -65,6 +65,8 @@ class AgentConversation(Base):
     ontology_release_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     user_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(200), default="新对话")
+    # 评估沙箱回放产生的会话（试跑草稿配置）：对用户侧列表不可见，评分后即清理
+    is_sandbox: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

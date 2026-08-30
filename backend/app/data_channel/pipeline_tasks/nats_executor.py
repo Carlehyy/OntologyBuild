@@ -50,6 +50,7 @@ _PIPELINE_RUN_DURABLE = "pipeline-run-executor"
 _DATASET_IMPORT_DURABLE = "dataset-import-executor"
 _DATASET_MIGRATE_DURABLE = "dataset-migrate-executor"
 _SUPER_ASSISTANT_REFLECT_MICRO_DURABLE = "super-assistant-reflect-micro"
+_ASSISTANT_EVAL_AUTOPILOT_DURABLE = "assistant-eval-autopilot"
 _SUPER_ASSISTANT_REFLECT_FULL_DURABLE = "super-assistant-reflect-full"
 _SUPER_ASSISTANT_REFLECT_FOCUSED_DURABLE = "super-assistant-reflect-focused"
 
@@ -138,6 +139,7 @@ async def _run_dataset_migrate_message(payload: dict) -> None:
 def _handler_registry():
     """subject → (durable, handler)：每 subject 独立 durable pull consumer。"""
     from app.data_channel.pipeline_tasks.dispatch import (
+        ASSISTANT_EVAL_AUTOPILOT_SUBJECT,
         DATASET_IMPORT_SUBJECT,
         DATASET_MIGRATE_SUBJECT,
         PIPELINE_EXECUTE_SUBJECT,
@@ -146,6 +148,7 @@ def _handler_registry():
         SUPER_ASSISTANT_REFLECT_FULL_SUBJECT,
         SUPER_ASSISTANT_REFLECT_MICRO_SUBJECT,
     )
+    from app.assistant_evaluation import autopilot_tasks
     from app.super_assistant import reflection_tasks
 
     return (
@@ -171,6 +174,11 @@ def _handler_registry():
             DATASET_MIGRATE_SUBJECT,
             _DATASET_MIGRATE_DURABLE,
             _run_dataset_migrate_message,
+        ),
+        (
+            ASSISTANT_EVAL_AUTOPILOT_SUBJECT,
+            _ASSISTANT_EVAL_AUTOPILOT_DURABLE,
+            autopilot_tasks.run_autopilot_cycle_message,
         ),
     )
 

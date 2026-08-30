@@ -21,8 +21,8 @@ from app.assistant_evaluation.dimensions import (
     DIMENSIONS,
     RUBRIC_DIM_KEY,
     normalize,
-    root_cause_of,
     rubric_dimension,
+    structured_root_cause,
 )
 from app.assistant_evaluation.engine import (
     build_engine,
@@ -33,6 +33,14 @@ from app.assistant_evaluation.models import (
     AssistantEvalItem,
     AssistantEvalRubric,
     AssistantEvalTask,
+)
+from app.assistant_evaluation.timeline import (
+    EVENT_TASK_CREATED,
+    EVENT_TASK_FAILED,
+    EVENT_TASK_SUCCEEDED,
+    ACTOR_ADMIN,
+    ACTOR_SYSTEM,
+    record_event,
 )
 from app.shared.database import SessionLocal
 
@@ -62,7 +70,8 @@ def _start_worker(task_id: str) -> None:
 def create_task(db: Session, *, assistant_key: str, conversation_ids: list[str] | None,
                 sample_size: int, sample_days: int, dimension_keys: list[str],
                 model_config_id: str | None, rubric_id: str | None,
-                created_by: str | None) -> AssistantEvalTask:
+                created_by: str | None,
+                purpose: str | None = None) -> AssistantEvalTask:
     adapter = get_adapters().get(assistant_key)
     if not adapter:
         raise ServiceError(f"未知的助手类型：{assistant_key}")
@@ -114,6 +123,7 @@ def create_task(db: Session, *, assistant_key: str, conversation_ids: list[str] 
             "dimension_keys": list(dimension_keys),
             "conversation_ids": list(conversation_ids),
             "engine": "openjudge" if openjudge_available() else "builtin",
+            **({"purpose": purpose} if purpose else {}),
             **({"rubric": rubric} if rubric else {}),
         },
         judge_model_config_id=(str(judge.id) if judge is not None else None),
@@ -123,6 +133,13 @@ def create_task(db: Session, *, assistant_key: str, conversation_ids: list[str] 
         created_by=created_by,
     )
     db.add(task)
+    db.flush()
+    record_event(db, event_type=EVENT_TASK_CREATED, assistant_key=assistant_key,
+                 actor=ACTOR_ADMIN, actor_user_id=created_by,
+                 ref_type="task", ref_id=task.id,
+                 detail={"title": task.title, "mode": mode,
+                         "conversation_count": len(conversation_ids),
+                         "judge_model_name": task.judge_model_name})
     db.commit()
     db.refresh(task)
 
@@ -208,7 +225,9 @@ async def _run_task_async(task_id: str) -> None:
                         item.reasons = reasons
                         item.flags = flags
                         item.overall_score = _weighted_overall(dim_keys, scores, dims_map)
-                        item.root_cause = root_cause_of(scores, flags)
+                        attribution = structured_root_cause(scores, flags)
+                        item.root_cause = attribution["summary"]
+                        item.attribution = attribution
                     except Exception as exc:  # 单会话失败不影响其余会话
                         logger.exception("评估单条会话失败：%s", conv_id)
                         item.flags = {"engine_error": str(exc)[:500]}
@@ -224,6 +243,15 @@ async def _run_task_async(task_id: str) -> None:
                                       rubric=rubric)
         task.finished_at = datetime.now(timezone.utc)
         task.duration_ms = int((time.monotonic() - started) * 1000)
+        summary = task.summary or {}
+        record_event(db=owns, event_type=EVENT_TASK_SUCCEEDED,
+                     assistant_key=task.assistant_key, actor=ACTOR_SYSTEM,
+                     ref_type="task", ref_id=task.id,
+                     detail={"title": task.title, "overall": summary.get("overall"),
+                             "evaluated": summary.get("evaluated"),
+                             "failed": summary.get("failed"),
+                             "badcases": len(summary.get("badcase_conversation_ids") or []),
+                             "insights": summary.get("insights") or {}})
         owns.commit()
     except Exception as exc:
         logger.exception("评估任务执行失败：%s", task_id)
@@ -234,6 +262,10 @@ async def _run_task_async(task_id: str) -> None:
             task.error = str(exc)[:2000]
             task.finished_at = datetime.now(timezone.utc)
             task.duration_ms = int((time.monotonic() - started) * 1000)
+            record_event(db=owns, event_type=EVENT_TASK_FAILED,
+                         assistant_key=task.assistant_key, actor=ACTOR_SYSTEM,
+                         ref_type="task", ref_id=task.id,
+                         detail={"title": task.title, "error": str(exc)[:500]})
             owns.commit()
     finally:
         owns.close()
@@ -310,6 +342,29 @@ def _weighted_overall(dim_keys: list[str], scores: dict, dims_map: dict) -> floa
     return round(weighted / total_weight, 1) if total_weight else None
 
 
+def _build_insights(scored: list[AssistantEvalItem]) -> dict:
+    """汇总结构化归因：类别分布 + 建议杠杆排序（M2 提案生成的直接输入）。"""
+    by_category: dict[str, dict] = {}
+    lever_counts: dict[str, int] = {}
+    for item in scored:
+        attribution = item.attribution or {}
+        category = attribution.get("category")
+        if not category or category == "good":
+            continue
+        slot = by_category.setdefault(
+            category, {"count": 0, "conversation_ids": [], "levers": []})
+        slot["count"] += 1
+        if len(slot["conversation_ids"]) < 20:
+            slot["conversation_ids"].append(item.conversation_id)
+        levers = list(attribution.get("levers") or [])
+        slot["levers"] = sorted(set(slot["levers"]) | set(levers))
+        for lever in levers:
+            lever_counts[lever] = lever_counts.get(lever, 0) + 1
+    suggested = [lever for lever, _ in
+                 sorted(lever_counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+    return {"by_category": by_category, "suggested_levers": suggested}
+
+
 def _build_summary(items: list[AssistantEvalItem], engine_name: str,
                    rubric: dict | None = None) -> dict:
     scored = [i for i in items if i.scores]
@@ -353,6 +408,7 @@ def _build_summary(items: list[AssistantEvalItem], engine_name: str,
             if dims_map.get(k) and dims_map[k].kind == "llm"
         ),
         "engine": engine_name,
+        "insights": _build_insights(scored),
     }
 
 

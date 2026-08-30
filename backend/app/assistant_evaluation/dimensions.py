@@ -122,3 +122,61 @@ def root_cause_of(scores: dict[str, float], flags: dict) -> str:
     if scores[lowest] >= 70:
         return "整体良好"
     return mapping.get(lowest, "整体待优化")
+
+
+# ---------------------------------------------------------------- 结构化根因
+
+# 维度 → 归因类别：飞轮把归因落到平台可控的杠杆上（M2 草稿变更 / M3 自动投产）
+_DIM_ROOT_CATEGORY = {
+    "hallucination": "model",
+    "harmfulness": "model",
+    "response_repetition": "model",
+    "trajectory": "tool",
+    "tool_call_success": "tool",
+    "action_loop": "tool",
+    "instruction_following": "prompt",
+    "relevance": "understanding",
+    RUBRIC_DIM_KEY: "rubric",
+}
+
+# 类别 → 建议杠杆（M1 仅作归因建议展示；M2 起映射为草稿变更类型）
+CATEGORY_LEVERS = {
+    "tool": ("prompt_patch", "tool_policy"),
+    "model": ("model_swap", "prompt_patch"),
+    "prompt": ("prompt_patch",),
+    "understanding": ("prompt_patch",),
+    "rubric": ("prompt_patch",),
+}
+
+
+def structured_root_cause(scores: dict[str, float], flags: dict) -> dict:
+    """root_cause_of 的结构化形态：类别 / 证据维度 / 严重度 / 建议杠杆。
+
+    判定优先级与 root_cause_of 保持一致（循环标记 > 多次工具失败 > 最低维度），
+    保证 summary 文案与结构化类别不会互相矛盾。
+    """
+    summary = root_cause_of(scores, flags)
+    if not scores or summary == "整体良好":
+        return {"category": "good", "dim_key": None, "severity": "low",
+                "levers": [], "summary": summary}
+
+    flags = flags or {}
+    if flags.get("loop_detected"):
+        dim_key = "action_loop"
+    elif (flags.get("tool_error_count") or 0) >= 2 \
+            and min(scores, key=scores.get) == "trajectory":
+        dim_key = "trajectory"
+    else:
+        dim_key = min(scores, key=scores.get)
+
+    score = float(scores.get(dim_key) or 0.0)
+    severity = "high" if score < 40 else ("medium" if score < 70 else "low")
+    category = _DIM_ROOT_CATEGORY.get(dim_key, "unknown")
+    return {
+        "category": category,
+        "dim_key": dim_key,
+        "dim_score": round(score, 1),
+        "severity": severity,
+        "levers": list(CATEGORY_LEVERS.get(category, ())),
+        "summary": summary,
+    }

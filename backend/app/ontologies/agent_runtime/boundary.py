@@ -94,6 +94,14 @@ class AgentScope:
             and (a.object_type_id is None or a.object_type_id in self.object_types)
         }
 
+    def with_profile(self, profile: AgentProfile) -> "AgentScope":
+        """返回绑定另一份 profile 的同界视图。
+
+        评估沙箱试跑（assistant_evaluation 双臂实验）用它在同一本体、同一
+        release 界内换用草稿 profile——草稿对象不落库，生产配置零改动。
+        """
+        return AgentScope(self.db, self.ontology, profile, self.release)
+
     # ---------- 引用解析（id / name / displayName 均可） ----------
 
     def _resolve(self, pool: dict, ref: str, kind: str):

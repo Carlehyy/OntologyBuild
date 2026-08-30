@@ -66,6 +66,8 @@ def list_conversations(
     query = db.query(AgentConversation).filter(
         AgentConversation.ontology_id == ontology_id,
         AgentConversation.user_id == getattr(current_user, "id", None),
+        # 评估沙箱回放会话不进入用户侧列表（评分快照已存回评估域）
+        AgentConversation.is_sandbox.is_(False),
     )
     if release_id is not None:
         query = query.filter(

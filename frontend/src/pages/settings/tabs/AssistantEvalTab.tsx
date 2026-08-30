@@ -37,6 +37,7 @@ import {
   type TrendPoint,
 } from '@/api/assistantEvaluation'
 import { modelApi } from '@/api/ontologies'
+import AssistantFlywheelSection from './AssistantFlywheelSection'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import { CHART_AXIS, CHART_SERIES_PALETTE, CHART_SPLIT, CHART_TEXT } from '@/lib/echartsTheme'
@@ -69,7 +70,7 @@ function scoreColor(score: number): string {
   return '#ff4d4f'
 }
 
-export default function AssistantEvalTab() {
+function AssistantEvalPanel() {
   const queryClient = useQueryClient()
   const [assistantKey, setAssistantKey] = useState<string>('')
   const [mode, setMode] = useState<'manual' | 'sample'>('sample')
@@ -833,3 +834,25 @@ function RubricCreateModal({ open, onClose, onCreated, models }: {
     </Modal>
   )
 }
+
+/**
+ * 页签外壳：评估任务（既有旁路评估）| 数据飞轮（基准集→提案→实验→值守→时间线）。
+ */
+function AssistantEvalTab() {
+  const [pane, setPane] = useState<'eval' | 'flywheel'>('eval')
+  return (
+    <div className="space-y-4">
+      <Segmented
+        value={pane}
+        onChange={value => setPane(value as 'eval' | 'flywheel')}
+        options={[
+          { label: '评估任务', value: 'eval' },
+          { label: '数据飞轮', value: 'flywheel' },
+        ]}
+      />
+      {pane === 'eval' ? <AssistantEvalPanel /> : <AssistantFlywheelSection />}
+    </div>
+  )
+}
+
+export default AssistantEvalTab

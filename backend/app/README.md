@@ -26,7 +26,7 @@ app/
 ├── auth/              身份、角色与菜单授权
 ├── inbox/             收件箱契约
 ├── shared/            迁移期共享基础能力
-├── tasks/             Celery 任务入口
+├── tasks/             Celery 任务入口（已列入退役计划，禁止新增；新定时/后台任务走 APScheduler + NATS JetStream → nats_executor）
 ├── engine/            预留的运行引擎 package；旧 post-harness 已退役
 ├── routers/           以兼容 facade 为主，仍有例外
 ├── models/            以兼容 facade/注册为主，仍有例外
