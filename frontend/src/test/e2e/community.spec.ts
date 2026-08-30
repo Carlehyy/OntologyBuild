@@ -165,7 +165,12 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   expect(serverListBox!.height).toBeGreaterThan(500)
   expect(viewportHeight - serverListBox!.y - serverListBox!.height).toBeGreaterThanOrEqual(20)
   expect(viewportHeight - serverListBox!.y - serverListBox!.height).toBeLessThanOrEqual(28)
-  await expect(page.getByTestId('mcp-server-stats')).toHaveCSS('justify-content', 'center')
+  // beUI 统计卡组：三张卡（MCP/测试通过/已发现工具）在筛选区上方渲染
+  const statsRegion = page.getByTestId('mcp-server-stats')
+  await expect(statsRegion).toBeVisible()
+  await expect(statsRegion.getByText('MCP Server', { exact: true })).toBeVisible()
+  await expect(statsRegion.getByText('测试通过', { exact: true })).toBeVisible()
+  await expect(statsRegion.getByText('已发现工具', { exact: true })).toBeVisible()
 
   await page.getByRole('button', { name: '测试 MCP 天气工具集' }).click()
   // 列表含多条已测试数据（stdio 桥接用例），状态/工具数断言须限定在目标行内
@@ -181,7 +186,7 @@ test('开放社区导航、技能占位页与 MCP 完整生命周期可用', asy
   await page.getByText('输入参数（JSON Schema）').first().click()
   await page.getByText('请求示例（tools/call）').first().click()
   await expect(page.locator('pre').filter({ hasText: '"method": "tools/call"' }).first()).toBeVisible()
-  await page.getByRole('button', { name: '关闭工具清单' }).click()
+  await page.getByRole('button', { name: '关闭弹窗' }).click()
 
   await page.getByRole('button', { name: '转接口 天气工具集' }).click()
   await expect(page.getByText('单发 JSON-RPC（tools/call）POST').first()).toBeVisible()

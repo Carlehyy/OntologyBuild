@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { motion, useReducedMotion } from 'motion/react'
 import {
   CheckCircle2,
   CircleAlert,
@@ -19,6 +20,23 @@ import { communityApi } from '@/api/community'
 import type { McpTool, SuperMcpServer } from '@/api/superAssistant'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import McpServerDialog from '@/components/mcp/McpServerDialog'
+import { AnimatedNumber } from '@/components/motion-ui/animated-number'
+import { Checkbox } from '@/components/motion-ui/checkbox'
+import {
+  CenterMorphModal,
+  CenterMorphModalContent,
+} from '@/components/motion-ui/center-morph-modal'
+import { IconButton } from '@/components/motion-ui/icon-button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/motion-ui/select'
+import { SPRING_LAYOUT } from '@/components/motion-ui/ease'
+import { Tooltip } from '@/components/motion-ui/tooltip'
+import { Modal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
 
 
@@ -74,108 +92,103 @@ const jsonRpcExample = (tool: McpTool) => JSON.stringify({
   params: { name: tool.name, arguments: argumentsTemplate(tool.input_schema) },
 }, null, 2)
 
+/** 行错峰入场延迟：与平台 beUI 页保持一致的节奏（0.035s 步进、0.28s 封顶） */
+const rowDelay = (index: number) => Math.min(index * 0.035, 0.28)
+
 function TestStatus({ server }: { server: SuperMcpServer }) {
   if (server.last_test_status === 'success') {
-    return <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700"><CheckCircle2 size={12} /> 已通过</span>
+    return <span className="inline-flex items-center gap-1.5 rounded-full border border-[color:var(--color-success)]/25 bg-[var(--color-success-bg)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-success)]"><CheckCircle2 size={12} /> 已通过</span>
   }
   if (server.last_test_status === 'error') {
-    return <span className="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-medium text-red-700"><CircleAlert size={12} /> 异常</span>
+    return <span className="inline-flex items-center gap-1.5 rounded-full border border-destructive/25 bg-[var(--color-danger-bg)] px-2.5 py-1 text-[11px] font-medium text-destructive"><CircleAlert size={12} /> 异常</span>
   }
-  return <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-500"><Clock3 size={12} /> 未测试</span>
+  return <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground"><Clock3 size={12} /> 未测试</span>
 }
 
-function ActionButton({
-  title,
-  ariaLabel,
-  onClick,
-  disabled,
-  danger,
-  children,
-}: {
-  title: string
-  ariaLabel: string
-  onClick: () => void
-  disabled?: boolean
-  danger?: boolean
-  children: React.ReactNode
+function StatCard({ icon, label, value, tone }: {
+  icon: React.ReactNode
+  label: string
+  value: number
+  tone?: 'default' | 'success'
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      aria-label={ariaLabel}
-      className={`flex w-11 flex-col items-center gap-0.5 rounded py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-40 ${
-        danger
-          ? 'text-slate-400 hover:bg-red-50 hover:text-red-600'
-          : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
-      }`}
-    >
-      {children}
-    </button>
+    <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-sm/50">
+      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${tone === 'success' ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-brand-soft text-brand-ink'}`}>
+        {icon}
+      </span>
+      <div className="min-w-0">
+        <p className="text-[11px] text-muted-foreground">{label}</p>
+        <p className="text-base font-semibold tabular-nums text-foreground">
+          <AnimatedNumber value={value} duration={0.9} />
+        </p>
+      </div>
+    </div>
   )
 }
 
 function ToolManifestDialog({ server, onClose }: { server: SuperMcpServer; onClose: () => void }) {
+  const reduce = useReducedMotion() ?? false
   const tools = server.tool_manifest || []
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px]" onMouseDown={onClose}>
-      <section role="dialog" aria-modal="true" aria-labelledby="mcp-tools-title" onMouseDown={event => event.stopPropagation()} className="flex max-h-[82dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.24)]">
-        <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
-          <div className="min-w-0">
-            <h2 id="mcp-tools-title" className="truncate text-base font-semibold text-slate-900">{serverTitle(server)} · 工具清单</h2>
-            <p className="mt-1 text-xs text-slate-500">最近一次测试发现 {tools.length} 个工具；标识 {server.name}</p>
-          </div>
-          <button type="button" onClick={onClose} aria-label="关闭工具清单" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><X size={17} /></button>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 text-xs leading-5 text-slate-600">
-            <p className="font-medium text-slate-700">调用方式</p>
-            <p className="mt-1.5">协议：MCP JSON-RPC 2.0，方法 <code className="rounded bg-white px-1 font-mono text-[11px] text-teal-700 ring-1 ring-slate-200">tools/call</code>，参数为 <code className="rounded bg-white px-1 font-mono text-[11px] text-teal-700 ring-1 ring-slate-200">{'{ name, arguments }'}</code>。</p>
-            {server.transport === 'stdio' ? (
-              <p className="mt-1.5">地址：本地进程 <span className="break-all font-mono text-[11px] text-slate-500">{endpointText(server) || '未配置 command'}</span>（stdio 由平台进程托管，不提供直连地址）。</p>
-            ) : (
-              <p className="mt-1.5">地址：<span className="break-all font-mono text-[11px] text-slate-500">{server.url}</span>（{transportLabel(server)}，需携带已配置的请求头）。</p>
-            )}
-          </div>
-          {tools.length === 0 ? (
-            <div className="mt-3 rounded-2xl border border-dashed border-slate-200 p-10 text-center">
-              <Code2 size={26} className="mx-auto text-slate-300" />
-              <p className="mt-3 text-sm font-medium text-slate-600">暂无可用工具</p>
-              <p className="mt-1 text-xs text-slate-400">请先关闭窗口并执行连接测试。</p>
-            </div>
-          ) : (
-            <div className="mt-3 space-y-3">
-              {tools.map((tool: McpTool) => (
-                <article key={tool.name} className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
-                  <div className="flex items-start gap-3">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-teal-700 ring-1 ring-slate-200"><Code2 size={15} /></span>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="break-all font-mono text-xs font-semibold text-slate-800">{tool.name}</h3>
-                      <p className="mt-1 text-xs leading-5 text-slate-500">{tool.description || '暂无工具描述'}</p>
-                      <details className="mt-2 text-xs">
-                        <summary className="cursor-pointer font-medium text-teal-700">输入参数（JSON Schema）</summary>
-                        <pre className="mt-1.5 max-h-48 overflow-auto rounded-lg bg-white p-3 font-mono text-[11px] leading-4 text-slate-600 ring-1 ring-slate-200">{JSON.stringify(tool.input_schema ?? {}, null, 2)}</pre>
-                      </details>
-                      <details className="mt-1.5 text-xs">
-                        <summary className="cursor-pointer font-medium text-teal-700">请求示例（tools/call）</summary>
-                        <pre className="mt-1.5 max-h-56 overflow-auto rounded-lg bg-white p-3 font-mono text-[11px] leading-4 text-slate-600 ring-1 ring-slate-200">{jsonRpcExample(tool)}</pre>
-                      </details>
-                    </div>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
+    <Modal
+      open
+      onClose={onClose}
+      title={`${serverTitle(server)} · 工具清单`}
+      description={`最近一次测试发现 ${tools.length} 个工具；标识 ${server.name}`}
+      size="2xl"
+      contentClassName="p-5"
+    >
+      <div className="rounded-xl border border-border bg-muted p-4 text-xs leading-5 text-muted-foreground">
+        <p className="font-medium text-foreground">调用方式</p>
+        <p className="mt-1.5">协议：MCP JSON-RPC 2.0，方法 <code className="rounded bg-card px-1 font-mono text-[11px] text-brand-ink ring-1 ring-border">tools/call</code>，参数为 <code className="rounded bg-card px-1 font-mono text-[11px] text-brand-ink ring-1 ring-border">{'{ name, arguments }'}</code>。</p>
+        {server.transport === 'stdio' ? (
+          <p className="mt-1.5">地址：本地进程 <span className="break-all font-mono text-[11px] text-[var(--color-text-tertiary)]">{endpointText(server) || '未配置 command'}</span>（stdio 由平台进程托管，不提供直连地址）。</p>
+        ) : (
+          <p className="mt-1.5">地址：<span className="break-all font-mono text-[11px] text-[var(--color-text-tertiary)]">{server.url}</span>（{transportLabel(server)}，需携带已配置的请求头）。</p>
+        )}
+      </div>
+      {tools.length === 0 ? (
+        <div className="mt-3 rounded-2xl border border-dashed border-border p-10 text-center">
+          <Code2 size={26} className="mx-auto text-muted-foreground/60" />
+          <p className="mt-3 text-sm font-medium text-muted-foreground">暂无可用工具</p>
+          <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">请先关闭窗口并执行连接测试。</p>
         </div>
-      </section>
-    </div>
+      ) : (
+        <div className="mt-3 space-y-3">
+          {tools.map((tool: McpTool, index: number) => (
+            <motion.article
+              key={tool.name}
+              initial={reduce ? false : { opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ ...SPRING_LAYOUT, delay: rowDelay(index) }}
+              className="rounded-xl border border-border bg-muted p-4"
+            >
+              <div className="flex items-start gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-card text-brand-ink ring-1 ring-border"><Code2 size={15} /></span>
+                <div className="min-w-0 flex-1">
+                  <h3 className="break-all font-mono text-xs font-semibold text-foreground">{tool.name}</h3>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">{tool.description || '暂无工具描述'}</p>
+                  <details className="mt-2 text-xs">
+                    <summary className="cursor-pointer font-medium text-brand-ink">输入参数（JSON Schema）</summary>
+                    <pre className="mt-1.5 max-h-48 overflow-auto rounded-lg bg-card p-3 font-mono text-[11px] leading-4 text-muted-foreground ring-1 ring-border">{JSON.stringify(tool.input_schema ?? {}, null, 2)}</pre>
+                  </details>
+                  <details className="mt-1.5 text-xs">
+                    <summary className="cursor-pointer font-medium text-brand-ink">请求示例（tools/call）</summary>
+                    <pre className="mt-1.5 max-h-56 overflow-auto rounded-lg bg-card p-3 font-mono text-[11px] leading-4 text-muted-foreground ring-1 ring-border">{jsonRpcExample(tool)}</pre>
+                  </details>
+                </div>
+              </div>
+            </motion.article>
+          ))}
+        </div>
+      )}
+    </Modal>
   )
 }
 
 function ExportToolsDialog({ server, onClose, onDone }: { server: SuperMcpServer; onClose: () => void; onDone: () => void }) {
   const { toast } = useToast()
+  const reduce = useReducedMotion() ?? false
   const tools = server.tool_manifest || []
   const [selected, setSelected] = useState<Set<string>>(() => new Set(tools.map(tool => tool.name)))
   const [busy, setBusy] = useState(false)
@@ -213,53 +226,97 @@ function ExportToolsDialog({ server, onClose, onDone }: { server: SuperMcpServer
   }
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px]" onMouseDown={() => !busy && onClose()}>
-      <section role="dialog" aria-modal="true" aria-labelledby="mcp-export-title" onMouseDown={event => event.stopPropagation()} className="flex max-h-[82dvh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.24)]">
-        <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
-          <div className="min-w-0">
-            <h2 id="mcp-export-title" className="text-base font-semibold text-slate-900">转接口 · {serverTitle(server)}</h2>
-            <p className="mt-1 text-xs leading-5 text-slate-500">勾选要生成 HTTP 接口的工具；生成后可在「接口代理 · 接口管理」的「MCP 插件」分组中查看。</p>
-          </div>
-          <button type="button" onClick={onClose} disabled={busy} aria-label="关闭转接口弹窗" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><X size={17} /></button>
+    <CenterMorphModal open onOpenChange={next => { if (!next && !busy) onClose() }}>
+      <CenterMorphModalContent
+        ariaLabel={`转接口 · ${serverTitle(server)}`}
+        closeButtonLabel="关闭转接口弹窗"
+        dismissible={!busy}
+        className="flex max-h-[82dvh] w-full !max-w-[min(94vw,32rem)] !rounded-[14px] flex-col overflow-hidden bg-card text-foreground"
+      >
+        <header className="shrink-0 border-b border-border px-5 py-4 pr-14">
+          <h2 className="text-base font-semibold text-foreground">转接口 · {serverTitle(server)}</h2>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">勾选要生成 HTTP 接口的工具；生成后可在「接口代理 · 接口管理」的「MCP 插件」分组中查看。</p>
         </header>
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-5">
-          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">{exportHint(server)}</p>
-          {tools.map(tool => (
-            <label key={tool.name} className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 text-xs transition-colors hover:border-teal-200">
-              <input
-                type="checkbox"
+          <p className="rounded-lg border border-[color:var(--color-warning)]/30 bg-[var(--color-warning-bg)] px-3 py-2 text-[11px] leading-5 text-[var(--color-warning)]">{exportHint(server)}</p>
+          {tools.map((tool, index) => (
+            <motion.div
+              key={tool.name}
+              initial={reduce ? false : { opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ ...SPRING_LAYOUT, delay: rowDelay(index) }}
+              className="flex items-start gap-3 rounded-xl border border-border bg-card p-3 text-xs transition-colors hover:border-brand-mist"
+            >
+              <Checkbox
                 checked={selected.has(tool.name)}
-                onChange={() => toggle(tool.name)}
+                onCheckedChange={() => toggle(tool.name)}
                 aria-label={`选择工具 ${tool.name}`}
-                className="mt-0.5 h-4 w-4 shrink-0 accent-teal-600"
+                className="mt-0.5"
               />
               <span className="min-w-0">
-                <span className="block break-all font-mono font-semibold text-slate-800">{tool.name}</span>
-                <span className="mt-0.5 block leading-5 text-slate-500">{tool.description || '暂无工具描述'}</span>
+                <span className="block break-all font-mono font-semibold text-foreground">{tool.name}</span>
+                <span className="mt-0.5 block leading-5 text-muted-foreground">{tool.description || '暂无工具描述'}</span>
               </span>
-            </label>
+            </motion.div>
           ))}
-          {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-700">{error}</p>}
+          {error && <p role="alert" className="rounded-xl border border-destructive/30 bg-[var(--color-danger-bg)] px-4 py-3 text-xs leading-5 text-destructive">{error}</p>}
         </div>
-        <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-200 bg-slate-50/70 px-5 py-4">
-          <div className="flex gap-3 text-xs text-slate-500">
-            <button type="button" onClick={() => setSelected(new Set(tools.map(tool => tool.name)))} className="transition-colors hover:text-slate-900">全选</button>
-            <button type="button" onClick={() => setSelected(new Set())} className="transition-colors hover:text-slate-900">全不选</button>
+        <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-border bg-muted px-5 py-4">
+          <div className="flex gap-3 text-xs text-muted-foreground">
+            <button type="button" onClick={() => setSelected(new Set(tools.map(tool => tool.name)))} className="transition-colors hover:text-foreground">全选</button>
+            <button type="button" onClick={() => setSelected(new Set())} className="transition-colors hover:text-foreground">全不选</button>
           </div>
           <div className="flex gap-3">
-            <button type="button" onClick={onClose} disabled={busy} className="min-h-10 min-w-24 rounded-xl border border-slate-200 bg-white px-4 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400">取消</button>
-            <button type="button" onClick={() => void submit()} disabled={busy || !selected.size} className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-xs font-medium text-white transition-colors hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45">
+            <button type="button" onClick={onClose} disabled={busy} className="min-h-10 min-w-24 rounded-xl border border-border bg-card px-4 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">取消</button>
+            <button type="button" onClick={() => void submit()} disabled={busy || !selected.size} className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-xl bg-brand px-4 text-xs font-medium text-white transition-colors hover:bg-brand-deep focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-45">
               {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} 生成接口
             </button>
           </div>
         </footer>
-      </section>
+      </CenterMorphModalContent>
+    </CenterMorphModal>
+  )
+}
+
+/** 零数据空态：三步引导替代一句话提示，对齐世界模型页的 beUI 空态模式 */
+function EmptyGuide({ onAdd }: { onAdd: () => void }) {
+  const steps = [
+    { icon: <Plus size={16} />, title: '登记 MCP', desc: '粘贴客户端 JSON 或手动配置 stdio / SSE / Streamable HTTP' },
+    { icon: <Wrench size={16} />, title: '连接测试', desc: '验证连通性并发现工具，清单与参数结构自动可见' },
+    { icon: <FileUp size={16} />, title: '转接口或对话调用', desc: '一键生成接口代理 HTTP 接口，或供超级助手直接调用' },
+  ]
+  return (
+    <div className="flex min-h-64 flex-1 flex-col items-center justify-center gap-6 rounded-2xl border border-border bg-card px-6 py-8 text-center">
+      <div>
+        <p className="text-sm font-semibold text-muted-foreground">从第一个 MCP Server 开始</p>
+        <p className="mt-1 text-xs text-muted-foreground">登记插件配置，测试通过后即可查看工具清单并转为 HTTP 接口</p>
+      </div>
+      <ol className="grid w-full max-w-3xl grid-cols-1 gap-3 sm:grid-cols-3" aria-label="插件社区使用流程指引">
+        {steps.map((step, index) => (
+          <li key={step.title} className="relative flex flex-col items-center gap-2 rounded-xl border border-border bg-muted px-4 pb-4 pt-5 text-center">
+            <span className="absolute left-3 top-3 flex h-5 w-5 items-center justify-center rounded-full bg-brand/10 text-[11px] font-semibold text-brand-ink">
+              {index + 1}
+            </span>
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-soft text-brand-ink">{step.icon}</span>
+            <p className="text-sm font-medium text-foreground">{step.title}</p>
+            <p className="text-[11px] leading-5 text-muted-foreground">{step.desc}</p>
+          </li>
+        ))}
+      </ol>
+      <button
+        type="button"
+        onClick={onAdd}
+        className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand px-5 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-brand-deep active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        <Plus size={15} /> 添加第一个 MCP
+      </button>
     </div>
   )
 }
 
 export default function PluginCommunityPage() {
   const { toast } = useToast()
+  const reduce = useReducedMotion() ?? false
   const [servers, setServers] = useState<SuperMcpServer[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -343,46 +400,47 @@ export default function PluginCommunityPage() {
   }
 
   const renderActions = (server: SuperMcpServer) => (
-    <div className="flex items-center justify-center gap-0.5">
-      <ActionButton
-        title="测试连接并刷新工具清单"
-        ariaLabel={`测试 MCP ${serverTitle(server)}`}
-        onClick={() => void testServer(server)}
-        disabled={testingId === server.id}
-      >
-        {testingId === server.id
-          ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" />
-          : <Wrench size={14} />}
-        <span className="text-[10px] leading-3">测试</span>
-      </ActionButton>
-      <ActionButton
+    <div className="flex items-center justify-center gap-1">
+      <Tooltip content="测试连接并刷新工具清单">
+        <IconButton
+          label={`测试 MCP ${serverTitle(server)}`}
+          reduce={reduce}
+          onClick={() => void testServer(server)}
+          disabled={testingId === server.id}
+        >
+          {testingId === server.id
+            ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" />
+            : <Wrench size={14} />}
+        </IconButton>
+      </Tooltip>
+      {/* 转接口为本页特色主操作：实心按钮 + 原生 title（置灰原因在 disabled 时仍可悬停查看） */}
+      <button
+        type="button"
+        onClick={() => setExportTarget(server)}
+        disabled={!exportable(server)}
         title={server.tool_manifest.length
           ? '转接口：将工具生成为接口代理的 HTTP 接口'
           : '尚未发现工具，请先执行连接测试'}
-        ariaLabel={`转接口 ${serverTitle(server)}`}
-        onClick={() => setExportTarget(server)}
-        disabled={!exportable(server)}
+        aria-label={`转接口 ${serverTitle(server)}`}
+        className="inline-flex h-8 items-center gap-1 rounded-lg bg-brand px-2.5 text-xs font-medium text-white transition-colors hover:bg-brand-deep focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-45"
       >
-        <FileUp size={14} />
-        <span className="text-[10px] leading-3">转接口</span>
-      </ActionButton>
-      <ActionButton
-        title="编辑名称、描述与连接配置"
-        ariaLabel={`编辑 MCP ${serverTitle(server)}`}
-        onClick={() => setEditing(server)}
-      >
-        <Pencil size={14} />
-        <span className="text-[10px] leading-3">编辑</span>
-      </ActionButton>
-      <ActionButton
-        title="删除该 MCP Server 及其工具清单"
-        ariaLabel={`删除 MCP ${serverTitle(server)}`}
-        onClick={() => setDeleteTarget(server)}
-        danger
-      >
-        <Trash2 size={14} />
-        <span className="text-[10px] leading-3">删除</span>
-      </ActionButton>
+        <FileUp size={13} /> 转接口
+      </button>
+      <Tooltip content="编辑名称、描述与连接配置">
+        <IconButton label={`编辑 MCP ${serverTitle(server)}`} reduce={reduce} onClick={() => setEditing(server)}>
+          <Pencil size={14} />
+        </IconButton>
+      </Tooltip>
+      <Tooltip content="删除该 MCP Server 及其工具清单">
+        <IconButton
+          label={`删除 MCP ${serverTitle(server)}`}
+          reduce={reduce}
+          onClick={() => setDeleteTarget(server)}
+          className="hover:bg-[var(--color-danger-bg)] hover:text-destructive focus-visible:ring-destructive"
+        >
+          <Trash2 size={14} />
+        </IconButton>
+      </Tooltip>
     </div>
   )
 
@@ -390,111 +448,135 @@ export default function PluginCommunityPage() {
     <div className="flex min-h-full flex-col gap-4 md:h-full md:min-h-0">
       <h1 className="sr-only">插件社区</h1>
 
-      <section aria-label="MCP 筛选与操作" className="flex shrink-0 flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 xl:flex-nowrap">
+      <section data-testid="mcp-server-stats" aria-label="MCP 统计" className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3">
+        <StatCard icon={<PlugZap size={16} />} label="MCP Server" value={stats.total} />
+        <StatCard icon={<CheckCircle2 size={16} />} label="测试通过" value={stats.healthy} tone="success" />
+        <StatCard icon={<Code2 size={16} />} label="已发现工具" value={stats.tools} />
+      </section>
+
+      <section aria-label="MCP 筛选与操作" className="flex shrink-0 flex-wrap items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3 xl:flex-nowrap">
         <div className="relative w-full sm:w-64 xl:w-72 xl:flex-none">
-          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
           <input
             value={search}
             onChange={event => setSearch(event.target.value)}
             placeholder="搜索名称、标识、地址或工具..."
             aria-label="搜索 MCP"
-            className="w-full rounded-xl border border-slate-200 py-2 pl-8 pr-8 text-sm outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10"
+            className="w-full rounded-xl border border-border bg-card py-2 pl-8 pr-8 text-sm text-foreground outline-none transition placeholder:text-[var(--color-text-tertiary)] focus:border-ring focus:ring-4 focus:ring-ring/10"
           />
           {search && (
-            <button type="button" onClick={() => setSearch('')} aria-label="清除 MCP 搜索" className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 transition-colors hover:text-slate-900">
+            <button type="button" onClick={() => setSearch('')} aria-label="清除 MCP 搜索" className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)] transition-colors hover:text-foreground">
               <X size={12} />
             </button>
           )}
         </div>
-        <select
-          value={statusFilter}
-          onChange={event => setStatusFilter(event.target.value as StatusFilter)}
-          aria-label="筛选 MCP 状态"
-          className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10"
-        >
-          <option value="all">全部状态</option>
-          <option value="success">测试通过</option>
-          <option value="error">连接异常</option>
-          <option value="untested">未测试</option>
-        </select>
+        <Select value={statusFilter} onValueChange={value => setStatusFilter(value as StatusFilter)}>
+          <SelectTrigger aria-label="筛选 MCP 状态" className="h-[38px] w-36 rounded-xl">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部状态</SelectItem>
+            <SelectItem value="success">测试通过</SelectItem>
+            <SelectItem value="error">连接异常</SelectItem>
+            <SelectItem value="untested">未测试</SelectItem>
+          </SelectContent>
+        </Select>
         {(search || statusFilter !== 'all') && (
-          <button type="button" onClick={() => { setSearch(''); setStatusFilter('all') }} className="shrink-0 px-2 py-1 text-xs text-slate-500 transition-colors hover:text-slate-900">
+          <button type="button" onClick={() => { setSearch(''); setStatusFilter('all') }} className="shrink-0 px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
             清除筛选
           </button>
         )}
-        <p className="ml-auto shrink-0 text-xs tabular-nums text-slate-400">显示 {filteredServers.length} / {servers.length} 项</p>
-        <button type="button" onClick={() => setEditing('new')} className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-teal-800 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2">
+        <p className="ml-auto shrink-0 text-xs tabular-nums text-[var(--color-text-tertiary)]">显示 {filteredServers.length} / {servers.length} 项</p>
+        <button
+          type="button"
+          onClick={() => setEditing('new')}
+          className="inline-flex h-[38px] shrink-0 items-center gap-1.5 rounded-xl bg-brand px-3.5 text-sm font-medium text-white transition-all duration-200 hover:-translate-y-px hover:bg-brand-deep active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        >
           <Plus size={15} /> 添加 MCP
         </button>
       </section>
 
       {loading ? (
-        <div className="flex min-h-64 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white">
-          <div className="text-center"><Loader2 size={24} className="mx-auto animate-spin text-teal-600 motion-reduce:animate-none" /><p className="mt-3 text-sm text-slate-500">正在加载 MCP 清单...</p></div>
+        <div className="flex min-h-64 flex-1 items-center justify-center rounded-2xl border border-border bg-card">
+          <div className="text-center"><Loader2 size={24} className="mx-auto animate-spin text-brand-ink motion-reduce:animate-none" /><p className="mt-3 text-sm text-muted-foreground">正在加载 MCP 清单...</p></div>
         </div>
       ) : filteredServers.length === 0 ? (
-        <div className="flex min-h-64 flex-1 flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 p-8 text-center text-slate-400">
-          <PlugZap size={30} className="text-slate-300" />
-          <p className="mt-3 text-sm font-medium text-slate-700">{servers.length ? '没有匹配的 MCP Server' : '暂无 MCP Server'}</p>
-          <p className="mt-1 text-xs leading-5 text-slate-400">{servers.length ? '调整搜索词或状态筛选后重试。' : '登记 MCP 配置并完成连接测试后，即可查看其工具清单。'}</p>
-          {!servers.length && <button type="button" onClick={() => setEditing('new')} className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-xl bg-teal-700 px-4 text-xs font-medium text-white hover:bg-teal-800"><Plus size={14} /> 添加第一个 MCP</button>}
-        </div>
+        servers.length ? (
+          <div className="flex min-h-64 flex-1 flex-col items-center justify-center rounded-2xl border border-border bg-card px-6 text-center">
+            <motion.div
+              animate={reduce ? undefined : { y: [0, -6, 0] }}
+              transition={{ repeat: Infinity, duration: 3, ease: 'easeInOut' }}
+            >
+              <PlugZap size={28} className="text-muted-foreground" />
+            </motion.div>
+            <p className="mt-3 text-sm font-medium text-muted-foreground">没有匹配的 MCP Server</p>
+            <p className="mt-1 text-xs text-muted-foreground">请调整搜索词或状态筛选后重试。</p>
+          </div>
+        ) : (
+          <EmptyGuide onAdd={() => setEditing('new')} />
+        )
       ) : (
         <>
-          <section aria-label="MCP Server 清单" className="hidden min-h-64 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)] md:flex">
+          <section aria-label="MCP Server 清单" className="hidden min-h-64 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm/50 md:flex">
             <div className="min-h-0 flex-1 overflow-auto">
               <table className="w-full min-w-[960px] table-fixed text-sm">
-                <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 backdrop-blur">
+                <thead className="sticky top-0 z-10 border-b border-border bg-muted/95 backdrop-blur">
                   <tr>
-                    <th className="w-[30%] px-4 py-2.5 text-left text-xs font-medium text-slate-600">MCP Server</th>
-                    <th className="w-[14%] px-4 py-2.5 text-center text-xs font-medium text-slate-600">传输方式</th>
-                    <th className="w-[13%] px-4 py-2.5 text-center text-xs font-medium text-slate-600">工具</th>
-                    <th className="w-[14%] px-4 py-2.5 text-center text-xs font-medium text-slate-600">连接状态</th>
-                    <th className="w-[29%] px-2 py-2.5 text-center text-xs font-medium text-slate-600">操作</th>
+                    <th className="w-[30%] px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">MCP Server</th>
+                    <th className="w-[14%] px-4 py-2.5 text-center text-xs font-medium text-muted-foreground">传输方式</th>
+                    <th className="w-[13%] px-4 py-2.5 text-center text-xs font-medium text-muted-foreground">工具</th>
+                    <th className="w-[14%] px-4 py-2.5 text-center text-xs font-medium text-muted-foreground">连接状态</th>
+                    <th className="w-[29%] px-2 py-2.5 text-center text-xs font-medium text-muted-foreground">操作</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredServers.map(server => (
-                    <tr key={server.id} className="transition-colors hover:bg-slate-50/80">
+                <tbody className="divide-y divide-border">
+                  {filteredServers.map((server, index) => (
+                    <motion.tr
+                      key={server.id}
+                      initial={reduce ? false : { opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ ...SPRING_LAYOUT, delay: rowDelay(index) }}
+                      className="transition-colors hover:bg-muted/60"
+                    >
                       <td className="px-4 py-3 align-middle">
                         <div className="min-w-0">
-                          <p className="truncate font-medium text-slate-900" title={serverTitle(server)}>{serverTitle(server)}</p>
-                          <p className="mt-0.5 truncate text-[11px] leading-4 text-slate-400" title={`${server.name} · ${endpointText(server)}`}>
+                          <p className="truncate font-medium text-foreground" title={serverTitle(server)}>{serverTitle(server)}</p>
+                          <p className="mt-0.5 truncate text-[11px] leading-4 text-[var(--color-text-tertiary)]" title={`${server.name} · ${endpointText(server)}`}>
                             <span className="font-mono">{server.name}</span> · <span className="font-mono">{endpointText(server) || '尚未配置地址'}</span>
                           </p>
-                          {server.description && <p className="mt-1 line-clamp-1 text-xs leading-4 text-slate-500" title={server.description}>{server.description}</p>}
+                          {server.description && <p className="mt-1 line-clamp-1 text-xs leading-4 text-muted-foreground" title={server.description}>{server.description}</p>}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-center align-middle"><span className="inline-flex rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-600">{transportLabel(server)}</span></td>
-                      <td className="px-4 py-3 text-center align-middle"><button type="button" onClick={() => setManifestTarget(server)} aria-label={`查看 ${serverTitle(server)} 的工具清单`} className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-teal-700 transition-colors hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><Code2 size={13} /> 共 {server.tool_manifest.length} 个</button></td>
+                      <td className="px-4 py-3 text-center align-middle"><span className="inline-flex rounded-lg border border-border bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground">{transportLabel(server)}</span></td>
+                      <td className="px-4 py-3 text-center align-middle"><button type="button" onClick={() => setManifestTarget(server)} aria-label={`查看 ${serverTitle(server)} 的工具清单`} className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-brand-ink transition-colors hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Code2 size={13} /> 共 {server.tool_manifest.length} 个</button></td>
                       <td className="px-4 py-3 text-center align-middle"><TestStatus server={server} /></td>
                       <td className="px-2 py-2 align-middle">{renderActions(server)}</td>
-                    </tr>
+                    </motion.tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div data-testid="mcp-server-stats" className="flex shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-1 border-t border-slate-100 bg-slate-50/50 px-4 py-2.5 text-center text-xs tabular-nums text-slate-500">
-              <span>共 {stats.total} 个 MCP Server</span>
-              <span><strong className="font-medium text-emerald-700">{stats.healthy}</strong> 个测试通过</span>
-              <span><strong className="font-medium text-slate-700">{stats.tools}</strong> 个已发现工具</span>
-            </div>
           </section>
 
           <div className="grid gap-3 md:hidden">
-            {filteredServers.map(server => (
-              <article key={server.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_8px_28px_rgba(15,23,42,0.04)]">
+            {filteredServers.map((server, index) => (
+              <motion.article
+                key={server.id}
+                initial={reduce ? false : { opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ ...SPRING_LAYOUT, delay: rowDelay(index) }}
+                className="rounded-2xl border border-border bg-card p-4 shadow-sm/50"
+              >
                 <div className="flex items-start gap-3">
-                  <div className="min-w-0 flex-1"><h2 className="truncate text-sm font-semibold text-slate-900">{serverTitle(server)}</h2><p className="mt-1 truncate font-mono text-[10px] text-slate-400">{server.name} · {endpointText(server)}</p></div>
+                  <div className="min-w-0 flex-1"><h2 className="truncate text-sm font-semibold text-foreground">{serverTitle(server)}</h2><p className="mt-1 truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">{server.name} · {endpointText(server)}</p></div>
                   <TestStatus server={server} />
                 </div>
-                {server.description && <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{server.description}</p>}
-                <div className="mt-3 flex flex-wrap gap-1.5"><span className="rounded-lg bg-slate-100 px-2 py-1 text-[10px] text-slate-600">{transportLabel(server)}</span><button type="button" onClick={() => setManifestTarget(server)} className="inline-flex min-h-8 items-center gap-1 rounded-lg bg-teal-50 px-2 text-[10px] font-medium text-teal-700"><Code2 size={11} /> 共 {server.tool_manifest.length} 个工具</button></div>
-                {server.last_test_message && <p className="mt-3 line-clamp-2 text-xs leading-5 text-slate-500">{server.last_test_message}</p>}
-                <div className="mt-3 border-t border-slate-100 pt-2">{renderActions(server)}</div>
-              </article>
+                {server.description && <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{server.description}</p>}
+                <div className="mt-3 flex flex-wrap gap-1.5"><span className="rounded-lg bg-muted px-2 py-1 text-[10px] text-muted-foreground">{transportLabel(server)}</span><button type="button" onClick={() => setManifestTarget(server)} className="inline-flex min-h-8 items-center gap-1 rounded-lg bg-brand-soft px-2 text-[10px] font-medium text-brand-ink"><Code2 size={11} /> 共 {server.tool_manifest.length} 个工具</button></div>
+                {server.last_test_message && <p className="mt-3 line-clamp-2 text-xs leading-5 text-muted-foreground">{server.last_test_message}</p>}
+                <div className="mt-3 border-t border-border pt-2">{renderActions(server)}</div>
+              </motion.article>
             ))}
-            <p className="px-1 text-center text-xs tabular-nums text-slate-400">共 {stats.total} 项 · {stats.healthy} 项测试通过 · {stats.tools} 个工具</p>
           </div>
         </>
       )}
