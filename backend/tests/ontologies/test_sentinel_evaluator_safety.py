@@ -453,3 +453,49 @@ def test_dynamic_template_validation_matches_runtime_unicode_and_event_support()
     assert [item["code"] for item in errors] == [
         "sentinel_event_property_not_found",
     ]
+
+
+def test_traverse_dedupes_by_primary_key_not_full_row_distinct(db):
+    """回归：PostgreSQL 的 json 类型没有等值操作符，实体级 DISTINCT（SELECT
+    全列含 properties/computed）会直接 UndefinedFunction——2026-08-30 云端
+    哨兵评估死信事故的根因。join 去重必须落在主键 GROUP BY 上。"""
+    from sqlalchemy.dialects import postgresql
+
+    query = evaluator._traverse(db, "ont-x", "lt-x", "inst-x", True, "ot-x")
+    sql = str(query.statement.compile(dialect=postgresql.dialect()))
+    assert "GROUP BY fo_object_instances.id" in sql
+    assert "DISTINCT" not in sql.upper()
+
+
+def test_traverse_returns_each_instance_once_across_duplicate_links(db):
+    """行为回归：主键 GROUP BY 去重后，重复链接仍只产出一行实例。"""
+    ontology_id = "ont-traverse-dedupe"
+    _project(db, ontology_id)
+    db.add(ObjectType(id="ot-p", ontology_id=ontology_id, name="p",
+                      display_name="p", primary_key="id", properties=[]))
+    db.add(LinkType(
+        id="lt-p", ontology_id=ontology_id, name="lt_p", display_name="lt p",
+        source_object_type_id="ot-p", target_object_type_id="ot-p",
+        cardinality="many-to-many", properties=[],
+    ))
+    db.add_all([
+        ObjectInstance(id="inst-anchor", ontology_id=ontology_id,
+                       object_type_id="ot-p", properties={}),
+        ObjectInstance(id="inst-target", ontology_id=ontology_id,
+                       object_type_id="ot-p", properties={"score": 42}),
+        # 两条同向重复链接 + 一条反向链接
+        LinkInstance(id="l1", ontology_id=ontology_id, link_type_id="lt-p",
+                     source_object_id="inst-anchor", target_object_id="inst-target"),
+        LinkInstance(id="l2", ontology_id=ontology_id, link_type_id="lt-p",
+                     source_object_id="inst-anchor", target_object_id="inst-target"),
+        LinkInstance(id="l3", ontology_id=ontology_id, link_type_id="lt-p",
+                     source_object_id="inst-target", target_object_id="inst-anchor"),
+    ])
+    db.commit()
+
+    forward = [i.id for i in evaluator._traverse(
+        db, ontology_id, "lt-p", "inst-anchor", True, "ot-p")]
+    assert forward == ["inst-target"]     # 去重：重复链接只产出一行
+    backward = [i.id for i in evaluator._traverse(
+        db, ontology_id, "lt-p", "inst-target", False, "ot-p")]
+    assert backward == ["inst-anchor"]

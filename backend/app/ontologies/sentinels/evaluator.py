@@ -475,7 +475,11 @@ def _traverse(db: Session, ontology_id: str, link_type_id: str,
             LinkInstance.ontology_release_id == release_id,
             ObjectInstance.ontology_release_id == release_id,
         )
-    return query.distinct().order_by(ObjectInstance.id).yield_per(500)
+    # PG 的 json 类型没有等值操作符：实体级 DISTINCT 会 SELECT 全部列（含
+    # properties/computed），PostgreSQL 直接 UndefinedFunction（2026-08-30
+    # 云端哨兵评估死信事故）。join 去重必须落在主键上——GROUP BY 主键在
+    # PG 走函数依赖规则、SQLite 天然允许裸列，两方言行为一致。
+    return query.group_by(ObjectInstance.id).order_by(ObjectInstance.id).yield_per(500)
 
 
 def _link_exists(db: Session, ontology_id: str, link: dict, tup: dict,
