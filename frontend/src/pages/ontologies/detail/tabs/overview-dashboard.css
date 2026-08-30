@@ -312,7 +312,7 @@
   border: 0;
   border-right: 1px solid var(--ov-border);
   background: transparent;
-  padding: clamp(8px, 1.6vh, 18px) 20px clamp(6px, 1.3vh, 15px);
+  padding: clamp(8px, 1.3vh, 18px) 20px clamp(6px, 1vh, 15px);
   text-align: left;
   cursor: pointer;
   transition: background .18s ease;
@@ -332,9 +332,13 @@
 .kpi-cell:last-child { border-right: 0; }
 .kpi-cell:hover { background: #fbfdff; }
 .kpi-label { color: #3d485d; font-size: 14px; font-weight: 700; }
-.kpi-cell strong { display: flex; min-height: clamp(24px, 4.2vh, 43px); align-items: baseline; gap: 8px; margin-top: clamp(4px, 1vh, 10px); color: #172033; font-size: clamp(24px, 3.2vh, 34px); font-weight: 730; line-height: 1; }
+.kpi-cell strong { display: flex; min-height: clamp(22px, 3.6vh, 40px); align-items: baseline; gap: 8px; margin-top: clamp(4px, 0.9vh, 10px); color: #172033; font-size: clamp(24px, 3.2vh, 34px); font-weight: 730; line-height: 1; }
 .kpi-cell strong small { color: #47566d; font-size: 14px; font-weight: 600; }
-.kpi-cell p { min-height: clamp(16px, 3vh, 32px); margin: 2px 0 7px; color: #667388; font-size: 11px; line-height: 1.55; }
+.kpi-cell p { min-height: clamp(14px, 2.4vh, 32px); margin: 2px 0 6px; color: #667388; font-size: 11px; line-height: 1.55; }
+/* KPI 卡内迷你图：固定高度通栏，ECharts 根节点绝对定位填充（同 runtime-trend
+   的做法，避免画布内联高度反哺内容尺寸）。矮屏档位压缩，保证总览单页呈现。 */
+.kpi-spark { position: relative; height: clamp(30px, 4.2vh, 44px); margin: 1px 0 5px; }
+.kpi-spark > div:first-child { position: absolute; inset: 0; }
 .kpi-status { display: inline-flex; min-height: 20px; width: fit-content; max-width: 100%; align-items: center; gap: 5px; margin-top: auto; color: #15957f; font-size: 11px; font-style: normal; font-weight: 600; }
 .kpi-status.is-warning { color: #ef8b17; }
 .kpi-status.is-neutral { color: #607086; font-weight: 500; }
@@ -346,7 +350,7 @@
 
 .overview-hero-grid > .runtime-summary { grid-column: 2; grid-row: 2; }
 
-.runtime-summary { display: flex; flex-direction: column; padding: clamp(10px, 1.8vh, 20px) 24px; min-height: clamp(230px, 33vh, 320px); }
+.runtime-summary { display: flex; flex-direction: column; padding: clamp(10px, 1.8vh, 20px) 24px; min-height: clamp(196px, 30vh, 320px); }
 
 .runtime-highlights { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: clamp(6px, 1.2vh, 11px); }
 .runtime-highlight { display: grid; min-width: 0; grid-template-columns: 36px minmax(64px, .7fr) minmax(108px, 1fr); align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid #e5ecef; border-radius: 11px; background: #f7fafb; }

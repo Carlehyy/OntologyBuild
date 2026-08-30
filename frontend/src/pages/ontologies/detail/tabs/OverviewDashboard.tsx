@@ -1,13 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { motion, useReducedMotion } from 'motion/react'
+import ReactECharts from 'echarts-for-react'
+import type { EChartsOption } from 'echarts'
 import {
   Activity, CheckCircle2, ChevronRight, CircleAlert, Database,
   GitBranch, Layers, Loader2, Sparkles, Workflow, Zap,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
+import { AnimatedNumber } from '@/components/motion-ui/animated-number'
+import { SPRING_LAYOUT } from '@/components/motion-ui/ease'
+import {
+  CHART_AMBER, CHART_AXIS, CHART_BLUE, CHART_SERIES_PALETTE, CHART_TEAL, CHART_VIOLET,
+} from '@/lib/echartsTheme'
 import type { OntologyDetail } from '@/types/ontology'
 import RuntimeTrendChart from './RuntimeTrendChart'
 import VersionEvolutionCard from './VersionEvolutionCard'
+import {
+  buildMiniBarOption, buildMiniCategoryBarOption, buildMiniDonutOption, buildMiniSegmentBarOption,
+} from '../governance/charts'
 import {
   describeRuntimeRange, normalizeRuntimeRange,
   resolveRuntimeRange, RUNTIME_DIMENSION_DEFAULT, RUNTIME_DIMENSION_OPTIONS,
@@ -72,32 +83,34 @@ const formatDateTime = (iso?: string | null, compact = false) => {
     : { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
-/* KPI 数字滚动：数据到达或变化时从旧值缓动到新值；
-   prefers-reduced-motion 下直接呈现最终值。 */
-function useCountUp(target: number, duration = 620) {
-  const [display, setDisplay] = useState(0)
-  const fromRef = useRef(0)
-  useEffect(() => {
-    const from = fromRef.current
-    if (from === target) return
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      fromRef.current = target
-      setDisplay(target)
-      return
-    }
-    const started = performance.now()
-    let raf = 0
-    const tick = (now: number) => {
-      const progress = Math.min((now - started) / duration, 1)
-      const eased = 1 - Math.pow(1 - progress, 3)
-      setDisplay(Math.round(from + (target - from) * eased))
-      if (progress < 1) raf = requestAnimationFrame(tick)
-      else fromRef.current = target
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [target, duration])
-  return display
+/* KPI 数字滚动与卡片入场交给 beUI 动效体系（AnimatedNumber + SPRING_LAYOUT），
+   两者的 prefers-reduced-motion 行为均由组件内部尊重。 */
+function KpiCell({ index, reduce, onClick, children }: {
+  index: number
+  reduce: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <motion.button
+      type="button"
+      className="kpi-cell"
+      onClick={onClick}
+      initial={reduce ? false : { opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ ...SPRING_LAYOUT, delay: Math.min(index * 0.05, 0.2) }}
+    >
+      {children}
+    </motion.button>
+  )
+}
+
+function KpiSpark({ option, label }: { option: EChartsOption; label: string }) {
+  return (
+    <div className="kpi-spark" role="img" aria-label={label}>
+      <ReactECharts option={option} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} notMerge />
+    </div>
+  )
 }
 
 function NetworkMark() {
@@ -154,10 +167,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
     refetchInterval: 30000,
   })
 
-  const kpiObjectTypes = useCountUp(overviewQuery.data?.model.objectTypes ?? 0)
-  const kpiInstances = useCountUp(overviewQuery.data?.data.instances ?? 0)
-  const kpiMappingsBound = useCountUp(overviewQuery.data?.data.mappings.bound ?? 0)
-  const kpiFactsTotal = useCountUp(overviewQuery.data?.facts.total ?? 0)
+  const reduce = useReducedMotion() ?? false
 
   if (!overviewQuery.data) {
     if (overviewQuery.isError) {
@@ -185,6 +195,33 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
     .filter(([, value]) => value > 0)
     .sort(([a], [b]) => (FACT_KIND_LABEL[a] ? 0 : 1) - (FACT_KIND_LABEL[b] ? 0 : 1))
   const sourceEntries = Object.entries(ov.data.instancesBySource).sort((a, b) => b[1] - a[1])
+  // KPI 迷你图：数据全部来自 overview 现有只读字段；空数据不渲染图表，卡片保持收敛。
+  const structureSpark = buildMiniCategoryBarOption([
+    { value: ov.model.objectTypes, color: CHART_TEAL },
+    { value: ov.model.linkTypes, color: CHART_BLUE },
+    { value: ov.model.actions, color: CHART_VIOLET },
+    { value: ov.model.functions, color: CHART_AMBER },
+  ])
+  const sourceSpark = ov.data.instances > 0
+    ? buildMiniDonutOption(sourceEntries.map(([, count], index) => ({
+      value: count, color: CHART_SERIES_PALETTE[index % CHART_SERIES_PALETTE.length],
+    })))
+    : null
+  const mappingRest = Math.max(
+    0, ov.data.mappings.total - ov.data.mappings.bound - ov.data.mappings.nameMatch - ov.data.mappings.autoCreate,
+  )
+  const mappingSpark = ov.data.mappings.total > 0
+    ? buildMiniSegmentBarOption([
+      { value: ov.data.mappings.bound, color: CHART_TEAL },
+      { value: ov.data.mappings.nameMatch, color: CHART_BLUE },
+      { value: ov.data.mappings.autoCreate, color: CHART_VIOLET },
+      { value: mappingRest, color: CHART_AXIS },
+    ])
+    : null
+  const factTopEntries = [...factParts].sort(([, a], [, b]) => b - a).slice(0, 4)
+  const factsSpark = ov.facts.total > 0
+    ? buildMiniBarOption(factTopEntries.map(([, value]) => value), CHART_VIOLET)
+    : null
   // 近7天用 overview 自带的 daily7d 桶；其余维度信 runtime-summary 的显式时间窗，
   // 两者都只呈现后端按日返回的数据，没有就如实呈现空态，绝不把汇总堆到某一天。
   const runtimeDays = runtimeDimension === 'last7'
@@ -245,31 +282,38 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
         </section>
 
         <section className="overview-panel kpi-rail" aria-label="关键指标">
-          <button type="button" className="kpi-cell" onClick={() => onGoGroup('design')}>
+          <KpiCell index={0} reduce={reduce} onClick={() => onGoGroup('design')}>
             <span className="kpi-label">当前发布结构</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
-            <strong>{kpiObjectTypes}<small>对象实体</small></strong>
+            <strong><AnimatedNumber value={ov.model.objectTypes} duration={0.9} /><small>对象实体</small></strong>
             <p>关系 {ov.model.linkTypes} · 动作 {ov.model.actions} · 函数 {ov.model.functions} · 哨兵 {ov.model.sentinels.total}</p>
+            <KpiSpark option={structureSpark} label="当前发布结构构成迷你柱状图：对象、关系、动作、函数数量" />
             {ov.model.actions === 0 && (
               <em className="kpi-status is-neutral"><CircleAlert size={15} />暂无动作类型</em>
             )}
             <em className="kpi-status is-blue"><Layers size={15} />结构冻结于版本，演进可对照</em>
-          </button>
-          <button type="button" className="kpi-cell" onClick={() => onGoGroup('data')}>
+          </KpiCell>
+          <KpiCell index={1} reduce={reduce} onClick={() => onGoGroup('data')}>
             <span className="kpi-label">当前实例投影</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
-            <strong>{kpiInstances}<small>对象实例</small></strong>
+            <strong><AnimatedNumber value={ov.data.instances} duration={0.9} /><small>对象实例</small></strong>
             <p>链接实例 {ov.data.linkInstances}</p>
+            {sourceSpark && (
+              <KpiSpark option={sourceSpark} label={`实例来源占比迷你环形图：${sourceEntries.map(([source, count]) => `${SOURCE_LABEL[source] || source} ${count}`).join('、')}`} />
+            )}
             <em className="kpi-status is-neutral">
               {sourceEntries.map(([source, count]) => `${SOURCE_LABEL[source] || source} ${count}`).join(' · ') || '暂无实例数据'}
             </em>
             <em className="kpi-status is-teal"><Database size={15} />实例与当前结构对账，来源可追</em>
-          </button>
-          <button type="button" className="kpi-cell" onClick={() => onGoGroup('data-mapping')}>
+          </KpiCell>
+          <KpiCell index={2} reduce={reduce} onClick={() => onGoGroup('data-mapping')}>
             <span className="kpi-label">数据映射</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
-            <strong>{kpiMappingsBound}<small>/ {ov.data.mappings.total} 已显式绑定</small></strong>
+            <strong><AnimatedNumber value={ov.data.mappings.bound} duration={0.9} /><small>/ {ov.data.mappings.total} 已显式绑定</small></strong>
             <p>名称匹配 {ov.data.mappings.nameMatch} · 数据自建 {ov.data.mappings.autoCreate}</p>
+            {mappingSpark && (
+              <KpiSpark option={mappingSpark} label="数据映射绑定状态迷你分段条：已绑定、名称匹配、数据自建与余量" />
+            )}
             <em className={`kpi-status ${ov.data.mappings.total === 0 ? 'is-neutral' : ov.data.mappings.bound === ov.data.mappings.total ? '' : 'is-warning'}`}>
               {ov.data.mappings.total === 0
                 ? <><Database size={15} />暂无映射记录</>
@@ -277,14 +321,17 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
                 ? <><CheckCircle2 size={15} />当前未发现未绑定映射</>
                 : <><CircleAlert size={15} />{ov.data.mappings.total - ov.data.mappings.bound} 条映射待确认</>}
             </em>
-          </button>
-          <button type="button" className="kpi-cell" onClick={() => onGoGroup('governance')}>
+          </KpiCell>
+          <KpiCell index={3} reduce={reduce} onClick={() => onGoGroup('governance')}>
             <span className="kpi-label">当前版本事实流</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
-            <strong>{kpiFactsTotal}<small>条</small></strong>
+            <strong><AnimatedNumber value={ov.facts.total} duration={0.9} /><small>条</small></strong>
             <p>{factParts.slice(0, 3).map(([kind, value]) => `${FACT_KIND_LABEL[kind] || kind} ${value}`).join(' · ') || '尚无事实记录'}</p>
+            {factsSpark && (
+              <KpiSpark option={factsSpark} label="当前版本事实流按类型迷你柱状图" />
+            )}
             <em className="kpi-status is-purple"><GitBranch size={15} />追加式留痕，可回放与追溯</em>
-          </button>
+          </KpiCell>
         </section>
 
         <section className="overview-panel runtime-summary">
