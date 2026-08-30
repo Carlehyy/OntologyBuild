@@ -178,12 +178,23 @@ function nextLaneY(nodes: MappingNode[], lane: MappingNode['data']['kind']) {
     .reduce((bottom, node) => Math.max(bottom, node.position.y + estimatedNodeHeight(node) + 36), 55)
 }
 
-export default function MappingConfigurationPage({ graphWorkspace = false }: { graphWorkspace?: boolean }) {
-  const { id: ontologyId = '' } = useParams<{ id: string }>()
-  const [searchParams] = useSearchParams()
-  const versionId = searchParams.get('versionId')
-  // 从总览页「查看字段映射」跳入时聚焦的目标节点（object:<id> / relation:<id>）。
-  const focusParam = searchParams.get('focus')
+export interface MappingWorkspaceProps {
+  ontologyId: string
+  versionId: string | null
+  /** 从总览页「查看字段映射」跳入时聚焦的目标节点（object:<id> / relation:<id>）。 */
+  focus?: string | null
+  /** 头部「返回」按钮行为；缺省为 history 后退，无历史时回退到 onOpenModelStructure 或映射/版本概览 */
+  onBack?: () => void
+  /** 头部「模型结构」按钮行为；缺省回映射/版本概览 */
+  onOpenModelStructure?: () => void
+}
+
+/**
+ * 数据映射工作台（可嵌入）：路由页 MappingConfigurationPage、图谱页 ?view=mapping
+ * 与业务澄清页「数据映射」视图共享同一组件，上下文经 props 注入。
+ */
+export function MappingWorkspace({ ontologyId, versionId, focus, onBack, onOpenModelStructure }: MappingWorkspaceProps) {
+  const focusParam = focus ?? null
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const data = useMappingData(ontologyId, false, versionId, true)
@@ -847,25 +858,27 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
   const confirmLeavingWorkspace = () => (
     !dirty || window.confirm('当前还有未保存的映射更改，离开后这些前端草稿会丢失。确定离开吗？')
   )
-  const modelStructurePath = versionId
-    ? `/ontologies/${ontologyId}/graph?versionId=${encodeURIComponent(versionId)}`
-    : `/ontologies/${ontologyId}/graph`
   const mappingOverviewPath = versionId
     ? `/ontologies/${ontologyId}?tab=versions`
     : `/ontologies/${ontologyId}?tab=data-mapping`
+  const fallbackBack = onOpenModelStructure ?? (() => navigate(mappingOverviewPath))
   const returnToPreviousPage = () => {
     if (!confirmLeavingWorkspace()) return
+    if (onBack) {
+      onBack()
+      return
+    }
     const historyIndex = window.history.state?.idx
     if (typeof historyIndex === 'number' && historyIndex > 0) {
       navigate(-1)
       return
     }
-    navigate(graphWorkspace ? modelStructurePath : mappingOverviewPath)
+    fallbackBack()
   }
   const leaveWorkspace = () => {
     if (!confirmLeavingWorkspace()) return
-    if (graphWorkspace) {
-      navigate(modelStructurePath)
+    if (onOpenModelStructure) {
+      onOpenModelStructure()
       return
     }
     navigate(mappingOverviewPath)
@@ -1038,5 +1051,21 @@ export default function MappingConfigurationPage({ graphWorkspace = false }: { g
 
       {tutorialStep !== null && <div className="dmc-tutorial" role="dialog" aria-modal="true"><div className="dmc-tutorial-card"><header><div><span><BookOpen size={15} /></span><div><b>数据映射快速入门</b><small>第 {tutorialStep + 1} 步，共 {tutorial.length} 步</small></div></div><button onClick={closeTutorial}><X size={15} /></button></header><main>{(() => { const StepIcon = tutorial[tutorialStep].icon; return <><span><StepIcon size={27} /></span><h3>{tutorial[tutorialStep].title}</h3><p>{tutorial[tutorialStep].text}</p></> })()}</main><footer><div>{tutorial.map((_, index) => <button key={index} data-active={index === tutorialStep} onClick={() => setTutorialStep(index)} />)}</div><span>{tutorialStep > 0 && <button onClick={() => setTutorialStep(step => (step || 1) - 1)}>上一步</button>}<button className="dmc-tutorial-next" onClick={() => tutorialStep === tutorial.length - 1 ? closeTutorial() : setTutorialStep(step => (step || 0) + 1)}>{tutorialStep === tutorial.length - 1 ? '开始配置' : '下一步'}<ArrowRight size={13} /></button></span></footer></div></div>}
     </div>
+  )
+}
+
+/**
+ * 数据映射配置路由页（薄壳）：读取路由参数后委托给 MappingWorkspace。
+ * 图谱编辑器 ?view=mapping 与业务澄清页「数据映射」视图直接消费 MappingWorkspace。
+ */
+export default function MappingConfigurationPage() {
+  const { id: ontologyId = '' } = useParams<{ id: string }>()
+  const [searchParams] = useSearchParams()
+  return (
+    <MappingWorkspace
+      ontologyId={ontologyId}
+      versionId={searchParams.get('versionId')}
+      focus={searchParams.get('focus')}
+    />
   )
 }
