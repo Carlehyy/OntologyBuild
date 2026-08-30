@@ -35,6 +35,7 @@ from app.exploration import questions as Q
 from app.exploration import readiness as R
 from app.exploration import officecli as O
 from app.exploration.attachment_context import build_attachment_context
+from app.exploration.drift_brief import build_bound_version_brief
 from app.exploration.models import (ExplorationAttachment, ExplorationMessage,
                                     ExplorationSession)
 from app.exploration.skills import ExplorationSkill, exploration_skills
@@ -91,6 +92,27 @@ def _skills_block(skills: dict[str, ExplorationSkill]) -> str:
 {lines}"""
 
 
+def _bound_version_block(brief: str | None) -> str:
+    """绑定版本漂移简报段落；未绑定/计算失败时为空串（不注入）。"""
+    if not brief:
+        return ""
+    return f"""
+
+# 绑定本体版本一致性（人工编辑感知）
+{brief}"""
+
+
+def _bound_version_brief(db: Session, session: ExplorationSession) -> str | None:
+    """每回合计算一次的绑定版本漂移简报；失败记日志并跳过注入，绝不摧毁回合。"""
+    if not session.ontology_version_id:
+        return None
+    try:
+        return build_bound_version_brief(db, session)
+    except Exception:  # noqa: BLE001 — 漂移感知是增强信号，不阻断对话
+        logger.warning("绑定版本漂移简报计算失败，本回合跳过注入", exc_info=True)
+        return None
+
+
 def _system_prompt(
     session: ExplorationSession,
     skills: dict[str, ExplorationSkill] | None = None,
@@ -99,6 +121,7 @@ def _system_prompt(
     canonical_max_chars: int = _CANONICAL_INLINE_CAP,
     summary_max_tokens: int | None = None,
     canvas_summary_max_items: int = 30,
+    bound_version_brief: str | None = None,
 ) -> str:
     rd = R.evaluate(session.canvas)
     history_summary = session.context_summary or "（尚未触发压缩；使用最近完整消息）"
@@ -175,7 +198,7 @@ canvasVersion={session.canvas_version or 0}
 )}
 若 complete=false，必须使用 get_canvas_elements 按 kind/id 读取相关完整元素；工具返回
 truncated/hasMore=true 时继续分页。每次写工具返回的新 canvasVersion 和 readiness 是后续
-调用的最新基线，不要继续使用旧版本或只依赖历史工具参数。{_skills_block(skills or {})}"""
+调用的最新基线，不要继续使用旧版本或只依赖历史工具参数。{_bound_version_block(bound_version_brief)}{_skills_block(skills or {})}"""
 
 
 def _web_search_prompt(enabled: bool) -> str:
@@ -335,13 +358,18 @@ def _prepare_history(db: Session, session: ExplorationSession,
             .limit(_HISTORY_QUERY_CAP).all())
     pending = rows
 
+    # 绑定版本漂移简报每回合只现算一次（要读库），随后作为纯文本透传进
+    # 各 prompt profile 的 _system_prompt，避免在降级循环里重复查库。
+    bound_version_brief = _bound_version_brief(db, session)
+
     context_limit, output_limit, input_budget = _configure_context_limits(call_kwargs)
     request_tools = tools if tools is not None else TOOL_DEFS
     tool_tokens = _estimate_tools(request_tools)
 
     provisional_messages = [{
         "role": "system",
-        "content": _system_prompt(session, skills, web_search_enabled),
+        "content": _system_prompt(session, skills, web_search_enabled,
+                                  bound_version_brief=bound_version_brief),
     }]
     provisional_messages.extend({
         "role": row.role,
@@ -385,6 +413,7 @@ def _prepare_history(db: Session, session: ExplorationSession,
             canonical_max_chars=canonical_cap,
             summary_max_tokens=summary_cap,
             canvas_summary_max_items=canvas_items,
+            bound_version_brief=bound_version_brief,
         )
         if base_estimate(candidate) <= initial_target:
             chosen = (candidate, canonical_cap, summary_cap, canvas_items)
@@ -398,6 +427,7 @@ def _prepare_history(db: Session, session: ExplorationSession,
             canonical_max_chars=canonical_cap,
             summary_max_tokens=summary_cap,
             canvas_summary_max_items=canvas_items,
+            bound_version_brief=bound_version_brief,
         )
         required = base_estimate(candidate)
         if required > input_budget:
