@@ -1,14 +1,15 @@
 /**
- * 业务探索 — 对话式业务建模/需求建模工作台
+ * 业务澄清 — 草稿版本在线配置工作台
  *
- * 双区工作台：探索对话（SSE 流式 + 工具轨迹） | 业务场景（七类模型实时沉淀）
- * 顶部动作：生成需求文档 → 需求文档工作区里生成本体模型 → 人审后落地本体。
+ * 左侧配置工作区（业务场景七类模型 / 本体模型图谱编辑器 / 数据映射 / 需求文档
+ * 四视图切换），右侧探索对话（SSE 流式 + 工具轨迹）随对话实时沉淀画布。
+ * 定位：服务指定本体草稿版本的集中配置，不再承担从零创建本体。
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  Bot, Check, CircleHelp, Compass, Copy, Download, ExternalLink, Files, FileText, GitBranch, Globe2, History, List,
+  Bot, Boxes, Check, CircleHelp, Compass, Copy, Download, ExternalLink, Files, FileText, GitBranch, Globe2, History, Layers, Link2, List,
   Loader2, Paperclip, Plus, Send, ShieldAlert, ShieldCheck, Trash2, User, Wrench, X,
 } from 'lucide-react'
 import {
@@ -24,12 +25,20 @@ import { useToast } from '@/components/ui/Toast'
 import { writeTextToClipboard } from '@/utils/clipboard'
 import Md from './Md'
 import CanvasPanel from './CanvasPanel'
-import DocumentsDrawer from './DocumentsDrawer'
+import DocumentsView from './DocumentsView'
 import DraftReviewDrawer from './DraftReviewDrawer'
 import FileWorkspaceDrawer from './FileWorkspaceDrawer'
-import { mergeDraftBindingOptions, parsePendingNewSession, parseSessionBinding, resolveBoundSession, sessionBindingKey, shouldAutoSelectLatestSession } from './sessionBinding'
+import { EXPLORE_VIEWS, mergeDraftBindingOptions, parseExploreView, parsePendingNewSession, parseSessionBinding, resolveBoundSession, sessionBindingKey, shouldAutoSelectLatestSession, type ExploreView } from './sessionBinding'
 import { SplitHandle, useSplitLayout } from '@/hooks/useSplitLayout'
+import { LazyGraphWorkspace, LazyMappingWorkspace } from '@/components/explore/ExploreWorkbenchViews'
 import type { ModelConfig } from '@/types/ontology'
+
+const VIEW_ICONS: Record<ExploreView, typeof Layers> = {
+  canvas: Layers,
+  model: Boxes,
+  mapping: Link2,
+  docs: FileText,
+}
 
 interface ChatMsg {
   id: string
@@ -182,6 +191,34 @@ function QuickReplies({ questions, disabled, onAnswer, onCustom }: {
   )
 }
 
+/** 未绑定本体版本时，本体模型/数据映射视图的引导占位 */
+function BindRequiredHint({ onBind }: { onBind: () => void }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-[var(--color-bg-base)] text-[var(--color-text-tertiary)]">
+        <GitBranch size={21} />
+      </span>
+      <p className="text-sm font-medium text-[var(--color-text-secondary)]">此视图需要绑定草稿态本体版本</p>
+      <p className="max-w-sm text-xs leading-5 text-[var(--color-text-tertiary)]">
+        从本体详情页「版本演进」选择草稿版本点击「在线配置」进入，或点击右上方「绑定本体」。
+      </p>
+      <button
+        type="button"
+        onClick={onBind}
+        className="mt-1 inline-flex h-8 items-center gap-1.5 rounded-md bg-teal-600 px-3 text-xs font-medium text-white transition-colors hover:bg-teal-700"
+      >
+        <GitBranch size={14} /> 绑定本体
+      </button>
+    </div>
+  )
+}
+
+const viewLoadingFallback = (
+  <div className="flex h-full items-center justify-center gap-2 text-xs text-[var(--color-text-tertiary)]">
+    <Loader2 size={15} className="animate-spin" /> 正在加载工作区…
+  </div>
+)
+
 export default function ExplorationPage() {
   const { containerRef, sizes, startResize } = useSplitLayout()
   const { toast } = useToast()
@@ -196,6 +233,20 @@ export default function ExplorationPage() {
     () => (pendingNewSession ? null : parseSessionBinding(searchParams)),
     [searchParams, pendingNewSession],
   )
+  // -- 工作区视图锚点（?view=canvas|model|mapping|docs，缺省 canvas） --
+  const view = useMemo(() => parseExploreView(searchParams), [searchParams])
+  const navigate = useNavigate()
+  // 保留式参数更新：切视图/换绑定时不丢其他锚点（ontologyId/versionId/session/view）
+  const updateParams = useCallback((patch: Record<string, string | null>) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null) next.delete(key)
+        else next.set(key, value)
+      }
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
   // -- 会话 --
   const { data: sessions = [], refetch: refetchSessions, isSuccess: sessionsLoaded } = useQuery({
     queryKey: ['bx-sessions'], queryFn: () => explorationApi.sessions(),
@@ -220,7 +271,6 @@ export default function ExplorationPage() {
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
   const [deleteSessionTarget, setDeleteSessionTarget] = useState<BxSession | null>(null)
   const [deletingSession, setDeletingSession] = useState(false)
-  const [docsOpen, setDocsOpen] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [reviewDraft, setReviewDraft] = useState<BxDraft | null>(null)
   const [genDocBusy, setGenDocBusy] = useState(false)
@@ -469,6 +519,10 @@ export default function ExplorationPage() {
     v => v.id === currentSession?.ontologyVersionId,
   )?.version_number
 
+  // 配置工作区（本体模型/数据映射视图）的上下文：URL 绑定优先，其次会话记录
+  const workbenchOntologyId = binding?.ontologyId || currentSession?.ontologyId || null
+  const workbenchVersionId = binding?.versionId || currentSession?.ontologyVersionId || null
+
   // -- 页头「绑定本体」选择器（分支②入口）：列出有编辑中草稿版本、且当前用户
   //    可写的本体；打开时才拉取，选中即带绑定参数进入绑定态会话。 --
   const [showBindPopover, setShowBindPopover] = useState(false)
@@ -625,7 +679,6 @@ export default function ExplorationPage() {
     setBanner('')
     try {
       await explorationApi.generateDocument(sid, modelId || undefined)
-      setDocsOpen(true)
     } catch (error: unknown) {
       setBanner(errorMessage(error, '文档生成失败'))
     } finally {
@@ -651,9 +704,101 @@ export default function ExplorationPage() {
       <div
         ref={containerRef}
         className="scrollbar-none grid min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-1"
-        style={{ gridTemplateColumns: `minmax(560px, ${sizes[0]}fr) 4px minmax(300px, ${sizes[1]}fr)` }}
+        style={{ gridTemplateColumns: `minmax(520px, ${sizes[0]}fr) 4px minmax(320px, ${sizes[1]}fr)` }}
       >
-      {/* 对话区 */}
+      {/* 配置工作区：业务场景 / 本体模型 / 数据映射 / 需求文档 */}
+      <aside className={`${panelClass} workspace-topology-surface flex flex-col`}>
+        <div className="flex h-11 shrink-0 items-center gap-1 border-b border-[var(--color-border)] bg-white px-3" aria-label="切换工作区视图">
+          {EXPLORE_VIEWS.map(item => {
+            const active = view === item.id
+            const Icon = VIEW_ICONS[item.id]
+            return (
+              <button
+                key={item.id}
+                type="button"
+                aria-pressed={active}
+                data-testid={`explore-view-${item.id}`}
+                onClick={() => updateParams({ view: item.id === 'canvas' ? null : item.id })}
+                className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${active
+                  ? 'border-teal-300 bg-teal-50 text-teal-700'
+                  : 'border-transparent text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
+              >
+                <Icon size={13} />
+                {item.label}
+              </button>
+            )
+          })}
+        </div>
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {view === 'canvas' && (
+            <CanvasPanel
+              sessionId={sid || undefined}
+              canvas={canvas}
+              completeness={completeness}
+              readiness={readiness}
+              onAsk={busy ? undefined : askInChat}
+              onOpenDocuments={() => updateParams({ view: 'docs' })}
+            />
+          )}
+          {view === 'model' && (
+            workbenchOntologyId ? (
+              <Suspense fallback={viewLoadingFallback}>
+                <LazyGraphWorkspace
+                  ontologyId={workbenchOntologyId}
+                  versionId={workbenchVersionId}
+                  theme="light"
+                  layout="embedded"
+                  onOpenMapping={() => updateParams({ view: 'mapping' })}
+                  onBackToVersions={() => navigate(`/ontologies/${workbenchOntologyId}?tab=versions`)}
+                  onDraftCreated={newVersionId => updateParams({ versionId: newVersionId })}
+                />
+              </Suspense>
+            ) : (
+              <BindRequiredHint onBind={() => setShowBindPopover(true)} />
+            )
+          )}
+          {view === 'mapping' && (
+            workbenchOntologyId ? (
+              <Suspense fallback={viewLoadingFallback}>
+                <LazyMappingWorkspace
+                  ontologyId={workbenchOntologyId}
+                  versionId={workbenchVersionId}
+                  onBack={() => updateParams({ view: 'model' })}
+                  onOpenModelStructure={() => updateParams({ view: 'model' })}
+                />
+              </Suspense>
+            ) : (
+              <BindRequiredHint onBind={() => setShowBindPopover(true)} />
+            )
+          )}
+          {view === 'docs' && (
+            sid ? (
+              <DocumentsView
+                sessionId={sid}
+                binding={currentSession?.ontologyId ? {
+                  ontologyId: currentSession.ontologyId,
+                  versionId: currentSession.ontologyVersionId || null,
+                  name: boundOntology?.name,
+                } : null}
+                onDraftCreated={draft => setReviewDraft(draft)}
+                onGenerate={generateDocument}
+                documentGenerating={genDocBusy}
+                canGenerateDocument={canvasCount > 0}
+              />
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+                <FileText size={22} className="text-[var(--color-text-tertiary)]" />
+                <p className="text-sm text-[var(--color-text-secondary)]">先在右侧对话中澄清业务</p>
+                <p className="text-xs text-[var(--color-text-tertiary)]">会话创建后即可生成并查看需求文档。</p>
+              </div>
+            )
+          )}
+        </div>
+      </aside>
+
+      <SplitHandle onPointerDown={startResize} label="调整配置工作区与探索对话宽度" />
+
+      {/* 探索对话 */}
       <section className={`${panelClass} workspace-topology-surface flex flex-col`}>
         <header className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-white px-4">
           <div className="flex w-full min-w-0 items-center justify-between gap-2">
@@ -665,7 +810,7 @@ export default function ExplorationPage() {
                 <h3 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
                   {sessions.find(s => s.id === sid)?.title || '业务澄清'}
                 </h3>
-                <p className="truncate text-[11px] text-[var(--color-text-tertiary)]">通过对话澄清业务，沉淀七大模型与需求文档，生成或完善本体模型</p>
+                <p className="truncate text-[11px] text-[var(--color-text-tertiary)]">通过对话澄清业务，沉淀七大模型与需求文档，在线完善本体模型</p>
               </div>
               {boundOntologyId && (
                 <span
@@ -684,7 +829,7 @@ export default function ExplorationPage() {
             <div className="flex shrink-0 items-center gap-2">
               {readiness && canvasCount > 0 && (
                 <span
-                  title={`当前阶段：${readiness.stage}\n堵门项 ${readiness.blockingCount} · 建议项 ${readiness.advisoryCount}（明细见右侧画布）`}
+                  title={`当前阶段：${readiness.stage}\n堵门项 ${readiness.blockingCount} · 建议项 ${readiness.advisoryCount}（明细见左侧业务场景视图）`}
                   className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium ${readiness.ready
                     ? 'border-teal-200 bg-teal-50 text-teal-700'
                     : 'border-amber-200 bg-amber-50 text-amber-700'}`}
@@ -751,7 +896,7 @@ export default function ExplorationPage() {
                                 data-testid="bind-ontology-option"
                                 onClick={() => {
                                   setShowBindPopover(false)
-                                  setSearchParams({ ontologyId: option.ontologyId, versionId: option.versionId })
+                                  updateParams({ ontologyId: option.ontologyId, versionId: option.versionId, session: null })
                                 }}
                                 className={`flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors focus-visible:outline-none ${active
                                   ? 'bg-teal-50/70'
@@ -911,7 +1056,7 @@ export default function ExplorationPage() {
               <div className="text-center">
                 <div className="text-sm font-medium text-[var(--color-text-primary)]">从描述你的业务开始</div>
                 <div className="mt-1 text-xs text-[var(--color-text-tertiary)] max-w-md leading-relaxed">
-                  我会通过提问帮你澄清业务，并把确认的信息实时沉淀为对象、主体、行为、事件、规则、流程、场景七类模型 —— 右侧画布随对话生长。
+                  我会通过提问帮你澄清业务，并把确认的信息实时沉淀为对象、主体、行为、事件、规则、流程、场景七类模型 —— 左侧业务场景随对话生长。
                 </div>
               </div>
               <div className="flex flex-col gap-2 w-full max-w-md">
@@ -1048,7 +1193,7 @@ export default function ExplorationPage() {
             />
             {openBlocking.length > 2 && (
               <div className="mb-1.5 text-[11px] text-[var(--color-text-tertiary)]">
-                还有 {openBlocking.length - 2} 个待澄清问题，见右侧画布「澄清账本」
+                还有 {openBlocking.length - 2} 个待澄清问题，见左侧业务场景视图「澄清账本」
               </div>
             )}
             {/* 消息输入框：回形针上传的附件直接体现在上方对话流中，输入框只承载本轮消息 */}
@@ -1158,37 +1303,8 @@ export default function ExplorationPage() {
           </div>
         </div>
       </section>
-
-      <SplitHandle onPointerDown={startResize} label="调整探索对话与业务场景宽度" />
-
-      {/* 业务场景 */}
-      <aside className={`${panelClass} workspace-topology-surface flex flex-col`}>
-        <CanvasPanel
-          sessionId={sid || undefined}
-          canvas={canvas}
-          completeness={completeness}
-          readiness={readiness}
-          onAsk={busy ? undefined : askInChat}
-          onOpenDocuments={() => setDocsOpen(true)}
-        />
-      </aside>
       </div>
 
-      {docsOpen && sid && (
-        <DocumentsDrawer
-          sessionId={sid}
-          binding={currentSession?.ontologyId ? {
-            ontologyId: currentSession.ontologyId,
-            versionId: currentSession.ontologyVersionId || null,
-            name: boundOntology?.name,
-          } : null}
-          onClose={() => setDocsOpen(false)}
-          onDraftCreated={draft => { setDocsOpen(false); setReviewDraft(draft) }}
-          onGenerate={generateDocument}
-          documentGenerating={genDocBusy}
-          canGenerateDocument={canvasCount > 0}
-        />
-      )}
       {workspaceOpen && sid && (
         <FileWorkspaceDrawer
           sessionId={sid}
@@ -1198,7 +1314,11 @@ export default function ExplorationPage() {
         />
       )}
       {reviewDraft && (
-        <DraftReviewDrawer draft={reviewDraft} onClose={() => setReviewDraft(null)} />
+        <DraftReviewDrawer
+          draft={reviewDraft}
+          onClose={() => setReviewDraft(null)}
+          onOpenModelView={() => { setReviewDraft(null); updateParams({ view: 'model' }) }}
+        />
       )}
       <ConfirmModal
         open={!!deleteSessionTarget}

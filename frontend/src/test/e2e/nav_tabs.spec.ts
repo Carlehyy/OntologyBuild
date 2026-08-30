@@ -119,8 +119,8 @@ test('顶栏多标签页：打开、切换、域内路径恢复、关闭与刷�
   await expect(agentTab).toHaveAttribute('aria-selected', 'false')
   await expect(ontologiesTab).toHaveAttribute('aria-selected', 'true')
 
-  // 经子项打开业务澄清标签，再收起该入口标签，聚焦本体助手与本体管理的双标签流转
-  await page.getByRole('navigation').getByRole('link', { name: '业务澄清' }).click()
+  // 业务澄清已从导航隐藏（仅经本体详情页「在线配置」进入）：经深链打开标签，再收起该入口标签，聚焦本体助手与本体管理的双标签流转
+  await page.goto('/#/explore')
   await expect(page).toHaveURL(/\/#\/explore$/)
   await tabList.getByRole('tab', { name: '本体模型 · 业务澄清' })
     .getByRole('button', { name: '关闭 本体模型 · 业务澄清' }).click()
@@ -260,17 +260,20 @@ test('左侧导航：本体模型分组在子页面收起后保持收起，再�
 
   const nav = page.getByRole('navigation')
   const ontologyGroup = nav.getByRole('button', { name: '本体模型' })
-  const exploreLink = nav.getByRole('link', { name: '业务澄清' })
+  const networkLink = nav.getByRole('link', { name: '本体网络' })
 
-  // 直接落在子页面 /explore（顶级路由、不在父路径前缀下）：分组应默认展开
+  // 直接落在隐藏子项页面 /explore（顶级路由、不在父路径前缀下）：
+  // 分组按全量菜单口径判定激活，仍应默认展开
   await page.goto('/#/explore')
   await expect(ontologyGroup).toHaveAttribute('aria-expanded', 'true')
-  await expect(exploreLink).toBeVisible()
+  await expect(networkLink).toBeVisible()
+  // 隐藏子项不渲染为导航链接
+  await expect(nav.getByRole('link', { name: '业务澄清' })).toHaveCount(0)
 
   // 收起后必须保持收起：回归点是子项为顶级路由时曾被误判“已离开分组”而自动弹回
   await ontologyGroup.click()
   await expect(ontologyGroup).toHaveAttribute('aria-expanded', 'false')
-  await expect(exploreLink).toHaveCount(0)
+  await expect(networkLink).toHaveCount(0)
 
   // 分组状态清理走 setTimeout(0)，留出时间窗验证不会闪回展开
   await page.waitForTimeout(250)
@@ -279,7 +282,7 @@ test('左侧导航：本体模型分组在子页面收起后保持收起，再�
   // 再点击重新展开
   await ontologyGroup.click()
   await expect(ontologyGroup).toHaveAttribute('aria-expanded', 'true')
-  await expect(exploreLink).toBeVisible()
+  await expect(networkLink).toBeVisible()
 })
 
 test('左侧导航：「数据集成」显示新名称且收展行为与其他分组一致', async ({ page }) => {

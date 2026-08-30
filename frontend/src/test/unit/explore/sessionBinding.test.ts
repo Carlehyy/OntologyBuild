@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
+  EXPLORE_VIEWS,
   mergeDraftBindingOptions,
+  parseExploreView,
   parsePendingNewSession,
   parseSessionBinding,
   resolveBoundSession,
@@ -154,5 +156,25 @@ describe('mergeDraftBindingOptions', () => {
     assert.deepEqual(Object.keys(option).sort(), [
       'domain', 'ontologyId', 'ontologyName', 'versionId', 'versionLabel', 'versionNumber',
     ])
+  })
+})
+
+describe('parseExploreView', () => {
+  it('缺省与非法值回落到业务场景视图', () => {
+    assert.equal(parseExploreView(params({})), 'canvas')
+    assert.equal(parseExploreView(params({ view: '' })), 'canvas')
+    assert.equal(parseExploreView(params({ view: 'unknown' })), 'canvas')
+  })
+
+  it('四个合法视图原样解析', () => {
+    for (const view of EXPLORE_VIEWS) {
+      assert.equal(parseExploreView(params({ view: view.id })), view.id)
+    }
+  })
+
+  it('与绑定参数共存时互不影响', () => {
+    const merged = params({ ontologyId: 'ont-1', versionId: 'ver-2', view: 'mapping' })
+    assert.equal(parseExploreView(merged), 'mapping')
+    assert.deepEqual(parseSessionBinding(merged), { ontologyId: 'ont-1', versionId: 'ver-2' })
   })
 })

@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
 import {
   X, Box, GitBranch, Play, CircleAlert, TriangleAlert, Loader2, CheckCircle2, ShieldCheck,
   SquareFunction, ShieldAlert, Trash2,
@@ -7,7 +6,6 @@ import {
 import {
   explorationApi, type ApplyDraftResult, type BxDraft, type DraftValidation,
 } from '@/api/exploration'
-import { appliedGraphPath } from './draftReviewLogic'
 
 const CARDINALITY_LABEL: Record<string, string> = {
   'one-to-one': '1:1', 'one-to-many': '1:N', 'many-to-one': 'N:1', 'many-to-many': 'N:N',
@@ -19,13 +17,16 @@ const errorMessage = (error: unknown, fallback: string): string => {
   return typeof value.detail === 'string' ? value.detail : value.detail?.message || value.message || fallback
 }
 
-/** 本体草稿人审抽屉：分组预览 + 逐项勾选 + 报告，应用后跳图谱编辑器。
- *  草稿可重复应用（同名跳过幂等）：部分勾选落地后可再次打开勾选剩余元素。 */
-export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscarded }: {
+/** 本体草稿人审抽屉：分组预览 + 逐项勾选 + 报告，应用后由宿主切到本体模型视图。
+ *  草稿可重复应用（同名跳过幂等）：部分勾选落地后可再次打开勾选剩余元素。
+ *  业务澄清工作台只服务绑定草稿版本，不再支持新建本体落地。 */
+export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscarded, onOpenModelView }: {
   draft: BxDraft
   onClose: () => void
   onApplied?: (result: ApplyDraftResult) => void
   onDiscarded?: () => void
+  /** 应用成功后「继续完善」入口：宿主切到本体模型视图并关闭抽屉 */
+  onOpenModelView?: (result: ApplyDraftResult) => void
 }) {
   const functions = draft.draft.functions ?? []
   const sentinels = draft.draft.sentinels ?? []
@@ -35,8 +36,6 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
   ], [draft])
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(allItems.filter(i => !i.conflict).map(i => i.key)))
-  const [newName, setNewName] = useState('')
-  const [newDomain, setNewDomain] = useState('业务探索')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState<ApplyDraftResult | null>(null)
@@ -54,13 +53,14 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
     })
   }
 
-  // 已落地过的草稿再次应用：固定合并进首次的目标本体，无需再填新本体名
-  const needsNewName = !draft.targetOntologyId && !draft.appliedOntologyId
+  // 草稿必须携带目标本体（绑定会话生成的草稿固定写入绑定草稿版本）；
+  // 历史无目标草稿不再支持新建本体落地。
+  const missingTarget = !draft.targetOntologyId && !draft.appliedOntologyId
 
   const apply = async () => {
     setError('')
     if (selected.size === 0) { setError('请至少勾选一个草稿元素'); return }
-    if (needsNewName && !newName.trim()) { setError('请填写新本体名称'); return }
+    if (missingTarget) { setError('该草稿未绑定目标本体，无法落地；请在绑定草稿版本的会话中重新生成草稿。'); return }
     setBusy(true)
     try {
       const checked = await explorationApi.validateDraft(draft.id, [...selected])
@@ -71,9 +71,6 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
       }
       const res = await explorationApi.applyDraft(draft.id, {
         selectedKeys: [...selected],
-        newOntology: needsNewName
-          ? { name: newName.trim(), domain: newDomain.trim() || '业务探索' }
-          : undefined,
       })
       setResult(res)
       onApplied?.(res)
@@ -168,12 +165,15 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
                   ))}
                 </ul>
               )}
-              <Link
-                to={appliedGraphPath(result)}
-                className="inline-block mt-2.5 text-xs font-medium text-teal-700 underline underline-offset-2"
-              >
-                前往图谱编辑器继续完善 →
-              </Link>
+              {onOpenModelView && (
+                <button
+                  type="button"
+                  onClick={() => onOpenModelView(result)}
+                  className="mt-2.5 text-xs font-medium text-teal-700 underline underline-offset-2"
+                >
+                  前往本体模型视图继续完善 →
+                </button>
+              )}
             </div>
           ) : (
             <>
@@ -469,26 +469,11 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
 
         {!result && (
           <div className="border-t border-[var(--color-border)] px-5 py-3.5 space-y-2.5">
-            {needsNewName && !discarded && (
-              <div className="flex gap-2">
-                <input
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  placeholder="新本体名称（必填）"
-                  className="flex-1 px-3 py-1.5 text-xs rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] outline-none focus:border-teal-500"
-                />
-                <input
-                  value={newDomain}
-                  onChange={e => setNewDomain(e.target.value)}
-                  placeholder="领域"
-                  className="w-32 px-3 py-1.5 text-xs rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] outline-none focus:border-teal-500"
-                />
-              </div>
-            )}
             {error && <div className="text-xs text-[var(--color-danger)]">{error}</div>}
             <div className="flex items-center justify-between gap-3">
               <span className="text-[11px] text-[var(--color-text-tertiary)]">
                 {discarded ? '该草稿已废弃，不可应用（可重新生成草稿）'
+                  : missingTarget ? '该草稿未绑定目标本体，无法落地'
                   : `已勾选 ${selected.size} / ${allItems.length} 项（冲突项不可选，应用时自动跳过）`}
               </span>
               <div className="flex items-center gap-2 shrink-0">
@@ -503,12 +488,11 @@ export default function DraftReviewDrawer({ draft, onClose, onApplied, onDiscard
                 )}
                 <button
                   onClick={apply}
-                  disabled={busy || discarded}
+                  disabled={busy || discarded || missingTarget}
                   className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-medium text-white bg-teal-600 hover:bg-teal-700 disabled:opacity-50"
                 >
                   {busy && <Loader2 size={12} className="animate-spin" />}
-                  {draft.appliedOntologyId ? '再次应用（合并进同一本体）'
-                    : draft.targetOntologyId ? '应用到本体' : '新建本体并应用'}
+                  {draft.appliedOntologyId ? '再次应用（合并进同一本体）' : '应用到本体'}
                 </button>
               </div>
             </div>

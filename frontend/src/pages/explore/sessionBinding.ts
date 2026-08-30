@@ -16,6 +16,22 @@ export function parseSessionBinding(params: Pick<URLSearchParams, 'get'>): Sessi
   return { ontologyId, versionId }
 }
 
+/** 工作台视图锚点：/explore?view=canvas|model|mapping|docs。 */
+export const EXPLORE_VIEWS = [
+  { id: 'canvas', label: '业务场景' },
+  { id: 'model', label: '本体模型' },
+  { id: 'mapping', label: '数据映射' },
+  { id: 'docs', label: '需求文档' },
+] as const
+
+export type ExploreView = (typeof EXPLORE_VIEWS)[number]['id']
+
+/** 解析视图参数：缺省或非法值回落到业务场景视图。 */
+export function parseExploreView(params: Pick<URLSearchParams, 'get'>): ExploreView {
+  const raw = (params.get('view') || '').trim()
+  return (EXPLORE_VIEWS.some(v => v.id === raw) ? raw : 'canvas') as ExploreView
+}
+
 /**
  * 「业务澄清」入口锚点：/explore?session=new。
  * 表示用户从其他页面（如本体管理首卡）显式要求开启一个新会话：

@@ -71,7 +71,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const navItems = visibleNavigation(user)
 
   const isActive = (to: string) => location.pathname === to || location.pathname.startsWith(to + '/')
-  const isGroupActive = (item: PlatformNavItem) => isActive(item.to) || (item.subItems?.some(s => isActive(s.to)) ?? false)
+  // 分组激活按全量菜单项判定（含 hiddenFromNavigation 项）：落在隐藏子项页面
+  // （如 /explore 在线配置工作台）时所属分组仍应展开以保持方位感；
+  // 与 isGroupStillActive 的全量口径一致，可见性只控制渲染。
+  const isGroupActive = (item: PlatformNavItem) => {
+    if (isActive(item.to)) return true
+    const fullItem = PLATFORM_NAV_ITEMS.find(candidate => candidate.key === item.key)
+    return fullItem?.subItems?.some(sub => isActive(sub.to)) ?? false
+  }
   // 点击 Logo 与“折叠起来”共用同一套开关：桌面端收起/展开侧边栏，移动端关闭抽屉
   const toggleSidebar = () => {
     if (window.innerWidth < 768) {

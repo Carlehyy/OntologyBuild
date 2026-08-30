@@ -324,8 +324,9 @@ test('complete branch → real-data trial → reviewed release works in the brow
   const draftRow = page.getByTestId('version-node-v0.1')
   await expect(draftRow).toContainText('草稿态')
   await expect(draftRow).not.toContainText('真实湖数据隔离试跑')
-  await expect(draftRow.getByRole('button', { name: '打开编辑器' })).toBeVisible()
-  await expect(draftRow.getByRole('button', { name: '数据映射' })).toBeVisible()
+  await expect(draftRow.getByRole('button', { name: '在线配置' })).toBeVisible()
+  await expect(draftRow.getByRole('button', { name: '打开编辑器' })).toHaveCount(0)
+  await expect(draftRow.getByRole('button', { name: '数据映射' })).toHaveCount(0)
   await expect(draftRow.getByRole('button', { name: 'v0.1 更多操作' })).toBeVisible()
 
   // 版本操作菜单互斥展开：切换到另一个版本时，前一个菜单必须立即收起。
@@ -354,9 +355,11 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await deleteDialog.getByRole('button', { name: '删除此分支' }).click()
   await expect(page.getByTestId('version-node-v0.2')).toHaveCount(0)
 
-  // 草稿映射快照使用 camelCase DTO；工作台必须完整回显，不能误判为空后覆盖。
-  await draftRow.getByRole('button', { name: '数据映射' }).click()
-  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=${draft.id}&view=mapping`))
+  // 草稿的「在线配置」统一进入业务澄清工作台；数据映射在「数据映射」视图中完成。
+  await draftRow.getByRole('button', { name: '在线配置' }).click()
+  await expect(page).toHaveURL(new RegExp(`/explore\\?ontologyId=${ontology.id}&versionId=${draft.id}`))
+  await page.getByTestId('explore-view-mapping').click()
+  await expect(page).toHaveURL(new RegExp(`/explore\\?ontologyId=${ontology.id}&versionId=${draft.id}&view=mapping`))
   const mappingWorkspaceBox = await page.getByTestId('mapping-workspace').boundingBox()
   const tutorialCardBox = await page.locator('.dmc-tutorial-card').boundingBox()
   expect(mappingWorkspaceBox).toBeTruthy()
@@ -433,7 +436,8 @@ test('complete branch → real-data trial → reviewed release works in the brow
   await expect(page.getByTestId('mapping-dataset-preview')).toHaveCount(0)
 
   await page.getByRole('button', { name: '模型结构', exact: true }).click()
-  await expect(page).toHaveURL(new RegExp(`/ontologies/${ontology.id}/graph\\?versionId=${draft.id}$`))
+  await expect(page).toHaveURL(new RegExp(`/explore\\?ontologyId=${ontology.id}&versionId=${draft.id}&view=model`))
+  await expect(page.getByTestId('graph-workspace-stage')).toContainText('草稿', { timeout: 20_000 })
   await page.goto(`/#/ontologies/${ontology.id}`)
   await page.getByRole('button', { name: '查看历史版本' }).click()
   await expect(page.getByTestId('version-tree')).toBeVisible()

@@ -275,6 +275,12 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
     navigate(`/ontologies/${ontologyId}/graph?versionId=${node.id}&view=mapping`)
   }
 
+  // 草稿版本的统一配置入口：业务澄清页（在线配置工作台）
+  const openOnlineConfig = (node: VersionNode) => {
+    onClose?.()
+    navigate(`/explore?ontologyId=${ontologyId}&versionId=${node.id}`)
+  }
+
   const createDraft = useMutation({
     mutationFn: () => {
       const recovery = source!.node_kind === 'release' && source!.id !== currentReleaseId
@@ -475,11 +481,8 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                   <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.trial} loading={runTrial.isPending} onClick={() => runTrial.mutate(node)}>
                     转为试跑态
                   </Button>
-                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.editor} onClick={() => openVersion(node)}>
-                    打开编辑器
-                  </Button>
-                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.mapping} onClick={() => openMapping(node)}>
-                    <Database size={14} /> 数据映射
+                  <Button variant="outline" size="sm" className={VERSION_ACTION_BUTTON.editor} data-testid="online-config-button" onClick={() => openOnlineConfig(node)}>
+                    <Compass size={14} /> 在线配置
                   </Button>
                 </>
               ) : trial ? (

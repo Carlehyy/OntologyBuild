@@ -431,7 +431,8 @@ test.describe('业务探索图表与图片交互', () => {
 
   test('需求文档历史版本与详情标题栏的分割线保持水平对齐', async ({ page }) => {
     await page.getByRole('button', { name: '查看需求文档' }).click()
-    await expect(page.getByRole('dialog', { name: '需求文档' })).toBeVisible()
+    await expect(page.getByTestId('requirements-view')).toBeVisible()
+    await expect(page.getByTestId('explore-view-docs')).toHaveAttribute('aria-pressed', 'true')
 
     const [historyHeader, detailHeader] = await Promise.all([
       page.getByTestId('requirements-history-header').boundingBox(),

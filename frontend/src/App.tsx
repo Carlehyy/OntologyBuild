@@ -158,11 +158,11 @@ export default function App() {
           <Route path="/pipelines" element={<Navigate to="/data/pipelines" replace />} />
           <Route path="/pipelines/*" element={<Navigate to="/data/pipelines" replace />} />
 
-          {/* ── 本体建模（对话式业务建模 → 需求文档 → 本体草稿） ── */}
+          {/* ── 业务澄清（草稿版本在线配置工作台；入口在本体详情页版本演进，导航中隐藏） ── */}
           <Route path="/explore" element={<ProtectedRoute><ExplorationPage /></ProtectedRoute>} />
 
-          {/* 本体模型（一级导航域）— 本体建模/本体管理为子菜单，本体网络待建设 */}
-          <Route path="/ontology-model" element={<Navigate to="/explore" replace />} />
+          {/* 本体模型（一级导航域）— 本体管理/本体网络为可见子菜单 */}
+          <Route path="/ontology-model" element={<Navigate to="/ontologies" replace />} />
           <Route path="/ontology-model/network" element={<ProtectedRoute><OntologyNetworkPage /></ProtectedRoute>} />
 
           {/* 世界模型（演化层）— 一级导航域；推演模型/推演服务/调用记录为独立页面；旧 /ontologies/world-model/* 路径保留重定向 */}

@@ -70,7 +70,7 @@ const draftResponse = (report: Record<string, unknown>) => ({
   id: 'draft-1',
   sessionId: 's1',
   documentId: 'doc-1',
-  targetOntologyId: null,
+  targetOntologyId: 'ont-1',
   draft: {
     objectTypes: [],
     linkTypes: [],
@@ -121,6 +121,8 @@ async function mockExplore(
         status: 'active',
         createdAt: '',
         updatedAt: '',
+        ontologyId: 'ont-1',
+        ontologyVersionId: 'ver-1',
       }])
     }
     if (path === '/api/v2/exploration/sessions/s1' && request.method() === 'GET') {
@@ -131,6 +133,8 @@ async function mockExplore(
         status: 'active',
         createdAt: '',
         updatedAt: '',
+        ontologyId: 'ont-1',
+        ontologyVersionId: 'ver-1',
         canvas: emptyCanvas,
         completeness: {
           counts: { objects: 1, actors: 0, behaviors: 0, events: 0, rules: 0, processes: 0, scenarios: 0 },
@@ -138,6 +142,16 @@ async function mockExplore(
         },
         readiness: ready,
         messages: [],
+      })
+    }
+    if (path === '/api/v2/ontologies/ont-1' && request.method() === 'GET') {
+      return ok(route, { id: 'ont-1', name: '订单本体' })
+    }
+    if (path === '/api/v2/ontologies/ont-1/version-tree' && request.method() === 'GET') {
+      return ok(route, {
+        versions: [{ id: 'ver-1', version_number: 'v0.1' }],
+        current_release_id: 'rel-1',
+        current_release_version: 'v0',
       })
     }
     if (path === '/api/v2/exploration/sessions/s1/attachments') return ok(route, [])
@@ -155,7 +169,8 @@ async function mockExplore(
 
   await page.goto('/#/explore', { waitUntil: 'domcontentloaded' })
   await page.getByTestId('requirements-document-button').click()
-  await expect(page.getByRole('dialog', { name: '需求文档' })).toBeVisible()
+  await expect(page.getByTestId('requirements-view')).toBeVisible()
+  await expect(page.getByTestId('explore-view-docs')).toHaveAttribute('aria-pressed', 'true')
 }
 
 test.describe('业务探索文档转化风险', () => {
