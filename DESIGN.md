@@ -48,12 +48,13 @@ description: >-
 | `--primary` | `#1a1a2e` | `#e6e9ef` | 主按钮/主操作 |
 | `--muted-foreground` | `#5a5a72` | `#98a2b3` | 次要文字 |
 | `--border` | `#e2e4e9` | `#2a3342` | 发丝边框 |
-| `--ring` | `#0d9488` | `#14b8a6` | 焦点环/强调 |
+| `--ring` | `#059669` | `#3ecf8e` | 焦点环/强调 |
 
-### 2.2 平台强调色（teal 系）
+### 2.2 平台强调色（emerald 系，源自 Supabase 祖母绿）
 
-- 品牌强调：teal `#0d9488`（浅）/ `#14b8a6`（深），用于导航底色
-  （`--color-nav-bg`）、焦点环、选中态、图表主序列。
+- 品牌强调：emerald `#059669`（浅）/ `#3ecf8e`（深，Supabase 祖母绿原值），
+  用于导航底色（`--color-nav-bg`）、焦点环、选中态、图表主序列；浅档取
+  emerald-600 以维持浅底 3:1 对比度（与历史 teal 同级），暗底直接用原值。
 - 使用纪律：强调色是「信号」不是「装饰」——同一视图只给最重要的元素。
 
 ### 2.3 语义色
@@ -113,10 +114,13 @@ success `--color-success #2d8a4e` · warning `#c9861a` · danger
 分类序列色板（按序轮转，勿在页面重排）：
 
 ```
-CHART_TEAL #0D9488 · CHART_BLUE #3B82F6 · CHART_VIOLET #8B5CF6 · CHART_AMBER #F59E0B
+CHART_TEAL #059669 · CHART_BLUE #3B82F6 · CHART_VIOLET #8B5CF6 · CHART_AMBER #F59E0B
 CHART_RED #F43F5E · CHART_EMERALD #10B981 · CHART_INDIGO #6366F1 · CHART_ORANGE #F97316
 CHART_CYAN #14B8A6 · CHART_PINK #EC4899      （扩展位：CHART_SKY #0EA5E9）
 ```
+
+CHART_TEAL 为历史导出名，取值已随品牌强调切换为 emerald-600；与序列位 6
+的 CHART_EMERALD 同族但明度可区分，多序列图避免相邻使用两者表达不同语义。
 
 文本/轴/网格：`CHART_TEXT #64748B` · `CHART_TEXT_STRONG #334155` ·
 `CHART_AXIS #CBD5E1` · `CHART_SPLIT #F1F5F9`；紧凑图的半透明轴线/虚线网格用

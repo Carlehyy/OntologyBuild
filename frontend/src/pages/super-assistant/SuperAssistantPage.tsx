@@ -469,7 +469,7 @@ export default function SuperAssistantPage() {
         <ConfigProvider
           theme={{
             algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
-            token: { colorPrimary: '#0d9488', colorLink: '#0d9488' },
+            token: { colorPrimary: '#059669', colorLink: '#059669' },
           }}
         >
           <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden">

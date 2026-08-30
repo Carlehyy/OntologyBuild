@@ -31,7 +31,7 @@
   --destructive-foreground: #ffffff;
   --border: #e2e4e9;
   --input: #e2e4e9;
-  --ring: #0d9488;
+  --ring: #059669;
 
   /* ── 浮层/焦点环别名（衔接 shadcn 语义变量与 var(--color-*) 用法） ── */
   --color-popover: var(--popover);
@@ -45,8 +45,8 @@
   --color-primary-active: #0f3460;
   --color-primary-light: #e8eaf6;
 
-  --color-nav-bg: #0d9488;
-  --color-nav-light: #ccfbf1;
+  --color-nav-bg: #059669;
+  --color-nav-light: #d1fae5;
 
   /* ── 背景 ── */
   --color-bg-base: var(--background);
@@ -160,14 +160,14 @@
   --destructive-foreground: #ffffff;
   --border: #2a3342;
   --input: #2a3342;
-  --ring: #14b8a6;
+  --ring: #3ecf8e;
 
   /* ── 主色（项目扩展） ── */
   --color-primary-hover: #f4f6fa;
   --color-primary-active: #cbd3de;
   --color-primary-light: #26303e;
 
-  --color-nav-light: #123f39;
+  --color-nav-light: #022c22;
 
   /* ── 背景 ── */
   --color-bg-elevated: #161c26;

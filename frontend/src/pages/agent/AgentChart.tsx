@@ -35,7 +35,7 @@ export interface ChartSpec {
 
 // ---------- 常量 / 工具 ----------
 
-const PALETTE = ['#0d9488', '#0284c7', '#f59e0b', '#7c3aed', '#e11d48', '#15803d', '#0891b2', '#db2777']
+const PALETTE = ['#059669', '#0284c7', '#f59e0b', '#7c3aed', '#e11d48', '#15803d', '#0891b2', '#db2777']
 const AXIS = 'var(--color-text-tertiary)'
 const GRID = 'var(--color-border)'
 

@@ -30,7 +30,7 @@ interface RecentOntology {
   entity_count?: number; logic_count?: number; action_count?: number; updated_at?: string
 }
 
-const DOMAIN_COLORS = ['#0891b2', '#d97706', '#6366f1', '#0d9488', '#16a34a', '#e11d48']
+const DOMAIN_COLORS = ['#0891b2', '#d97706', '#6366f1', '#059669', '#16a34a', '#e11d48']
 const seedSpark = (seed: number, n = 14) =>
   Array.from({ length: n }, (_, i) => 40 + 30 * Math.sin(seed + i * 0.7) + 14 * Math.sin(seed * 2 + i * 1.9))
 
@@ -123,7 +123,7 @@ function QualityRadar({ items }: { items: { label: string; value: number; color:
         <defs>
           <radialGradient id="qualityRadarFill" cx="50%" cy="50%" r="58%">
             <stop offset="0%" stopColor="#0891b2" stopOpacity="0.3" />
-            <stop offset="100%" stopColor="#0d9488" stopOpacity="0.04" />
+            <stop offset="100%" stopColor="#059669" stopOpacity="0.04" />
           </radialGradient>
           <filter id="qualityRadarGlow" x="-40%" y="-40%" width="180%" height="180%">
             <feGaussianBlur stdDeviation="2.4" result="blur" />
@@ -199,13 +199,13 @@ export default function OverviewPage() {
   const ingestSources = [
     { n: 'MySQL · 供应商库', p: 94, c: '#16a34a', m: 'p95 42ms', d: '-6%' },
     { n: 'API · 采购系统', p: 71, c: '#0891b2', m: '2 待映射', d: '+2' },
-    { n: 'Kafka · 事件流', p: 88, c: '#0d9488', m: '1.3K/s', d: '+11%' },
+    { n: 'Kafka · 事件流', p: 88, c: '#059669', m: '1.3K/s', d: '+11%' },
     { n: 'S3 · 归档数据湖', p: 82, c: '#6366f1', m: '批次 18', d: '+4%' },
   ]
   const qualitySignals = [
     { label: '完整', value: 96, color: '#16a34a', delta: '+1.8' },
     { label: '准确', value: 91, color: '#0891b2', delta: '+0.9' },
-    { label: '一致', value: 89, color: '#0d9488', delta: '-0.4' },
+    { label: '一致', value: 89, color: '#059669', delta: '-0.4' },
     { label: '时效', value: 94, color: '#6366f1', delta: '+2.1' },
     { label: '血缘', value: 87, color: '#d97706', delta: '+3.6' },
   ]
@@ -218,7 +218,7 @@ export default function OverviewPage() {
   /* 五段流程：左2=数据治理 · 中=本体图谱枢纽 · 右2=业务治理 */
   const flowStages: FlowStage[] = [
     { key: 'collect', zh: '数据采集', en: 'COLLECT', Icon: RadioTower, color: '#0891b2', main: windowMeta.ingest, mainLabel: windowMeta.short, metric: `${windowMeta.compare} +12%`, to: '/data' },
-    { key: 'model', zh: '本体建模', en: 'MODEL', Icon: Network, color: '#0d9488', main: <AnimatedNumber value={stats.ontology_count} />, mainLabel: '本体项目', metric: `${windowMeta.short} +2 版本`, to: '/ontologies' },
+    { key: 'model', zh: '本体建模', en: 'MODEL', Icon: Network, color: '#059669', main: <AnimatedNumber value={stats.ontology_count} />, mainLabel: '本体项目', metric: `${windowMeta.short} +2 版本`, to: '/ontologies' },
     { key: 'graph', zh: '图谱实例', en: 'GRAPH', Icon: Boxes, color: '#6366f1', main: <AnimatedNumber value={entities} />, mainLabel: '实体节点', metric: `净增 ${entityDelta} 节点`, to: '/ontologies' },
     { key: 'analyze', zh: '智能分析', en: 'ANALYZE', Icon: Brain, color: '#d97706', main: <AnimatedNumber value={ruleHitsWindow} />, mainLabel: '规则命中', metric: `${windowMeta.compare} +8%`, to: '/agent' },
     { key: 'decide', zh: '智能决策', en: 'DECIDE', Icon: Target, color: '#e11d48', main: <AnimatedNumber value={tele.decisions} duration={600} />, mainLabel: '决策/分', metric: '自动 70%', to: '/agent' },
@@ -236,7 +236,7 @@ export default function OverviewPage() {
   const kpis: { label: string; value: string; suffix?: string; icon: React.ElementType; color: string; trend: string; trendTone?: DeltaTone; tag?: string; to?: string; testId?: string }[] = [
     { label: '治理健康', value: health, suffix: '', icon: ShieldCheck, color: '#16a34a', trend: '+1.2%' },
     { label: '数据质量', value: '92.6', suffix: '%', icon: Database, color: '#0891b2', trend: '+0.8%' },
-    { label: '规则覆盖', value: String(coverage), suffix: '%', icon: Workflow, color: '#0d9488', trend: '+3.1%' },
+    { label: '规则覆盖', value: String(coverage), suffix: '%', icon: Workflow, color: '#059669', trend: '+3.1%' },
     { label: '待办审批', value: String(pendingApprovals), suffix: '', icon: CheckCircle2, color: '#d97706', trend: '-2', trendTone: 'good', tag: '待处理', to: '/data/pipelines/steward', testId: 'overview-kpi-approvals' },
     { label: '决策执行', value: String(decisionsWindow), suffix: '', icon: Target, color: '#6366f1', trend: '+18' },
     { label: '异常告警', value: String(anomalies), suffix: '', icon: AlertTriangle, color: '#dc2626', trend: '-2', trendTone: 'good', tag: '去处理', to: '/data' },
@@ -339,7 +339,7 @@ export default function OverviewPage() {
               <Sparkline data={seedSpark(9, 16)} color="#0891b2" width={86} height={34} />
             </div>
             <div className="grid grid-cols-3 gap-2 mt-2.5">
-              {[{ l: '活跃源', v: 9, c: '#0891b2', d: '+1' }, { l: '接入', v: windowMeta.ingest, c: '#0d9488', d: '+12%' }, { l: '待映射', v: 2, c: '#d97706', d: '-2' }].map((s) => (
+              {[{ l: '活跃源', v: 9, c: '#0891b2', d: '+1' }, { l: '接入', v: windowMeta.ingest, c: '#059669', d: '+12%' }, { l: '待映射', v: 2, c: '#d97706', d: '-2' }].map((s) => (
                 <div key={s.l} className="rounded-lg px-2 py-1.5" style={{ background: 'rgba(15,23,42,0.035)', border: '1px solid rgba(15,23,42,0.08)' }}>
                   <div className="text-[14px] font-semibold ck-num" style={{ color: s.c }}>{s.v}</div>
                   <div className="flex items-center justify-between gap-0.5">
@@ -399,7 +399,7 @@ export default function OverviewPage() {
                   <span className="ck-label text-[9px]">规则活跃波形 · {windowMeta.short} SIGNAL</span>
                   <div className="flex items-center gap-3 text-[8.5px] ck-mono text-[#a0a8b8]">
                     <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{ background: '#0891b2' }} />采集</span>
-                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{ background: '#0d9488' }} />分析</span>
+                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{ background: '#059669' }} />分析</span>
                     <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full" style={{ background: '#d97706' }} />决策</span>
                   </div>
                 </div>
@@ -408,7 +408,7 @@ export default function OverviewPage() {
             </div>
             <div className="grid grid-cols-5 border-t border-[rgba(15,23,42,0.09)] shrink-0">
               {[
-                { l: '实体净增', v: <AnimatedNumber value={entityDelta} />, c: '#0d9488', s: `${windowMeta.compare} +9%` },
+                { l: '实体净增', v: <AnimatedNumber value={entityDelta} />, c: '#059669', s: `${windowMeta.compare} +9%` },
                 { l: '关系净增', v: <AnimatedNumber value={relationDelta} />, c: '#6366f1', s: `${windowMeta.compare} +14%` },
                 { l: '领域活跃', v: <AnimatedNumber value={domains.length} />, c: '#d97706', s: `${windowMeta.short}` },
                 { l: '规则命中', v: <AnimatedNumber value={ruleHitsWindow} />, c: '#16a34a', s: `${windowMeta.compare} +8%` },

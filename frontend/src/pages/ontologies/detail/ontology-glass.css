@@ -16,7 +16,7 @@
   --onto-accent: #1a1a2e;
   --onto-accent-hover: #16213e;
   --onto-accent-soft: #e8eaf6;
-  --onto-accent-teal: var(--color-nav-bg);       /* #0d9488，深浅主题一致 */
+  --onto-accent-teal: var(--color-nav-bg);       /* #059669，深浅主题一致 */
 
   /* 玻璃专用 token（中性冷调阴影，呼应灰白底） */
   --glass-bg: rgba(255, 255, 255, 0.66);

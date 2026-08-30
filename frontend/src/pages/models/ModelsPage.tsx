@@ -465,7 +465,7 @@ export default function ModelsPage() {
                       }}
                       title={enabled ? '点击停用' : '点击启用'}
                       className="relative shrink-0 w-[38px] h-[22px] rounded-full transition-colors"
-                      style={{ background: enabled ? '#0d9488' : '#cbd2dc' }}
+                      style={{ background: enabled ? '#059669' : '#cbd2dc' }}
                     >
                       <span
                         className="absolute top-0.5 w-[18px] h-[18px] rounded-full bg-white shadow transition-all"

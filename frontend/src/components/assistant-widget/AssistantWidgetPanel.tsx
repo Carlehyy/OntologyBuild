@@ -203,8 +203,8 @@ export default function AssistantWidgetPanel() {
       theme={{
         algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
         token: {
-          colorPrimary: '#0d9488',
-          colorLink: '#0d9488',
+          colorPrimary: '#059669',
+          colorLink: '#059669',
           borderRadius: 8,
           // 面板层级按 widgetAnchor 分级（常规 z-40 / 全屏图谱页 z-[10000]）；
           // 面板内的 antd 浮层（历史会话 Popover 等）统一抬到面板之上

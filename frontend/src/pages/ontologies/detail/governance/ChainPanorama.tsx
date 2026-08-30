@@ -132,7 +132,7 @@ function ChainColumnHeader({ data }: NodeProps<Node<{ label: string; count: numb
    高亮时流动加快,压暗时静止;prefers-reduced-motion 下粒子隐藏。 */
 function ChainFlowEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data }: EdgeProps<Edge<ChainEdgeData>>) {
   const [path] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
-  const stroke = data?.stroke ?? '#0d9488'
+  const stroke = data?.stroke ?? '#059669'
   const highlighted = Boolean(data?.highlighted)
   const dimmed = Boolean(data?.dimmed)
   const dur = highlighted ? '1.6s' : '2.8s'
@@ -173,7 +173,7 @@ const nodeTypes = { chainNode: ChainNodeCard, chainHeader: ChainColumnHeader }
 const edgeTypes = { chainFlow: ChainFlowEdge }
 
 const EDGE_STYLE: Record<ChainEdge['kind'], { stroke: string; dash?: string }> = {
-  flow: { stroke: '#0d9488' },
+  flow: { stroke: '#059669' },
   hit: { stroke: '#f43f5e' },
   auto: { stroke: '#94a3b8', dash: '5 4' },
 }
