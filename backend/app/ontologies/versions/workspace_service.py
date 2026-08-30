@@ -208,8 +208,18 @@ def _snapshot_formal(db: Session, ontology_id: str) -> dict:
     return release_service.collect_publishable_snapshot(db, ontology_id)
 
 
+_DIFF_NAME_CAP = 10
+
+
+def _diff_names(items: list[dict]) -> list[str]:
+    """从快照元素列表提取可读名称（有界截断，供审计 diff 使用）。"""
+    names = [str(i.get("name") or i.get("displayName") or i.get("id") or "?")
+             for i in items]
+    return names[:_DIFF_NAME_CAP]
+
+
 def _diff_formal(prev: dict | None, curr: dict) -> dict:
-    """按 id 对比两个正规模型快照，输出各集合的 added/modified/deleted 计数。"""
+    """按 id 对比两个正规模型快照，输出各集合的 added/modified/deleted 计数与名称。"""
     prev = prev or {}
     out: dict = {}
     total_added = total_modified = total_deleted = 0
@@ -221,13 +231,21 @@ def _diff_formal(prev: dict | None, curr: dict) -> dict:
         curr_items = {i["id"]: i for i in (curr.get(key) or [])}
         added = len(curr_items.keys() - prev_items.keys())
         deleted = len(prev_items.keys() - curr_items.keys())
-        modified = 0
+        modified_items: list[dict] = []
         for iid in curr_items.keys() & prev_items.keys():
             a = {k: v for k, v in prev_items[iid].items() if k not in ("createdAt", "updatedAt")}
             b = {k: v for k, v in curr_items[iid].items() if k not in ("createdAt", "updatedAt")}
             if a != b:
-                modified += 1
-        out[key] = {"added": added, "modified": modified, "deleted": deleted}
+                modified_items.append(curr_items[iid])
+        modified = len(modified_items)
+        out[key] = {
+            "added": added,
+            "modified": modified,
+            "deleted": deleted,
+            "addedNames": _diff_names([curr_items[i] for i in curr_items.keys() - prev_items.keys()]),
+            "modifiedNames": _diff_names(modified_items),
+            "deletedNames": _diff_names([prev_items[i] for i in prev_items.keys() - curr_items.keys()]),
+        }
         total_added += added; total_modified += modified; total_deleted += deleted
     out["total"] = {"added": total_added, "modified": total_modified, "deleted": total_deleted}
     return out
