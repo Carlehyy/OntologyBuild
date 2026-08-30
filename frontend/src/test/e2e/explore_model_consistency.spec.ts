@@ -155,6 +155,7 @@ const ok = (route: Route, data: unknown, status = 200) => route.fulfill({
 interface MockState {
   trialStarted: boolean
   trialFails422: boolean
+  noSemanticLayer: boolean
   versionTreeReads: number
   workspaceReads: number
   chatMessages: string[]
@@ -233,6 +234,20 @@ async function mockExploreModel(page: Page, state: MockState) {
       })
     }
     if (path === `/api/v2/ontologies/${ontologyId}/versions/${draftVersionId}/semantic`) {
+      if (state.noSemanticLayer) {
+        return ok(route, {
+          semantic: null,
+          overview: {
+            hasSemanticLayer: false,
+            documentTitle: null,
+            documentStale: false,
+            canvasCounts: { objects: 0, actors: 0, behaviors: 0, events: 0, rules: 0, scenarios: 0, processes: 0 },
+            structureCounts: { objectTypes: 1, linkTypes: 0, actions: 0, functions: 0, sentinels: 0 },
+            consistency: { issueCount: 0, byCode: {} },
+          },
+          issues: [],
+        })
+      }
       return ok(route, semanticResponse)
     }
     if (path === `/api/v2/ontologies/${ontologyId}/versions/${draftVersionId}/workspace`) {
@@ -282,6 +297,7 @@ async function mockExploreModel(page: Page, state: MockState) {
 const newState = (overrides: Partial<MockState> = {}): MockState => ({
   trialStarted: false,
   trialFails422: false,
+  noSemanticLayer: false,
   versionTreeReads: 0,
   workspaceReads: 0,
   chatMessages: [],
@@ -331,6 +347,23 @@ test.describe('业务澄清 · 本体模型一致性面板与试跑预检', () =
     expect(message).not.toContain('需求文档「需求文档」')
     await expect(page.getByText(/我在本体模型中做了人工修改/)).toBeVisible()
     await expect(page.getByText('已复述理解并同步画布', { exact: true })).toBeVisible()
+  })
+
+  test('未沉淀语义层的版本不误报「一致」，展开后引导生成需求文档', async ({ page }) => {
+    await mockExploreModel(page, newState({ noSemanticLayer: true }))
+
+    // 无语义层 ≠ 零漂移：不出现漂移角标，也不显示「一致」
+    await expect(page.getByTestId('explore-model-drift-badge')).toHaveCount(0)
+    await page.getByTestId('explore-view-model').click()
+    await expect(page.getByTestId('consistency-status-badge')).toHaveText('未沉淀语义层')
+
+    await page.getByTestId('consistency-panel-toggle').click()
+    await expect(page.getByTestId('consistency-panel')).toContainText('语义层在「生成本体模型」落地时沉淀')
+    await expect(page.getByTestId('back-translate-button')).toHaveCount(0)
+
+    // 引导跳转到需求文档视图
+    await page.getByTestId('goto-docs-no-semantic').click()
+    await expect(page.getByTestId('explore-view-docs')).toHaveAttribute('aria-pressed', 'true')
   })
 
   test('预检弹窗列出权威门禁，确认后发起试跑并展示试跑结果', async ({ page }) => {
