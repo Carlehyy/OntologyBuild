@@ -282,13 +282,14 @@ def save_canvas_layout(
 @router.put("/{ontology_id}/versions/{version_id}/workspace")
 def save_draft_workspace(
     ontology_id: str, version_id: str, body: dict,
-    db: Session = Depends(get_db), _=Depends(get_current_user),
+    db: Session = Depends(get_db), current_user=Depends(get_current_user),
 ):
     return workspace_service.save_draft_workspace(
         db,
         ontology_id,
         version_id,
         body,
+        current_user,
         _raise_publish_errors=_raise_publish_errors,
         _stale_previous_trials=_stale_previous_trials,
     )
@@ -304,13 +305,14 @@ def get_draft_mappings(
 @router.put("/{ontology_id}/versions/{version_id}/workspace/mappings")
 def save_draft_mappings(
     ontology_id: str, version_id: str, body: dict,
-    db: Session = Depends(get_db), _=Depends(get_current_user),
+    db: Session = Depends(get_db), current_user=Depends(get_current_user),
 ):
     return workspace_service.save_draft_mappings(
         db,
         ontology_id,
         version_id,
         body,
+        current_user,
         _raise_publish_errors=_raise_publish_errors,
         _stale_previous_trials=_stale_previous_trials,
     )
@@ -339,6 +341,7 @@ def get_version_semantic(
         ontology_id,
         version_id,
         semantic_overview_fn=semantic_overview,
+        semantic_consistency_fn=semantic_consistency_issues,
     )
 
 
@@ -410,6 +413,26 @@ def create_trial_run(
         _trial_lease_deadline=_trial_lease_deadline,
         _trial_materialization_candidate=_trial_materialization_candidate,
         _trial_payload=_trial_payload,
+        _validate_sentinels=_validate_sentinels,
+        semantic_consistency_fn=semantic_consistency_issues,
+    )
+
+
+@router.post("/{ontology_id}/versions/{version_id}/trial-preflight")
+def trial_preflight(
+    ontology_id: str, version_id: str,
+    db: Session = Depends(get_db), _=Depends(get_current_user),
+):
+    """试跑前只读预检：复用试跑门禁逐项汇总，不创建试跑记录、不写库。"""
+    return trial_service.trial_preflight(
+        db,
+        ontology_id,
+        version_id,
+        _active_trial_run=_active_trial_run,
+        _current_release=_current_release,
+        _ensure_editable_draft=_ensure_editable_draft,
+        _raise_trial_already_running=_raise_trial_already_running,
+        _snapshot_sentinel_models=_snapshot_sentinel_models,
         _validate_sentinels=_validate_sentinels,
         semantic_consistency_fn=semantic_consistency_issues,
     )

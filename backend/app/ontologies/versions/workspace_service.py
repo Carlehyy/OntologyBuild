@@ -770,6 +770,7 @@ def save_draft_workspace(
     ontology_id: str,
     version_id: str,
     body: dict,
+    current_user: Any,
     *,
     _raise_publish_errors,
     _stale_previous_trials,
@@ -801,6 +802,8 @@ def save_draft_workspace(
         db, ontology_id, candidate.get("sentinels"),
     ))
     _raise_publish_errors(errors, "草稿结构校验未通过")
+    # 审计 diff 必须在替换快照前计算，否则 prev/curr 相同、差异永远为空。
+    diff = _diff_formal(draft.snapshot_formal, candidate)
     draft.snapshot_formal = candidate
     valid_layout_ids = _canvas_node_ids(candidate)
     previous_layout = draft.canvas_layout if isinstance(draft.canvas_layout, dict) else {}
@@ -823,6 +826,22 @@ def save_draft_workspace(
     draft.snapshot_hash = snapshot_hash(candidate)
     draft.lifecycle_status = "editing"
     _stale_previous_trials(db, draft)
+    db.add(AuditLog(
+        id=str(uuid.uuid4()), ontology_id=ontology_id,
+        event_type="edit", event_subtype="workspace_saved",
+        user_id=current_user.id, user_name=current_user.username,
+        description=(
+            f"保存草稿 {draft.version_number} 结构工作区，"
+            f"revision 推进至 {draft.revision}"
+        ),
+        object_type="ontology_version", object_id=version_id,
+        before_state=None, after_state=None,
+        meta={
+            "revision": draft.revision,
+            "snapshotHash": draft.snapshot_hash,
+            "diff": diff,
+        },
+    ))
     db.commit()
     return {"data": {
         "revision": f"{draft.revision}:{draft.snapshot_hash}",
@@ -855,6 +874,7 @@ def save_draft_mappings(
     ontology_id: str,
     version_id: str,
     body: dict,
+    current_user: Any,
     *,
     _raise_publish_errors,
     _stale_previous_trials,
@@ -890,11 +910,29 @@ def save_draft_mappings(
         sentinel_errors,
         "建模内置哨兵字段校验未通过",
     )
+    # 审计 diff 必须在替换快照前计算，否则 prev/curr 相同、差异永远为空。
+    diff = _diff_formal(draft.snapshot_formal, snap)
     draft.snapshot_formal = snap
     draft.revision = (draft.revision or 0) + 1
     draft.snapshot_hash = snapshot_hash(snap)
     draft.lifecycle_status = "editing"
     _stale_previous_trials(db, draft)
+    db.add(AuditLog(
+        id=str(uuid.uuid4()), ontology_id=ontology_id,
+        event_type="edit", event_subtype="workspace_mappings_saved",
+        user_id=current_user.id, user_name=current_user.username,
+        description=(
+            f"保存草稿 {draft.version_number} 数据映射与哨兵，"
+            f"revision 推进至 {draft.revision}"
+        ),
+        object_type="ontology_version", object_id=version_id,
+        before_state=None, after_state=None,
+        meta={
+            "revision": draft.revision,
+            "snapshotHash": draft.snapshot_hash,
+            "diff": diff,
+        },
+    ))
     db.commit()
     return {"data": {
         "revision": f"{draft.revision}:{draft.snapshot_hash}",
@@ -940,6 +978,7 @@ def get_version_semantic(
     version_id: str,
     *,
     semantic_overview_fn,
+    semantic_consistency_fn=None,
 ):
     """读取任一版本的业务语义层快照与一致性总览（发布/草稿均可，只读）。"""
     version = db.query(OntologyVersion).filter(
@@ -952,7 +991,13 @@ def get_version_semantic(
         version.snapshot_semantic
         if isinstance(version.snapshot_semantic, dict) else None
     )
+    # 语义层尚未沉淀时不做重放比对：否则结构元素会被全部误报为
+    # semantic_business_missing（语义缺失与语义漂移是两件事）。
+    issues: list[dict] = []
+    if semantic is not None and semantic_consistency_fn is not None:
+        issues = semantic_consistency_fn(semantic, version.snapshot_formal)
     return {"data": {
         "semantic": semantic,
         "overview": semantic_overview_fn(semantic, version.snapshot_formal),
+        "issues": issues,
     }}

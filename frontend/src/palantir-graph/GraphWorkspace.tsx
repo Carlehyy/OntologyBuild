@@ -54,6 +54,10 @@ export interface GraphWorkspaceProps {
   onBackToVersions?: () => void;
   /** runtime 态「基于此版本开始修改」创建草稿成功后的回调；缺省跳转全屏编辑器路由 */
   onDraftCreated?: (versionId: string) => void;
+  /** 本工作区版本保存落库（syncStatus → 'saved'）后的回调；每次保存触发一次。
+   *  仅当 store 的 workspaceVersionId 与本组件 versionId 一致时触发，避免与
+   *  共享 store 上的其他工作区（如全屏编辑器）串扰。 */
+  onSaved?: () => void;
 }
 
 /**
@@ -69,6 +73,7 @@ export default function GraphWorkspace({
   onOpenMapping,
   onBackToVersions,
   onDraftCreated,
+  onSaved,
 }: GraphWorkspaceProps) {
   const embedded = layout === 'embedded';
   const navigate = useNavigate();
@@ -136,6 +141,23 @@ export default function GraphWorkspace({
 
   // 撤销/重做历史记录（与后端加载无关，进入编辑器即绑定）
   useEffect(() => attachHistory(), []);
+
+  // 保存成功（syncStatus 边沿进入 'saved'）通知宿主，用于失效语义一致性等派生查询。
+  // ontology store 是模块级单例：仅在保存归属本工作区版本时触发，防止跨工作区串扰。
+  const onSavedRef = useRef(onSaved);
+  onSavedRef.current = onSaved;
+  useEffect(() => {
+    if (!versionId) return;
+    return useOntologyStore.subscribe((state, prev) => {
+      if (
+        state.syncStatus === 'saved'
+        && prev.syncStatus !== 'saved'
+        && state.workspaceVersionId === versionId
+      ) {
+        onSavedRef.current?.();
+      }
+    });
+  }, [versionId]);
 
   // 快捷键：Ctrl+K 搜索 / Ctrl+Z 撤销 / Ctrl+Shift+Z·Ctrl+Y 重做 / Ctrl+S 保存
   // Delete 删除选中（带影响预览）/ Esc 关闭右侧面板。

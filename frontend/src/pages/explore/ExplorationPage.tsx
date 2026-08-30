@@ -6,10 +6,10 @@
  * 定位：服务指定本体草稿版本的集中配置，不再承担从零创建本体。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Suspense } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  Bot, Boxes, Check, CircleHelp, Compass, Copy, Download, ExternalLink, Files, FileText, GitBranch, Globe2, History, Layers, Link2, List,
+  Bot, Boxes, Check, CircleHelp, Compass, Copy, Download, ExternalLink, Files, FileText, FlaskConical, GitBranch, Globe2, History, Layers, Link2, List,
   Loader2, Paperclip, Plus, Send, Trash2, User, Wrench, X,
 } from 'lucide-react'
 import {
@@ -25,9 +25,11 @@ import { useToast } from '@/components/ui/Toast'
 import { writeTextToClipboard } from '@/utils/clipboard'
 import Md from './Md'
 import CanvasPanel from './CanvasPanel'
+import ConsistencyPanel from './ConsistencyPanel'
 import DocumentsView from './DocumentsView'
 import DraftReviewDrawer from './DraftReviewDrawer'
 import FileWorkspaceDrawer from './FileWorkspaceDrawer'
+import TrialPreflightDialog from './TrialPreflightDialog'
 import { EXPLORE_VIEWS, parseExploreView, parsePendingNewSession, parseSessionBinding, resolveBoundSession, sessionBindingKey, shouldAutoSelectLatestSession, type ExploreView } from './sessionBinding'
 import { SplitHandle, useSplitLayout } from '@/hooks/useSplitLayout'
 import { LazyGraphWorkspace, LazyMappingWorkspace } from '@/components/explore/ExploreWorkbenchViews'
@@ -215,6 +217,7 @@ const viewLoadingFallback = (
 export default function ExplorationPage() {
   const { containerRef, sizes, startResize } = useSplitLayout()
   const { toast } = useToast()
+  const queryClient = useQueryClient()
   // -- URL 绑定锚点（/explore?ontologyId=…&versionId=…，来自版本试跑门禁的补齐
   //    入口与页头「绑定本体」选择器） --
   const [searchParams, setSearchParams] = useSearchParams()
@@ -516,6 +519,25 @@ export default function ExplorationPage() {
   const workbenchOntologyId = binding?.ontologyId || currentSession?.ontologyId || null
   const workbenchVersionId = binding?.versionId || currentSession?.ontologyVersionId || null
 
+  // 绑定版本的语义一致性（本体模型视图顶部一致性面板与「本体模型」标签页漂移角标共用
+  // 缓存，queryKey 与本体详情页结构说明弹窗一致；人工保存后经 GraphWorkspace.onSaved 失效重取）
+  const { data: workbenchSemantic } = useQuery({
+    queryKey: ['ontology-structure-doc', workbenchOntologyId, workbenchVersionId],
+    queryFn: () => ontologyVersionApi.versionSemantic(workbenchOntologyId!, workbenchVersionId!),
+    enabled: Boolean(workbenchOntologyId && workbenchVersionId),
+  })
+  const semanticIssueCount = (workbenchSemantic?.issues || []).length
+
+  // 绑定版本生命周期（版本树口径）：仅 editing 草稿提供「转为试跑态」入口；
+  // 试跑成功后 lifecycle 变化会同步进 GraphWorkspace 的 key，强制重挂以按试跑态只读重读。
+  const workbenchVersionNode = boundVersionTree?.versions.find(v => v.id === workbenchVersionId) || null
+  const canEnterTrial = Boolean(
+    workbenchOntologyId && workbenchVersionId
+    && workbenchVersionNode?.node_kind === 'draft'
+    && workbenchVersionNode.lifecycle_status === 'editing',
+  )
+  const [preflightOpen, setPreflightOpen] = useState(false)
+
   const pickFiles = () => fileInputRef.current?.click()
 
   const handleFiles = async (files: FileList | null) => {
@@ -708,6 +730,15 @@ export default function ExplorationPage() {
               >
                 <Icon size={13} />
                 {item.label}
+                {item.id === 'model' && semanticIssueCount > 0 && (
+                  <span
+                    data-testid="explore-model-drift-badge"
+                    title="本体模型与业务语义存在漂移"
+                    className="inline-flex min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-semibold leading-4 text-white"
+                  >
+                    {semanticIssueCount > 99 ? '99+' : semanticIssueCount}
+                  </span>
+                )}
               </button>
             )
           })}
@@ -724,17 +755,52 @@ export default function ExplorationPage() {
           )}
           {view === 'model' && (
             workbenchOntologyId ? (
-              <Suspense fallback={viewLoadingFallback}>
-                <LazyGraphWorkspace
-                  ontologyId={workbenchOntologyId}
-                  versionId={workbenchVersionId}
-                  theme="light"
-                  layout="embedded"
-                  showHeader={false}
-                  onBackToVersions={() => navigate(`/ontologies/${workbenchOntologyId}?tab=versions`)}
-                  onDraftCreated={newVersionId => updateParams({ versionId: newVersionId })}
-                />
-              </Suspense>
+              <div className="flex h-full min-h-0 flex-col">
+                {workbenchVersionId && (
+                  <div className="shrink-0 border-b border-[var(--color-border)] bg-white px-3 py-2">
+                    <div className="flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <ConsistencyPanel
+                          ontologyId={workbenchOntologyId}
+                          versionId={workbenchVersionId}
+                          onBackTranslate={busy ? undefined : askInChat}
+                          onGotoDocs={() => updateParams({ view: 'docs' })}
+                        />
+                      </div>
+                      {canEnterTrial && (
+                        <button
+                          type="button"
+                          data-testid="explore-trial-entry"
+                          onClick={() => setPreflightOpen(true)}
+                          title="权威预检通过后把草稿转为试跑态（快照冻结，真实数据仅写入隔离空间）"
+                          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-amber-700 bg-amber-700 px-3 text-xs font-medium text-white transition-colors hover:border-amber-800 hover:bg-amber-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                        >
+                          <FlaskConical size={13} /> 转为试跑态
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <Suspense fallback={viewLoadingFallback}>
+                    <LazyGraphWorkspace
+                      key={`${workbenchVersionId || 'runtime'}:${workbenchVersionNode?.lifecycle_status || 'unknown'}`}
+                      ontologyId={workbenchOntologyId}
+                      versionId={workbenchVersionId}
+                      theme="light"
+                      layout="embedded"
+                      showHeader={false}
+                      onBackToVersions={() => navigate(`/ontologies/${workbenchOntologyId}?tab=versions`)}
+                      onDraftCreated={newVersionId => updateParams({ versionId: newVersionId })}
+                      onSaved={() => {
+                        void queryClient.invalidateQueries({
+                          queryKey: ['ontology-structure-doc', workbenchOntologyId, workbenchVersionId],
+                        })
+                      }}
+                    />
+                  </Suspense>
+                </div>
+              </div>
             ) : (
               <BindRequiredHint />
             )
@@ -1205,6 +1271,18 @@ export default function ExplorationPage() {
           draft={reviewDraft}
           onClose={() => setReviewDraft(null)}
           onOpenModelView={() => { setReviewDraft(null); updateParams({ view: 'model' }) }}
+        />
+      )}
+      {preflightOpen && workbenchOntologyId && workbenchVersionId && (
+        <TrialPreflightDialog
+          open
+          ontologyId={workbenchOntologyId}
+          versionId={workbenchVersionId}
+          readiness={readiness}
+          onClose={() => setPreflightOpen(false)}
+          onTrialStarted={() => {
+            void queryClient.invalidateQueries({ queryKey: ['version-tree', workbenchOntologyId] })
+          }}
         />
       )}
       <ConfirmModal
