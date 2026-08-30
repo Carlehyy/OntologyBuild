@@ -29,7 +29,7 @@ def upgrade() -> None:
         if "is_sandbox" not in conv_columns:
             op.add_column("fo_agent_conversations",
                           sa.Column("is_sandbox", sa.Boolean(), nullable=False,
-                                    server_default=sa.text("0")))
+                                    server_default=sa.text("false")))
 
     if "assistant_eval_benchmark_sets" in tables:
         bench_columns = {c["name"] for c in sa_inspect(bind)
