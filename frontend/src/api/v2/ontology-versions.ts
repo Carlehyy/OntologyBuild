@@ -104,10 +104,38 @@ export interface OntologySemanticOverview {
   consistency: { issueCount: number; byCode: Record<string, number> }
 }
 
-/** GET .../versions/{vid}/semantic 的 data：语义层快照原文 + 一致性总览。 */
+/** 语义一致性明细条目（后端 semantic_gate 的 gate_error 同口径）。 */
+export interface OntologySemanticIssue {
+  code: string
+  kind: 'objectType' | 'linkType' | 'action' | 'function' | 'sentinel' | 'document' | string
+  id: string
+  name: string
+  message: string
+  field?: string
+}
+
+/** GET .../versions/{vid}/semantic 的 data：语义层快照原文 + 一致性总览 + 明细。
+ *  issues 为新增字段，旧后端缺省时前端按空数组处理。 */
 export interface OntologyVersionSemantic {
   semantic: Record<string, unknown> | null
   overview: OntologySemanticOverview
+  issues?: OntologySemanticIssue[]
+}
+
+/** POST .../versions/{vid}/trial-preflight 的单项检查（权威门禁，失败即阻断试跑）。 */
+export interface OntologyTrialPreflightCheck {
+  id: 'editable_draft' | 'single_flight' | 'base_up_to_date' | 'structure' | 'mapping_contract' | 'semantic_consistency' | string
+  label: string
+  status: 'pass' | 'fail'
+  errors: OntologyReleaseGateIssue[]
+}
+
+/** POST .../versions/{vid}/trial-preflight 的 data。 */
+export interface OntologyTrialPreflight {
+  ok: boolean
+  versionId: string
+  revision: string
+  checks: OntologyTrialPreflightCheck[]
 }
 
 export interface OntologyImpactReport {
@@ -182,6 +210,9 @@ export const ontologyVersionApi = {
   runTrial: (ontologyId: string, versionId: string) =>
     apiClientV2.post<OntologyTrialRun>(
       `/ontologies/${ontologyId}/versions/${versionId}/trial-runs`, {}),
+  trialPreflight: (ontologyId: string, versionId: string) =>
+    apiClientV2.post<OntologyTrialPreflight>(
+      `/ontologies/${ontologyId}/versions/${versionId}/trial-preflight`, {}),
   impact: (ontologyId: string, versionId: string) =>
     apiClientV2.get<OntologyImpactReport>(
       `/ontologies/${ontologyId}/versions/${versionId}/impact`),

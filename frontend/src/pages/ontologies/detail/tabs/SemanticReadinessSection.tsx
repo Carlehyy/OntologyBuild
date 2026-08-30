@@ -7,7 +7,7 @@ import {
   normalizeSemanticOverview,
   structureCountRows,
   type SemanticCountRow,
-} from './semanticReadiness'
+} from '@/components/ontology/semanticReadiness'
 
 function CountRow({ label, rows }: { label: string; rows: SemanticCountRow[] }) {
   return (
