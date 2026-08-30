@@ -93,6 +93,9 @@ success `--color-success #2d8a4e` · warning `#c9861a` · danger
 | 动效组件 | beUI（beui.dev，MIT 开源） | shadcn 式源码拷贝，按 4.2 映射平台 token；动效依赖 `motion`，文案默认中文、可用 props 覆盖；首个落地 `components/availability-scheduler`，预览路由 `/design/components` |
 | 表格块参考 | Tremor Blocks | 只参考布局结构，配色按 4.2 映射 |
 
+组件清单、引入流程与存量页面渐进采用策略见
+[`frontend/src/components/README.md`](./frontend/src/components/README.md)。
+
 ### 4.2 外部样例拷贝规则（治理条款）
 
 - **ReUI**：与 shadcn 同构，可放心作为复杂控件样例；拷贝进仓库前必须把示例中的
