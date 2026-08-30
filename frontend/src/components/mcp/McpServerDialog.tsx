@@ -186,7 +186,7 @@ export default function McpServerDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px]" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[var(--color-bg-overlay)] p-4 backdrop-blur-[2px]" onMouseDown={onClose}>
       <section
         ref={dialogRef}
         role="dialog"
@@ -194,23 +194,23 @@ export default function McpServerDialog({
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         onMouseDown={event => event.stopPropagation()}
-        className="flex max-h-[88dvh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.24)]"
+        className="flex max-h-[88dvh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-[0_28px_90px_rgba(15,23,42,0.24)]"
       >
-        <header className="flex shrink-0 items-start justify-between border-b border-slate-200 px-5 py-4 sm:px-6">
+        <header className="flex shrink-0 items-start justify-between border-b border-border px-5 py-4 sm:px-6">
           <div>
-            <h2 id={titleId} className="text-base font-semibold text-slate-900">{server ? `编辑 MCP：${server.display_name || server.name}` : '添加 MCP Server'}</h2>
-            <p id={descriptionId} className="mt-1 text-xs leading-5 text-slate-500">支持粘贴客户端 JSON，也可直接配置 stdio、SSE 或 Streamable HTTP。</p>
+            <h2 id={titleId} className="text-base font-semibold text-foreground">{server ? `编辑 MCP：${server.display_name || server.name}` : '添加 MCP Server'}</h2>
+            <p id={descriptionId} className="mt-1 text-xs leading-5 text-muted-foreground">支持粘贴客户端 JSON，也可直接配置 stdio、SSE 或 Streamable HTTP。</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="关闭添加 MCP 弹窗" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">
+          <button type="button" onClick={onClose} aria-label="关闭添加 MCP 弹窗" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <X size={17} />
           </button>
         </header>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-5 [scrollbar-gutter:stable] sm:p-6">
           {!server && (
-            <details className="rounded-xl border border-slate-200 bg-slate-50/70" open>
-              <summary className="cursor-pointer px-4 py-3 text-xs font-medium text-slate-700">粘贴 MCP 客户端 JSON</summary>
-              <div className="space-y-3 border-t border-slate-200 p-4">
+            <details className="rounded-xl border border-border bg-muted" open>
+              <summary className="cursor-pointer px-4 py-3 text-xs font-medium text-foreground">粘贴 MCP 客户端 JSON</summary>
+              <div className="space-y-3 border-t border-border p-4">
                 <textarea
                   ref={clientConfigRef}
                   value={clientConfig}
@@ -223,16 +223,16 @@ export default function McpServerDialog({
                   rows={8}
                   aria-label="MCP 客户端 JSON"
                   placeholder={'{\n  "mcpServers": {\n    "api-hub": {\n      "command": "npx",\n      "args": ["-y", "mcp-remote", "https://example.com/mcp"]\n    }\n  }\n}'}
-                  className="w-full resize-none overflow-hidden rounded-xl border border-slate-200 bg-white p-3 font-mono text-xs leading-5 text-slate-700 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10"
+                  className="w-full resize-none overflow-hidden rounded-xl border border-border bg-card p-3 font-mono text-xs leading-5 text-foreground outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/10"
                 />
-                <button type="button" onClick={applyClientConfig} disabled={!clientConfig.trim()} className="min-h-10 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-teal-700 transition-colors hover:border-teal-200 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-45">
+                <button type="button" onClick={applyClientConfig} disabled={!clientConfig.trim()} className="min-h-10 rounded-lg border border-border bg-card px-3 text-xs font-medium text-brand-ink transition-colors hover:border-brand-mist hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-45">
                   解析并填入下方表单
                 </button>
-                <p className="text-[11px] leading-5 text-slate-500">
+                <p className="text-[11px] leading-5 text-muted-foreground">
                   兼容 Claude、Cursor、Cline、Windsurf、Gemini、JetBrains、Continue、VS Code 与 Zed 常见 JSON / JSONC 格式。
                 </p>
                 {clientConfigOptions.length > 1 && (
-                  <label className="block text-xs font-medium text-slate-600">
+                  <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
                     选择要填入的 MCP Server
                     <select
                       value={selectedClientConfig}
@@ -241,7 +241,7 @@ export default function McpServerDialog({
                         setSelectedClientConfig(nextIndex)
                         fillFromClientConfig(clientConfigOptions[nextIndex])
                       }}
-                      className="mt-1.5 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10"
+                      className="mt-1.5 min-h-10 w-full rounded-lg border border-border bg-card px-3 text-xs text-foreground outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/10"
                     >
                       {clientConfigOptions.map((config, index) => (
                         <option key={`${config.name}-${index}`} value={index}>{config.name}</option>
@@ -249,31 +249,31 @@ export default function McpServerDialog({
                     </select>
                   </label>
                 )}
-                {clientConfigMessage && <p role="status" className="rounded-lg bg-teal-50 px-3 py-2 text-[11px] leading-5 text-teal-800">{clientConfigMessage}</p>}
+                {clientConfigMessage && <p role="status" className="rounded-lg bg-brand-soft px-3 py-2 text-[11px] leading-5 text-brand-ink">{clientConfigMessage}</p>}
               </div>
             </details>
           )}
 
           <div className="grid gap-4 md:grid-cols-2">
-            <label className="block text-xs font-medium text-slate-600">
-              名称 <span className="text-red-500">*</span>
-              <input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder="如：DMP 数据服务" className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10" />
-              <span className="mt-1.5 block text-[11px] font-normal leading-4 text-slate-500">列表与工具清单中展示的可读名称，需手动填写。</span>
+            <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
+              名称 <span className="text-destructive">*</span>
+              <input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder="如：DMP 数据服务" className="mt-1.5 min-h-11 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/10" />
+              <span className="mt-1.5 block text-[11px] font-normal leading-4 text-muted-foreground">列表与工具清单中展示的可读名称，需手动填写。</span>
             </label>
-            <label className="block text-xs font-medium text-slate-600">
-              标识 <span className="text-red-500">*</span>
-              <input value={identifier} disabled={!!server} onChange={event => setIdentifier(event.target.value)} placeholder="dmp-mcp-server" className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 disabled:bg-slate-100 disabled:text-slate-500" />
-              <span className="mt-1.5 block text-[11px] font-normal leading-4 text-slate-500">唯一标识，可从客户端 JSON 解析；保存后不可修改。</span>
+            <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
+              标识 <span className="text-destructive">*</span>
+              <input value={identifier} disabled={!!server} onChange={event => setIdentifier(event.target.value)} placeholder="dmp-mcp-server" className="mt-1.5 min-h-11 w-full rounded-xl border border-border bg-card px-3 font-mono text-sm text-foreground outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/10 disabled:bg-muted disabled:text-muted-foreground" />
+              <span className="mt-1.5 block text-[11px] font-normal leading-4 text-muted-foreground">唯一标识，可从客户端 JSON 解析；保存后不可修改。</span>
             </label>
           </div>
-          <label className="block text-xs font-medium text-slate-600">
-            描述 <span className="text-red-500">*</span>
-            <textarea value={descriptionText} onChange={event => setDescriptionText(event.target.value)} rows={2} placeholder="该 MCP Server 的用途说明，如：提供 DMP 平台的数据检索能力" className="mt-1.5 w-full resize-y rounded-xl border border-slate-200 bg-white p-3 text-sm leading-5 text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10" />
+          <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
+            描述 <span className="text-destructive">*</span>
+            <textarea value={descriptionText} onChange={event => setDescriptionText(event.target.value)} rows={2} placeholder="该 MCP Server 的用途说明，如：提供 DMP 平台的数据检索能力" className="mt-1.5 w-full resize-y rounded-xl border border-border bg-card p-3 text-sm leading-5 text-foreground outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/10" />
           </label>
           <div className="grid gap-4 md:grid-cols-2">
-            <label className="block text-xs font-medium text-slate-600">
-              传输方式 <span className="text-red-500">*</span>
-              <select value={transport} onChange={event => setTransport(event.target.value as McpTransport)} className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10">
+            <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
+              传输方式 <span className="text-destructive">*</span>
+              <select value={transport} onChange={event => setTransport(event.target.value as McpTransport)} className="mt-1.5 min-h-11 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/10">
                 <option value="streamable_http">Streamable HTTP（推荐）</option>
                 <option value="sse">SSE（旧版兼容）</option>
                 <option value="stdio">stdio（启动本地进程）</option>
@@ -283,42 +283,42 @@ export default function McpServerDialog({
 
           {transport === 'stdio' ? (
             <>
-              <label className="block text-xs font-medium text-slate-600">
-                command <span className="text-red-500">*</span>
-                <input value={command} onChange={event => setCommand(event.target.value)} placeholder="npx" className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10" />
+              <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
+                command <span className="text-destructive">*</span>
+                <input value={command} onChange={event => setCommand(event.target.value)} placeholder="npx" className="mt-1.5 min-h-11 w-full rounded-xl border border-border bg-card px-3 font-mono text-sm text-foreground outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/10" />
               </label>
               <div className="grid gap-4 md:grid-cols-2">
-                <label className="block text-xs font-medium text-slate-600">
+                <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
                   args JSON
-                  <textarea value={args} onChange={event => setArgs(event.target.value)} rows={5} placeholder={'["-y", "@example/mcp-server"]'} className="mt-1.5 w-full resize-y rounded-xl border border-slate-200 bg-white p-3 font-mono text-xs leading-5 text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10" />
+                  <textarea value={args} onChange={event => setArgs(event.target.value)} rows={5} placeholder={'["-y", "@example/mcp-server"]'} className="mt-1.5 w-full resize-y rounded-xl border border-border bg-card p-3 font-mono text-xs leading-5 text-foreground outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/10" />
                 </label>
-                <label className="block text-xs font-medium text-slate-600">
+                <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
                   env JSON
-                  <textarea value={env} onChange={event => setEnv(event.target.value)} rows={5} placeholder={server ? `留空保持现有环境变量（${server.env_names.join(', ') || '无'}）` : '{\n  "API_KEY": "…"\n}'} className="mt-1.5 w-full resize-y rounded-xl border border-slate-200 bg-white p-3 font-mono text-xs leading-5 text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10" />
+                  <textarea value={env} onChange={event => setEnv(event.target.value)} rows={5} placeholder={server ? `留空保持现有环境变量（${server.env_names.join(', ') || '无'}）` : '{\n  "API_KEY": "…"\n}'} className="mt-1.5 w-full resize-y rounded-xl border border-border bg-card p-3 font-mono text-xs leading-5 text-foreground outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/10" />
                 </label>
               </div>
-              <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">stdio 会在后端容器内启动进程，部署方必须显式启用并允许该 command。环境变量会加密存储且不会回显。</p>
+              <p className="rounded-xl border border-[color:var(--color-warning)]/30 bg-[var(--color-warning-bg)] px-4 py-3 text-xs leading-5 text-[var(--color-warning)]">stdio 会在后端容器内启动进程，部署方必须显式启用并允许该 command。环境变量会加密存储且不会回显。</p>
             </>
           ) : (
             <>
-              <label className="block text-xs font-medium text-slate-600">
-                MCP URL <span className="text-red-500">*</span>
-                <input type="url" value={url} onChange={event => setUrl(event.target.value)} placeholder="https://mcp.example.com/mcp" className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10" />
-                <span className="mt-1.5 block text-[11px] font-normal leading-4 text-slate-500">公网地址可直接连接；生产环境会拒绝环回、内网和链路本地地址。</span>
+              <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
+                MCP URL <span className="text-destructive">*</span>
+                <input type="url" value={url} onChange={event => setUrl(event.target.value)} placeholder="https://mcp.example.com/mcp" className="mt-1.5 min-h-11 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/10" />
+                <span className="mt-1.5 block text-[11px] font-normal leading-4 text-muted-foreground">公网地址可直接连接；生产环境会拒绝环回、内网和链路本地地址。</span>
               </label>
-              <label className="block text-xs font-medium text-slate-600">
+              <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
                 请求头 JSON
-                <textarea value={headers} onChange={event => setHeaders(event.target.value)} rows={4} placeholder={server ? `留空保持现有请求头（${server.header_names.join(', ') || '无'}）` : '{\n  "Authorization": "Bearer …"\n}'} className="mt-1.5 w-full resize-y rounded-xl border border-slate-200 bg-white p-3 font-mono text-xs leading-5 text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10" />
+                <textarea value={headers} onChange={event => setHeaders(event.target.value)} rows={4} placeholder={server ? `留空保持现有请求头（${server.header_names.join(', ') || '无'}）` : '{\n  "Authorization": "Bearer …"\n}'} className="mt-1.5 w-full resize-y rounded-xl border border-border bg-card p-3 font-mono text-xs leading-5 text-foreground outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/10" />
               </label>
             </>
           )}
 
-          {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs leading-5 text-red-700">{error}</p>}
+          {error && <p role="alert" className="rounded-xl border border-destructive/30 bg-[var(--color-danger-bg)] px-4 py-3 text-xs leading-5 text-destructive">{error}</p>}
         </div>
 
-        <footer className="flex shrink-0 justify-center gap-3 border-t border-slate-200 bg-slate-50/70 px-5 py-4 sm:px-6">
-          <button type="button" onClick={onClose} className="min-h-10 min-w-24 rounded-xl border border-slate-200 bg-white px-4 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400">取消</button>
-          <button type="button" onClick={save} disabled={busy || !identifier.trim() || !displayName.trim() || !descriptionText.trim() || (transport === 'stdio' ? !command.trim() : !url.trim())} className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-xs font-medium text-white transition-colors hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45">
+        <footer className="flex shrink-0 justify-center gap-3 border-t border-border bg-muted px-5 py-4 sm:px-6">
+          <button type="button" onClick={onClose} className="min-h-10 min-w-24 rounded-xl border border-border bg-card px-4 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">取消</button>
+          <button type="button" onClick={save} disabled={busy || !identifier.trim() || !displayName.trim() || !descriptionText.trim() || (transport === 'stdio' ? !command.trim() : !url.trim())} className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-xl bg-brand px-4 text-xs font-medium text-white transition-colors hover:bg-brand-deep focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45">
             {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} 保存
           </button>
         </footer>
