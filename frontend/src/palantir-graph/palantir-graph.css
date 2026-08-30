@@ -2,7 +2,10 @@
 @import url('https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,700,800&f[]=satoshi@400,500,700&display=swap');
 
 /* Palantir Ontology Graph - 作用域样式
-   颜色通过 tailwind.config.ts 配置（onto/surface/fn 系列）
+   颜色通过 tailwind.config.ts 配置（onto/surface/fn 系列），
+   色值统一经本文件的 --pg-* CSS 变量（RGB 通道三元组）下发：
+   .palantir-graph-root 定义深色默认值（全屏编辑器），
+   .palantir-graph-root.pg-light 覆盖为浅色系（嵌入式工作台）。
    动画通过 tailwind.config.ts 配置
    所有样式作用于 .palantir-graph-root 类下，避免污染全局
 */
@@ -34,6 +37,40 @@
 
 body.palantir-graph-root,
 .palantir-graph-root {
+  /* tailwind onto/surface/fn 色板的深色默认值（RGB 三元组） */
+  --pg-onto-50: 240 247 255;
+  --pg-onto-100: 224 239 255;
+  --pg-onto-200: 185 223 255;
+  --pg-onto-300: 124 196 255;
+  --pg-onto-400: 54 166 255;
+  --pg-onto-500: 12 138 255;
+  --pg-onto-600: 0 105 245;
+  --pg-onto-700: 0 84 212;
+  --pg-onto-800: 3 71 171;
+  --pg-onto-900: 10 62 141;
+  --pg-onto-950: 7 39 86;
+
+  --pg-surface-50: 248 250 252;
+  --pg-surface-100: 241 245 249;
+  --pg-surface-200: 226 232 240;
+  --pg-surface-300: 203 213 225;
+  --pg-surface-400: 148 163 184;
+  --pg-surface-500: 100 116 139;
+  --pg-surface-600: 71 85 105;
+  --pg-surface-700: 51 65 85;
+  --pg-surface-800: 30 41 59;
+  --pg-surface-900: 15 23 42;
+  --pg-surface-950: 2 6 23;
+
+  --pg-fn-50: 253 244 255;
+  --pg-fn-100: 250 232 255;
+  --pg-fn-200: 245 208 254;
+  --pg-fn-300: 240 171 252;
+  --pg-fn-400: 232 121 249;
+  --pg-fn-500: 217 70 239;
+  --pg-fn-600: 192 38 211;
+  --pg-fn-700: 162 28 175;
+
   --color-bg: #0a0e17;
   --color-surface: #111827;
   --color-surface-elevated: #1e293b;
@@ -63,6 +100,18 @@ body.palantir-graph-root,
   --color-function: #d946ef;
   --color-action: #f59e0b;
 
+  /* 主题敏感的内联样式取值（组件 style/attr 中引用） */
+  --color-glass: rgba(17, 24, 39, 0.8);
+  --color-canvas-dot: rgba(99, 102, 241, 0.15);
+  --color-minimap-mask: rgba(10, 14, 23, 0.8);
+  --color-minimap-node-alt: #64748b;
+  --color-edge-label-bg: #0f172a;
+  --color-edge-label-text: #e2e8f0;
+  --color-node-shadow: rgba(0, 0, 0, 0.3);
+  --color-node-shadow-selected: rgba(99, 102, 241, 0.2);
+  --color-code-bg: #0a0e17;
+  --color-code-text: #e2e8f0;
+
   font-family: 'Satoshi', system-ui, -apple-system, sans-serif;
   background: var(--color-bg);
   color: var(--color-text);
@@ -73,6 +122,47 @@ body.palantir-graph-root,
   height: 100%;
 }
 
+/* 浅色系：嵌入式工作台（业务澄清页"本体模型"视图）。
+   surface 刻度整体反转（深→浅映射文字/边框/背景层级），
+   onto/fn 强调色与语义色在两套主题下通用，无需覆盖。 */
+.palantir-graph-root.pg-light {
+  --pg-surface-50: 2 6 23;
+  --pg-surface-100: 15 23 42;
+  --pg-surface-200: 30 41 59;
+  --pg-surface-300: 51 65 85;
+  --pg-surface-400: 71 85 105;
+  --pg-surface-500: 100 116 139;
+  --pg-surface-600: 148 163 184;
+  --pg-surface-700: 203 213 225;
+  --pg-surface-800: 226 232 240;
+  --pg-surface-900: 241 245 249;
+  --pg-surface-950: 248 250 252;
+
+  --color-bg: #f1f5f9;
+  --color-surface: #f1f5f9;
+  --color-surface-elevated: #ffffff;
+  --color-surface-100: #0f172a;
+  --color-surface-200: #1e293b;
+  --color-surface-400: #475569;
+  --color-surface-500: #64748b;
+  --color-surface-600: #94a3b8;
+  --color-surface-700: #cbd5e1;
+  --color-surface-800: #e2e8f0;
+  --color-border: #cbd5e1;
+  --color-text: #0f172a;
+  --color-text-secondary: #475569;
+
+  --color-glass: rgba(255, 255, 255, 0.85);
+  --color-canvas-dot: rgba(15, 23, 42, 0.08);
+  --color-minimap-mask: rgba(241, 245, 249, 0.75);
+  --color-minimap-node-alt: #94a3b8;
+  --color-edge-label-bg: #ffffff;
+  --color-edge-label-text: #1e293b;
+  --color-node-shadow: rgba(15, 23, 42, 0.08);
+  --color-code-bg: #f8fafc;
+  --color-code-text: #1e293b;
+}
+
 .palantir-graph-root * {
   box-sizing: border-box;
 }
@@ -81,23 +171,23 @@ body.palantir-graph-root,
 .canvas-bg {
   background-color: var(--color-bg);
   background-image:
-    radial-gradient(circle at 1px 1px, rgba(99, 102, 241, 0.15) 1px, transparent 0);
+    radial-gradient(circle at 1px 1px, var(--color-canvas-dot) 1px, transparent 0);
   background-size: 24px 24px;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
+/* Custom scrollbar（限定作用域，嵌入时不影响宿主页） */
+.palantir-graph-root ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-::-webkit-scrollbar-track {
+.palantir-graph-root ::-webkit-scrollbar-track {
   background: var(--color-surface);
 }
-::-webkit-scrollbar-thumb {
+.palantir-graph-root ::-webkit-scrollbar-thumb {
   background: var(--color-border);
   border-radius: 4px;
 }
-::-webkit-scrollbar-thumb:hover {
+.palantir-graph-root ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-secondary);
 }
 
@@ -105,12 +195,15 @@ body.palantir-graph-root,
 .react-flow__background {
   background-color: var(--color-bg) !important;
 }
+.palantir-graph-root .react-flow__background .react-flow__background-pattern {
+  fill: var(--color-canvas-dot);
+}
 .react-flow__controls {
   background: var(--color-surface-elevated) !important;
   border: 1px solid var(--color-border) !important;
   border-radius: 12px !important;
   overflow: hidden;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
+  box-shadow: 0 4px 20px var(--color-node-shadow) !important;
 }
 .react-flow__controls-button {
   background: var(--color-surface-elevated) !important;
@@ -217,6 +310,16 @@ body.palantir-graph-root,
 }
 .btn-success:hover { background-color: rgba(16, 185, 129, 0.3); }
 
+/* 浅色系下按钮/徽标文字色加深，保证白底对比度 */
+.palantir-graph-root.pg-light .btn-danger {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+.palantir-graph-root.pg-light .btn-success {
+  background-color: rgba(16, 185, 129, 0.12);
+  color: #059669;
+}
+
 /* Input styles */
 .input-field {
   width: 100%;
@@ -268,7 +371,7 @@ body.palantir-graph-root,
 
 /* Glass effect */
 .glass {
-  background: rgba(17, 24, 39, 0.8);
+  background: var(--color-glass);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
@@ -302,15 +405,27 @@ body.palantir-graph-root,
 .type-object_set { background-color: rgba(217, 70, 239, 0.2); color: #e879f9; }
 .type-void { background-color: rgba(100, 116, 139, 0.2); color: #94a3b8; }
 
+/* 浅色系下类型徽标文字色加深 */
+.palantir-graph-root.pg-light .type-string { background-color: rgba(34, 197, 94, 0.12); color: #16a34a; }
+.palantir-graph-root.pg-light .type-number { background-color: rgba(59, 130, 246, 0.12); color: #2563eb; }
+.palantir-graph-root.pg-light .type-boolean { background-color: rgba(234, 179, 8, 0.14); color: #a16207; }
+.palantir-graph-root.pg-light .type-date { background-color: rgba(168, 85, 247, 0.12); color: #9333ea; }
+.palantir-graph-root.pg-light .type-datetime { background-color: rgba(236, 72, 153, 0.12); color: #db2777; }
+.palantir-graph-root.pg-light .type-array { background-color: rgba(249, 115, 22, 0.12); color: #ea580c; }
+.palantir-graph-root.pg-light .type-object { background-color: rgba(99, 102, 241, 0.12); color: #4f46e5; }
+.palantir-graph-root.pg-light .type-reference { background-color: rgba(6, 182, 212, 0.12); color: #0891b2; }
+.palantir-graph-root.pg-light .type-object_set { background-color: rgba(217, 70, 239, 0.12); color: #c026d3; }
+.palantir-graph-root.pg-light .type-void { background-color: rgba(100, 116, 139, 0.12); color: #64748b; }
+
 /* Code editor styling */
 .code-editor {
   width: 100%;
   min-height: 200px;
   padding: 0.75rem;
-  background-color: #0a0e17;
+  background-color: var(--color-code-bg);
   border: 1px solid var(--color-surface-600);
   border-radius: 0.5rem;
-  color: #e2e8f0;
+  color: var(--color-code-text);
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.8rem;
   line-height: 1.6;
@@ -405,6 +520,13 @@ body.palantir-graph-root,
   background-color: rgba(217, 70, 239, 0.15);
   color: #e879f9;
 }
+
+/* 浅色系下徽标文字色加深 */
+.palantir-graph-root.pg-light .badge-success { color: #059669; }
+.palantir-graph-root.pg-light .badge-error { color: #dc2626; }
+.palantir-graph-root.pg-light .badge-warning { color: #b45309; }
+.palantir-graph-root.pg-light .badge-info { color: #0891b2; }
+.palantir-graph-root.pg-light .badge-fn { color: #c026d3; }
 
 /* Severity indicators */
 .severity-error { border-left: 3px solid #ef4444; background-color: rgba(239, 68, 68, 0.08); }

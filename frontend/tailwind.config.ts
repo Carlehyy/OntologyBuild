@@ -1,5 +1,11 @@
 import type { Config } from 'tailwindcss'
 
+// palantir-graph 编辑器色板：色值经 CSS 变量（RGB 通道三元组）下发，
+// 深色默认值与浅色覆盖见 src/palantir-graph/palantir-graph.css 的
+// .palantir-graph-root / .palantir-graph-root.pg-light 作用域。
+// 这三组色板仅 palantir-graph 与图谱编辑器页面使用。
+const pg = (name: string) => `rgb(var(--pg-${name}) / <alpha-value>)`
+
 const config: Config = {
   content: ['./index.html', './src/**/*.{ts,tsx,js,jsx}'],
   // shadcn 深色模式约定：通过 <html class="dark"> 切换，变量定义见 src/styles/tokens.css
@@ -42,40 +48,40 @@ const config: Config = {
         input: 'var(--input)',
         ring: 'var(--ring)',
         onto: {
-          50: '#f0f7ff',
-          100: '#e0efff',
-          200: '#b9dfff',
-          300: '#7cc4ff',
-          400: '#36a6ff',
-          500: '#0c8aff',
-          600: '#0069f5',
-          700: '#0054d4',
-          800: '#0347ab',
-          900: '#0a3e8d',
-          950: '#072756',
+          50: pg('onto-50'),
+          100: pg('onto-100'),
+          200: pg('onto-200'),
+          300: pg('onto-300'),
+          400: pg('onto-400'),
+          500: pg('onto-500'),
+          600: pg('onto-600'),
+          700: pg('onto-700'),
+          800: pg('onto-800'),
+          900: pg('onto-900'),
+          950: pg('onto-950'),
         },
         surface: {
-          50: '#f8fafc',
-          100: '#f1f5f9',
-          200: '#e2e8f0',
-          300: '#cbd5e1',
-          400: '#94a3b8',
-          500: '#64748b',
-          600: '#475569',
-          700: '#334155',
-          800: '#1e293b',
-          900: '#0f172a',
-          950: '#020617',
+          50: pg('surface-50'),
+          100: pg('surface-100'),
+          200: pg('surface-200'),
+          300: pg('surface-300'),
+          400: pg('surface-400'),
+          500: pg('surface-500'),
+          600: pg('surface-600'),
+          700: pg('surface-700'),
+          800: pg('surface-800'),
+          900: pg('surface-900'),
+          950: pg('surface-950'),
         },
         fn: {
-          50: '#fdf4ff',
-          100: '#fae8ff',
-          200: '#f5d0fe',
-          300: '#f0abfc',
-          400: '#e879f9',
-          500: '#d946ef',
-          600: '#c026d3',
-          700: '#a21caf',
+          50: pg('fn-50'),
+          100: pg('fn-100'),
+          200: pg('fn-200'),
+          300: pg('fn-300'),
+          400: pg('fn-400'),
+          500: pg('fn-500'),
+          600: pg('fn-600'),
+          700: pg('fn-700'),
         },
       },
       fontFamily: {

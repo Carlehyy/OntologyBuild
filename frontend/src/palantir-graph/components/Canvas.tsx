@@ -39,10 +39,10 @@ const edgeTypes = {
 const defaultEdgeOptions = {
   type: 'multi',
   animated: true,
-  style: { stroke: '#06b6d4', strokeWidth: 2 },
+  style: { stroke: 'var(--color-link)', strokeWidth: 2 },
   markerEnd: {
     type: MarkerType.ArrowClosed,
-    color: '#06b6d4',
+    color: 'var(--color-link)',
   },
 };
 
@@ -466,15 +466,15 @@ export default function Canvas({ onBrowseInstances, schemaReadOnly = false, layo
           variant={BackgroundVariant.Dots}
           gap={24}
           size={1}
-          color="rgba(99, 102, 241, 0.15)"
+          color="var(--color-canvas-dot)"
         />
         <MiniMap
           className="!bottom-6 !right-6"
           nodeColor={(node) => {
-            if (node.type === 'objectType') return '#6366f1';
-            return '#64748b';
+            if (node.type === 'objectType') return 'var(--color-object)';
+            return 'var(--color-minimap-node-alt)';
           }}
-          maskColor="rgba(10, 14, 23, 0.8)"
+          maskColor="var(--color-minimap-mask)"
         />
       </ReactFlow>
 

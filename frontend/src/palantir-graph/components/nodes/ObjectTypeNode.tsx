@@ -57,9 +57,9 @@ const ObjectTypeNode = memo(({ data, selected }: ObjectTypeNodeProps) => {
         ${selected ? 'border-indigo-500 node-selected' : 'border-surface-600 hover:border-surface-500'}
       `}
       style={{
-        boxShadow: selected 
-          ? '0 0 30px rgba(99, 102, 241, 0.2)' 
-          : '0 4px 20px rgba(0, 0, 0, 0.3)',
+        boxShadow: selected
+          ? '0 0 30px var(--color-node-shadow-selected)'
+          : '0 4px 20px var(--color-node-shadow)',
       }}
     >
       {/* Header */}

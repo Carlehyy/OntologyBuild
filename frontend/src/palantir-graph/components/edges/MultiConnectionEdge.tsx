@@ -27,19 +27,19 @@ export default function MultiConnectionEdge({
 }: EdgeProps) {
   const offset = (data?.__offset as number | undefined) ?? 0;
 
-  const stroke = selected ? '#22d3ee' : '#06b6d4';
+  const stroke = selected ? 'var(--color-accent)' : 'var(--color-link)';
   const edgeStyle = {
     ...style,
     stroke,
     strokeWidth: selected ? 2.6 : 2,
   };
   const labelBgStyle = {
-    fill: '#0f172a',
+    fill: 'var(--color-edge-label-bg)',
     fillOpacity: 0.92,
-    stroke: selected ? '#22d3ee' : '#334155',
+    stroke: selected ? 'var(--color-accent)' : 'var(--color-border)',
     strokeWidth: 1,
   };
-  const labelStyle = { fill: '#e2e8f0', fontSize: 11, fontWeight: 500 };
+  const labelStyle = { fill: 'var(--color-edge-label-text)', fontSize: 11, fontWeight: 500 };
 
   // 自环：从右端口向上绕回左端口。多条自环用有符号 offset 做水平错位
   // （组内各不相同，保证不重叠），高度随 |offset| 略增，外圈更高。
