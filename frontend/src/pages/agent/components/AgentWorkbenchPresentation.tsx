@@ -186,6 +186,8 @@ const TOOL_META: Record<string, { label: string; icon: React.ElementType }> = {
   list_dynamic_sentinels: { label: '查看动态哨兵', icon: BellRing },
   propose_dynamic_sentinel_change: { label: '校验哨兵提案', icon: BellRing },
   run_decision_simulation: { label: '决策推演', icon: Scale },
+  list_world_model_services: { label: '发现推演服务', icon: Network },
+  run_world_model_simulation: { label: '世界模型推演', icon: Sigma },
   propose_action: { label: '预演提案', icon: FlaskConical },
 }
 
