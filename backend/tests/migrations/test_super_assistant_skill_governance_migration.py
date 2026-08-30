@@ -33,7 +33,7 @@ def test_revision_graph_head_is_single_head(tmp_path, monkeypatch):
 
     # 单头门禁：新迁移必须线性追加（当前 head 见 alembic heads 输出）。
     assert len(heads) == 1
-    assert heads == ["0084_mcp_display_fields"]
+    assert heads == ["0085_assistant_eval_flywheel_m1"]
 
 
 def _create_0067_shape_skills_table(db_path: Path) -> None:
