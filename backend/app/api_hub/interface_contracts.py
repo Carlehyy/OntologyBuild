@@ -125,6 +125,12 @@ class InterfaceIn(BaseModel):
     def validate_url(cls, value: str) -> str:
         value = value.strip()
         parsed = urlsplit(value)
+        # mcp-bridge:// 为平台保留方案：接口由执行器进程内分发为服务端
+        # MCP 调用（见 api_hub.mcp_bridge），不是出站 HTTP 目标。
+        if parsed.scheme.lower() == "mcp-bridge":
+            if not parsed.netloc or not (parsed.path or "").lstrip("/"):
+                raise ValueError("MCP 桥接地址格式无效，应为 mcp-bridge://<server_id>/<tool_name>")
+            return value
         if (
             parsed.scheme.lower() not in {"http", "https"}
             or not parsed.hostname

@@ -422,6 +422,14 @@ export function validateHttpUrl(value: string): string {
   if (!url) return '请填写请求 URL'
   try {
     const parsed = new URL(url)
+    // mcp-bridge:// 为平台保留方案：由接口代理执行器进程内分发为服务端
+    // MCP 调用（插件社区 stdio/SSE 转接口生成），不是出站 HTTP 目标。
+    if (parsed.protocol === 'mcp-bridge:') {
+      if (!parsed.hostname || !parsed.pathname.replace(/^\//, '')) {
+        return 'MCP 桥接地址格式无效，应为 mcp-bridge://<server_id>/<tool_name>'
+      }
+      return ''
+    }
     if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) {
       return '请求 URL 必须是无账号信息的 http:// 或 https:// 完整地址，例如 https://www.baidu.com'
     }
