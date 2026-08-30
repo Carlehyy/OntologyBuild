@@ -3,10 +3,10 @@ version: alpha
 name: OntologyBuild-Design-Language
 description: >-
   OntologyBuild（本体即服务平台）的统一设计语言。基于 VoltAgent/awesome-design-md
-  收录的 Supabase 设计分析骨架适配：白底近单色画布、单一绿系强调、克制 chrome、
-  数据密度优先。本文档是前端 UI 的唯一设计事实来源，供人类开发者与 AI 编码代理
-  共同遵循；取值的可执行载体是 frontend/src/styles/tokens.css 与
-  frontend/src/lib/echartsTheme.ts。
+  （站点形式 getdesign.md）收录的 Supabase 设计分析骨架适配：白底近单色画布、
+  单一绿系强调、克制 chrome、数据密度优先。本文档是前端 UI 的唯一设计事实
+  来源，供人类开发者与 AI 编码代理共同遵循；取值的可执行载体是
+  frontend/src/styles/tokens.css 与 frontend/src/lib/echartsTheme.ts。
 ---
 
 # OntologyBuild 设计语言（DESIGN.md）
@@ -76,6 +76,9 @@ success `--color-success #2d8a4e` · warning `#c9861a` · danger
 - 字号阶梯（`--font-*`）：12 / 13 / 14(基准) / 16 / 18 / 20 / 24px；
   字重只用 400 / 500 / 600；行高 tight 1.25 / normal 1.5 / relaxed 1.75。
 - 中文排版：标题不加负字距；数字密集列用等宽字体 + 右对齐。
+- 「技术标签」模式（吸收自上游 Supabase 的等宽标签惯例）：JetBrains Mono
+  11–12px、全大写、字距约 0.1em、`muted-foreground` 色，用于区块小标题、
+  ID 与状态组标签；不引入新字体，继续用 `@fontsource/jetbrains-mono`。
 
 ## 4. 组件规范
 
@@ -155,6 +158,9 @@ ECharts 关系图能力不足时可选 G6（图可视化）/X6（图编辑），
 
 - 切换机制：`<html class="dark">`（`lib/theme.ts` + tailwind `darkMode: ['class']`）。
 - **任何 token 改动必须 `:root` 与 `.dark` 成对维护**（AGENTS.md 亦有所述）。
+- 深色模式的层级表达优先用边框与表面色阶（`--card`/`--border`/`--accent`），
+  阴影只作极轻辅助（对齐上游 Supabase「深度靠边框层级、不靠阴影」的治理）；
+  禁止在深色下叠加重阴影制造层级。
 - 图表现状为固定浅色作用域；新增深色图表支持时优先把取值改为 CSS 变量注入，
   不要再复制第二套主题文件。
 
@@ -176,6 +182,9 @@ ECharts 关系图能力不足时可选 G6（图可视化）/X6（图编辑），
 
 - 风格骨架改编自 [VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md)
   收录的 Supabase 设计分析（white canvas + near-black ink + 单一绿色 CTA + 数据平台气质）。
+- 上游站点形式：[getdesign.md 的 Supabase 设计分析](https://getdesign.md/supabase/design-md)
+  （同源内容；本平台适配保留 light 优先与数据密度取向，未照搬其营销站排版尺度，
+  差异与可吸收项见 2026-08-30 对比记录）。
 - 组件生态参照：shadcn/ui 主题约定、[reui.io](https://reui.io)、
   [blocks.tremor.so](https://blocks.tremor.so)、[ECharts](https://echarts.apache.org/)、
   [AntV G6](https://g6.antv.antgroup.com) / [AntV X6](https://x6.antv.antgroup.com)。
