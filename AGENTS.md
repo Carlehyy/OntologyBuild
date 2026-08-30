@@ -37,7 +37,10 @@ OntologyBuild 是“本体即服务”平台。前端导航是代码发现入口
 
 后端支撑基础设施不对外独立成业务域：`backend/app/bootstrap/`（健康探针与
 启动生命周期）、`backend/app/shared/`（配置、数据库、存储等共享能力）、
-`backend/app/tasks/`（Celery 任务入口）；`backend/app/engine/` 为空壳预留。
+`backend/app/tasks/`（Celery 任务入口，已列入退役计划：禁止新增任务；新的
+定时/后台任务一律采用「APScheduler 进程内定时 + NATS JetStream 派发 +
+nats_executor 消费」模式，先例见超级助手反思链路 `super_assistant.reflect.*`）；
+`backend/app/engine/` 为空壳预留。
 模块级导览见 `backend/app/README.md`。
 
 `backend/app/routers/`、`models/`、`schemas/`、`services/` 以迁移期兼容层为主：
@@ -138,7 +141,8 @@ app/services/v2/graph/neo4j_service.py
 - HTTP 路径、方法、状态码、响应结构和 OpenAPI operation；
 - `navigation.ts`、后端权限和数据库中持久化的 menu key；
 - 数据库表名、约束名、Alembic revision/down_revision；
-- Celery task name、队列名和定时任务标识；
+- Celery task name、队列名和定时任务标识（Celery 已列入退役计划，
+  存量契约在退役完成前照常受保护）；
 - 环境变量名、Compose service/volume 名和健康检查入口；
 - HashRouter 深链、公开分享/下载 URL、localStorage key；
 - SSE、WebSocket、API Hub `/api-hub` 与 `/proxy` 协议。
