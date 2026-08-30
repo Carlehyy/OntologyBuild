@@ -163,6 +163,23 @@ export default function ConsistencyPanel({ ontologyId, versionId, onBackTranslat
               )}
             </div>
           )}
+          <div
+            data-testid="solidify-path-hint"
+            className="flex flex-wrap items-center gap-2 rounded-md bg-slate-50 px-2.5 py-1.5"
+          >
+            <span className="text-[11px] leading-5 text-slate-600">
+              消解路径：回译/补齐只更新业务画布，漂移消解需到需求文档视图重新生成文档并「生成本体模型」固化语义层。
+            </span>
+            {onGotoDocs && (
+              <button
+                type="button"
+                onClick={onGotoDocs}
+                className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] text-slate-700 transition-colors hover:bg-slate-100"
+              >
+                前往固化
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

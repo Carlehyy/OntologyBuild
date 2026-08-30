@@ -185,18 +185,22 @@ export function groupSemanticIssues(issues: OntologySemanticIssue[]): SemanticIs
   }))
 }
 
-/** 需要回译到业务画布的漂移：结构有画布无、同名签名不一致（均为人工改结构所致）。 */
-const BACK_TRANSLATE_CODES = new Set(['semantic_business_missing', 'semantic_signature_mismatch'])
+/** 需要回译到业务画布的漂移及逐项动作提示（均为人工改结构所致）。 */
+const BACK_TRANSLATE_ACTIONS: Record<string, string> = {
+  semantic_business_missing: '结构有、画布无，请补全对应业务语义',
+  semantic_signature_mismatch: '同名但签名不一致，请核对差异并对齐画布',
+}
 
 /**
- * 拼装「回译到业务语义」的对话消息：列出受影响元素，要求助手先复述理解再更新画布。
- * 无可回译条目时返回 null，调用方据此隐藏入口。
+ * 拼装「回译到业务语义」的对话消息：逐项列出受影响元素与期望动作，
+ * 要求助手先复述理解再更新画布。无可回译条目时返回 null，调用方据此隐藏入口。
  */
 export function composeBackTranslateMessage(issues: OntologySemanticIssue[]): string | null {
-  const targets = issues.filter(issue => BACK_TRANSLATE_CODES.has(issue.code))
+  const targets = issues.filter(issue => issue.code in BACK_TRANSLATE_ACTIONS)
   if (targets.length === 0) return null
-  const items = targets.map(issue =>
-    `${semanticIssueKindLabel(issue.kind)}「${issue.name || issue.id}」`)
-  return `我在本体模型中做了人工修改，请把以下改动回译到业务场景画布：${items.join('、')}。`
-    + '请先用业务语言复述你的理解，再更新画布。'
+  const lines = targets.map(issue =>
+    `- ${semanticIssueKindLabel(issue.kind)}「${issue.name || issue.id}」：${BACK_TRANSLATE_ACTIONS[issue.code]}`)
+  return '我在本体模型视图中人工修改了本体结构，请把以下改动逐项回译到业务场景画布：\n'
+    + lines.join('\n')
+    + '\n请先用业务语言复述你对每项改动的理解，确认无误后再用 upsert_elements 更新画布。'
 }

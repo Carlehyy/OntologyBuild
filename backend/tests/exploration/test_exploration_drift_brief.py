@@ -5,6 +5,7 @@
   3. 零差异绑定版本 → 注入「业务语义与本体结构当前一致」
   4. 简报计算抛错 → 回合照常完成且不注入小节（增强信号绝不摧毁回合）
   5. build_bound_version_brief 单测：未绑定/版本缺失 → None
+  6. 近期人工保存审计（名称级 diff）进入简报
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from app.exploration import orchestrator
 from app.exploration.drift_brief import build_bound_version_brief
 from app.exploration.models import ExplorationSession
 from app.ontologies.agent_runtime import llm_bridge
+from app.ontologies.inference.models import AuditLog
 
 from tests.exploration.test_exploration import _fake_model_config
 from tests.exploration.test_exploration_version_semantic import (
@@ -159,4 +161,30 @@ def test_brief_block_stays_compact(db, client, auth_headers, ontology):
 
     brief = build_bound_version_brief(db, row)
     assert brief is not None
-    assert len(brief.splitlines()) <= 12
+    assert len(brief.splitlines()) <= 15
+
+
+def test_brief_includes_recent_human_edit_audit(db, client, auth_headers,
+                                                ontology, admin_user):
+    """近期人工保存的审计（含名称级 diff）进入简报，供引导师定位人工改动。"""
+    release = _drifted_release(db, ontology["id"])
+    db.add(AuditLog(
+        ontology_id=ontology["id"], event_type="edit",
+        event_subtype="workspace_saved", user_id=admin_user.id,
+        user_name=admin_user.username,
+        description="保存草稿结构工作区", object_type="ontology_version",
+        object_id=release.id,
+        meta={"diff": {"objectTypes": {
+            "added": 1, "modified": 0, "deleted": 0,
+            "addedNames": ["验证对象Tmp"], "modifiedNames": [], "deletedNames": [],
+        }}},
+    ))
+    db.commit()
+    bound = _bound_session(client, auth_headers, release.id)
+    row = db.query(ExplorationSession).filter_by(id=bound["id"]).one()
+
+    brief = build_bound_version_brief(db, row)
+
+    assert "近期人工编辑" in brief
+    assert "保存结构工作区" in brief
+    assert "验证对象Tmp" in brief

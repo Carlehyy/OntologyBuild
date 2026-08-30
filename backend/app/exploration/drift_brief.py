@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.exploration.models import ExplorationSession
 from app.exploration.semantic_gate import semantic_consistency_issues
+from app.ontologies.inference.models import AuditLog
 from app.ontologies.versions.models import OntologyVersion
 from app.ontologies.versions.snapshot_contract import complete_snapshot
 
@@ -27,14 +28,69 @@ _CODE_MEANINGS = {
     "semantic_document_stale": "需求文档或画布指纹已过期",
 }
 
-# 注入预算：最多 5 条代表差异，单条消息截断，整块控制在十几行内
+# 注入预算：最多 5 条代表差异 + 3 条近期人工编辑，单条截断，整块控制在十几行内
 _MAX_SAMPLES = 5
+_MAX_AUDIT_LINES = 3
 _MESSAGE_CAP = 120
+
+_SUBTYPE_LABELS = {
+    "workspace_saved": "保存结构工作区",
+    "workspace_mappings_saved": "保存数据映射",
+}
+_COLLECTION_LABELS = {
+    "objectTypes": "对象类型", "linkTypes": "关系类型", "actions": "动作",
+    "functions": "函数", "sentinels": "哨兵",
+    "mappings": "属性映射", "linkMappings": "关系映射",
+}
 
 
 def _clip(text: str) -> str:
     message = " ".join(str(text or "").split())
     return message[:_MESSAGE_CAP] + "…" if len(message) > _MESSAGE_CAP else message
+
+
+def _summarize_diff(diff: dict) -> str:
+    """把 _diff_formal 的输出压成一行可读摘要：优先名称，退化为计数。"""
+    parts: list[str] = []
+    for key, label in _COLLECTION_LABELS.items():
+        entry = diff.get(key) or {}
+        for verb, names_key, count_key in (
+            ("新增", "addedNames", "added"),
+            ("修改", "modifiedNames", "modified"),
+            ("删除", "deletedNames", "deleted"),
+        ):
+            names = entry.get(names_key) or []
+            count = entry.get(count_key) or 0
+            if names:
+                seg = f"{verb}{label}「{'、'.join(names[:3])}」"
+                if count > len(names[:3]):
+                    seg += f"等{count}项"
+                parts.append(seg)
+            elif count:
+                parts.append(f"{verb}{label}{count}项")
+    return "；".join(parts)
+
+
+def _recent_human_edit_lines(db: Session, version: OntologyVersion) -> list[str]:
+    """该版本最近的人工保存审计（新→旧），供引导师定位「谁刚改了什么」。"""
+    rows = (db.query(AuditLog)
+            .filter(AuditLog.ontology_id == version.ontology_id,
+                    AuditLog.object_type == "ontology_version",
+                    AuditLog.object_id == version.id,
+                    AuditLog.event_subtype.in_(list(_SUBTYPE_LABELS)))
+            .order_by(AuditLog.created_at.desc())
+            .limit(_MAX_AUDIT_LINES)
+            .all())
+    lines: list[str] = []
+    for row in rows:
+        ts = row.created_at.strftime("%m-%d %H:%M") if row.created_at else ""
+        label = _SUBTYPE_LABELS.get(row.event_subtype, row.event_subtype or "编辑")
+        summary = _summarize_diff(((row.meta or {}).get("diff")) or {})
+        line = f"- {ts} {row.user_name or '未知用户'} {label}"
+        if summary:
+            line += f"：{summary}"
+        lines.append(_clip(line))
+    return lines
 
 
 def build_bound_version_brief(
@@ -76,6 +132,10 @@ def build_bound_version_brief(
             lines.append(f"- …（其余 {len(issues) - _MAX_SAMPLES} 项从略）")
     else:
         lines.append("业务语义与本体结构当前一致（0 项差异）。")
+    edit_lines = _recent_human_edit_lines(db, version)
+    if edit_lines:
+        lines.append("近期人工编辑（审计留痕，新的在前）：")
+        lines.extend(edit_lines)
     lines.append(
         "这些差异很可能来自用户在本体模型视图的人工修改；当用户确认时，使用 "
         "upsert_elements/remove_elements 把对应改动回译到业务场景画布，"

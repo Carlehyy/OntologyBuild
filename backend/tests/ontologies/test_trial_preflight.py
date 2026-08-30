@@ -473,6 +473,7 @@ def test_workspace_save_writes_exactly_one_audit_log(
     assert meta["snapshotHash"] == saved.json()["data"]["snapshotHash"]
     assert meta["diff"]["objectTypes"] == {
         "added": 1, "modified": 0, "deleted": 0,
+        "addedNames": ["Order"], "modifiedNames": [], "deletedNames": [],
     }
     assert meta["diff"]["total"] == {
         "added": 1, "modified": 0, "deleted": 0,
@@ -525,4 +526,5 @@ def test_workspace_mappings_save_writes_exactly_one_audit_log(
     assert meta["snapshotHash"] == mapped.json()["data"]["snapshotHash"]
     assert meta["diff"]["mappings"] == {
         "added": 1, "modified": 0, "deleted": 0,
+        "addedNames": ["mapping-order"], "modifiedNames": [], "deletedNames": [],
     }

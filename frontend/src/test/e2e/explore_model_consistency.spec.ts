@@ -324,12 +324,15 @@ test.describe('业务澄清 · 本体模型一致性面板与试跑预检', () =
     await expect(page.getByTestId('consistency-group-semantic_business_missing'))
       .toContainText('结构中的对象「订单」在业务画布中没有对应对象/主体')
 
+    // 漂移消解路径引导常驻展示
+    await expect(page.getByTestId('solidify-path-hint')).toContainText('消解路径')
+
     // 结构缺失 → 引导回需求文档视图重新「生成本体模型」
     await page.getByTestId('regenerate-model-hint').click()
     await expect(page.getByTestId('explore-view-docs')).toHaveAttribute('aria-pressed', 'true')
   })
 
-  test('回译到业务语义把受影响元素拼装为一条对话消息发出', async ({ page }) => {
+  test('回译到业务语义把受影响元素逐项拼装为一条对话消息发出', async ({ page }) => {
     const state = newState()
     await mockExploreModel(page, state)
 
@@ -339,13 +342,14 @@ test.describe('业务澄清 · 本体模型一致性面板与试跑预检', () =
 
     await expect.poll(() => state.chatMessages.length).toBe(1)
     const message = state.chatMessages[0]
-    expect(message).toContain('我在本体模型中做了人工修改')
-    expect(message).toContain('对象类型「订单」、动作「审批」')
-    expect(message).toContain('请先用业务语言复述你的理解，再更新画布。')
+    expect(message).toContain('我在本体模型视图中人工修改了本体结构')
+    expect(message).toContain('- 对象类型「订单」：结构有、画布无，请补全对应业务语义')
+    expect(message).toContain('- 动作「审批」：同名但签名不一致，请核对差异并对齐画布')
+    expect(message).toContain('请先用业务语言复述你对每项改动的理解')
     // 结构缺失/文档过期不回译，只提示到需求文档视图补齐
     expect(message).not.toContain('订单明细')
     expect(message).not.toContain('需求文档「需求文档」')
-    await expect(page.getByText(/我在本体模型中做了人工修改/)).toBeVisible()
+    await expect(page.getByText(/我在本体模型视图中人工修改/)).toBeVisible()
     await expect(page.getByText('已复述理解并同步画布', { exact: true })).toBeVisible()
   })
 
@@ -374,7 +378,7 @@ test.describe('业务澄清 · 本体模型一致性面板与试跑预检', () =
     await page.getByTestId('explore-trial-entry').click()
 
     const dialog = page.getByRole('dialog')
-    await expect(dialog.getByText('权威门禁', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('试跑门禁', { exact: true })).toBeVisible()
     await expect(page.getByTestId('trial-preflight-check-editable_draft')).toContainText('草稿可编辑')
     await expect(page.getByTestId('trial-preflight-check-semantic_consistency')).toContainText('语义一致性')
     await expect(page.getByTestId('trial-preflight-checks').getByTestId(/trial-preflight-check-/)).toHaveCount(6)
