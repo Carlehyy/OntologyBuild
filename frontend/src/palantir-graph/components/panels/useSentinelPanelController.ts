@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
 import { v4 as uuidv4 } from 'uuid'
 import { apiClientV2 } from '../../../api/client'
 import {
@@ -30,7 +29,8 @@ const errorText = (error: any) => (
 export function useSentinelPanelController({
   isOpen,
 }: UseSentinelPanelControllerOptions) {
-  const { id: ontologyId } = useParams<{ id: string }>()
+  // 本体 id 取自工作区 store（loadFromBackend 写入），与路由解耦以便嵌入其他页面
+  const ontologyId = useOntologyStore(state => state.backendId)
   const { ontology } = useOntologyStore()
   const workspaceMode = useOntologyStore(state => state.workspaceMode)
   const workspaceVersionId = useOntologyStore(

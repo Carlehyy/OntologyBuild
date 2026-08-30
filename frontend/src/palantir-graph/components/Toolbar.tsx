@@ -22,9 +22,13 @@ import type { GraphWorkspaceCapabilities } from '../workspaceCapabilities';
 interface ToolbarProps {
   capabilities: GraphWorkspaceCapabilities;
   onOpenSearch: () => void;
+  /** 覆盖「返回」行为；缺省为 history 后退。嵌入模式下由宿主接管或不渲染 */
+  onBack?: () => void;
+  /** 是否渲染「返回」按钮（嵌入宿主有自己的导航时传 false） */
+  showBack?: boolean;
 }
 
-export default function Toolbar({ capabilities, onOpenSearch }: ToolbarProps) {
+export default function Toolbar({ capabilities, onOpenSearch, onBack, showBack = true }: ToolbarProps) {
   const navigate = useNavigate();
   const {
     ontology, openPanel, exportOntology, importOntology, reset, autoLayout,
@@ -78,6 +82,10 @@ export default function Toolbar({ capabilities, onOpenSearch }: ToolbarProps) {
 
   const handleBack = () => {
     if (isDirty && !confirm('有未保存的改动，离开将丢失。确定返回？')) return;
+    if (onBack) {
+      onBack();
+      return;
+    }
     navigate(-1);
   };
 
@@ -316,16 +324,18 @@ export default function Toolbar({ capabilities, onOpenSearch }: ToolbarProps) {
             </span>
           </button>
 
-          <button
-            onClick={handleBack}
-            className="w-11 h-11 flex items-center justify-center rounded-xl bg-surface-700/50 hover:bg-surface-600/50 text-surface-400 hover:text-surface-200 transition-all duration-200 group relative"
-            title="返回"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-            <span className="absolute left-full ml-3 px-2 py-1 bg-surface-800 text-surface-200 text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
-              返回
-            </span>
-          </button>
+          {showBack && (
+            <button
+              onClick={handleBack}
+              className="w-11 h-11 flex items-center justify-center rounded-xl bg-surface-700/50 hover:bg-surface-600/50 text-surface-400 hover:text-surface-200 transition-all duration-200 group relative"
+              title="返回"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+              <span className="absolute left-full ml-3 px-2 py-1 bg-surface-800 text-surface-200 text-sm rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+                返回
+              </span>
+            </button>
+          )}
         </div>
       </div>
 
