@@ -25,20 +25,17 @@
 - `motion-ui/` 已随第二个消费方（世界模型页域）提升为共享层，页面可直接
   import；新增动效优先复用其中的原语与 ease/touch 基础设施。
 
-## 当前 vendored beUI 清单
+## beUI 目录与清单（单一事实源）
 
-| 内容 | 入口 | 说明 |
-|---|---|---|
-| AvailabilityScheduler | [`availability-scheduler/index.tsx`](./availability-scheduler/index.tsx) | 每周可用时段编辑器；`weekdayLabels` / `hourCycle` / `texts` 三个 props 可覆盖中文与 24 小时制默认；受控/非受控均支持。活示例：登录后访问 `/#/design/components` |
-| AnimatedNumber | [`motion-ui/animated-number.tsx`](./motion-ui/animated-number.tsx) | 数字滚动（进视口触发、尊重减少动态效果）；统计卡数值常用 |
-| TiltCard | [`motion-ui/tilt-card.tsx`](./motion-ui/tilt-card.tsx) | 指针跟随 3D 倾转 + 高光；仅真悬停设备生效，展示型卡片用 |
-| CenterMorphModal | [`motion-ui/center-morph-modal.tsx`](./motion-ui/center-morph-modal.tsx) | 中心展开式 morph 弹窗（role=dialog、焦点圈定）；轻量告知类弹窗可用，重表单仍用平台 Modal |
-| motion 原语（Switch、Checkbox、Tooltip、Select、MorphPopover、IconButton） | [`motion-ui/`](./motion-ui/) | 共享层，页面可直接使用；同类控件与 antd/shadcn 不得在同一子树混用 |
-| 动效基础设施（ease 弹性曲线、touch 手势工具、use-dismiss 等 hooks、presence-gate） | [`motion-ui/`](./motion-ui/) | 同上 |
-
-**API 文档就是源码**（shadcn 哲学：代码归你，直接读文件）；上游浏览与官方演示
-见 <https://beui.dev>（MIT，github.com/starc007/ui-components），但一律以本目录
-vendored 版本为准。
+- **上游目录速查（含 B 端适配策展）**：[`motion-ui/catalog.ts`](./motion-ui/catalog.ts)
+  ——上游全部 motion 组件的「已引入 / 可按需引入 / 不适用 B 端」三态标注，
+  钉死在上游 commit `afba7fa055dd`，agent 选型时直接读它；
+- **人类视角渲染**：登录后访问 `/#/design/components`——已引入组件的活示例 +
+  目录速查表（画廊受 e2e 门禁保护，示例腐坏会直接红灯）；
+- **API**：已引入组件以 `motion-ui/` 源码为准（shadcn 哲学：代码归你，直接读）；
+  未引入组件按 catalog 条目的上游路径取源码评估依赖闭包；
+- beui.dev 仅作人类浏览参考；机器选型一律走 catalog.ts 或上游仓库树
+  （`api.github.com/repos/starc007/ui-components/git/trees/main?recursive=1`）。
 
 ## 引入下一个 beUI 组件的流程
 

@@ -34,6 +34,9 @@ test('组件预览：availability-scheduler 渲染、开关、加时段与复制
   const dashesBefore = await page.getByText('–', { exact: true }).count()
   await page.getByRole('button', { name: '添加时间段：星期一' }).click()
   await expect(page.getByText('–', { exact: true })).toHaveCount(dashesBefore + 1)
+  // 等弹簧布局沉降：MorphPopover 定位跟踪窗口滚动但不跟踪布局位移，
+  // 行仍在弹簧中时测量会把弹层锚在旧坐标（toHaveCount 是 DOM 计数，动画中即命中）
+  await page.waitForTimeout(700)
 
   // 复制星期五到每天：先把该行滚到视口中部，避免 fixed 弹层落到视口外
   await page.getByRole('switch', { name: '切换星期五可用' })
@@ -43,4 +46,26 @@ test('组件预览：availability-scheduler 渲染、开关、加时段与复制
   await page.getByRole('button', { name: '每天', exact: true }).click()
   await expect(page.getByText('不可用', { exact: true })).toHaveCount(0)
   await expect(page.getByTestId('scheduler-value')).toContainText('"sun"')
+})
+
+test('组件画廊：目录速查与动效原语示例', async ({ page }) => {
+  await authenticate(page)
+  await page.goto('/#/design/components')
+
+  // 上游目录速查：可引入/不适用两桶都渲染（策展数据源 motion-ui/catalog.ts）
+  const catalog = page.getByTestId('beui-catalog')
+  await expect(catalog).toBeVisible()
+  await expect(catalog.getByText('drawer', { exact: true })).toBeVisible()
+  await expect(catalog.getByText('combobox', { exact: true })).toBeVisible()
+  await expect(catalog.getByText(/不适用 B 端/)).toBeVisible()
+
+  // 原语示例可交互：开关切换
+  await page.getByRole('switch', { name: '演示开关' }).click()
+
+  // morph 弹窗演示：可打开、Esc 可关闭
+  await page.getByRole('button', { name: '打开演示弹窗' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
 })
