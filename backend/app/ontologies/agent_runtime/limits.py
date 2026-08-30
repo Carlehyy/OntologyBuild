@@ -92,6 +92,22 @@ _LIMITS: tuple[AgentRuntimeLimit, ...] = (
         "path_node_budget", 2000, 10, 1_000_000,
         "AGENT_PATH_NODE_BUDGET",
         "一次多跳最多访问的节点总数"),
+    AgentRuntimeLimit(
+        "world_model_list_cap", 20, 1, 200,
+        "AGENT_WORLD_MODEL_LIST_CAP",
+        "list_world_model_services 单次返回的可用/不可用服务数上限"),
+    AgentRuntimeLimit(
+        "world_model_example_chars", 2000, 200, 100_000,
+        "AGENT_WORLD_MODEL_EXAMPLE_CHARS",
+        "推演服务示例入参（exampleInput）展示的字符上限"),
+    AgentRuntimeLimit(
+        "world_model_invoke_per_turn", 2, 1, 20,
+        "AGENT_WORLD_MODEL_INVOKE_PER_TURN",
+        "单回合最多调用的世界模型推演次数（内核执行成本护栏）"),
+    AgentRuntimeLimit(
+        "world_model_context_chars", 50_000, 1000, 200_000,
+        "AGENT_WORLD_MODEL_CONTEXT_CHARS",
+        "推演入参 context+actions 序列化后的字符上限（世界模型侧另有 100K 硬顶）"),
 )
 
 _LIMIT_BY_KEY: dict[str, AgentRuntimeLimit] = {item.key: item for item in _LIMITS}

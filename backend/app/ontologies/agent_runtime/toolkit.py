@@ -18,10 +18,13 @@
   explain_sentinel_firing 哨兵触发解释（条件求值 + 命中证据 + 状态语义）
   list_actions       授权范围内的动作及参数说明
   run_decision_simulation 隔离快照上的多视角决策推演（只写推演运行记录）
+  list_world_model_services 当前本体可用的世界模型推演服务（按语义注册过滤 + 漂移/前置条件检查）
+  run_world_model_simulation 调用世界模型推演服务（确定性脚本执行，调用经 world_model 调用记录审计）
   propose_action     动作预演（引擎 dry-run：校验 + 模拟效果，不落实际变更）
 """
 from __future__ import annotations
 
+import json
 import time
 from typing import Any, Optional
 
@@ -383,6 +386,25 @@ TOOL_DEFS: list[dict] = [
         },
     },
     {
+        "name": "list_world_model_services",
+        "description": "列出当前本体可用的世界模型推演服务（已发布且语义注册到本本体的服务）。可用服务附带示例入参 exampleInput（context/actions/horizon 的期望形状）；因本体版本演进（依赖对象类型缺失）或数据不足（前置条件不满足）暂不可用的服务会给出原因。做未来态势/what-if 数据推演前先调用本工具。",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "run_world_model_simulation",
+        "description": "调用一个世界模型推演服务做确定性推演：context 按服务示例入参的形状、用查询工具收集的真实数据组装，actions 为干预动作，horizon 为推演步长。返回结构化结果与调用记录编号；结果中的数字必须原样引用，不得自行改算或外推。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "service_id": {"type": "string", "description": "服务 id（来自 list_world_model_services）"},
+                "context": {"type": "object", "description": "推演入参，形状参照服务 exampleInput 的 context", "additionalProperties": True},
+                "actions": {"type": "array", "description": "干预动作列表，形状参照 exampleInput 的 actions", "items": {}},
+                "horizon": {"type": "integer", "description": "推演步长/时间窗口", "minimum": 0},
+            },
+            "required": ["service_id", "context"],
+        },
+    },
+    {
         "name": "propose_action",
         "description": "对某动作做预演（dry-run）：跑完整校验并模拟全部效果，但不落任何实际变更。这是 agent 唯一的'写'入口——预演结果会作为提案展示给用户，由用户决定是否真实执行。需要修改数据时必须用本工具，禁止假装已经执行。",
         "parameters": {
@@ -537,13 +559,17 @@ class ToolRunner:
     顺带收集引用（citations）——回答里出现过的实例都可追溯。"""
 
     def __init__(self, db: Session, scope: AgentScope, *,
-                 decision_context: Optional[dict] = None):
+                 decision_context: Optional[dict] = None,
+                 world_model_context: Optional[dict] = None):
         self.db = db
         self.scope = scope
         self.decision_context = decision_context or {}
+        # 世界模型推演上下文：{"user": <User>} —— 菜单权限门控 + 调用记录审计人
+        self.world_model_context = world_model_context or {}
         self.citations: list[dict] = []
         self.proposals: list[dict] = []
         self._cited: set[str] = set()
+        self._world_model_invocations = 0
 
     def _cite(self, inst: ObjectInstance):
         if inst.id in self._cited or len(self.citations) >= runtime_limit("citation_cap"):
@@ -1299,6 +1325,162 @@ class ToolRunner:
             model_config_id=context.get("model_config_id"),
         )
         return compact_tool_result(run)
+
+    # ------------------------------------------------------------ 世界模型推演
+
+    def _require_world_model_access(self) -> None:
+        """世界模型推演是跨域能力：进程内调用绕过了 world_model 路由的
+        menu_guard，必须在此复刻同一道菜单权限门（Q2 决策：要求 world_model key）。"""
+        from app.auth.permissions import user_has_menu_access
+        user = self.world_model_context.get("user")
+        if user is None:
+            raise ToolError("当前调用缺少用户上下文，无法使用世界模型推演")
+        if not user_has_menu_access(self.db, user, "world_model"):
+            raise ToolError(
+                "当前用户没有「世界模型」菜单权限，无法使用世界模型推演；"
+                "请联系管理员在用户管理的角色菜单中勾选。")
+
+    def _world_model_eligibility(self, service) -> tuple[bool, list[str]]:
+        """服务对当前会话是否可用：本体绑定 → 类型存在（含授权白名单交集，
+        兼作版本漂移检测）→ 前置条件实例数。任一不满足给出人可读原因。"""
+        binding = service.applicable_object_types
+        if not isinstance(binding, dict):
+            return False, ["服务未登记本体语义注册信息"]
+        if binding.get("ontology_id") != self.scope.ontology.id:
+            return False, ["服务未注册到当前本体"]
+        reasons: list[str] = []
+        known = self.scope.object_types
+        missing = [t for t in (binding.get("object_type_ids") or []) if t not in known]
+        if missing:
+            reasons.append(
+                f"依赖的 {len(missing)} 个对象类型已不在当前版本或授权范围内"
+                "（本体版本演进或权限变更），需要服务维护者重新发布")
+        counts = self.scope.instance_counts()
+        for pre in (service.preconditions or []):
+            if not isinstance(pre, dict):
+                continue
+            tid = str(pre.get("object_type_id") or "")
+            need = int(pre.get("min_count") or 1)
+            have = counts.get(tid, 0)
+            if have < need:
+                ot = known.get(tid)
+                label = ot.display_name if ot else tid
+                reasons.append(f"前置条件不满足：{label} 实例数 {have} < 要求 {need}")
+        return (not reasons), reasons
+
+    def _world_model_example(self, service) -> Optional[dict]:
+        """取发布时冻结版本的 test_input 作为 context 组装样板（截断保护）。"""
+        from app.world_model.models import WorldModelScriptVersion
+        if not service.version_id:
+            return None
+        version = self.db.get(WorldModelScriptVersion, service.version_id)
+        if version is None or not isinstance(version.test_input, dict):
+            return None
+        payload = json.dumps(version.test_input, ensure_ascii=False, default=str)
+        cap = runtime_limit("world_model_example_chars")
+        if len(payload) > cap:
+            return {"_truncated": True, "preview": payload[:cap]}
+        return version.test_input
+
+    def _tool_list_world_model_services(self, args: dict) -> dict:
+        self._require_world_model_access()
+        from app.world_model.models import SERVICE_STATUS_ONLINE, WorldModelService
+        rows = (self.db.query(WorldModelService)
+                .filter(WorldModelService.status == SERVICE_STATUS_ONLINE)
+                .order_by(WorldModelService.updated_at.desc()).all())
+        available: list[dict] = []
+        blocked: list[dict] = []
+        known = self.scope.object_types
+        for svc in rows:
+            binding = svc.applicable_object_types
+            if not isinstance(binding, dict) or binding.get("ontology_id") != self.scope.ontology.id:
+                continue  # 注册到其他本体的服务不进入本会话视野
+            item = {
+                "serviceId": svc.id,
+                "name": svc.name,
+                "description": svc.description or "",
+                "applicableObjectTypes": [
+                    known[t].display_name if t in known else t
+                    for t in (binding.get("object_type_ids") or [])],
+            }
+            ok, reasons = self._world_model_eligibility(svc)
+            if ok:
+                example = self._world_model_example(svc)
+                if example is not None:
+                    item["exampleInput"] = example
+                available.append(item)
+            else:
+                item["reasons"] = reasons
+                blocked.append(item)
+        cap = runtime_limit("world_model_list_cap")
+        return {
+            "kind": "world_model_services",
+            "available": available[:cap],
+            "blocked": blocked[:cap],
+            "note": ("调用 run_world_model_simulation 时 context/actions 按 exampleInput 的形状、"
+                     "用查询工具收集的真实数据组装；blocked 为版本演进或数据不足暂不可用的服务。"),
+        }
+
+    def _tool_run_world_model_simulation(self, args: dict) -> dict:
+        self._require_world_model_access()
+        cap_invokes = runtime_limit("world_model_invoke_per_turn")
+        if self._world_model_invocations >= cap_invokes:
+            raise ToolError(
+                f"本回合世界模型推演调用已达上限（{cap_invokes} 次）；"
+                "请基于已有推演结果作答，或把问题拆到下一回合。")
+        from fastapi import HTTPException
+        from app.world_model import service as world_model_service
+        from app.world_model.models import SERVICE_STATUS_ONLINE, WorldModelService
+        from app.world_model.schemas import InvokeRequest
+        service_id = str(args.get("service_id") or "").strip()
+        if not service_id:
+            raise ToolError("缺少 service_id；请先用 list_world_model_services 获取可用服务。")
+        svc = self.db.get(WorldModelService, service_id)
+        if svc is None:
+            raise ToolError("推演服务不存在或已被删除。")
+        if svc.status != SERVICE_STATUS_ONLINE:
+            raise ToolError(f"推演服务「{svc.name}」当前状态为 {svc.status}，未在线。")
+        ok, reasons = self._world_model_eligibility(svc)
+        if not ok:
+            raise ToolError(f"推演服务「{svc.name}」当前不可用：" + "；".join(reasons))
+        context = args.get("context") if isinstance(args.get("context"), dict) else {}
+        actions = args.get("actions") if isinstance(args.get("actions"), list) else []
+        try:
+            horizon = int(args.get("horizon", 1))
+        except (TypeError, ValueError):
+            horizon = 1
+        horizon = max(0, horizon)
+        try:
+            size = len(json.dumps({"context": context, "actions": actions},
+                                  ensure_ascii=False, default=str))
+        except (TypeError, ValueError) as exc:
+            raise ToolError("context/actions 必须是可 JSON 序列化的数据") from exc
+        cap_chars = runtime_limit("world_model_context_chars")
+        if size > cap_chars:
+            raise ToolError(
+                f"context+actions 序列化后 {size} 字符，超过上限 {cap_chars}；"
+                "请缩小数据范围后重试。")
+        user = self.world_model_context.get("user")
+        try:
+            self._world_model_invocations += 1
+            result = world_model_service.invoke_service(
+                self.db, service_id,
+                InvokeRequest(context=context, actions=actions, horizon=horizon),
+                user)
+        except HTTPException as exc:
+            detail = exc.detail
+            message = str(detail.get("message") or detail) if isinstance(detail, dict) else str(detail)
+            raise ToolError(f"推演服务调用失败：{message}") from exc
+        return {
+            "kind": "world_model_simulation",
+            "serviceId": service_id,
+            "serviceName": svc.name,
+            "ok": bool(result.ok),
+            "payload": result.payload,
+            "error": result.error,
+            "durationMs": result.duration_ms,
+            "callId": result.call_id,
+        }
 
     def _tool_list_dynamic_sentinels(self, args: dict) -> dict:
         if self.scope.release is None:

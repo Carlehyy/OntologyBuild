@@ -90,7 +90,7 @@ def _system_prompt(scope) -> str:
 9. 管理哨兵时，只能管理来源为 assistant_dynamic 的动态哨兵。发布版本内置哨兵只读且绝不能生成其编辑、启停或删除提案。所有动态哨兵变更必须先用 propose_dynamic_sentinel_change 生成提案，等待用户在界面确认；创建后默认停用，必须通过当前发布版全量试跑才能启用。
 10. 用户问「这条哨兵为什么触发 / 为什么没触发 / 为什么执行了动作」时，用 explain_sentinel_firing：它基于触发记录与命中快照做确定性还原，给出条件表达式、每个命中元组的对象与属性值证据、条件与绑定过滤的求值结果、状态语义与动作结果。解释以工具返回为准，不得臆造求值细节；snapshotMissing=true 或 matchLimit 截断时必须如实说明。
 11. 用户明确要“决策推演、比较未来方案、what-if、辅助决策”时，必须调用 run_decision_simulation。可以先用查询工具澄清对象，但不能用普通文字冒充推演结果。推演中的多视角数量不是概率，评分不是因果证明；回答要说明数据截止时间、关键假设、分歧、早期信号和停止条件。推演只给建议，任何真实动作仍须另行生成提案并由用户确认。
-10. 用户明确要“决策推演、比较未来方案、what-if、辅助决策”时，必须调用 run_decision_simulation。可以先用查询工具澄清对象，但不能用普通文字冒充推演结果。推演中的多视角数量不是概率，评分不是因果证明；回答要说明数据截止时间、关键假设、分歧、早期信号和停止条件。推演只给建议，任何真实动作仍须另行生成提案并由用户确认。
+12. 用户问「未来会怎样 / 如果…会怎样 / 态势推演」且面向数据演化时：先用 list_world_model_services 查看本本体可用的世界模型推演服务；有可用服务时，按其 exampleInput 形状用查询工具收集真实数据组装 context，再调用 run_world_model_simulation。推演返回的数字必须原样引用，禁止自行换算或外推；回答需注明所用服务名与推演步长。无可用服务时如实说明，不能用文字冒充推演结果。它与决策推演分工不同：比较方案取舍用 run_decision_simulation，问数据演化轨迹用世界模型。
 
 {_CHARTS_GUIDE}
 {extra_block}"""
@@ -137,6 +137,12 @@ def _summarize(name: str, result: dict) -> str:
     if name == "run_decision_simulation":
         return (f"决策推演完成：{result.get('perspectiveCount', 0)} 个视角，"
                 f"建议「{result.get('recommendedOption') or '待复核'}」")
+    if name == "list_world_model_services":
+        return (f"世界模型推演服务：{len(result.get('available', []))} 个可用、"
+                f"{len(result.get('blocked', []))} 个不可用")
+    if name == "run_world_model_simulation":
+        return (f"世界模型推演「{result.get('serviceName', '')}」"
+                f"{'完成' if result.get('ok') else '失败'}（{result.get('durationMs', 0)}ms）")
     if name == "list_dynamic_sentinels":
         return f"{len(result.get('sentinels', []))} 个助手动态哨兵"
     if name == "propose_dynamic_sentinel_change":
@@ -386,7 +392,7 @@ def _run(db: Session, ontology_id: str, user, question: str,
         "created_by": user_id,
         "model_config_id": getattr(cfg, "id", None),
         "call_kwargs": call_kwargs,
-    })
+    }, world_model_context={"user": user})
     steps: list[dict] = []
     usage_total = {"inputTokens": 0, "outputTokens": 0}
     answer: Optional[str] = None
