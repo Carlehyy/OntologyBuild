@@ -118,6 +118,13 @@ export interface OntologyImpactReport {
   total: { added: number; modified: number; deleted: number }
   /** 旧后端无此字段，前端按缺失处理（不渲染业务语义区块）。 */
   semanticOverview?: OntologySemanticOverview
+  /** 本次删除的对象类型将使其失效的已发布推演服务（实时查询，不参与 impact 哈希）。 */
+  worldModelImpact?: Array<{
+    serviceId: string
+    name: string
+    status: string
+    missingObjectTypeIds: string[]
+  }>
   releaseReadiness?: {
     ready: boolean
     blockingCount: number

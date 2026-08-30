@@ -14,10 +14,11 @@
   GET    /projects/{id}/versions        脚本版本列表
   GET    /projects/{id}/versions/{vid}  版本详情（含脚本，供恢复）
 
-  推演服务（发布即上线，一个项目一个在线服务）：
-  GET    /projects/{id}/service         当前服务信息（未发布为 null）
-  POST   /projects/{id}/publish         发布/覆盖更新（冻结版本 + 本体语义注册）
-  POST   /projects/{id}/service/status  上线 / 下线
+  推演服务（发布即上线；一个项目可发布多个服务，每个绑定一个本体）：
+  GET    /projects/{id}/service         代表性服务信息（兼容入口，未发布为 null）
+  GET    /projects/{id}/services        项目全部已发布服务（多本体发布列表）
+  POST   /projects/{id}/publish         发布/覆盖更新（同一本体覆盖，跨本体新增）
+  POST   /projects/{id}/service/status  上线 / 下线（批量作用于项目全部服务）
   POST   /services/{id}/invoke          调用（写调用记录）
 
   推演服务注册表（跨项目，推演服务页数据源）：
@@ -221,6 +222,17 @@ def get_project_service(
 ):
     svc = service.get_project_service(db, project_id)
     return _ok(service.service_out(db, svc).model_dump() if svc else None)
+
+
+@router.get("/projects/{project_id}/services")
+def list_project_services(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """项目的全部已发布服务（多本体发布后一个项目可有 N 个，每个绑定一个本体）。"""
+    rows = service.list_project_services(db, project_id)
+    return _ok([service.service_out(db, s).model_dump() for s in rows])
 
 
 @router.post("/projects/{project_id}/publish", status_code=201)
