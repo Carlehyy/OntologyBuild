@@ -34,7 +34,10 @@ export default function ConsistencyPanel({ ontologyId, versionId, onBackTranslat
   const hasDocumentIssue = issues.some(
     issue => issue.code === 'semantic_document_missing' || issue.code === 'semantic_document_stale',
   )
-  const consistent = issues.length === 0
+  // 语义层缺失与「零漂移」是两回事：版本未经过澄清流程沉淀语义层时，
+  // 三面比对无从谈起，必须展示为独立状态，不能误报「一致」。
+  const noSemanticLayer = Boolean(data && data.overview && data.overview.hasSemanticLayer === false)
+  const consistent = !noSemanticLayer && issues.length ===  0
 
   return (
     <div
@@ -48,32 +51,56 @@ export default function ConsistencyPanel({ ontologyId, versionId, onBackTranslat
         data-testid="consistency-panel-toggle"
         className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-bg-hover)]"
       >
-        <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${consistent
-          ? 'bg-teal-50 text-teal-700' : 'bg-amber-50 text-amber-700'}`}>
-          {consistent ? <ShieldCheck size={13} /> : <ShieldAlert size={13} />}
+        <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${noSemanticLayer
+          ? 'bg-slate-100 text-slate-500' : consistent
+            ? 'bg-teal-50 text-teal-700' : 'bg-amber-50 text-amber-700'}`}>
+          {noSemanticLayer ? <FileText size={13} /> : consistent ? <ShieldCheck size={13} /> : <ShieldAlert size={13} />}
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-primary)]">
             一致性状态
             <span
               data-testid="consistency-status-badge"
-              className={`rounded-full px-1.5 py-0.5 text-[10px] ${consistent
-                ? 'bg-teal-50 text-teal-700' : 'bg-amber-50 text-amber-700'}`}
+              className={`rounded-full px-1.5 py-0.5 text-[10px] ${noSemanticLayer
+                ? 'bg-slate-100 text-slate-600' : consistent
+                  ? 'bg-teal-50 text-teal-700' : 'bg-amber-50 text-amber-700'}`}
             >
-              {consistent ? '一致' : `${issues.length} 项漂移`}
+              {noSemanticLayer ? '未沉淀语义层' : consistent ? '一致' : `${issues.length} 项漂移`}
             </span>
           </span>
           <span className="mt-0.5 block truncate text-[11px] text-[var(--color-text-tertiary)]">
-            {consistent
-              ? '业务画布 · 需求文档 · 本体结构三面一致'
-              : '人工修改与业务语义存在出入 · 点击查看明细'}
+            {noSemanticLayer
+              ? '该版本尚未经过业务澄清沉淀语义层，暂无可比对的画布与文档'
+              : consistent
+                ? '业务画布 · 需求文档 · 本体结构三面一致'
+                : '人工修改与业务语义存在出入 · 点击查看明细'}
           </span>
         </span>
         {expanded
           ? <ChevronDown size={13} className="shrink-0 text-[var(--color-text-tertiary)]" />
           : <ChevronRight size={13} className="shrink-0 text-[var(--color-text-tertiary)]" />}
       </button>
-      {expanded && !consistent && (
+      {expanded && noSemanticLayer && (
+        <div className="border-t border-[var(--color-border)] px-3 pb-3 pt-2.5">
+          <div className="flex flex-wrap items-center gap-2 rounded-md bg-slate-50 px-2.5 py-1.5">
+            <FileText size={12} className="shrink-0 text-slate-500" />
+            <span className="text-[11px] leading-5 text-slate-600">
+              语义层在「生成本体模型」落地时沉淀；生成后此处即可比对业务画布、需求文档与本体结构的三面一致性。
+            </span>
+            {onGotoDocs && (
+              <button
+                type="button"
+                onClick={onGotoDocs}
+                data-testid="goto-docs-no-semantic"
+                className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] text-slate-700 transition-colors hover:bg-slate-100"
+              >
+                前往需求文档视图
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {expanded && !noSemanticLayer && !consistent && (
         <div className="space-y-2.5 border-t border-[var(--color-border)] px-3 pb-3 pt-2.5">
           {groups.map(group => (
             <div key={group.code} data-testid={`consistency-group-${group.code}`}>
