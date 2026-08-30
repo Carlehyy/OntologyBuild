@@ -7,14 +7,14 @@
 import { Check, Copy } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
-import { Checkbox } from "./motion/checkbox";
+import { Checkbox } from "@/components/motion-ui/checkbox";
 import {
   MorphPopover,
   MorphPopoverContent,
-} from "./motion/popover-morph";
-import { Tooltip } from "./motion/tooltip";
-import { SPRING_PRESS } from "./motion/ease";
-import { IconButton } from "./icon-button";
+} from "@/components/motion-ui/popover-morph";
+import { Tooltip } from "@/components/motion-ui/tooltip";
+import { SPRING_PRESS } from "@/components/motion-ui/ease";
+import { IconButton } from "@/components/motion-ui/icon-button";
 import { type DayKey, type SchedulerTexts } from "./types";
 
 // Copy this day's hours to other days: a morph popover with a day picker.

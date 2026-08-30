@@ -6,11 +6,11 @@
 import { Plus, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useRef, useState } from "react";
-import { Switch } from "./motion/switch";
-import { Tooltip } from "./motion/tooltip";
-import { SPRING_LAYOUT } from "./motion/ease";
+import { Switch } from "@/components/motion-ui/switch";
+import { Tooltip } from "@/components/motion-ui/tooltip";
+import { SPRING_LAYOUT } from "@/components/motion-ui/ease";
 import { CopyMenu } from "./copy-menu";
-import { IconButton } from "./icon-button";
+import { IconButton } from "@/components/motion-ui/icon-button";
 import { TimeSelect } from "./time-select";
 import {
   clampRange,

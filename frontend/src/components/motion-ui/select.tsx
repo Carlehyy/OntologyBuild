@@ -203,9 +203,11 @@ export function Select({
 export interface SelectTriggerProps {
   className?: string;
   children: ReactNode;
+  /** 透传给触发按钮的无障碍标签（如筛选器的 aria-label）。 */
+  "aria-label"?: string;
 }
 
-export function SelectTrigger({ className, children }: SelectTriggerProps) {
+export function SelectTrigger({ className, children, ...rest }: SelectTriggerProps) {
   const ctx = useSelectContext("SelectTrigger");
   const isTop = ctx.placement === "top";
   // edge facing the panel flattens then rounds; the far edge stays rounded.
@@ -218,6 +220,7 @@ export function SelectTrigger({ className, children }: SelectTriggerProps) {
       : { duration: 0.42, times: [0, 0.5, 1], ease: EASE_OUT };
   return (
     <motion.button
+      {...rest}
       type="button"
       id={ctx.triggerId}
       disabled={ctx.disabled}

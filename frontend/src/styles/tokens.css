@@ -48,6 +48,15 @@
   --color-nav-bg: #059669;
   --color-nav-light: #d1fae5;
 
+  /* ── 强调色语义阶（accent，明暗自适应；替代页域硬编码 teal-* 的令牌化目标） ──
+     DEFAULT 即 --color-nav-bg（按钮/主操作，深浅同值与导航一致）；
+     deep 为 hover/active 深档；soft/mist/line 为浅底色阶；ink 为浅底上的强调文字。 */
+  --color-accent-deep: #047857;
+  --color-accent-soft: #ecfdf5;
+  --color-accent-mist: #d1fae5;
+  --color-accent-line: #a7f3d0;
+  --color-accent-ink: #047857;
+
   /* ── 背景 ── */
   --color-bg-base: var(--background);
   --color-bg-elevated: #f5f7fa;
@@ -168,6 +177,13 @@
   --color-primary-light: #26303e;
 
   --color-nav-light: #022c22;
+
+  /* ── 强调色语义阶（accent 深色档）── */
+  --color-accent-deep: #065f46;
+  --color-accent-soft: #022c22;
+  --color-accent-mist: #064e3b;
+  --color-accent-line: #065f46;
+  --color-accent-ink: #6ee7b7;
 
   /* ── 背景 ── */
   --color-bg-elevated: #161c26;

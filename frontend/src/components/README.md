@@ -12,6 +12,7 @@
 | 表格、树、穿梭、级联等重数据交互 | antd 6（ConfigProvider 已对齐平台色） | 全局 |
 | 按钮、卡片、弹窗、输入等基础件 | shadcn 语义组件 | [`ui/`](./ui/) |
 | 动效交互组件（当前：每周可用时段编辑器） | vendored beUI | [`availability-scheduler/`](./availability-scheduler/) |
+| 动效原语（Switch/Select/Tooltip/Popover/IconButton 与弹簧曲线、手势 hooks） | vendored beUI，共享层 | [`motion-ui/`](./motion-ui/) |
 | 本体图谱编辑画布 | palantir-graph 业务单元 | [`../palantir-graph/`](../palantir-graph/) |
 | 悬浮助手、收件箱、工单等域组件 | 各业务域组件目录 | 各子目录 |
 
@@ -21,17 +22,16 @@
   motion Switch 并存）；
 - beUI 组件**只能使用本目录已 vendored 的**，不得直接引用 beui.dev 在线产物；
 - vendored 文件内颜色一律走平台语义令牌，禁止新增裸 hex；
-- `availability-scheduler/motion/` 下的动效原语（Switch/Select/Popover 等）
-  当前是该组件的**内部实现**，其他页面不得直接 import；第二个 beUI 组件落地时
-  再把 `motion/` 提升为 `components/motion-ui/` 共享层。
+- `motion-ui/` 已随第二个消费方（世界模型页域）提升为共享层，页面可直接
+  import；新增动效优先复用其中的原语与 ease/touch 基础设施。
 
 ## 当前 vendored beUI 清单
 
 | 内容 | 入口 | 说明 |
 |---|---|---|
 | AvailabilityScheduler | [`availability-scheduler/index.tsx`](./availability-scheduler/index.tsx) | 每周可用时段编辑器；`weekdayLabels` / `hourCycle` / `texts` 三个 props 可覆盖中文与 24 小时制默认；受控/非受控均支持。活示例：登录后访问 `/#/design/components` |
-| motion 原语（Switch、Checkbox、Tooltip、Select、MorphPopover） | [`availability-scheduler/motion/`](./availability-scheduler/motion/) | 随组件一并 vendored 的动效原语，规则见上 |
-| 动效基础设施（ease 弹性曲线、touch 手势工具、use-dismiss 等 hooks） | [`availability-scheduler/motion/`](./availability-scheduler/motion/) | 同上，当前仅组件内部使用 |
+| motion 原语（Switch、Checkbox、Tooltip、Select、MorphPopover、IconButton） | [`motion-ui/`](./motion-ui/) | 共享层，页面可直接使用；同类控件与 antd/shadcn 不得在同一子树混用 |
+| 动效基础设施（ease 弹性曲线、touch 手势工具、use-dismiss 等 hooks） | [`motion-ui/`](./motion-ui/) | 同上 |
 
 **API 文档就是源码**（shadcn 哲学：代码归你，直接读文件）；上游浏览与官方演示
 见 <https://beui.dev>（MIT，github.com/starc007/ui-components），但一律以本目录

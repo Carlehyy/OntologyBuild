@@ -12,14 +12,14 @@ export default function StatCard({ icon, label, value, sub, tone }: {
   tone?: 'default' | 'danger'
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50">
-      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${tone === 'danger' ? 'bg-red-50 text-red-500' : 'bg-teal-50 text-teal-600'}`}>
+    <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-sm/50">
+      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${tone === 'danger' ? 'bg-[var(--color-danger-bg)] text-destructive' : 'bg-brand-soft text-brand-ink'}`}>
         {icon}
       </span>
       <div className="min-w-0">
-        <p className="text-[11px] text-slate-400">{label}</p>
-        <p className="text-base font-semibold tabular-nums text-slate-700">{value}</p>
-        {sub && <p className="truncate text-[11px] text-slate-400" title={sub}>{sub}</p>}
+        <p className="text-[11px] text-muted-foreground">{label}</p>
+        <p className="text-base font-semibold tabular-nums text-foreground">{value}</p>
+        {sub && <p className="truncate text-[11px] text-muted-foreground" title={sub}>{sub}</p>}
       </div>
     </div>
   )

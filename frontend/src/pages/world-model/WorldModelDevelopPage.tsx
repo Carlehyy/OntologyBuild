@@ -411,7 +411,7 @@ export default function WorldModelDevelopPage() {
         <button
           type="button"
           onClick={() => navigate('/world-model/models')}
-          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+          className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
         >
           返回推演模型列表
         </button>
@@ -426,7 +426,7 @@ export default function WorldModelDevelopPage() {
         <button
           type="button"
           onClick={() => navigate('/world-model/models')}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           aria-label="返回推演模型列表"
         >
           <ArrowLeft size={15} />
@@ -434,14 +434,14 @@ export default function WorldModelDevelopPage() {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h1 className="truncate text-base font-semibold text-[var(--color-text-primary)]">{project.name}</h1>
-            <span className="inline-flex shrink-0 items-center rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">
+            <span className="inline-flex shrink-0 items-center rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
               {engineTypeLabel(project.engine_type)}
             </span>
             {dirty
-              ? <span className="shrink-0 text-[11px] text-amber-600">未保存</span>
-              : <span className="shrink-0 text-[11px] text-slate-400">已保存</span>}
+              ? <span className="shrink-0 text-[11px] text-[var(--color-warning)]">未保存</span>
+              : <span className="shrink-0 text-[11px] text-muted-foreground">已保存</span>}
             {draftRestoredAt && (
-              <span className="shrink-0 text-[11px] text-teal-600">
+              <span className="shrink-0 text-[11px] text-brand-ink">
                 已恢复 {formatDateTime(draftRestoredAt)} 的草稿
               </span>
             )}
@@ -451,14 +451,14 @@ export default function WorldModelDevelopPage() {
           <button
             type="button"
             onClick={() => setShowHelp(true)}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-600 transition-colors hover:bg-slate-50"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground transition-colors hover:bg-muted"
           >
             <HelpCircle size={14} /> 契约说明
           </button>
           <button
             type="button"
             onClick={openVersions}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-600 transition-colors hover:bg-slate-50"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground transition-colors hover:bg-muted"
           >
             <History size={14} /> 历史版本
           </button>
@@ -467,7 +467,7 @@ export default function WorldModelDevelopPage() {
             onClick={requestInsertTs}
             disabled={insertingTs}
             title="插入官方时序推演示例：ARIMA/SARIMA 建模与预测（覆盖当前脚本内容）"
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground transition-colors hover:bg-muted disabled:opacity-50"
           >
             {insertingTs ? <Loader2 size={14} className="animate-spin" /> : <TrendingUp size={14} />} 时序示例
           </button>
@@ -476,7 +476,7 @@ export default function WorldModelDevelopPage() {
             onClick={() => void openPublish()}
             disabled={project.version_count === 0}
             title={project.version_count === 0 ? '先执行通过并保存一个版本，才能发布' : service ? '重新发布（覆盖更新当前服务）' : '发布为推演服务'}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-3 text-xs font-medium text-teal-700 transition-colors hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-brand-line bg-brand-soft px-3 text-xs font-medium text-brand-ink transition-colors hover:bg-brand-mist focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Rocket size={14} /> {service ? '重新发布' : '发布'}
           </button>
@@ -484,7 +484,7 @@ export default function WorldModelDevelopPage() {
             <button
               type="button"
               onClick={() => setConfirmRevert(true)}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-600 transition-colors hover:bg-slate-50"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground transition-colors hover:bg-muted"
             >
               <RotateCcw size={14} /> 恢复到已保存
             </button>
@@ -493,7 +493,7 @@ export default function WorldModelDevelopPage() {
             <button
               type="button"
               onClick={cancelExecution}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-3.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
             >
               <Loader2 size={14} className="animate-spin" /> 取消执行
             </button>
@@ -508,7 +508,7 @@ export default function WorldModelDevelopPage() {
             </button>
           )}
           {dirty && !executing && !saving && !canSave && (
-            <span className="inline-flex items-center text-[11px] text-amber-600">
+            <span className="inline-flex items-center text-[11px] text-[var(--color-warning)]">
               先执行通过，才能保存当前内容
             </span>
           )}
@@ -517,7 +517,7 @@ export default function WorldModelDevelopPage() {
             onClick={save}
             disabled={!canSave}
             title={canSave ? '保存脚本' : '先执行通过，才能保存当前内容'}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-teal-600 px-3.5 text-xs font-medium text-white transition-colors hover:bg-teal-700 disabled:bg-slate-200 disabled:text-slate-400"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-brand px-3.5 text-xs font-medium text-white transition-colors hover:bg-brand-deep disabled:bg-muted disabled:text-muted-foreground"
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
             保存
@@ -530,10 +530,10 @@ export default function WorldModelDevelopPage() {
         <section
           data-testid="world-model-service-panel"
           className={`mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-4 py-2.5 ${service.status === 'online'
-            ? 'border-teal-200 bg-teal-50/60'
-            : 'border-slate-200 bg-slate-50'}`}
+            ? 'border-brand-line bg-brand-soft'
+            : 'border-border bg-muted'}`}
         >
-          <span className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-medium ${service.status === 'online' ? 'bg-teal-100 text-teal-700' : 'bg-slate-200 text-slate-500'}`}>
+          <span className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-medium ${service.status === 'online' ? 'bg-brand-mist text-brand-ink' : 'bg-muted text-muted-foreground'}`}>
             {service.status === 'online' ? '在线' : '已下线'}
           </span>
           <span className="text-sm font-medium text-[var(--color-text-primary)]">{service.name}</span>
@@ -541,13 +541,13 @@ export default function WorldModelDevelopPage() {
             <span className="text-[11px] text-[var(--color-text-tertiary)]">v{service.version_no}</span>
           )}
           {service.endpoint_path && (
-            <span className="flex min-w-0 items-center gap-1 rounded-md border border-[var(--color-border)] bg-white px-2 py-1">
-              <code className="truncate font-mono text-[11px] text-slate-600">POST {service.endpoint_path}</code>
+            <span className="flex min-w-0 items-center gap-1 rounded-md border border-[var(--color-border)] bg-card px-2 py-1">
+              <code className="truncate font-mono text-[11px] text-muted-foreground">POST {service.endpoint_path}</code>
               <button
                 type="button"
                 onClick={copyEndpoint}
                 aria-label={endpointCopied ? '端点已复制' : '复制调用端点'}
-                className="inline-flex shrink-0 items-center gap-1 rounded px-1 text-[10px] text-slate-400 transition-colors hover:text-teal-700"
+                className="inline-flex shrink-0 items-center gap-1 rounded px-1 text-[10px] text-muted-foreground transition-colors hover:text-brand-ink"
               >
                 {endpointCopied ? <Check size={11} /> : <Copy size={11} />}
                 {endpointCopied ? '已复制' : '复制'}
@@ -558,7 +558,7 @@ export default function WorldModelDevelopPage() {
             <button
               type="button"
               onClick={() => void toggleServiceStatus()}
-              className="inline-flex h-7 items-center rounded-md border border-[var(--color-border)] bg-white px-2.5 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-slate-50"
+              className="inline-flex h-7 items-center rounded-md border border-[var(--color-border)] bg-card px-2.5 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-muted"
             >
               {service.status === 'online' ? '下线' : '上线'}
             </button>
@@ -568,8 +568,8 @@ export default function WorldModelDevelopPage() {
 
       {/* 主区域：左编辑器，右入参+结果 */}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-2">
-        <section className="flex min-h-[420px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-          <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 text-xs text-slate-500">
+        <section className="flex min-h-[420px] flex-col overflow-hidden rounded-xl border border-border bg-card">
+          <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs text-muted-foreground">
             <FileCode2 size={14} />
             <span>推演脚本（Python）</span>
           </div>
@@ -587,21 +587,21 @@ export default function WorldModelDevelopPage() {
 
         <div className="flex min-h-0 flex-col gap-3">
           <section
-            className={`flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white ${inputExpanded ? 'min-h-0 flex-1' : ''}`}
+            className={`flex flex-col overflow-hidden rounded-xl border border-border bg-card ${inputExpanded ? 'min-h-0 flex-1' : ''}`}
             style={inputExpanded ? undefined : { maxHeight: '38%' }}
           >
-            <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 text-xs text-slate-500">
+            <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs text-muted-foreground">
               <Terminal size={14} />
               <span>测试入参（context / actions / horizon）</span>
               {!testInputStatus.ok && (
-                <span className="text-[11px] text-red-500">JSON 无效</span>
+                <span className="text-[11px] text-destructive">JSON 无效</span>
               )}
               <button
                 type="button"
                 onClick={() => setInputExpanded(value => !value)}
                 aria-label={inputExpanded ? '收起入参编辑区' : '放大入参编辑区'}
                 title={inputExpanded ? '收起，恢复下方结果区' : '放大为整列编辑长序列参数'}
-                className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-muted-foreground"
               >
                 {inputExpanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
               </button>
@@ -610,12 +610,12 @@ export default function WorldModelDevelopPage() {
               value={testInputText}
               onChange={event => { setTestInputText(event.target.value); setValidatedKey(null) }}
               spellCheck={false}
-              className="min-h-[110px] flex-1 resize-none px-3 py-2 font-mono text-xs leading-5 text-slate-700 focus:outline-none"
+              className="min-h-[110px] flex-1 resize-none px-3 py-2 font-mono text-xs leading-5 text-foreground focus:outline-none"
               aria-label="测试入参 JSON"
               aria-invalid={!testInputStatus.ok}
             />
             {!testInputStatus.ok && (
-              <div className="flex items-start gap-1.5 border-t border-red-100 bg-red-50/60 px-3 py-1.5 text-[11px] leading-4 text-red-600">
+              <div className="flex items-start gap-1.5 border-t border-[var(--color-danger-bg)] bg-[var(--color-danger-bg)] px-3 py-1.5 text-[11px] leading-4 text-destructive">
                 <AlertCircle size={12} className="mt-0.5 shrink-0" />
                 <span className="break-words">测试入参 JSON 无效：{testInputStatus.message}</span>
               </div>
@@ -623,27 +623,27 @@ export default function WorldModelDevelopPage() {
           </section>
 
           {!inputExpanded && (
-          <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-            <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 text-xs text-slate-500">
+          <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card">
+            <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs text-muted-foreground">
               {result
                 ? result.ok
-                  ? <CheckCircle2 size={14} className="text-teal-600" />
-                  : <XCircle size={14} className="text-red-500" />
+                  ? <CheckCircle2 size={14} className="text-brand-ink" />
+                  : <XCircle size={14} className="text-destructive" />
                 : <Terminal size={14} />}
               <span>执行结果</span>
               {result && (
-                <span className="ml-auto text-[11px] tabular-nums text-slate-400">
+                <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">
                   {result.duration_ms} ms
                 </span>
               )}
             </div>
             <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
               {executing ? (
-                <div className="flex h-full items-center justify-center gap-2 text-xs text-slate-400">
+                <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">
                   <Loader2 size={14} className="animate-spin" /> 内核执行中…
                 </div>
               ) : !result ? (
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-muted-foreground">
                   点击「执行」在内核中试运行 simulate(context, actions, horizon)，此处展示返回值与标准输出。
                 </p>
               ) : (
@@ -651,23 +651,23 @@ export default function WorldModelDevelopPage() {
                   {result.ok ? (
                     trajectory ? (
                       <div>
-                        <p className="mb-1.5 text-[11px] font-medium text-slate-500">simulate 返回值 · 轨迹预览</p>
+                        <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">simulate 返回值 · 轨迹预览</p>
                         <TrajectoryPreview summary={trajectory} payload={result.payload} />
                       </div>
                     ) : (
                       <div>
-                        <p className="mb-1 text-[11px] font-medium text-slate-500">simulate 返回值</p>
-                        <pre className="overflow-auto rounded-lg bg-slate-50 p-2.5 text-xs leading-5 text-slate-700">
+                        <p className="mb-1 text-[11px] font-medium text-muted-foreground">simulate 返回值</p>
+                        <pre className="overflow-auto rounded-lg bg-muted p-2.5 text-xs leading-5 text-foreground">
                           {JSON.stringify(result.payload, null, 2)}
                         </pre>
                       </div>
                     )
                   ) : (
                     <div>
-                      <p className="mb-1 text-[11px] font-medium text-red-600">执行失败</p>
-                      <p className="text-xs text-red-600">{result.error}</p>
+                      <p className="mb-1 text-[11px] font-medium text-destructive">执行失败</p>
+                      <p className="text-xs text-destructive">{result.error}</p>
                       {result.traceback && (
-                        <pre className="mt-2 overflow-auto rounded-lg bg-red-50 p-2.5 text-[11px] leading-5 text-red-700">
+                        <pre className="mt-2 overflow-auto rounded-lg bg-[var(--color-danger-bg)] p-2.5 text-[11px] leading-5 text-destructive">
                           {result.traceback}
                         </pre>
                       )}
@@ -675,8 +675,8 @@ export default function WorldModelDevelopPage() {
                   )}
                   {result.stdout && (
                     <div>
-                      <p className="mb-1 text-[11px] font-medium text-slate-500">标准输出</p>
-                      <pre className="max-h-48 overflow-auto rounded-lg bg-slate-50 p-2.5 text-[11px] leading-5 text-slate-600">
+                      <p className="mb-1 text-[11px] font-medium text-muted-foreground">标准输出</p>
+                      <pre className="max-h-48 overflow-auto rounded-lg bg-muted p-2.5 text-[11px] leading-5 text-muted-foreground">
                         {result.stdout}
                       </pre>
                     </div>
@@ -698,16 +698,16 @@ export default function WorldModelDevelopPage() {
           </SheetHeader>
           <div className="mt-4 space-y-2">
             {versionsLoading ? (
-              <p className="py-8 text-center text-xs text-slate-400">加载版本列表…</p>
+              <p className="py-8 text-center text-xs text-muted-foreground">加载版本列表…</p>
             ) : !versions?.length ? (
-              <p className="py-8 text-center text-xs text-slate-400">暂无历史版本，保存一次后此处会出现记录。</p>
+              <p className="py-8 text-center text-xs text-muted-foreground">暂无历史版本，保存一次后此处会出现记录。</p>
             ) : (
               versions.map(version => (
-                <div key={version.id} className="rounded-lg border border-slate-200 px-3 py-2.5">
+                <div key={version.id} className="rounded-lg border border-border px-3 py-2.5">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm font-medium text-slate-700">v{version.version_no}</p>
-                      <p className="mt-0.5 text-[11px] text-slate-400">
+                      <p className="text-sm font-medium text-foreground">v{version.version_no}</p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
                         {formatDateTime(version.created_at)} · {version.duration_ms} ms
                       </p>
                     </div>
@@ -716,26 +716,26 @@ export default function WorldModelDevelopPage() {
                         type="button"
                         onClick={() => void toggleVersionPreview(version)}
                         aria-expanded={previewVersionId === version.id}
-                        className="inline-flex h-7 items-center rounded-md border border-slate-200 px-2.5 text-xs text-slate-600 transition-colors hover:bg-slate-50"
+                        className="inline-flex h-7 items-center rounded-md border border-border px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted"
                       >
                         {previewVersionId === version.id ? '收起' : '查看'}
                       </button>
                       <button
                         type="button"
                         onClick={() => { setShowVersions(false); setConfirmRestoreVersionId(version.id) }}
-                        className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-xs text-slate-600 transition-colors hover:bg-slate-50"
+                        className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted"
                       >
                         <RotateCcw size={12} /> 恢复
                       </button>
                     </div>
                   </div>
                   {previewVersionId === version.id && (
-                    <div className="mt-2.5 space-y-2 border-t border-slate-100 pt-2.5">
+                    <div className="mt-2.5 space-y-2 border-t border-border pt-2.5">
                       {(() => {
                         const detail = versionDetails[version.id]
                         if (!detail || detail === 'error') {
                           return (
-                            <div className="flex items-center justify-between text-[11px] text-slate-400">
+                            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                               <span className="inline-flex items-center gap-1.5">
                                 {detail === 'error'
                                   ? '版本内容加载失败'
@@ -744,7 +744,7 @@ export default function WorldModelDevelopPage() {
                               <button
                                 type="button"
                                 onClick={() => void toggleVersionPreview(version)}
-                                className="rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 transition-colors hover:bg-slate-50"
+                                className="rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted"
                               >
                                 重试
                               </button>
@@ -754,14 +754,14 @@ export default function WorldModelDevelopPage() {
                         return (
                           <>
                             <div>
-                              <p className="mb-1 text-[11px] font-medium text-slate-500">该版测试入参</p>
-                              <pre className="max-h-28 overflow-auto rounded-md bg-slate-50 p-2 font-mono text-[11px] leading-4 text-slate-600">
+                              <p className="mb-1 text-[11px] font-medium text-muted-foreground">该版测试入参</p>
+                              <pre className="max-h-28 overflow-auto rounded-md bg-muted p-2 font-mono text-[11px] leading-4 text-muted-foreground">
                                 {detail.test_input ? JSON.stringify(detail.test_input, null, 2) : '（未记录测试入参）'}
                               </pre>
                             </div>
                             <div>
-                              <p className="mb-1 text-[11px] font-medium text-slate-500">该版脚本</p>
-                              <pre className="max-h-64 overflow-auto rounded-md bg-slate-50 p-2 font-mono text-[11px] leading-4 text-slate-700">{detail.script}</pre>
+                              <p className="mb-1 text-[11px] font-medium text-muted-foreground">该版脚本</p>
+                              <pre className="max-h-64 overflow-auto rounded-md bg-muted p-2 font-mono text-[11px] leading-4 text-foreground">{detail.script}</pre>
                             </div>
                           </>
                         )
@@ -782,17 +782,17 @@ export default function WorldModelDevelopPage() {
             <SheetTitle>推演脚本契约</SheetTitle>
             <SheetDescription>平台与推演模型之间的统一接口约定</SheetDescription>
           </SheetHeader>
-          <div className="mt-4 space-y-4 text-xs leading-6 text-slate-600">
+          <div className="mt-4 space-y-4 text-xs leading-6 text-muted-foreground">
             <section>
-              <h3 className="text-sm font-semibold text-slate-800">入口函数</h3>
-              <pre className="mt-2 overflow-auto rounded-lg bg-slate-50 p-3 font-mono text-[11px] leading-5">
+              <h3 className="text-sm font-semibold text-foreground">入口函数</h3>
+              <pre className="mt-2 overflow-auto rounded-lg bg-muted p-3 font-mono text-[11px] leading-5">
 {`def simulate(context, actions, horizon):
     ...
     return {...}  # JSON 可序列化`}
               </pre>
             </section>
             <section>
-              <h3 className="text-sm font-semibold text-slate-800">参数</h3>
+              <h3 className="text-sm font-semibold text-foreground">参数</h3>
               <ul className="mt-1 list-disc space-y-1 pl-4">
                 <li><code>context: dict</code> — 当前状态快照（来自数字孪生/知识图谱的业务对象状态）</li>
                 <li><code>actions: list</code> — 候选行动列表；无干预推演（纯预测）时为空列表</li>
@@ -800,12 +800,12 @@ export default function WorldModelDevelopPage() {
               </ul>
             </section>
             <section>
-              <h3 className="text-sm font-semibold text-slate-800">返回值</h3>
+              <h3 className="text-sm font-semibold text-foreground">返回值</h3>
               <p className="mt-1">JSON 可序列化的 dict，建议包含 <code>trajectory</code>（各时点轨迹）、<code>confidence</code>（置信度）、<code>boundary</code>（适用边界说明）。</p>
-              <p className="mt-1 text-slate-500">当 <code>trajectory</code> 为数值序列或等宽的数值二维数组时，执行结果面板会自动绘制轨迹折线预览，原始 JSON 折叠保留。</p>
+              <p className="mt-1 text-muted-foreground">当 <code>trajectory</code> 为数值序列或等宽的数值二维数组时，执行结果面板会自动绘制轨迹折线预览，原始 JSON 折叠保留。</p>
             </section>
             <section>
-              <h3 className="text-sm font-semibold text-slate-800">可用的时序/科学计算库</h3>
+              <h3 className="text-sm font-semibold text-foreground">可用的时序/科学计算库</h3>
               <p className="mt-1">
                 脚本在平台 Python 内核中执行，可直接使用 numpy、pandas、duckdb 与
                 statsmodels（ARIMA/SARIMAX、指数平滑、ACF/PACF 等）。
@@ -813,7 +813,7 @@ export default function WorldModelDevelopPage() {
               </p>
             </section>
             <section>
-              <h3 className="text-sm font-semibold text-slate-800">保存规则</h3>
+              <h3 className="text-sm font-semibold text-foreground">保存规则</h3>
               <ul className="mt-1 list-disc space-y-1 pl-4">
                 <li>只有当前内容与测试入参执行通过，保存按钮才可用</li>
                 <li>保存时服务端会重新执行复核（双重保障），通过才落库</li>

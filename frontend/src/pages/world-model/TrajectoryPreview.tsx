@@ -86,17 +86,17 @@ export default function TrajectoryPreview({ summary, payload }: {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">
+        <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
           轨迹 {scaleLabel}
         </span>
         {summary.confidence !== null && (
-          <span className="rounded-md bg-teal-50 px-1.5 py-0.5 text-[11px] text-teal-700">
+          <span className="rounded-md bg-brand-soft px-1.5 py-0.5 text-[11px] text-brand-ink">
             置信度 {summary.confidence}
           </span>
         )}
       </div>
       {summary.boundary && (
-        <p className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-[11px] leading-4 text-slate-500">
+        <p className="rounded-lg bg-muted px-2.5 py-1.5 text-[11px] leading-4 text-muted-foreground">
           适用边界：{summary.boundary}
         </p>
       )}
@@ -109,10 +109,10 @@ export default function TrajectoryPreview({ summary, payload }: {
         />
       </div>
       <details>
-        <summary className="cursor-pointer select-none text-[11px] text-slate-400 transition-colors hover:text-slate-600">
+        <summary className="cursor-pointer select-none text-[11px] text-muted-foreground transition-colors hover:text-muted-foreground">
           原始返回值（JSON）
         </summary>
-        <pre className="mt-1.5 max-h-48 overflow-auto rounded-lg bg-slate-50 p-2.5 text-xs leading-5 text-slate-700">
+        <pre className="mt-1.5 max-h-48 overflow-auto rounded-lg bg-muted p-2.5 text-xs leading-5 text-foreground">
           {JSON.stringify(payload, null, 2)}
         </pre>
       </details>

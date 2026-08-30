@@ -118,7 +118,7 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
     }
   }
 
-  const selectClass = 'h-9 w-full rounded-md border border-[var(--color-border)] bg-white px-3 text-sm text-[var(--color-text-primary)] focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30'
+  const selectClass = 'h-9 w-full rounded-md border border-[var(--color-border)] bg-card px-3 text-sm text-[var(--color-text-primary)] focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring'
   const labelClass = 'mb-1.5 block text-sm font-medium text-[var(--color-text-primary)]'
 
   return (
@@ -136,7 +136,7 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
             onClick={() => void submit()}
             loading={submitting}
             disabled={!canSubmit}
-            className="bg-teal-600 text-white hover:bg-teal-700 active:bg-teal-800 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
+            className="bg-brand text-white hover:bg-brand-deep active:bg-brand-deep disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none"
           >
             {service ? '重新发布' : '发布并上线'}
           </Button>
@@ -152,7 +152,7 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
             value={name}
             onChange={event => setName(event.target.value)}
             placeholder="例如：台区负荷短期推演服务"
-            className="selection:bg-teal-200 selection:text-teal-950 focus:border-teal-500 focus:ring-teal-500/30"
+            className=" focus:border-ring focus:ring-ring"
           />
           <div>
             <label className={labelClass}>发布版本</label>
@@ -173,11 +173,11 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
             maxLength={500}
             rows={2}
             placeholder="说明该服务回答什么推演问题、适用边界"
-            className="w-full resize-none rounded-md border border-[var(--color-border)] bg-white px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30"
+            className="w-full resize-none rounded-md border border-[var(--color-border)] bg-card px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
           />
         </div>
 
-        <div className="rounded-xl border border-[var(--color-border)] bg-slate-50/60 p-4">
+        <div className="rounded-xl border border-[var(--color-border)] bg-muted p-4">
           <p className="text-sm font-medium text-[var(--color-text-primary)]">本体语义注册<span className="ml-0.5 text-[var(--color-danger)]">*</span></p>
           <p className="mt-0.5 text-[11px] leading-4 text-[var(--color-text-tertiary)]">
             声明该服务适用的业务对象类型，值必须引用本体概念——Agent 据此做结构化工具检索，而不是靠文字描述猜。
@@ -198,7 +198,7 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
             </div>
             <div>
               <label className={labelClass}>适用对象类型（可多选）</label>
-              <div className="max-h-36 overflow-y-auto rounded-md border border-[var(--color-border)] bg-white px-2 py-1.5" aria-label="适用对象类型">
+              <div className="max-h-36 overflow-y-auto rounded-md border border-[var(--color-border)] bg-card px-2 py-1.5" aria-label="适用对象类型">
                 {!ontologyId ? (
                   <p className="px-1 py-2 text-xs text-[var(--color-text-tertiary)]">请先选择本体</p>
                 ) : loadingObjectTypes ? (
@@ -207,12 +207,12 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
                   <p className="px-1 py-2 text-xs text-[var(--color-text-tertiary)]">该本体暂无对象类型</p>
                 ) : (
                   objectTypes.map(item => (
-                    <label key={item.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm text-[var(--color-text-primary)] hover:bg-slate-50">
+                    <label key={item.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm text-[var(--color-text-primary)] hover:bg-muted">
                       <input
                         type="checkbox"
                         checked={objectTypeIds.includes(item.id)}
                         onChange={() => toggleObjectType(item.id)}
-                        className="h-3.5 w-3.5 rounded border-slate-300 accent-teal-600"
+                        className="h-3.5 w-3.5 rounded border-border accent-[var(--color-nav-bg)]"
                       />
                       <span className="truncate">{item.label}</span>
                     </label>
@@ -229,7 +229,7 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
                 type="button"
                 onClick={() => setPreconditions(current => [...current, { object_type_id: objectTypes[0]?.id || '', min_count: 1 }])}
                 disabled={!ontologyId || objectTypes.length === 0}
-                className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--color-border)] px-2 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-slate-50 disabled:opacity-40"
+                className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--color-border)] px-2 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-muted disabled:opacity-40"
               >
                 <Plus size={12} /> 添加条件
               </button>
@@ -252,14 +252,14 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
                       min={1}
                       value={item.min_count}
                       onChange={event => setPreconditions(current => current.map((row, i) => i === index ? { ...row, min_count: Math.max(1, Number(event.target.value) || 1) } : row))}
-                      className="h-9 w-20 rounded-md border border-[var(--color-border)] bg-white px-2 text-sm focus:border-teal-500 focus:outline-none"
+                      className="h-9 w-20 rounded-md border border-[var(--color-border)] bg-card px-2 text-sm focus:border-ring focus:outline-none"
                       aria-label={`前置条件 ${index + 1} 最小数量`}
                     />
                     <button
                       type="button"
                       onClick={() => setPreconditions(current => current.filter((_, i) => i !== index))}
                       aria-label={`删除前置条件 ${index + 1}`}
-                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-muted-foreground"
                     >
                       <X size={13} />
                     </button>

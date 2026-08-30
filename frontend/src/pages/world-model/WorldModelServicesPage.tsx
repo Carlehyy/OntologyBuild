@@ -34,6 +34,8 @@ import {
 import { Button } from '@/components/ui/Button'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/motion-ui/select'
+import { Tooltip } from '@/components/motion-ui/tooltip'
 import { writeTextToClipboard } from '@/utils/clipboard'
 import { validateJsonObject, type JsonParseIssue } from '@/utils/jsonInput'
 import StatCard from './StatCard'
@@ -74,8 +76,8 @@ function formatDateTime(iso?: string | null): string {
 
 function statusBadge(status: string) {
   return status === 'online'
-    ? <span className="inline-flex items-center rounded-md bg-teal-50 px-1.5 py-0.5 text-[11px] text-teal-700">在线</span>
-    : <span className="inline-flex items-center rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">已下线</span>
+    ? <span className="inline-flex items-center rounded-md bg-brand-soft px-1.5 py-0.5 text-[11px] text-brand-ink">在线</span>
+    : <span className="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">已下线</span>
 }
 
 export default function WorldModelServicesPage() {
@@ -136,8 +138,9 @@ export default function WorldModelServicesPage() {
       const result = await worldModelApi.listServices({
         page, size: PAGE_SIZE, keyword, status: status || undefined,
       })
-      setItems(result.items)
-      setTotal(result.total)
+      // 防御：异常/降级响应可能缺少 items 字段（曾由兜底 mock 触发整页白屏）
+      setItems(result.items ?? [])
+      setTotal(result.total ?? 0)
     } catch (err) {
       setError(apiError(err))
     } finally {
@@ -330,7 +333,7 @@ export default function WorldModelServicesPage() {
       {/* 概览统计条：全局聚合，直读服务规模与调用健康度；接口失败时占位+重试，绝不显示误导性的 0 */}
       {overviewError ? (
         <section
-          className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700"
+          className="flex flex-wrap items-center gap-3 rounded-xl border border-[var(--color-warning)] bg-[var(--color-warning-bg)] px-4 py-3 text-xs text-[var(--color-warning)]"
           aria-label="推演服务概览"
           role="alert"
         >
@@ -339,7 +342,7 @@ export default function WorldModelServicesPage() {
           <button
             type="button"
             onClick={() => void loadOverview()}
-            className="ml-auto inline-flex h-7 items-center gap-1 rounded-lg border border-amber-300 bg-white px-2.5 text-[11px] font-medium text-amber-700 hover:bg-amber-100"
+            className="ml-auto inline-flex h-7 items-center gap-1 rounded-lg border border-[var(--color-warning)] bg-card px-2.5 text-[11px] font-medium text-[var(--color-warning)] hover:bg-[var(--color-warning-bg)]"
           >
             <RefreshCw size={12} /> 重试
           </button>
@@ -383,68 +386,71 @@ export default function WorldModelServicesPage() {
       )}
 
       {/* 筛选栏 */}
-      <section className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50" aria-label="推演服务筛选">
+      <section className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-4 py-3 shadow-sm/50" aria-label="推演服务筛选">
         <div className="relative w-full sm:w-72">
-          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <input
             value={draftKeyword}
             onChange={event => setDraftKeyword(event.target.value)}
             onKeyDown={event => { if (event.key === 'Enter') applyFilters() }}
             placeholder="搜索服务名称或描述"
             aria-label="按服务名称或描述筛选"
-            className="h-9 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+            className="h-9 w-full rounded-lg border border-border bg-card pl-8 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-brand focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
-        <select
+        <Select
           value={draftStatus}
-          onChange={event => setDraftStatus(event.target.value as StatusFilter)}
-          aria-label="按服务状态筛选"
-          className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-600 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+          onValueChange={value => setDraftStatus(value as StatusFilter)}
         >
-          <option value="">全部状态</option>
-          <option value="online">在线</option>
-          <option value="offline">已下线</option>
-        </select>
-        <Button onClick={applyFilters} className="h-9 bg-teal-600 text-white hover:bg-teal-700">查询</Button>
+          <SelectTrigger aria-label="按服务状态筛选" className="h-9 rounded-lg">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">全部状态</SelectItem>
+            <SelectItem value="online">在线</SelectItem>
+            <SelectItem value="offline">已下线</SelectItem>
+          </SelectContent>
+        </Select>
+        <Button onClick={applyFilters} className="h-9 bg-brand text-white hover:bg-brand-deep">查询</Button>
         <button
           type="button"
           onClick={resetFilters}
-          className="inline-flex h-9 items-center gap-1 rounded-lg px-2.5 text-xs text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+          className="inline-flex h-9 items-center gap-1 rounded-lg px-2.5 text-xs text-muted-foreground hover:bg-muted hover:text-muted-foreground"
         >
           <X size={13} /> 重置
         </button>
-        <span className="ml-auto hidden text-xs tabular-nums text-slate-400 sm:inline" aria-live="polite">
+        <span className="ml-auto hidden text-xs tabular-nums text-muted-foreground sm:inline" aria-live="polite">
           共 {total} 个推演服务
         </span>
         <button
           type="button"
           onClick={() => void refreshAll()}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs text-slate-600 hover:bg-slate-50"
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs text-muted-foreground hover:bg-muted"
         >
           <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} /> 刷新
         </button>
       </section>
 
       {/* 服务注册表 */}
-      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm/50">
+      <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm/50">
         {loading ? (
-          <p className="py-16 text-center text-sm text-slate-400">加载推演服务…</p>
+          <p className="py-16 text-center text-sm text-muted-foreground">加载推演服务…</p>
         ) : error ? (
           <div className="flex flex-col items-center gap-3 py-16" role="alert">
-            <p className="text-sm text-red-600">{error}</p>
+            <p className="text-sm text-destructive">{error}</p>
             <button
               type="button"
               onClick={() => void loadServices()}
-              className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+              className="rounded-lg border border-[var(--color-danger-bg)] bg-card px-3 py-1.5 text-xs font-medium text-destructive hover:bg-[var(--color-danger-bg)]"
             >
               重新加载
             </button>
           </div>
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
-            <Rocket size={28} className="text-slate-300" />
-            <p className="mt-3 text-sm font-medium text-slate-500">{keyword || status ? '没有符合条件的推演服务' : '暂无推演服务'}</p>
-            <p className="mt-1 max-w-md text-xs leading-5 text-slate-400">
+            <Rocket size={28} className="text-muted-foreground" />
+            <p className="mt-3 text-sm font-medium text-muted-foreground">{keyword || status ? '没有符合条件的推演服务' : '暂无推演服务'}</p>
+            <p className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
               {keyword || status
                 ? '请调整名称或状态筛选条件'
                 : '在「推演模型」开发页执行通过、保存版本并发布后，服务会作为一等实体出现在这里，对外提供统一调用端点。'}
@@ -454,7 +460,7 @@ export default function WorldModelServicesPage() {
           <>
             <table className="w-full text-left text-sm">
               <thead>
-                <tr className="border-b border-slate-100 text-xs text-slate-400">
+                <tr className="border-b border-border text-xs text-muted-foreground">
                   <th className="px-4 py-2.5 font-medium">推演服务</th>
                   <th className="px-4 py-2.5 font-medium">所属模型</th>
                   <th className="px-4 py-2.5 font-medium">版本</th>
@@ -466,86 +472,90 @@ export default function WorldModelServicesPage() {
               </thead>
               <tbody>
                 {items.map(item => (
-                  <tr key={item.id} className="border-b border-slate-50 transition-colors hover:bg-slate-50/60">
+                  <tr key={item.id} className="border-b border-border transition-colors hover:bg-muted">
                     <td className="max-w-[240px] px-4 py-2.5">
-                      <p className="truncate font-medium text-slate-700" title={item.name}>{item.name}</p>
+                      <p className="truncate font-medium text-foreground" title={item.name}>{item.name}</p>
                       {item.description && (
-                        <p className="truncate text-[11px] text-slate-400" title={item.description}>{item.description}</p>
+                        <p className="truncate text-[11px] text-muted-foreground" title={item.description}>{item.description}</p>
                       )}
                     </td>
                     <td className="px-4 py-2.5">
                       <button
                         type="button"
                         onClick={() => { window.location.hash = '#/world-model/models/' + item.project_id + '/develop' }}
-                        className="text-teal-700 underline-offset-2 hover:underline"
+                        className="text-brand-ink underline-offset-2 hover:underline"
                         title={'进入「' + item.project_name + '」开发页'}
                       >
                         {item.project_name || '—'}
                       </button>
                     </td>
-                    <td className="px-4 py-2.5 tabular-nums text-slate-500">{item.version_no !== null ? 'v' + item.version_no : '—'}</td>
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{item.version_no !== null ? 'v' + item.version_no : '—'}</td>
                     <td className="px-4 py-2.5">{statusBadge(item.status)}</td>
-                    <td className="px-4 py-2.5 tabular-nums text-slate-500">
-                      <span className={item.failed_count > 0 ? 'text-red-500' : 'text-teal-600'}>
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">
+                      <span className={item.failed_count > 0 ? 'text-destructive' : 'text-brand-ink'}>
                         {item.call_count - item.failed_count}
                       </span>
-                      <span className="text-slate-300"> / </span>
+                      <span className="text-muted-foreground"> / </span>
                       {item.call_count}
                       <span
-                        className={`ml-1.5 text-[11px] ${item.failed_count > 0 ? 'text-red-500' : 'text-slate-400'}`}
+                        className={`ml-1.5 text-[11px] ${item.failed_count > 0 ? 'text-destructive' : 'text-muted-foreground'}`}
                         title={`成功率 ${formatSuccessRate(item.call_count - item.failed_count, item.call_count)}`}
                       >
                         {formatSuccessRate(item.call_count - item.failed_count, item.call_count)}
                       </span>
                     </td>
-                    <td className="px-4 py-2.5 tabular-nums text-slate-500">{formatDateTime(item.updated_at)}</td>
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{formatDateTime(item.updated_at)}</td>
                     <td className="px-4 py-2.5">
                       <span className="flex items-center justify-end gap-1">
-                        <button
-                          type="button"
-                          onClick={() => openInvoke(item)}
-                          disabled={item.status !== 'online'}
-                          title={item.status === 'online' ? '试调用该推演服务' : '服务已下线，无法调用'}
-                          aria-label={'试调用 ' + item.name}
-                          className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 px-2 text-[11px] text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          <Play size={12} /> 试调用
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openDetail(item)}
-                          aria-label={'查看 ' + item.name + ' 详情'}
-                          title="服务详情与语义注册"
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition-colors hover:bg-slate-50"
-                        >
-                          <Eye size={13} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => requestToggleStatus(item)}
-                          disabled={togglingId === item.id}
-                          aria-label={item.status === 'online' ? '下线 ' + item.name : '上线 ' + item.name}
-                          title={item.status === 'online' ? '下线' : '上线'}
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition-colors hover:bg-slate-50 disabled:opacity-40"
-                        >
-                          <Power size={13} className={item.status === 'online' ? 'text-teal-600' : ''} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => copyEndpoint(item)}
-                          aria-label={'复制 ' + item.name + ' 调用端点'}
-                          title="复制完整调用地址（含协议、主机与路径）"
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition-colors hover:bg-slate-50"
-                        >
-                          {copiedId === item.id ? <Check size={13} className="text-teal-600" /> : <Copy size={13} />}
-                        </button>
+                        <Tooltip content={item.status === 'online' ? '试调用该推演服务' : '服务已下线，无法调用'}>
+                          <button
+                            type="button"
+                            onClick={() => openInvoke(item)}
+                            disabled={item.status !== 'online'}
+                            aria-label={'试调用 ' + item.name}
+                            className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <Play size={12} /> 试调用
+                          </button>
+                        </Tooltip>
+                        <Tooltip content="服务详情与语义注册">
+                          <button
+                            type="button"
+                            onClick={() => openDetail(item)}
+                            aria-label={'查看 ' + item.name + ' 详情'}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-muted"
+                          >
+                            <Eye size={13} />
+                          </button>
+                        </Tooltip>
+                        <Tooltip content={item.status === 'online' ? '下线（需二次确认）' : '上线'}>
+                          <button
+                            type="button"
+                            onClick={() => requestToggleStatus(item)}
+                            disabled={togglingId === item.id}
+                            aria-label={item.status === 'online' ? '下线 ' + item.name : '上线 ' + item.name}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-muted disabled:opacity-40"
+                          >
+                            <Power size={13} className={item.status === 'online' ? 'text-brand-ink' : ''} />
+                          </button>
+                        </Tooltip>
+                        <Tooltip content="复制完整调用地址（含协议、主机与路径）">
+                          <button
+                            type="button"
+                            onClick={() => copyEndpoint(item)}
+                            aria-label={'复制 ' + item.name + ' 调用端点'}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-muted"
+                          >
+                            {copiedId === item.id ? <Check size={13} className="text-brand-ink" /> : <Copy size={13} />}
+                          </button>
+                        </Tooltip>
                       </span>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            <div className="flex items-center justify-between border-t border-slate-100 px-4 py-2.5 text-xs text-slate-400">
+            <div className="flex items-center justify-between border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
               <span>共 {total} 条</span>
               <div className="flex items-center gap-2">
                 <button
@@ -553,7 +563,7 @@ export default function WorldModelServicesPage() {
                   onClick={() => setPage(p => Math.max(1, p - 1))}
                   disabled={page <= 1}
                   aria-label="上一页"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 disabled:opacity-40"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border disabled:opacity-40"
                 >
                   <ChevronLeft size={14} />
                 </button>
@@ -563,7 +573,7 @@ export default function WorldModelServicesPage() {
                   onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                   disabled={page >= totalPages}
                   aria-label="下一页"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 disabled:opacity-40"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border disabled:opacity-40"
                 >
                   <ChevronRight size={14} />
                 </button>
@@ -588,7 +598,7 @@ export default function WorldModelServicesPage() {
               onClick={() => void submitInvoke()}
               loading={invoking}
               disabled={!invokeTarget || invokeTarget.status !== 'online'}
-              className="bg-teal-600 text-white hover:bg-teal-700"
+              className="bg-brand text-white hover:bg-brand-deep"
             >
               调用
             </Button>
@@ -597,19 +607,19 @@ export default function WorldModelServicesPage() {
       >
         <div className="space-y-4">
           <div>
-            <p className="mb-1.5 flex items-center justify-between gap-2 text-sm font-medium text-slate-700">
+            <p className="mb-1.5 flex items-center justify-between gap-2 text-sm font-medium text-foreground">
               <span>测试入参（context / actions / horizon）</span>
               {exampleInput && (
                 <button
                   type="button"
                   onClick={() => { setInvokeInput(exampleInput); setJsonIssue(null) }}
-                  className="rounded-md border border-slate-200 px-2 py-0.5 text-[11px] font-normal text-teal-700 hover:bg-teal-50"
+                  className="rounded-md border border-border px-2 py-0.5 text-[11px] font-normal text-brand-ink hover:bg-brand-soft"
                 >
                   填入示例
                 </button>
               )}
             </p>
-            <p className="mb-1.5 text-[11px] leading-5 text-slate-400">
+            <p className="mb-1.5 text-[11px] leading-5 text-muted-foreground">
               context 为观测数据（如时序服务需传 series 数值列表，长度不足会被边界拒绝）、actions 为干预动作、horizon 为预测步数；
               示例取自该服务发布版本保存时的调试入参。
             </p>
@@ -618,12 +628,12 @@ export default function WorldModelServicesPage() {
               onChange={event => handleInvokeInputChange(event.target.value)}
               spellCheck={false}
               rows={8}
-              className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs leading-5 text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30"
+              className="w-full resize-none rounded-lg border border-border bg-card px-3 py-2 font-mono text-xs leading-5 text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
               aria-label="试调用测试入参 JSON"
               aria-invalid={!!jsonIssue}
             />
             {jsonIssue && (
-              <p className="mt-1 text-[11px] text-red-600" role="alert">
+              <p className="mt-1 text-[11px] text-destructive" role="alert">
                 JSON 语法错误
                 {jsonIssue.line !== null && jsonIssue.column !== null
                   ? `（第 ${jsonIssue.line} 行第 ${jsonIssue.column} 列附近）`
@@ -640,52 +650,52 @@ export default function WorldModelServicesPage() {
                 return (
                   <div>
                     {emptyTrajectory ? (
-                      <div className="mb-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5">
-                        <p className="flex items-center gap-1 text-[11px] font-medium text-amber-700">
+                      <div className="mb-1 rounded-lg border border-[var(--color-warning)] bg-[var(--color-warning-bg)] px-2.5 py-1.5">
+                        <p className="flex items-center gap-1 text-[11px] font-medium text-[var(--color-warning)]">
                           <AlertTriangle size={12} /> 调用成功 · {invokeResult.duration_ms} ms · 未产生预测输出
                         </p>
                         {boundaryNote && (
-                          <p className="mt-0.5 text-[11px] leading-4 text-amber-600">边界说明：{boundaryNote}</p>
+                          <p className="mt-0.5 text-[11px] leading-4 text-[var(--color-warning)]">边界说明：{boundaryNote}</p>
                         )}
                       </div>
                     ) : (
-                      <p className="mb-1 flex items-center gap-1 text-[11px] font-medium text-teal-600">
+                      <p className="mb-1 flex items-center gap-1 text-[11px] font-medium text-brand-ink">
                         <CheckCircle2 size={12} /> 调用成功 · {invokeResult.duration_ms} ms
                       </p>
                     )}
-                    <pre className="max-h-64 overflow-auto rounded-lg bg-slate-50 p-2.5 text-xs leading-5 text-slate-700">
+                    <pre className="max-h-64 overflow-auto rounded-lg bg-muted p-2.5 text-xs leading-5 text-foreground">
                       {JSON.stringify(invokeResult.payload, null, 2)}
                     </pre>
                   </div>
                 )
               })() : (
                 <div>
-                  <p className="mb-1 flex items-center gap-1 text-[11px] font-medium text-red-600">
+                  <p className="mb-1 flex items-center gap-1 text-[11px] font-medium text-destructive">
                     <XCircle size={12} /> 调用失败
                   </p>
-                  <p className="text-xs text-red-600">{invokeResult.error}</p>
+                  <p className="text-xs text-destructive">{invokeResult.error}</p>
                 </div>
               )}
             </div>
           )}
           {invokeTarget?.endpoint_path && (
             <div>
-              <p className="mb-1.5 flex items-center justify-between text-sm font-medium text-slate-700">
+              <p className="mb-1.5 flex items-center justify-between text-sm font-medium text-foreground">
                 <span className="flex items-center gap-1"><Terminal size={14} /> 外部调用示例（curl）</span>
                 <button
                   type="button"
                   onClick={() => copyCurlExample(buildCurlExample(fullEndpointUrl(invokeTarget.endpoint_path!), invokeInput))}
                   aria-label="复制 curl 示例"
                   title="复制 curl 调用示例"
-                  className="inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 px-2 text-[11px] font-normal text-slate-600 hover:bg-slate-50"
+                  className="inline-flex h-6 items-center gap-1 rounded-md border border-border px-2 text-[11px] font-normal text-muted-foreground hover:bg-muted"
                 >
-                  {copiedCurl ? <Check size={12} className="text-teal-600" /> : <Copy size={12} />} 复制
+                  {copiedCurl ? <Check size={12} className="text-brand-ink" /> : <Copy size={12} />} 复制
                 </button>
               </p>
-              <pre className="overflow-x-auto rounded-lg bg-slate-50 p-2.5 font-mono text-[11px] leading-5 text-slate-600">
+              <pre className="overflow-x-auto rounded-lg bg-muted p-2.5 font-mono text-[11px] leading-5 text-muted-foreground">
                 {buildCurlExample(fullEndpointUrl(invokeTarget.endpoint_path), invokeInput)}
               </pre>
-              <p className="mt-1 text-[11px] leading-4 text-slate-400">
+              <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
                 「访问令牌」为平台登录账号的 JWT，可通过 POST /api/v1/auth/login 获取（与页面登录同源）；未带令牌或令牌失效将返回 401/403。
               </p>
             </div>
@@ -696,12 +706,12 @@ export default function WorldModelServicesPage() {
       {/* 详情抽屉 */}
       {detailTarget && (
         <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-label="推演服务详情">
-          <div className="absolute inset-0 bg-slate-900/30" onClick={() => setDetailTarget(null)} />
-          <aside className="relative z-10 flex h-full w-[min(560px,100%)] flex-col bg-white shadow-2xl">
-            <header className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
+          <div className="absolute inset-0 bg-[var(--color-bg-overlay)]" onClick={() => setDetailTarget(null)} />
+          <aside className="relative z-10 flex h-full w-[min(560px,100%)] flex-col bg-card shadow-2xl">
+            <header className="flex items-center justify-between border-b border-border px-5 py-3.5">
               <div>
-                <h2 className="text-sm font-semibold text-slate-800">{detailTarget.name}</h2>
-                <p className="mt-0.5 text-[11px] text-slate-400">
+                <h2 className="text-sm font-semibold text-foreground">{detailTarget.name}</h2>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
                   {detailTarget.project_name} · v{detailTarget.version_no ?? '-'} · 更新于 {formatDateTime(detailTarget.updated_at)}
                 </p>
               </div>
@@ -709,23 +719,23 @@ export default function WorldModelServicesPage() {
                 type="button"
                 onClick={() => setDetailTarget(null)}
                 aria-label="关闭详情"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-muted-foreground"
               >
                 <X size={16} />
               </button>
             </header>
 
             <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
-              <div className="space-y-4 text-xs leading-6 text-slate-600">
+              <div className="space-y-4 text-xs leading-6 text-muted-foreground">
                 <section>
-                  <p className="mb-1.5 flex items-center justify-between text-xs font-semibold text-slate-800">
+                  <p className="mb-1.5 flex items-center justify-between text-xs font-semibold text-foreground">
                     <span>基本状态</span>{statusBadge(detailTarget.status)}
                   </p>
-                  <dl className="space-y-1.5 rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                  <dl className="space-y-1.5 rounded-lg border border-border bg-muted/50 p-3">
                     <div className="flex items-start justify-between gap-2">
-                      <dt className="shrink-0 text-slate-400">调用端点</dt>
+                      <dt className="shrink-0 text-muted-foreground">调用端点</dt>
                       <dd className="flex min-w-0 items-start justify-end gap-1.5">
-                        <span className="break-all text-right font-mono text-[11px] leading-5 text-slate-700">
+                        <span className="break-all text-right font-mono text-[11px] leading-5 text-foreground">
                           {detailTarget.endpoint_path ?? '—'}
                         </span>
                         {detailTarget.endpoint_path && (
@@ -734,36 +744,36 @@ export default function WorldModelServicesPage() {
                             onClick={() => copyEndpoint(detailTarget)}
                             aria-label="复制调用端点"
                             title="复制完整调用地址（含协议、主机与路径）"
-                            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-200/70 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
-                            {copiedId === detailTarget.id ? <Check size={12} className="text-teal-600" /> : <Copy size={12} />}
+                            {copiedId === detailTarget.id ? <Check size={12} className="text-brand-ink" /> : <Copy size={12} />}
                           </button>
                         )}
                       </dd>
                     </div>
-                    <div className="flex justify-between"><dt className="text-slate-400">服务描述</dt><dd className="max-w-[320px] text-right text-slate-700">{detailTarget.description || '—'}</dd></div>
-                    <div className="flex justify-between"><dt className="text-slate-400">调用统计</dt><dd className="tabular-nums text-slate-700">成功 {detailTarget.call_count - detailTarget.failed_count} / 共 {detailTarget.call_count}（成功率 {formatSuccessRate(detailTarget.call_count - detailTarget.failed_count, detailTarget.call_count)}）</dd></div>
+                    <div className="flex justify-between"><dt className="text-muted-foreground">服务描述</dt><dd className="max-w-[320px] text-right text-foreground">{detailTarget.description || '—'}</dd></div>
+                    <div className="flex justify-between"><dt className="text-muted-foreground">调用统计</dt><dd className="tabular-nums text-foreground">成功 {detailTarget.call_count - detailTarget.failed_count} / 共 {detailTarget.call_count}（成功率 {formatSuccessRate(detailTarget.call_count - detailTarget.failed_count, detailTarget.call_count)}）</dd></div>
                   </dl>
                 </section>
 
                 <section>
-                  <p className="mb-1.5 text-xs font-semibold text-slate-800">本体语义注册</p>
-                  <dl className="space-y-1.5 rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                  <p className="mb-1.5 text-xs font-semibold text-foreground">本体语义注册</p>
+                  <dl className="space-y-1.5 rounded-lg border border-border bg-muted/50 p-3">
                     <div className="flex justify-between">
-                      <dt className="text-slate-400">所属本体</dt>
-                      <dd className="max-w-[320px] text-right text-slate-700">{ontologyName || detailTarget.applicable_object_types?.ontology_id || '—'}</dd>
+                      <dt className="text-muted-foreground">所属本体</dt>
+                      <dd className="max-w-[320px] text-right text-foreground">{ontologyName || detailTarget.applicable_object_types?.ontology_id || '—'}</dd>
                     </div>
                     <div className="flex justify-between">
-                      <dt className="text-slate-400">适用对象类型</dt>
-                      <dd className="max-w-[320px] text-right text-slate-700">
+                      <dt className="text-muted-foreground">适用对象类型</dt>
+                      <dd className="max-w-[320px] text-right text-foreground">
                         {(detailTarget.applicable_object_types?.object_type_ids ?? [])
                           .map(id => objectTypeLabels[id] || id)
                           .join('、') || '—'}
                       </dd>
                     </div>
                     <div className="flex justify-between">
-                      <dt className="text-slate-400">前置条件</dt>
-                      <dd className="max-w-[320px] text-right text-slate-700">
+                      <dt className="text-muted-foreground">前置条件</dt>
+                      <dd className="max-w-[320px] text-right text-foreground">
                         {(detailTarget.preconditions ?? [])
                           .map(item => (objectTypeLabels[item.object_type_id] || item.object_type_id) + ' ≥ ' + item.min_count)
                           .join('；') || '无'}
@@ -773,7 +783,7 @@ export default function WorldModelServicesPage() {
                 </section>
 
                 <section>
-                  <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                  <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-foreground">
                     <Activity size={13} /> 最近调用（共 {serviceCallsTotal} 条）
                     {serviceCallsTotal > 0 && (
                       <button
@@ -783,7 +793,7 @@ export default function WorldModelServicesPage() {
                           setDetailTarget(null)
                           navigate(`/world-model/calls?service_id=${target.id}&service_name=${encodeURIComponent(target.name)}`)
                         }}
-                        className="ml-auto inline-flex items-center gap-1 text-[11px] font-normal text-teal-700 underline-offset-2 hover:underline"
+                        className="ml-auto inline-flex items-center gap-1 text-[11px] font-normal text-brand-ink underline-offset-2 hover:underline"
                         title="进入调用记录页并按本服务过滤"
                       >
                         查看全部 <ExternalLink size={11} />
@@ -791,14 +801,14 @@ export default function WorldModelServicesPage() {
                     )}
                   </p>
                   {serviceCallsLoading ? (
-                    <p className="py-6 text-center text-xs text-slate-400">加载调用记录…</p>
+                    <p className="py-6 text-center text-xs text-muted-foreground">加载调用记录…</p>
                   ) : serviceCalls.length === 0 ? (
-                    <p className="py-6 text-center text-xs text-slate-400">该服务暂无调用记录</p>
+                    <p className="py-6 text-center text-xs text-muted-foreground">该服务暂无调用记录</p>
                   ) : (
-                    <div className="overflow-hidden rounded-lg border border-slate-100">
+                    <div className="overflow-hidden rounded-lg border border-border">
                       <table className="w-full text-left text-xs">
                         <thead>
-                          <tr className="border-b border-slate-100 text-[11px] text-slate-400">
+                          <tr className="border-b border-border text-[11px] text-muted-foreground">
                             <th className="px-3 py-2 font-medium">时间</th>
                             <th className="px-3 py-2 font-medium">调用方</th>
                             <th className="px-3 py-2 font-medium">结果</th>
@@ -807,15 +817,15 @@ export default function WorldModelServicesPage() {
                         </thead>
                         <tbody>
                           {serviceCalls.map(call => (
-                            <tr key={call.id} className="border-b border-slate-50">
-                              <td className="px-3 py-2 tabular-nums text-slate-500">{formatDateTime(call.created_at)}</td>
-                              <td className="px-3 py-2 text-slate-600">{call.caller || '—'}</td>
+                            <tr key={call.id} className="border-b border-border">
+                              <td className="px-3 py-2 tabular-nums text-muted-foreground">{formatDateTime(call.created_at)}</td>
+                              <td className="px-3 py-2 text-muted-foreground">{call.caller || '—'}</td>
                               <td className="px-3 py-2">
                                 {call.ok
-                                  ? <span className="inline-flex items-center gap-1 text-teal-600"><CheckCircle2 size={12} /> 成功</span>
-                                  : <span className="inline-flex items-center gap-1 text-red-600"><XCircle size={12} /> 失败</span>}
+                                  ? <span className="inline-flex items-center gap-1 text-brand-ink"><CheckCircle2 size={12} /> 成功</span>
+                                  : <span className="inline-flex items-center gap-1 text-destructive"><XCircle size={12} /> 失败</span>}
                               </td>
-                              <td className="px-3 py-2 text-right tabular-nums text-slate-500">{call.duration_ms} ms</td>
+                              <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{call.duration_ms} ms</td>
                             </tr>
                           ))}
                         </tbody>

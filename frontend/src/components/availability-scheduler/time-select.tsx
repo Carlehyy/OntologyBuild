@@ -9,7 +9,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "./motion/select";
+} from "@/components/motion-ui/select";
 import type { TimeOption } from "./types";
 
 // Time field: the library Select, with the option list capped so the panel
