@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
 import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useAuthStore } from '@/stores/authStore'
@@ -50,6 +50,9 @@ import { canAccessPath, defaultLandingPath, firstAccessiblePath } from '@/config
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1 } }
 })
+
+// 组件预览路由懒加载：motion（动效依赖）随之隔离出主包
+const ComponentGalleryPage = lazy(() => import('@/pages/design/ComponentGalleryPage'))
 
 let lastAuthorizedPath: string | null = null
 
@@ -206,6 +209,11 @@ export default function App() {
           <Route path="/settings/workflows" element={<Navigate to="/settings/users" replace />} />
           <Route path="/settings/agents" element={<Navigate to="/settings/users" replace />} />
           <Route path="/settings/:tab" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+          {/* 组件预览（components/ 共享组件的可达挂载点；不进入导航，仅要求登录） */}
+          <Route
+            path="/design/components"
+            element={<AuthenticatedRoute><Suspense fallback={null}><ComponentGalleryPage /></Suspense></AuthenticatedRoute>}
+          />
           <Route path="*" element={<UnknownRouteRedirect />} />
           </Routes>
         </HashRouter>

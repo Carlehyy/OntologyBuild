@@ -90,6 +90,7 @@ success `--color-success #2d8a4e` · warning `#c9861a` · danger
 | 基础件 | `components/ui/*`（shadcn 语义约定） | Button/Card/Badge/Input/Dialog 等，样式全部走 token |
 | 复杂件 | antd 6 | 表格/树/穿梭等重组件，经 ConfigProvider token 对齐平台色 |
 | 样例库 | ReUI（shadcn 注册表扩展） | 按需拷贝源码，拷贝后按 4.2 规则换肤 |
+| 动效组件 | beUI（beui.dev，MIT 开源） | shadcn 式源码拷贝，按 4.2 映射平台 token；动效依赖 `motion`，文案默认中文、可用 props 覆盖；首个落地 `components/availability-scheduler`，预览路由 `/design/components` |
 | 表格块参考 | Tremor Blocks | 只参考布局结构，配色按 4.2 映射 |
 
 ### 4.2 外部样例拷贝规则（治理条款）
