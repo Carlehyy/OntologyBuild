@@ -407,28 +407,33 @@ export default function PluginCommunityPage() {
           reduce={reduce}
           onClick={() => void testServer(server)}
           disabled={testingId === server.id}
+          className="h-7 w-7"
         >
           {testingId === server.id
-            ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" />
-            : <Wrench size={14} />}
+            ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />
+            : <Wrench size={13} />}
         </IconButton>
       </Tooltip>
-      {/* 转接口为本页特色主操作：实心按钮 + 原生 title（置灰原因在 disabled 时仍可悬停查看） */}
-      <button
-        type="button"
-        onClick={() => setExportTarget(server)}
-        disabled={!exportable(server)}
-        title={server.tool_manifest.length
-          ? '转接口：将工具生成为接口代理的 HTTP 接口'
+      {/* 转接口为主操作（世界模型卡片 footer 配方）：Tooltip 悬停挂在包装 span 上，
+          disabled 状态下置灰原因仍可悬停查看 */}
+      <Tooltip
+        content={exportable(server)
+          ? '将勾选工具生成为接口代理的 HTTP 接口'
           : '尚未发现工具，请先执行连接测试'}
-        aria-label={`转接口 ${serverTitle(server)}`}
-        className="inline-flex h-8 items-center gap-1 rounded-lg bg-brand px-2.5 text-xs font-medium text-white transition-colors hover:bg-brand-deep focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-45"
       >
-        <FileUp size={13} /> 转接口
-      </button>
+        <button
+          type="button"
+          onClick={() => setExportTarget(server)}
+          disabled={!exportable(server)}
+          aria-label={`转接口 ${serverTitle(server)}`}
+          className="inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md bg-brand px-2.5 text-xs font-medium text-white transition-colors hover:bg-brand-deep focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <FileUp size={13} /> 转接口
+        </button>
+      </Tooltip>
       <Tooltip content="编辑名称、描述与连接配置">
-        <IconButton label={`编辑 MCP ${serverTitle(server)}`} reduce={reduce} onClick={() => setEditing(server)}>
-          <Pencil size={14} />
+        <IconButton label={`编辑 MCP ${serverTitle(server)}`} reduce={reduce} onClick={() => setEditing(server)} className="h-7 w-7">
+          <Pencil size={13} />
         </IconButton>
       </Tooltip>
       <Tooltip content="删除该 MCP Server 及其工具清单">
@@ -436,9 +441,9 @@ export default function PluginCommunityPage() {
           label={`删除 MCP ${serverTitle(server)}`}
           reduce={reduce}
           onClick={() => setDeleteTarget(server)}
-          className="hover:bg-[var(--color-danger-bg)] hover:text-destructive focus-visible:ring-destructive"
+          className="h-7 w-7 hover:bg-[var(--color-danger-bg)] hover:text-destructive focus-visible:ring-destructive"
         >
-          <Trash2 size={14} />
+          <Trash2 size={13} />
         </IconButton>
       </Tooltip>
     </div>
