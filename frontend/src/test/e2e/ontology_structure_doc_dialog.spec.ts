@@ -141,15 +141,15 @@ async function openStructureTab(page: Page) {
   await expect(page.getByTestId('structure-node-object')).toBeVisible()
 }
 
-test('结构说明按钮替换智能整理，弹窗展示需求文档并支持目录跳转与下载', async ({ page }) => {
+test('业务文档按钮替换智能整理，弹窗展示需求文档并支持目录跳转与下载', async ({ page }) => {
   const { semanticRequests } = await mockStructurePage(page)
   await openStructureTab(page)
 
   // 按钮文案已替换：智能整理入口不再存在
-  await expect(page.getByRole('button', { name: '结构说明' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '业务文档' })).toBeVisible()
   await expect(page.getByRole('button', { name: '智能整理图谱' })).toHaveCount(0)
 
-  await page.getByRole('button', { name: '结构说明' }).click()
+  await page.getByRole('button', { name: '业务文档' }).click()
   await expect(page.getByTestId('structure-doc-content')).toBeVisible()
   // 查询的是当前发布版本（release-1）的语义层
   await expect.poll(() => semanticRequests.length).toBe(1)
@@ -192,7 +192,7 @@ test('结构说明按钮替换智能整理，弹窗展示需求文档并支持�
   expect(downloaded).toContain('## 数据来源')
   expect(downloaded).toContain('订单号必填且全局唯一。')
 
-  await page.getByLabel('关闭结构说明').click()
+  await page.getByLabel('关闭业务文档').click()
   await expect(page.getByTestId('structure-doc-content')).toHaveCount(0)
 })
 
@@ -200,7 +200,7 @@ test('版本没有语义层时展示允许的空态', async ({ page }) => {
   await mockStructurePage(page, { semantic: { semantic: null, overview: { hasSemanticLayer: false } } })
   await openStructureTab(page)
 
-  await page.getByRole('button', { name: '结构说明' }).click()
+  await page.getByRole('button', { name: '业务文档' }).click()
   await expect(page.getByTestId('structure-doc-empty')).toContainText('当前版本没有关联的需求文档')
   await expect(page.getByTestId('structure-doc-download')).toHaveCount(0)
 })
@@ -209,7 +209,7 @@ test('语义层存在但需求文档为空内容时展示空内容态', async ({
   await mockStructurePage(page, { semantic: { semantic: { documentTitle: '', documentMd: '' }, overview: { hasSemanticLayer: true } } })
   await openStructureTab(page)
 
-  await page.getByRole('button', { name: '结构说明' }).click()
+  await page.getByRole('button', { name: '业务文档' }).click()
   await expect(page.getByTestId('structure-doc-empty')).toContainText('需求文档内容为空')
   await expect(page.getByTestId('structure-doc-download')).toHaveCount(0)
 })

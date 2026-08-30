@@ -85,7 +85,7 @@ function CenterHint({ icon, title, hint, testid, retry }: {
 }
 
 /**
- * 本体结构的「结构说明」弹窗：查询并展示当前本体版本语义层冻结的需求文档
+ * 本体结构的「业务文档」弹窗：查询并展示当前本体版本语义层冻结的需求文档
  * （快照口径，与建模页 DocumentsDrawer 同源同风格）。
  * 视觉口径：白 + 浅绿搭配、左右细滚动条、正文文字清晰化；顶栏展示本体名称
  * 与发布版本徽章，下载入口收进顶栏，底部说明条已移除。
@@ -178,7 +178,7 @@ export default function StructureDocDialog({ open, ontologyId, ontologyName, ver
         {/* 文档目录：白 + 浅绿导航，细滚动条，点击跳转到正文具体位置 */}
         <aside className="flex w-60 shrink-0 flex-col border-r border-[#d5eae0] bg-[#f2faf6]">
           <div className="flex h-16 shrink-0 flex-col justify-center border-b border-[#d5eae0] px-4">
-            <div id="structure-doc-dialog-title" className="text-sm font-semibold text-[var(--color-text-primary)]">结构说明</div>
+            <div id="structure-doc-dialog-title" className="text-sm font-semibold text-[var(--color-text-primary)]">业务文档</div>
             <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">需求文档目录 · 共 {toc.length} 节</div>
           </div>
           <nav data-testid="structure-doc-toc" aria-label="需求文档目录" className="odg-scroll flex-1 overflow-y-auto p-2">
@@ -241,7 +241,7 @@ export default function StructureDocDialog({ open, ontologyId, ontologyName, ver
               <button
                 type="button"
                 onClick={onClose}
-                aria-label="关闭结构说明"
+                aria-label="关闭业务文档"
                 className="shrink-0 rounded-md p-1.5 text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
               >
                 <X size={16} />

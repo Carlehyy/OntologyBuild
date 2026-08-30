@@ -4,7 +4,7 @@
  * 数据口径：探索会话可绑定本体（ontologyId）；同一本体存在多个会话时取
  * 最近更新的一支，读取其画布（对象/主体/行为/事件/规则/流程/场景）。
  * 左侧目录按模型类别归纳，点击具体模型后在右侧查看详情；没有业务模型
- * 时呈现空态。视觉与「结构说明」弹窗同口径（白 + 浅绿、细滚动条）。
+ * 时呈现空态。视觉与「业务文档」弹窗同口径（白 + 浅绿、细滚动条）。
  */
 import { useEffect, useMemo, useState, type ElementType } from 'react'
 import { createPortal } from 'react-dom'

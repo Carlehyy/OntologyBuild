@@ -47,21 +47,22 @@ export const StructureGraphNode = memo(({ data, selected }: NodeProps<StructureN
     ? 'border-fuchsia-500 ring-4 ring-fuchsia-100 shadow-[0_14px_32px_rgba(192,38,211,0.16)]'
     : data.emphasis === 'dependency'
       ? 'border-violet-500 ring-4 ring-violet-100 shadow-[0_14px_32px_rgba(124,58,237,0.16)]'
-      : data.emphasis === 'path'
-        ? 'border-cyan-500 ring-4 ring-cyan-100 shadow-[0_14px_32px_rgba(6,182,212,0.16)]'
-        : data.emphasis === 'search'
-          ? 'border-amber-500 ring-4 ring-amber-100 shadow-[0_14px_32px_rgba(245,158,11,0.16)]'
-          : data.emphasis === 'context'
-            ? 'border-violet-300 ring-2 ring-violet-50'
-            : selected
-              ? 'border-teal-500 ring-4 ring-teal-100 shadow-[0_14px_32px_rgba(13,148,136,0.14)]'
-              : style.border
+      : data.emphasis === 'search'
+        ? 'border-amber-500 ring-4 ring-amber-100 shadow-[0_14px_32px_rgba(245,158,11,0.16)]'
+        : data.emphasis === 'context'
+          ? 'border-violet-300 ring-2 ring-violet-50'
+          : selected
+            ? 'border-teal-500 ring-4 ring-teal-100 shadow-[0_14px_32px_rgba(13,148,136,0.14)]'
+            : style.border
   const widthClass = data.kind === 'object' ? 'w-[224px]' : data.kind === 'property' ? 'w-[188px]' : 'w-[196px]'
+  /* 对象实体节点常态即取悬浮观感（微浮起 + 阴影），与属性/动作等子节点拉开
+     层级：画布一眼可辨"实体在平面之上"。emphasis/selected/压暗态优先于常态浮起。 */
+  const resting = data.kind === 'object' && !data.emphasis && !selected && !data.dimmed
 
   return (
     <div
       data-testid={`structure-node-${data.kind}`}
-      className={`${widthClass} rounded-xl border bg-white px-3.5 py-3 transition-[opacity,border-color,box-shadow,transform] duration-200 ${emphasisClass} ${data.dimmed ? 'opacity-20 grayscale' : 'opacity-100'} hover:-translate-y-0.5 hover:shadow-lg`}
+      className={`${widthClass} rounded-xl border bg-white px-3.5 py-3 transition-[opacity,border-color,box-shadow,transform] duration-200 ${emphasisClass} ${data.dimmed ? 'opacity-20 grayscale' : 'opacity-100'} ${resting ? '-translate-y-0.5 shadow-lg' : ''} ${data.kind === 'object' ? 'hover:shadow-xl' : 'hover:-translate-y-0.5 hover:shadow-lg'}`}
     >
       <DirectionalHandles />
       <div className="flex min-w-0 items-center gap-3">
@@ -103,14 +104,12 @@ export function StructureGraphEdge({
     : `M ${sourceX},${sourceY} Q ${controlX},${controlY} ${targetX},${targetY}`
   const labelX = selfLoop ? midX : midX + nx * offset
   const labelY = selfLoop ? Math.min(sourceY, targetY) - 84 - Math.abs(offset) : midY + ny * offset
-  const emphasized = data?.emphasis === 'path' || data?.emphasis === 'dependency' || data?.emphasis === 'search'
-  const stroke = data?.emphasis === 'path'
-    ? '#0891b2'
-    : data?.emphasis === 'dependency'
-      ? '#7c3aed'
-      : data?.emphasis === 'search'
-        ? '#d97706'
-        : selected ? '#047857' : relation ? '#64748b' : data?.kind === 'property' ? '#c4b5fd' : '#fcd34d'
+  const emphasized = data?.emphasis === 'dependency' || data?.emphasis === 'search'
+  const stroke = data?.emphasis === 'dependency'
+    ? '#7c3aed'
+    : data?.emphasis === 'search'
+      ? '#d97706'
+      : selected ? '#047857' : relation ? '#64748b' : data?.kind === 'property' ? '#c4b5fd' : '#fcd34d'
   const opacity = data?.dimmed ? 0.12 : relation ? 0.9 : 0.62
 
   return (
@@ -126,7 +125,7 @@ export function StructureGraphEdge({
         <EdgeLabelRenderer>
           <div
             data-testid="structure-edge-relation"
-            className={`nodrag nopan pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full border bg-white/95 px-2 py-0.5 text-[11px] font-semibold shadow-sm ${emphasized ? 'border-cyan-300 text-cyan-800' : 'border-slate-200 text-slate-700'}`}
+            className={`nodrag nopan pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full border bg-white/95 px-2 py-0.5 text-[11px] font-semibold shadow-sm ${data?.emphasis === 'dependency' ? 'border-violet-300 text-violet-800' : data?.emphasis === 'search' ? 'border-amber-300 text-amber-800' : 'border-slate-200 text-slate-700'}`}
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
           >
             {data.label}
