@@ -220,7 +220,7 @@ function ProjectCard({
 }) {
   const reduce = useReducedMotion() ?? false
   return (
-    <TiltCard className="h-full" max={8}>
+    <TiltCard className="h-full" max={8} glare={false}>
       <article className="flex h-full min-h-[190px] flex-col rounded-2xl border border-border bg-card p-5 shadow-sm/50 transition-shadow hover:shadow-md">
       <header className="flex items-start gap-3">
         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand-ink">
