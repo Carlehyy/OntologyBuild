@@ -32,6 +32,13 @@ def upgrade() -> None:
     inspector = sa_inspect(bind)
     tables = set(inspector.get_table_names())
 
+    # 该迁移给 users 表加列、并建两张外键指向 users.id 的表。部分迁移测试
+    # 场景（如 skill 治理迁移测试）只手工建被测表并 stamp 到中间版本，
+    # users 表此时不存在；此时直接跳过本迁移的全部 DDL，避免 NoSuchTableError。
+    # 真实库与全量 upgrade 链路里 users 表必然存在，会正常执行。
+    if "users" not in tables:
+        return
+
     # users 表新增 report_token_encrypted 列（兼容存量：nullable）
     existing_columns = {c["name"] for c in inspector.get_columns("users")}
     if "report_token_encrypted" not in existing_columns:
