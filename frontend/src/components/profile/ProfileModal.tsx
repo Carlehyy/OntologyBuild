@@ -2,16 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Braces,
   CircleUserRound,
+  Download,
   KeyRound,
   Loader2,
   LockKeyhole,
   Plus,
+  RefreshCw,
+  ShieldCheck,
   Trash2,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
-import { authApi, type UserEnvVar } from '@/api/auth'
+import { authApi, type PrivacyVar, type UserEnvVar } from '@/api/auth'
 import { useAuthStore } from '@/stores/authStore'
 /**
  * 个人资料弹窗（用户头像下拉 → 个人资料，MYW-56）。
@@ -21,17 +24,23 @@ import { useAuthStore } from '@/stores/authStore'
  *   auth-store）、修改密码（走既有 PUT /auth/password，需验证当前密码）；
  * - 「环境变量」：用户私有环境变量，key/value 均为字符串，全量保存，
  *   服务端加密落库；本期仅做个人配置的保存与维护，不注入任何执行链路。
+ * - 「隐私变量」：由本地脚本 RSA 公钥加密上报、平台私钥解密后 Fernet
+ *   落库的变量。用户创建变量（首次创建生成上报 token，仅此一次可见）、
+ *   下载 Python 上报脚本模板、重置上报 token。平台侧不回显 value。
  */
 
 const ENV_VAR_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/
 const ENV_VAR_MAX_ITEMS = 50
 const ENV_VAR_VALUE_MAX_LENGTH = 4096
+const PRIVACY_VAR_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/
+const PRIVACY_VAR_MAX_ITEMS = 50
 
-type ProfileTab = 'account' | 'env'
+type ProfileTab = 'account' | 'env' | 'privacy'
 
 const PROFILE_TABS: Array<{ key: ProfileTab; label: string; icon: typeof CircleUserRound }> = [
   { key: 'account', label: '账号信息', icon: CircleUserRound },
   { key: 'env', label: '环境变量', icon: Braces },
+  { key: 'privacy', label: '隐私变量', icon: ShieldCheck },
 ]
 
 type Notice = { kind: 'success' | 'error'; text: string }
@@ -45,6 +54,30 @@ function errorMessage(error: any, fallback: string) {
 
 const inputClass =
   'w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 py-2 text-sm text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-primary)] disabled:cursor-not-allowed disabled:bg-[var(--color-muted)] disabled:text-[var(--color-text-secondary)]'
+
+function formatTime(iso: string | null): string {
+  if (!iso) return '尚未上报'
+  try {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return '尚未上报'
+    return d.toLocaleString()
+  } catch {
+    return '尚未上报'
+  }
+}
+
+function saveBlob(blob: Blob, filename: string) {
+  // 副作用类交互兜底（AGENTS.md §5）：除 Blob 下载外不再提供其它路径，
+  // 下载结果由调用方在 E2E 里断言文件内容，提示文案如实（"已尝试下载"）。
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
 
 export default function ProfileModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const user = useAuthStore(s => s.user)
@@ -60,10 +93,17 @@ export default function ProfileModal({ open, onClose }: { open: boolean; onClose
   const [savingProfile, setSavingProfile] = useState(false)
   const [savingPassword, setSavingPassword] = useState(false)
   const [savingEnvVars, setSavingEnvVars] = useState(false)
+
+  // 隐私变量状态
+  const [privacyVars, setPrivacyVars] = useState<PrivacyVar[]>([])
+  const [privacyLoading, setPrivacyLoading] = useState(false)
+  const [privacyNewKey, setPrivacyNewKey] = useState('')
+  const [privacyBusy, setPrivacyBusy] = useState(false)
+
   const [notice, setNotice] = useState<Notice | null>(null)
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
 
-  const busy = savingProfile || savingPassword || savingEnvVars
+  const busy = savingProfile || savingPassword || savingEnvVars || privacyBusy
 
   // 仅在弹窗打开时初始化/加载。刻意不把 user 放进依赖：保存邮箱会更新
   // auth-store 里的 user，若依赖它，成功提示会被这次重置立即吞掉。
@@ -74,6 +114,7 @@ export default function ProfileModal({ open, onClose }: { open: boolean; onClose
     setEmailDraft(currentUser?.email ?? '')
     setCurrentPassword('')
     setNewPassword('')
+    setPrivacyNewKey('')
     setNotice(null)
     let cancelled = false
     setEnvLoading(true)
@@ -83,6 +124,13 @@ export default function ProfileModal({ open, onClose }: { open: boolean; onClose
         if (!cancelled) setNotice({ kind: 'error', text: errorMessage(error, '环境变量加载失败') })
       })
       .finally(() => { if (!cancelled) setEnvLoading(false) })
+    setPrivacyLoading(true)
+    authApi.listPrivacyVars()
+      .then(items => { if (!cancelled) setPrivacyVars(Array.isArray(items) ? items : []) })
+      .catch(error => {
+        if (!cancelled) setNotice({ kind: 'error', text: errorMessage(error, '隐私变量加载失败') })
+      })
+      .finally(() => { if (!cancelled) setPrivacyLoading(false) })
     return () => { cancelled = true }
   }, [open])
 
@@ -171,12 +219,93 @@ export default function ProfileModal({ open, onClose }: { open: boolean; onClose
     setEnvVars(current => current.map((item, i) => i === index ? { ...item, ...patch } : item))
   }
 
+  // ---- 隐私变量 ----
+
+  const createPrivacyVar = async () => {
+    const key = privacyNewKey.trim()
+    if (!key) { showToast('error', '请填写变量名'); return }
+    if (!PRIVACY_VAR_KEY_PATTERN.test(key)) {
+      showToast('error', '变量名仅允许字母、数字、下划线、连字符和点')
+      return
+    }
+    if (privacyVars.some(v => v.key === key)) {
+      showToast('error', `变量名已存在：${key}`)
+      return
+    }
+    if (privacyVars.length >= PRIVACY_VAR_MAX_ITEMS) {
+      showToast('error', `隐私变量上限 ${PRIVACY_VAR_MAX_ITEMS} 条`)
+      return
+    }
+    setPrivacyBusy(true)
+    try {
+      const created = await authApi.createPrivacyVar(key)
+      setPrivacyVars(current => [...current, created].sort((a, b) => a.key.localeCompare(b.key)))
+      setPrivacyNewKey('')
+      // 首次创建返回 report_token：仅此一次可见，如实提示并给出复制兜底。
+      if (created.report_token) {
+        showToast('success', '已创建。上报 token 仅此一次展示，请立即复制保存')
+        // 用 prompt 作为复制兜底（剪贴板 API 在非 HTTPS/非聚焦下不可靠）。
+        window.setTimeout(() => {
+          window.prompt('上报 token（仅此一次，请立即保存）：', created.report_token)
+        }, 100)
+      } else {
+        showToast('success', '已创建')
+      }
+    } catch (error) {
+      showToast('error', errorMessage(error, '创建隐私变量失败'))
+    } finally {
+      setPrivacyBusy(false)
+    }
+  }
+
+  const deletePrivacyVar = async (key: string) => {
+    setPrivacyBusy(true)
+    try {
+      await authApi.deletePrivacyVar(key)
+      setPrivacyVars(current => current.filter(v => v.key !== key))
+      showToast('success', '已删除')
+    } catch (error) {
+      showToast('error', errorMessage(error, '删除隐私变量失败'))
+    } finally {
+      setPrivacyBusy(false)
+    }
+  }
+
+  const resetReportToken = async () => {
+    setPrivacyBusy(true)
+    try {
+      const result = await authApi.resetReportToken()
+      showToast('success', '已重置。新 token 仅此一次展示，请立即复制保存')
+      window.setTimeout(() => {
+        window.prompt('新上报 token（仅此一次，请立即保存；旧 token 已失效）：', result.report_token)
+      }, 100)
+    } catch (error) {
+      showToast('error', errorMessage(error, '重置上报 token 失败'))
+    } finally {
+      setPrivacyBusy(false)
+    }
+  }
+
+  const downloadScript = async () => {
+    setPrivacyBusy(true)
+    try {
+      const blob = await authApi.downloadReporterScript()
+      // 提示文案如实（AGENTS.md §5：不依据中间信号宣称已下载）。
+      saveBlob(blob, 'privacy_reporter.py')
+      showToast('success', '已尝试下载脚本，请检查浏览器下载')
+    } catch (error) {
+      showToast('error', errorMessage(error, '下载脚本失败'))
+    } finally {
+      setPrivacyBusy(false)
+    }
+  }
+
   return (
     <Modal
       open={open}
       onClose={onClose}
       title="个人资料"
-      description="维护账号信息、登录密码与你的私有环境变量"
+      description="维护账号信息、登录密码、私有环境变量与隐私变量"
       size="xl"
       headerIcon={<CircleUserRound size={19} />}
       disableClose={busy}
@@ -191,12 +320,7 @@ export default function ProfileModal({ open, onClose }: { open: boolean; onClose
         </div>
       )}
 
-      {/* 双栏区域固定最小高度：两个 tab 内容量差异大（账号信息约为环境变量
-          的三倍高），不固定高度时切换 tab 弹窗会忽高忽低。min-h 覆盖账号
-          信息面板的完整内容，选中环境变量时同样保持这一高度；内容超出时
-          仍随内容增高并由 Modal 整体限高滚动。 */}
       <div className="grid min-h-[30rem] grid-cols-[128px_minmax(0,1fr)] items-start gap-5">
-        {/* 左侧竖向 tab 导航 */}
         <nav
           role="tablist"
           aria-label="个人资料分区"
@@ -234,7 +358,6 @@ export default function ProfileModal({ open, onClose }: { open: boolean; onClose
         {/* 右侧分区内容 */}
         {activeTab === 'account' && (
           <div role="tabpanel" id="profile-panel-account" aria-labelledby="profile-tab-account">
-            {/* 账号信息 */}
             <section aria-label="账号信息">
               <p className="text-xs text-[var(--color-text-tertiary)]">
                 用户名是区分不同用户的唯一标识，不支持修改
@@ -262,7 +385,6 @@ export default function ProfileModal({ open, onClose }: { open: boolean; onClose
               </div>
             </section>
 
-            {/* 修改密码 */}
             <section aria-label="修改密码" className="mt-5 border-t border-[var(--color-border)] pt-4">
               <h4 className="flex items-center gap-1.5 text-sm font-medium text-[var(--color-text-primary)]">
                 <KeyRound size={14} />修改密码
@@ -300,7 +422,6 @@ export default function ProfileModal({ open, onClose }: { open: boolean; onClose
 
         {activeTab === 'env' && (
           <div role="tabpanel" id="profile-panel-env" aria-labelledby="profile-tab-env">
-            {/* 私有环境变量 */}
             <section aria-label="私有环境变量">
               <p className="text-xs text-[var(--color-text-tertiary)]">
                 仅本人可见，值加密存储；本期仅保存配置，暂不注入任何执行链路（最多 {ENV_VAR_MAX_ITEMS} 条）
@@ -354,6 +475,95 @@ export default function ProfileModal({ open, onClose }: { open: boolean; onClose
                   <Button size="sm" variant="success" loading={savingEnvVars} onClick={() => void saveEnvVars()}>
                     保存变量
                   </Button>
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {activeTab === 'privacy' && (
+          <div role="tabpanel" id="profile-panel-privacy" aria-labelledby="profile-tab-privacy">
+            <section aria-label="隐私变量">
+              <p className="text-xs text-[var(--color-text-tertiary)]">
+                本地脚本用公钥加密上报，平台私钥解密后加密存储；适合依赖本地环境才能生成的凭据（如本地
+                Cookie）。下载脚本后填入采集逻辑即可自动上报。本期仅存储，不注入执行链路（最多
+                {PRIVACY_VAR_MAX_ITEMS} 条）。
+              </p>
+              <div className="mt-3 space-y-3">
+                {/* 创建新变量 */}
+                <div className="flex items-end gap-2">
+                  <label className="flex-1">
+                    <span className="mb-1.5 block text-xs font-medium text-[var(--color-text-secondary)]">新建变量名</span>
+                    <input
+                      value={privacyNewKey}
+                      onChange={event => setPrivacyNewKey(event.target.value)}
+                      onKeyDown={event => { if (event.key === 'Enter') void createPrivacyVar() }}
+                      placeholder="如 MY_LOCAL_COOKIE"
+                      className={`${inputClass} font-mono`}
+                      aria-label="新建隐私变量名"
+                    />
+                  </label>
+                  <Button size="sm" loading={privacyBusy} onClick={() => void createPrivacyVar()}>
+                    <Plus size={13} />创建
+                  </Button>
+                </div>
+
+                {/* 变量列表 */}
+                <div className="space-y-2">
+                  {privacyLoading ? (
+                    <div className="flex items-center gap-2 px-1 py-3 text-xs text-[var(--color-text-tertiary)]">
+                      <Loader2 size={14} className="animate-spin" />正在加载隐私变量...
+                    </div>
+                  ) : privacyVars.length === 0 ? (
+                    <p className="px-1 py-3 text-xs text-[var(--color-text-tertiary)]">暂无隐私变量，在上方创建</p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {privacyVars.map(item => (
+                        <li key={item.id} className="flex items-center justify-between rounded-lg border border-[var(--color-border)] px-3 py-2">
+                          <div className="min-w-0">
+                            <p className="truncate font-mono text-sm text-[var(--color-text-primary)]">{item.key}</p>
+                            <p className="text-xs text-[var(--color-text-tertiary)]">
+                              {item.has_value ? '已上报' : '尚未上报'} · 上次上报 {formatTime(item.last_reported_at)}
+                            </p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`删除变量 ${item.key}`}
+                            disabled={privacyBusy}
+                            onClick={() => void deletePrivacyVar(item.key)}
+                          >
+                            <Trash2 size={14} />
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                {/* 下载脚本 + 重置 token */}
+                <div className="flex flex-wrap items-center gap-2 border-t border-[var(--color-border)] pt-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    loading={privacyBusy}
+                    onClick={() => void downloadScript()}
+                  >
+                    <Download size={13} />下载上报脚本
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    loading={privacyBusy}
+                    onClick={() => void resetReportToken()}
+                  >
+                    <RefreshCw size={13} />重置上报 token
+                  </Button>
+                  {privacyVars.length > 0 && (
+                    <p className="text-xs text-[var(--color-text-tertiary)]">
+                      下载脚本内嵌公钥与上报 token；token 泄露可在此重置使旧 token 失效
+                    </p>
+                  )}
                 </div>
               </div>
             </section>

@@ -187,3 +187,98 @@ test('私有环境变量支持增删改并全量保存', async ({ page }) => {
   await expect(dialog.getByText('环境变量已保存')).toBeVisible()
   await expect(panel.getByLabel('第 1 个变量名')).toHaveValue('NEW_KEY')
 })
+
+// ---- 隐私变量：创建 / 列表 / 下载脚本（断言文件内容）/ 重置 token ----
+
+test('隐私变量支持创建、列表回显、下载脚本与重置token', async ({ page }) => {
+  await mockPlatformShell(page)
+
+  // 容器：捕获下载请求与创建/重置响应
+  const captured: {
+    scriptBody?: string
+    createBody?: { key?: string }
+    resetCalled?: boolean
+  } = {}
+  let storedVars: Array<{ id: string; key: string; has_value: boolean; last_reported_at: string | null; created_at: string }> = []
+
+  await page.route('**/api/v1/auth/privacy-vars', async route => {
+    const method = route.request().method()
+    if (method === 'GET') {
+      return json(route, storedVars)
+    }
+    if (method === 'POST') {
+      captured.createBody = route.request().postDataJSON() as { key?: string }
+      const key = captured.createBody?.key ?? 'X'
+      const created = {
+        id: `pv-${key}`,
+        key,
+        has_value: false,
+        last_reported_at: null,
+        created_at: now,
+        report_token: 'first-token-only',
+      }
+      storedVars = [...storedVars, { id: created.id, key: created.key, has_value: false, last_reported_at: null, created_at: now }]
+        .sort((a, b) => a.key.localeCompare(b.key))
+      return json(route, created)
+    }
+    return route.continue()
+  })
+
+  await page.route('**/api/v1/auth/privacy-vars/report-token/reset', async route => {
+    captured.resetCalled = true
+    return json(route, { report_token: 'new-token-after-reset' })
+  })
+
+  // 下载脚本：返回一段确定内容的 Python，断言下载文件内容（AGENTS.md §5
+  // 副作用验收标准：必须断言真实结果，不能只断言提示出现）。
+  const scriptContent = '#!/usr/bin/env python3\nBASE_URL = "http://localhost:8000"\nREPORT_TOKEN = "first-token-only"\n# END'
+  await page.route('**/api/v1/auth/privacy-vars/script', async route => {
+    captured.scriptBody = scriptContent
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/x-python',
+      headers: { 'content-disposition': 'attachment; filename="privacy_reporter.py"' },
+      body: scriptContent,
+    })
+  })
+
+  await page.goto('/#/inbox', { waitUntil: 'domcontentloaded' })
+  const dialog = await openProfileDialog(page)
+
+  // 切到隐私变量 tab
+  await dialog.getByRole('tab', { name: '隐私变量' }).click()
+  const panel = dialog.getByRole('tabpanel', { name: '隐私变量' })
+  await expect(panel).toBeVisible()
+  await expect(dialog.getByRole('tab', { name: '隐私变量' })).toHaveAttribute('aria-selected', 'true')
+
+  // 创建一个变量
+  await panel.getByLabel('新建隐私变量名').fill('MY_LOCAL_COOKIE')
+  await panel.getByRole('button', { name: '创建' }).click()
+  await expect(dialog.getByText('已创建')).toBeVisible()
+  // 列表回显
+  await expect(panel.getByText('MY_LOCAL_COOKIE')).toBeVisible()
+
+  // 下载脚本：用 Playwright download 事件断言真实文件内容（非中间信号）
+  const downloadPromise = page.waitForEvent('download')
+  await panel.getByRole('button', { name: '下载上报脚本' }).click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('privacy_reporter.py')
+  // 断言下载文件真实内容（AGENTS.md §5：不依据中间信号，断言最终结果）。
+  const stream = await download.createReadStream()
+  const chunks: Buffer[] = []
+  for await (const chunk of stream) chunks.push(chunk as Buffer)
+  const downloadText = Buffer.concat(chunks).toString('utf-8')
+  expect(downloadText).toContain('BASE_URL')
+  expect(downloadText).toContain('REPORT_TOKEN')
+  expect(downloadText).toContain('first-token-only')
+
+  // 重置 token：仅断言请求发出 + 提示出现（真实 token 值由后端保证）
+  await page.route('**/api/v1/auth/privacy-vars', async route => {
+    // 二次覆盖：列表里仍保留之前创建的变量
+    if (route.request().method() === 'GET') return json(route, storedVars)
+    return route.continue()
+  })
+  await panel.getByRole('button', { name: '重置上报 token' }).click()
+  await expect(dialog.getByText('已重置')).toBeVisible()
+  expect(captured.resetCalled).toBe(true)
+})

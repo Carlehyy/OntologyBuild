@@ -6,6 +6,22 @@ export interface UserEnvVar {
   value: string
 }
 
+/** 隐私变量列表项：刻意不含 value（隐私变量值由本地脚本上报，平台侧仅
+ * 存储，不对前端明文展示）。has_value 表示平台是否已收到过上报值。 */
+export interface PrivacyVar {
+  id: string
+  key: string
+  has_value: boolean
+  last_reported_at: string | null
+  created_at: string
+}
+
+/** 创建隐私变量响应：首次创建（生成上报 token）时附带 report_token 明文，
+ * 仅此一次返回；后续创建不带该字段。 */
+export interface PrivacyVarCreated extends PrivacyVar {
+  report_token?: string
+}
+
 export const authApi = {
   login: (username: string, password: string) =>
     apiClient.post<{ access_token: string; token_type: string }>('/auth/login', { username, password }),
@@ -20,4 +36,16 @@ export const authApi = {
   listEnvVars: () => apiClient.get<UserEnvVar[]>('/auth/env-vars'),
   saveEnvVars: (items: UserEnvVar[]) =>
     apiClient.put<UserEnvVar[]>('/auth/env-vars', { items }),
+  // 隐私变量：本地脚本 RSA 公钥加密上报 → 平台私钥解密 + Fernet 落库
+  listPrivacyVars: () => apiClient.get<PrivacyVar[]>('/auth/privacy-vars'),
+  createPrivacyVar: (key: string) =>
+    apiClient.post<PrivacyVarCreated>('/auth/privacy-vars', { key }),
+  deletePrivacyVar: (key: string) =>
+    apiClient.delete(`/auth/privacy-vars/${encodeURIComponent(key)}`),
+  resetReportToken: () =>
+    apiClient.post<{ report_token: string }>('/auth/privacy-vars/report-token/reset'),
+  // 下载上报脚本模板（Blob）。下载依赖浏览器副作用，按 AGENTS.md §5
+  // 副作用验收标准：E2E 必须断言下载文件内容，不能只断言"提示出现"。
+  downloadReporterScript: () =>
+    apiClient.get('/auth/privacy-vars/script', { responseType: 'blob' }) as Promise<Blob>,
 }
