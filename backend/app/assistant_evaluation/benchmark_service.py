@@ -23,6 +23,7 @@ from app.assistant_evaluation.service import ServiceError
 from app.assistant_evaluation.timeline import (
     EVENT_BENCHMARK_CREATED,
     EVENT_BENCHMARK_DELETED,
+    EVENT_BENCHMARK_FROM_TASK_FILTERED,
     EVENT_BENCHMARK_ITEM_REMOVED,
     EVENT_BENCHMARK_ITEMS_ADDED,
     ACTOR_ADMIN,
@@ -173,28 +174,62 @@ def create_from_task(db: Session, *, task_id: str, name: str | None,
     if adapter is None:
         raise ServiceError(f"未知的助手类型：{task.assistant_key}")
     ontology_id = None
-    if task.assistant_key == "ontology_agent":
-        # 基准会话同属一个本体：从首条会话推导绑定（跨本体任务在评估侧不存在）
-        from app.ontologies.agent_runtime.models import AgentConversation
-
-        conv = (
-            db.query(AgentConversation)
-            .filter(AgentConversation.id == picked[0].conversation_id)
-            .first()
-        )
-        if conv is None:
-            raise ServiceError("基准来源会话已不存在，无法确定所属本体。")
-        ontology_id = conv.ontology_id
     entries = [{
         "conversation_id": i.conversation_id,
         "split": split_for(i.conversation_id),
         "origin": origin,
     } for i in picked]
+    if task.assistant_key == "ontology_agent":
+        # 评估任务混采多个本体的会话（助手级采样），而基准集按本体隔离
+        # （沙箱回放需要本体上下文）：取条目最多的本体为主人，其余过滤
+        # 掉并留痕，而不是让整个沉淀失败（2026-08-30 真实 E2E 缺陷）。
+        ontology_id, entries, skipped_foreign = _filter_entries_to_majority_ontology(
+            db, entries)
+        if not entries:
+            raise ServiceError("无法确定基准集所属本体：来源会话已全部不存在。")
+        if skipped_foreign:
+            record_event(db, event_type=EVENT_BENCHMARK_FROM_TASK_FILTERED,
+                         assistant_key=task.assistant_key, actor=ACTOR_ADMIN,
+                         actor_user_id=created_by, ref_type="task", ref_id=task.id,
+                         detail={"ontology_id": ontology_id,
+                                 "skipped_foreign": skipped_foreign})
     fallback_name = name or f"{adapter.label} · {task.title} · {'坏例' if include == 'badcase' else '全量'}基准"
     return create_set(db, assistant_key=task.assistant_key, name=fallback_name,
                       description=description or "", entries=entries,
                       created_by=created_by, source_task_id=task.id,
                       ontology_id=ontology_id)
+
+
+def conversation_ontology_map(db: Session, conversation_ids: list[str]) -> dict[str, str | None]:
+    """批量查询本体助手会话的本体归属：{conversation_id: ontology_id}。"""
+    from app.ontologies.agent_runtime.models import AgentConversation
+
+    ids = [cid for cid in conversation_ids if cid]
+    if not ids:
+        return {}
+    rows = (
+        db.query(AgentConversation.id, AgentConversation.ontology_id)
+        .filter(AgentConversation.id.in_(ids))
+        .all()
+    )
+    return {row.id: row.ontology_id for row in rows}
+
+
+def _filter_entries_to_majority_ontology(
+        db: Session, entries: list[dict]) -> tuple[str | None, list[dict], int]:
+    """按多数本体过滤条目：返回 (ontology_id, 保留条目, 过滤数)。"""
+    ownership = conversation_ontology_map(
+        db, [e["conversation_id"] for e in entries])
+    counts: dict[str, int] = {}
+    for entry in entries:
+        ontology = ownership.get(entry["conversation_id"])
+        if ontology:
+            counts[ontology] = counts.get(ontology, 0) + 1
+    if not counts:
+        return None, [], 0
+    majority = max(counts, key=lambda k: (counts[k], k))
+    kept = [e for e in entries if ownership.get(e["conversation_id"]) == majority]
+    return majority, kept, len(entries) - len(kept)
 
 
 def add_items(db: Session, set_id: str, entries: list[dict],

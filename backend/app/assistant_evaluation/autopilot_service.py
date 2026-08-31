@@ -104,7 +104,7 @@ def save_config(db: Session, *, ontology_id: str, enabled: bool, run_at: str,
     row.dimension_keys = list(dict.fromkeys(dimension_keys)) or list(BASE_DIMENSION_KEYS)
     row.model_config_id = model_config_id or None
     try:
-        row.threshold = max(0.0, float(threshold or 5.0))
+        row.threshold = max(0.0, float(threshold) if threshold is not None else 5.0)
         row.max_applies_per_week = max(1, min(int(max_applies_per_week or 3), 7))
         row.sample_days = max(1, min(int(sample_days or 14), 90))
     except (TypeError, ValueError):
@@ -307,6 +307,12 @@ def run_cycle(config_id: str) -> dict:
         existing = {i.conversation_id
                     for i in benchmark_service.items_of(db, config.benchmark_set_id)}
         fresh = [cid for cid in badcases if cid not in existing]
+        if fresh:
+            # 采样任务混采多本体（助手级评估），基准集按本体隔离：
+            # 只归并属于值守本体的坏例，其余静默跳过（2026-08-30 真实 E2E 缺陷）
+            ownership = benchmark_service.conversation_ontology_map(db, fresh)
+            fresh = [cid for cid in fresh
+                     if ownership.get(cid) == config.ontology_id]
         folded = 0
         if fresh and len(existing) + len(fresh) <= min(
                 MAX_ITEMS_PER_SET, MAX_BENCHMARK_ITEMS_PER_EXPERIMENT):

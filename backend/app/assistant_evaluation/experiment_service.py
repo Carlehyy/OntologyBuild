@@ -211,7 +211,8 @@ def create_experiment(db: Session, *, proposal_id: str, benchmark_set_id: str,
     judge = task_service._resolve_judge_model(db, model_config_id) if llm_dims else None
 
     try:
-        threshold = float(threshold) if threshold else DEFAULT_GATE_THRESHOLD
+        # 注意 0 是合法阈值（配合零噪声地板的确定性维度），不能当 falsy 回退
+        threshold = float(threshold) if threshold is not None else DEFAULT_GATE_THRESHOLD
     except (TypeError, ValueError):
         raise ServiceError("门禁阈值必须是数字。")
     threshold = max(0.0, threshold)

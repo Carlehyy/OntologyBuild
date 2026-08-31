@@ -321,3 +321,90 @@ def test_new_m2_endpoints_require_admin(client, editor_token):
     ):
         r = client.get(path, headers={"Authorization": f"Bearer {editor_token}"})
         assert r.status_code == 403
+
+
+def test_threshold_zero_is_not_treated_as_missing(client, auth_headers, db, admin_user,
+                                                  ontology):
+    """回归：threshold=0 是合法值（配合零噪声地板的确定性维度），
+    不能被 falsy 回退成默认 5.0——2026-08-30 真实 E2E 缺陷。"""
+    ontology_id = ontology["id"]
+    conv = _seed_agent_conversation(db, ontology_id, ["问"], title="留出会话")
+    bench = client.post("/api/v1/assistant-evaluation/benchmarks", json={
+        "assistant_key": "ontology_agent", "ontology_id": ontology_id,
+        "name": "零阈值基准",
+        "items": [{"conversation_id": conv, "split": "heldout"}],
+    }, headers=auth_headers).json()["data"]
+    proposal = client.post("/api/v1/assistant-evaluation/proposals", json={
+        "ontology_id": ontology_id, "type": "prompt_patch",
+        "payload": {"system_prompt_extra": DRAFT_MARKER},
+    }, headers=auth_headers).json()["data"]
+
+    experiment = client.post("/api/v1/assistant-evaluation/experiments", json={
+        "proposal_id": proposal["id"], "benchmark_set_id": bench["id"],
+        "dimension_keys": ["response_repetition"], "threshold": 0,
+    }, headers=auth_headers)
+    assert experiment.status_code == 200
+    params = experiment.json()["data"]["params"]
+    assert params["threshold"] == 0.0     # 0 不被回退成 5.0
+
+
+def test_from_task_filters_cross_ontology_to_majority(client, auth_headers, db,
+                                                      admin_user, ontology,
+                                                      inline_workers):
+    """回归：评估任务混采多本体（助手级采样），from-task 取多数本体
+    过滤而非整体失败——2026-08-30 真实 E2E 缺陷。"""
+    from app.ontologies.agent_runtime.models import AgentConversation
+
+    ontology_id = ontology["id"]
+    other_ontology = str(uuid.uuid4())
+    # 2 条本体 A + 1 条本体 B（带重复工具步骤 → action_loop 产出评分）
+    def _seed_with_steps(ontology, question, title):
+        conv = AgentConversation(ontology_id=ontology, title=title)
+        db.add(conv)
+        db.commit()
+        db.refresh(conv)
+        step = {"tool": "sql_query", "arguments": {"sql": "select 1"},
+                "summary": "1", "durationMs": 1, "result": "1"}
+        db.add(AgentMessage(conversation_id=conv.id, role="user", content=question))
+        db.add(AgentMessage(conversation_id=conv.id, role="assistant",
+                            content="答", steps=[dict(step), dict(step), dict(step)]))
+        db.commit()
+        return conv.id
+
+    c_a1 = _seed_with_steps(ontology_id, "问A1", "A1")
+    c_a2 = _seed_with_steps(ontology_id, "问A2", "A2")
+    c_b1 = _seed_with_steps(other_ontology, "问B1", "B1")
+    task = client.post("/api/v1/assistant-evaluation/tasks", json={
+        "assistant_key": "ontology_agent",
+        "conversation_ids": [c_a1, c_a2, c_b1],
+        "dimension_keys": ["action_loop"],
+    }, headers=auth_headers).json()["data"]
+    assert task["status"] == "success"
+
+    bench = client.post("/api/v1/assistant-evaluation/benchmarks/from-task", json={
+        "task_id": task["id"], "include": "all",
+    }, headers=auth_headers)
+    assert bench.status_code == 200, bench.text
+    data = bench.json()["data"]
+    assert data["ontology_id"] == ontology_id          # 多数本体胜出
+    assert data["item_count"] == 2                     # 跨本体条目被过滤
+
+    detail = client.get(
+        f"/api/v1/assistant-evaluation/benchmarks/{data['id']}",
+        headers=auth_headers).json()["data"]
+    ids = {i["conversation_id"] for i in detail["items"]}
+    assert ids == {c_a1, c_a2} and c_b1 not in ids
+
+    # 时间线留痕过滤事件
+    events = client.get(
+        f"/api/v1/assistant-evaluation/timeline?ref_type=task&ref_id={task['id']}",
+        headers=auth_headers).json()["data"]
+    assert any(e["event_type"] == "benchmark_from_task_filtered"
+               and e["detail"]["skipped_foreign"] == 1 for e in events)
+
+    # 清理另一本体会话避免污染
+    for conv_id in (c_b1,):
+        row = db.query(AgentConversation).filter_by(id=conv_id).first()
+        if row is not None:
+            db.delete(row)
+            db.commit()
