@@ -1383,7 +1383,7 @@ class ToolRunner:
             cur = conn.execute(
                 "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
                 "body_type, body_content, mcp_enabled, open_enabled, parameter_schema, "
-                "created_by, updated_by, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "created_by, updated_by, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     name.strip()[:200] or "浏览器发现接口",
                     (description or f"数据管家会话 {self._conversation()[:8]} 从页面网络请求发现").strip(),
