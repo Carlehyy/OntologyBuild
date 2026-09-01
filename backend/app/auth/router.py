@@ -251,6 +251,29 @@ def create_privacy_var(
     return {"data": data, "message": "ok"}
 
 
+@router.get("/privacy-vars/{key}/value")
+def get_privacy_var_value(
+    key: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # 仅当前用户可取回自己的明文值；跨用户对不存在的 key 一律返回 404，不泄漏存在性。
+    row = db.query(UserPrivacyVar).filter(
+        UserPrivacyVar.user_id == current_user.id,
+        UserPrivacyVar.key == key,
+    ).first()
+    if not row or not row.value_encrypted:
+        raise HTTPException(status_code=404, detail="Privacy var not found")
+    return {
+        "data": {
+            "key": row.key,
+            "value": decrypt_value(row.value_encrypted),
+            "last_reported_at": row.last_reported_at,
+        },
+        "message": "ok",
+    }
+
+
 @router.delete("/privacy-vars/{key}")
 def delete_privacy_var(
     key: str,

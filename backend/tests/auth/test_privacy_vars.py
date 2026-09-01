@@ -342,3 +342,75 @@ def test_report_backward_compat_pure_rsa_still_works(client, admin_user, db: Ses
     assert decrypt_value(db_row.value_encrypted) == short_value
 
 
+# ---- 查看明文值（当前用户 JWT 取回自己的明文） ----
+
+def test_get_value_returns_plaintext_for_reported_var(client, admin_user, db: Session):
+    headers = _login_headers(client, "admin", "admin123")
+    token = _create_var_get_token(client, headers, "MY_COOKIE")
+    secret = "session-cookie-value-非常机密"
+    kp = db.query(UserPrivacyKeypair).filter(
+        UserPrivacyKeypair.user_id == admin_user.id
+    ).first()
+    ct = rsa_encrypt(kp.public_key_pem, secret)
+    assert _report(client, token, [{"key": "MY_COOKIE", "ciphertext": ct}]).status_code == 200
+
+    r = client.get("/api/v1/auth/privacy-vars/MY_COOKIE/value", headers=headers)
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["key"] == "MY_COOKIE"
+    assert data["value"] == secret  # 明文回显，不脱敏
+    assert data["last_reported_at"] is not None
+
+
+def test_get_value_returns_plaintext_for_long_hybrid_value(client, admin_user, db: Session):
+    """长明文（混合加密上报）也能正确解密回显。"""
+    from app.auth.crypto import hybrid_encrypt
+    headers = _login_headers(client, "admin", "admin123")
+    token = _create_var_get_token(client, headers, "LONG_COOKIE")
+    kp = db.query(UserPrivacyKeypair).filter(
+        UserPrivacyKeypair.user_id == admin_user.id
+    ).first()
+    long_cookie = "x" * 500
+    encrypted = hybrid_encrypt(kp.public_key_pem, long_cookie)
+    assert _report(client, token, [{"key": "LONG_COOKIE", **encrypted}]).status_code == 200
+
+    r = client.get("/api/v1/auth/privacy-vars/LONG_COOKIE/value", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["data"]["value"] == long_cookie
+
+
+def test_get_value_404_when_not_reported(client, admin_user):
+    """变量已创建但尚未上报（value_encrypted 为空）→ 404，不返回空明文。"""
+    headers = _login_headers(client, "admin", "admin123")
+    _create_var_get_token(client, headers, "EMPTY")
+    r = client.get("/api/v1/auth/privacy-vars/EMPTY/value", headers=headers)
+    assert r.status_code == 404
+
+
+def test_get_value_404_when_key_unknown(client, admin_user):
+    headers = _login_headers(client, "admin", "admin123")
+    r = client.get("/api/v1/auth/privacy-vars/NOPE/value", headers=headers)
+    assert r.status_code == 404
+
+
+def test_get_value_cannot_cross_users(client, admin_user, editor_user, db: Session):
+    """A 拿不到 B 的变量明文；跨用户对不存在的 key 一律 404，不泄漏存在性。"""
+    admin_h = _login_headers(client, "admin", "admin123")
+    editor_h = _login_headers(client, "editor", "editor123")
+    editor_token = _create_var_get_token(client, editor_h, "EDITOR_SECRET")
+    kp = db.query(UserPrivacyKeypair).filter(
+        UserPrivacyKeypair.user_id == editor_user.id
+    ).first()
+    secret = "editor-only-value"
+    ct = rsa_encrypt(kp.public_key_pem, secret)
+    assert _report(client, editor_token, [{"key": "EDITOR_SECRET", "ciphertext": ct}]).status_code == 200
+
+    # admin 用自己的 JWT 去取 editor 的变量 → 404（对 admin 而言该 key 不存在）
+    r = client.get("/api/v1/auth/privacy-vars/EDITOR_SECRET/value", headers=admin_h)
+    assert r.status_code == 404
+
+
+def test_get_value_requires_auth(client):
+    assert client.get("/api/v1/auth/privacy-vars/K/value").status_code == 403
+
+
