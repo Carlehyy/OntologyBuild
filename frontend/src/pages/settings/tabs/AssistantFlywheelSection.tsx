@@ -79,6 +79,13 @@ function statusTag(status: string) {
   return <Tag color={conf.color}>{conf.label}</Tag>
 }
 
+/** 评分对应的语义色（取平台 token，浅深自适应）；与 AssistantEvalTab 的 scoreColor 同源。 */
+function scoreColor(score: number): string {
+  if (score >= 80) return 'var(--color-success)'
+  if (score >= 60) return 'var(--color-warning)'
+  return 'var(--color-danger)'
+}
+
 export default function AssistantFlywheelSection() {
   const [view, setView] = useState<ViewKey>('benchmarks')
 
@@ -526,7 +533,7 @@ function ProposalView() {
                   </Text>
                   {Object.entries(stats.per_dim).map(([dim, stat]) => (
                     <Progress key={dim} percent={stat.avg} size="small"
-                              strokeColor={stat.avg >= 80 ? '#52c41a' : stat.avg >= 60 ? '#faad14' : '#ff4d4f'}
+                              strokeColor={scoreColor(stat.avg)}
                               format={() => `${dim} ${stat.avg}`} />
                   ))}
                 </div>
