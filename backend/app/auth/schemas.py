@@ -74,9 +74,19 @@ class PrivacyVarOut(BaseModel):
 
 
 class PrivacyReportItem(BaseModel):
-    # 脚本用公钥 RSA-OAEP 加密后 base64 编码上报的单条密文。
+    """上报单条密文。支持两种加密形式（脚本侧择一）：
+
+    1. 混合加密（推荐，无长度限制）：aes_key_ciphertext + value_ciphertext
+       + nonce 三字段同时非空。
+    2. 纯 RSA（向后兼容，仅短值可用）：只填 ciphertext 字段。
+    """
     key: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.\-]+$")
-    ciphertext: str = Field(min_length=1, max_length=8192)
+    # 纯 RSA 模式：base64(RSA-OAEP-SHA256 密文)。混合模式留空。
+    ciphertext: str = Field(default="", max_length=8192)
+    # 混合模式三件套（同时非空时走混合解密）。
+    aes_key_ciphertext: str = Field(default="", max_length=8192)
+    value_ciphertext: str = Field(default="", max_length=32768)
+    nonce: str = Field(default="", max_length=64)
 
 
 class PrivacyReport(BaseModel):

@@ -287,3 +287,58 @@ def test_private_key_is_fernet_encrypted_at_rest(client, admin_user, db: Session
     assert "BEGIN PRIVATE KEY" in private_pem
 
 
+# ---- 混合加密（RSA + AES-GCM）：长明文无长度限制 ----
+
+def test_report_with_hybrid_encryption_long_cookie(client, admin_user, db: Session):
+    """长 Cookie（超 RSA 单块上限 190 字节）走混合加密，平台解密 + 双层落库。"""
+    from app.auth.crypto import hybrid_encrypt
+    headers = _login_headers(client, "admin", "admin123")
+    token = _create_var_get_token(client, headers, "LONG_COOKIE")
+    kp = db.query(UserPrivacyKeypair).filter(
+        UserPrivacyKeypair.user_id == admin_user.id
+    ).first()
+    # 构造一个超长的、含大量特殊符号的真实 Cookie 样本
+    long_cookie = (
+        "env_token=pro; login_uid=8C-AC-46-C2-7B-01-EC; "
+        "hwsso_login=V006F5m9oyiU_ar0PDWsIo8iBxViHW6XFMkkJwZ2E9ZOotZrW6GZxPeY"
+        "ZLMHauDf2LbfNyKn7MEIHyPc91eXevnJsc0SRhcEiufAUdvwpqWIg5P0A27KDYp7uEJq"
+        "lJOwbafhhqOqLdCDbpvyRnT_aqp_bmXATzulVQgvGDhL9J_aIloMq6OeJ8AxR9zexycj"
+        "hWqEp_bX56r_byxNs1tnx6P6fcetvTWJTTctDkXqYtDkSH0Mh_alegPGyikUGuctTkhIb"
+        "4_bVo6_btL6CvTS8VOkr30cI0TvNb2AZ3P5av8DqmDzygSmkgn03J5WzXh_auGSSPTmH"
+        "JitHdZdc_aftZvxzze4PBp8ti4jg_c_c; "
+        "X-Auth-Token=89e8edef7ed7dba24109ecf0546b6c9a320e5b1c3231892d; "
+        "IAM-Csrf-Token=56018f7b2ecdb13cc58ea43f4bcc1dbc2bc5532bbbdf4d8f;"
+    )
+    assert len(long_cookie) > 200  # 确实超 RSA 单块上限
+    encrypted = hybrid_encrypt(kp.public_key_pem, long_cookie)
+    r = _report(client, token, [{"key": "LONG_COOKIE", **encrypted}])
+    assert r.status_code == 200, r.text
+    row = next(x for x in r.json()["data"] if x["key"] == "LONG_COOKIE")
+    assert row["has_value"] is True
+    # 落库双层加密：DB 里是 Fernet 密文，解密后等于原始长 Cookie
+    db_row = db.query(UserPrivacyVar).filter(
+        UserPrivacyVar.user_id == admin_user.id,
+        UserPrivacyVar.key == "LONG_COOKIE",
+    ).first()
+    assert long_cookie not in db_row.value_encrypted
+    assert decrypt_value(db_row.value_encrypted) == long_cookie
+
+
+def test_report_backward_compat_pure_rsa_still_works(client, admin_user, db: Session):
+    """向后兼容：旧脚本只填 ciphertext（纯 RSA），仍能解密。"""
+    headers = _login_headers(client, "admin", "admin123")
+    token = _create_var_get_token(client, headers, "SHORT")
+    kp = db.query(UserPrivacyKeypair).filter(
+        UserPrivacyKeypair.user_id == admin_user.id
+    ).first()
+    short_value = "short-cookie"  # 短值，纯 RSA 可加密
+    ct = rsa_encrypt(kp.public_key_pem, short_value)
+    r = _report(client, token, [{"key": "SHORT", "ciphertext": ct}])
+    assert r.status_code == 200
+    db_row = db.query(UserPrivacyVar).filter(
+        UserPrivacyVar.user_id == admin_user.id,
+        UserPrivacyVar.key == "SHORT",
+    ).first()
+    assert decrypt_value(db_row.value_encrypted) == short_value
+
+

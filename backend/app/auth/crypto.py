@@ -131,3 +131,73 @@ def rsa_decrypt(private_pem: str, ciphertext_b64: str) -> str:
 def decrypt_private_key(private_key_pem_encrypted: str) -> str:
     """从 Fernet 密文还原出 RSA 私钥 PEM 明文（仅供平台侧解密上报值用）。"""
     return decrypt_value(private_key_pem_encrypted)
+
+
+# ---- 混合加密（RSA + AES-GCM）：无明文长度限制 ----
+#
+# 纯 RSA-OAEP 单块明文有上限（RSA-2048 + SHA256 约 190 字节），而典型
+# Cookie 常达数百字符。混合加密用 RSA 只加密一把随机 AES 密钥，明文本身
+# 用 AES-GCM 加密，从而无长度限制，且脚本侧仍只持有公钥（无私钥）。
+#
+# 上报契约（JSON 字段）：
+#   aes_key_ciphertext: base64(RSA-OAEP-SHA256 加密的 AES-256 密钥，32 字节)
+#   value_ciphertext:   base64(AES-GCM 密文)
+#   nonce:              base64(AES-GCM 12 字节 nonce)
+# 老的纯 RSA ciphertext 字段仍向后兼容（短值可单块加密直接走 ciphertext）。
+
+import os as _os
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+
+def hybrid_encrypt(public_pem: str, plaintext: str) -> dict:
+    """混合加密：返回 {aes_key_ciphertext, value_ciphertext, nonce}（均 base64）。
+
+    供上报脚本调用：生成随机 AES-256 密钥，用平台公钥 RSA 加密该密钥，
+    用 AES-GCM 加密明文。脚本侧无任何私钥，泄露只有公钥+一次性 AES 密钥。
+    """
+    if not plaintext:
+        return {"aes_key_ciphertext": "", "value_ciphertext": "", "nonce": ""}
+    aes_key = _os.urandom(32)
+    nonce = _os.urandom(12)
+    aesgcm = AESGCM(aes_key)
+    value_ct = aesgcm.encrypt(nonce, plaintext.encode(), None)
+    pub = _load_public_key(public_pem)
+    aes_key_ct = pub.encrypt(
+        aes_key,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None,
+        ),
+    )
+    return {
+        "aes_key_ciphertext": base64.b64encode(aes_key_ct).decode(),
+        "value_ciphertext": base64.b64encode(value_ct).decode(),
+        "nonce": base64.b64encode(nonce).decode(),
+    }
+
+
+def hybrid_decrypt(private_pem: str, payload: dict) -> str:
+    """混合解密：从 {aes_key_ciphertext, value_ciphertext, nonce} 还原明文。
+
+    平台侧用私钥 RSA 解出 AES 密钥，再用 AES-GCM 解密明文。
+    payload 任一字段为空时原样返回空串（兼容空值上报）。
+    """
+    aes_key_ct = payload.get("aes_key_ciphertext", "")
+    value_ct = payload.get("value_ciphertext", "")
+    nonce = payload.get("nonce", "")
+    if not aes_key_ct or not value_ct or not nonce:
+        return ""
+    priv = _load_private_key(private_pem)
+    aes_key = priv.decrypt(
+        base64.b64decode(aes_key_ct),
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None,
+        ),
+    )
+    aesgcm = AESGCM(aes_key)
+    plaintext = aesgcm.decrypt(base64.b64decode(nonce), base64.b64decode(value_ct), None)
+    return plaintext.decode()

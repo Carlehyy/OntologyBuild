@@ -25,6 +25,7 @@ from app.auth.crypto import (
     encrypt_value,
     generate_report_token,
     generate_rsa_keypair,
+    hybrid_decrypt,
     rsa_decrypt,
 )
 import uuid
@@ -387,17 +388,27 @@ INTERVAL = 300
 {COLLECT_FUNCS}
 
 
-def _encrypt(public_key_pem: str, plaintext: str) -> str:
+def _encrypt(public_key_pem: str, plaintext: str) -> dict:
+    """混合加密：RSA 加密随机 AES 密钥，AES-GCM 加密明文。无长度限制。"""
+    import os
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    aes_key = os.urandom(32)
+    nonce = os.urandom(12)
+    value_ct = AESGCM(aes_key).encrypt(nonce, plaintext.encode(), None)
     pub = serialization.load_pem_public_key(public_key_pem.encode())
-    ct = pub.encrypt(
-        plaintext.encode(),
+    aes_key_ct = pub.encrypt(
+        aes_key,
         padding.OAEP(
             mgf=padding.MGF1(algorithm=hashes.SHA256()),
             algorithm=hashes.SHA256(),
             label=None,
         ),
     )
-    return base64.b64encode(ct).decode()
+    return {{
+        "aes_key_ciphertext": base64.b64encode(aes_key_ct).decode(),
+        "value_ciphertext": base64.b64encode(value_ct).decode(),
+        "nonce": base64.b64encode(nonce).decode(),
+    }}
 
 
 def _report_once():
@@ -417,7 +428,9 @@ def _report_once():
             continue
         if not isinstance(value, str):
             value = str(value)
-        items.append({{"key": key, "ciphertext": _encrypt(PUBLIC_KEY_PEM, value)}})
+        item = {{"key": key}}
+        item.update(_encrypt(PUBLIC_KEY_PEM, value))
+        items.append(item)
     if not items:
         sys.stderr.write("本次无可上报值\n")
         return
@@ -495,7 +508,16 @@ def report_privacy_vars(
     now = datetime.now(timezone.utc)
     for item in body.items:
         try:
-            plaintext = rsa_decrypt(private_pem, item.ciphertext)
+            # 优先混合加密（无长度限制）；三件套齐全时走 hybrid_decrypt。
+            # 否则回退纯 RSA（向后兼容旧脚本，仅短值可用）。
+            if item.aes_key_ciphertext and item.value_ciphertext and item.nonce:
+                plaintext = hybrid_decrypt(private_pem, {
+                    "aes_key_ciphertext": item.aes_key_ciphertext,
+                    "value_ciphertext": item.value_ciphertext,
+                    "nonce": item.nonce,
+                })
+            else:
+                plaintext = rsa_decrypt(private_pem, item.ciphertext)
         except Exception:
             raise HTTPException(status_code=400, detail=f"Failed to decrypt value for key: {item.key}")
         row = db.query(UserPrivacyVar).filter(
