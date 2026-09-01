@@ -156,6 +156,10 @@ test('助手评估：发起抽样评估并查看质量报告', async ({ page }) 
   await mockAssistantEvalApi(page)
   await page.goto('/#/settings/assistant-eval')
 
+  // 页头骨架（DESIGN.md §6）：标题与副标题可见，确认页头未被回归误删
+  await expect(page.getByRole('heading', { name: '助手评估' })).toBeVisible()
+  await expect(page.getByText('基于 OpenJudge 的助手会话质量评估与数据飞轮', { exact: false })).toBeVisible()
+
   await expect(page.getByText('发起评估')).toBeVisible()
   await expect(page.getByText('评分标准（可选，自定义 rubric 维度）')).toBeVisible()
 

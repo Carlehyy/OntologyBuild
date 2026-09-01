@@ -40,7 +40,17 @@ import { modelApi } from '@/api/ontologies'
 import AssistantFlywheelSection from './AssistantFlywheelSection'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
-import { CHART_AXIS, CHART_SERIES_PALETTE, CHART_SPLIT, CHART_TEXT } from '@/lib/echartsTheme'
+import {
+  baseChartOption,
+  CHART_AXIS,
+  CHART_SERIES_PALETTE,
+  CHART_SPLIT,
+  CHART_TEXT,
+  CHART_TEXT_STRONG,
+  CHART_TOOLTIP_BG,
+  CHART_TOOLTIP_BORDER,
+  CHART_TOOLTIP_CSS,
+} from '@/lib/echartsTheme'
 
 const { Text } = Typography
 
@@ -64,10 +74,15 @@ const STATUS_TAG: Record<string, { color: string; label: string }> = {
   error: { color: 'error', label: '失败' },
 }
 
+/**
+ * 评分对应的语义色（取平台 token，浅深自适应）：
+ * ≥80 success / ≥60 warning / <60 danger。
+ * 返回 CSS 变量引用，深色模式随 .dark 自动翻转。
+ */
 function scoreColor(score: number): string {
-  if (score >= 80) return '#52c41a'
-  if (score >= 60) return '#faad14'
-  return '#ff4d4f'
+  if (score >= 80) return 'var(--color-success)'
+  if (score >= 60) return 'var(--color-warning)'
+  return 'var(--color-danger)'
 }
 
 function AssistantEvalPanel() {
@@ -269,17 +284,17 @@ function AssistantEvalPanel() {
   return (
     <div className="space-y-6">
       {/* 发起评估 */}
-      <section className="rounded-lg border border-gray-200 bg-white p-4">
+      <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-4">
         <div className="mb-3 flex items-center gap-2">
-          <FlaskConical size={16} className="text-gray-400" />
-          <span className="text-sm font-medium text-gray-900">发起评估</span>
+          <FlaskConical size={16} className="text-[var(--color-text-tertiary)]" />
+          <span className="text-sm font-medium text-[var(--color-text-primary)]">发起评估</span>
           {meta && (
             <Tag>{meta.engine === 'openjudge' ? 'OpenJudge 引擎' : '内置引擎'}</Tag>
           )}
         </div>
         <div className="grid gap-x-6 gap-y-3 md:grid-cols-2">
           <div>
-            <div className="mb-1 text-xs text-gray-500">评估对象</div>
+            <div className="mb-1 text-xs text-[var(--color-text-secondary)]">评估对象</div>
             <Select
               className="w-full"
               placeholder="选择助手"
@@ -291,11 +306,11 @@ function AssistantEvalPanel() {
               }))}
             />
             {activeAssistant && (
-              <div className="mt-1 text-[11px] text-gray-400">{activeAssistant.description}</div>
+              <div className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">{activeAssistant.description}</div>
             )}
           </div>
           <div>
-            <div className="mb-1 text-xs text-gray-500">judge 模型（LLM 型维度使用）</div>
+            <div className="mb-1 text-xs text-[var(--color-text-secondary)]">judge 模型（LLM 型维度使用）</div>
             <Select
               className="w-full"
               placeholder="默认：平台默认模型"
@@ -310,7 +325,7 @@ function AssistantEvalPanel() {
             />
           </div>
           <div>
-            <div className="mb-1 text-xs text-gray-500">评分标准（可选，自定义 rubric 维度）</div>
+            <div className="mb-1 text-xs text-[var(--color-text-secondary)]">评分标准（可选，自定义 rubric 维度）</div>
             <Space.Compact className="w-full">
               <Select
                 className="flex-1"
@@ -328,12 +343,12 @@ function AssistantEvalPanel() {
                 新建
               </Button>
             </Space.Compact>
-            <div className="mt-1 text-[11px] text-gray-400">
+            <div className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">
               基于任务描述由 judge 模型生成评分标准，评估时作为额外维度计入综合分
             </div>
           </div>
           <div className="md:col-span-2">
-            <div className="mb-1 text-xs text-gray-500">会话范围</div>
+            <div className="mb-1 text-xs text-[var(--color-text-secondary)]">会话范围</div>
             <Segmented
               value={mode}
               onChange={(v) => setMode(v as 'manual' | 'sample')}
@@ -374,17 +389,42 @@ function AssistantEvalPanel() {
             )}
           </div>
           <div className="md:col-span-2">
-            <div className="mb-1 text-xs text-gray-500">
-              评分维度<span className="ml-2 text-[11px] text-gray-400">LLM 型消耗 judge 模型；代码型零成本固定执行</span>
+            <div className="mb-1 text-xs text-[var(--color-text-secondary)]">
+              评分维度<span className="ml-2 text-[11px] text-[var(--color-text-tertiary)]">LLM 型消耗 judge 模型；代码型零成本固定执行</span>
             </div>
             <Checkbox.Group
-              className="flex flex-col gap-1"
+              className="grid grid-cols-1 gap-2 sm:grid-cols-2"
               value={effectiveDimensions}
               onChange={(keys) => setDimensionKeys(keys as string[])}
-              options={(meta?.dimension_catalog ?? [])
+            >
+              {(meta?.dimension_catalog ?? [])
                 .filter(d => !assistantKey || activeAssistant?.supported_dimension_keys.includes(d.key))
-                .map(d => ({ value: d.key, label: `${d.label}（${d.kind === 'llm' ? 'LLM' : '代码'}）· ${d.description}` }))}
-            />
+                .map(d => {
+                  const isLlm = d.kind === 'llm'
+                  return (
+                    <div
+                      key={d.key}
+                      className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm transition-colors hover:border-[var(--color-border-hover)]"
+                    >
+                      <Checkbox value={d.key} className="mt-0.5" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-medium text-[var(--color-text-primary)]">{d.label}</span>
+                          <Tag
+                            color={isLlm ? 'blue' : 'default'}
+                            className="!m-0 !px-1 !text-[10px] !leading-tight"
+                          >
+                            {isLlm ? 'LLM' : '代码'}
+                          </Tag>
+                        </div>
+                        <div className="mt-0.5 truncate text-[11px] text-[var(--color-text-tertiary)]" title={d.description}>
+                          {d.description}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+            </Checkbox.Group>
           </div>
         </div>
         <div className="mt-4 flex items-center justify-between">
@@ -537,7 +577,7 @@ function EvalReportBody({ detail, onOpenTrace }: { detail: EvalTaskDetail; onOpe
   const itemReasons = (item: EvalTaskItem) => (
     <div className="space-y-1 pl-2">
       {Object.entries(item.reasons).map(([key, reason]) => (
-        <div key={key} className="text-xs text-gray-600">
+        <div key={key} className="text-xs text-[var(--color-text-secondary)]">
           {reason.score != null && (
             <span className="mr-1 inline-block min-w-9 font-medium">{reason.score}分</span>
           )}
@@ -545,7 +585,7 @@ function EvalReportBody({ detail, onOpenTrace }: { detail: EvalTaskDetail; onOpe
         </div>
       ))}
       {!!item.flags.low_dims?.length && (
-        <div className="text-xs text-red-500">薄弱维度：{item.flags.low_dims.join('、')}</div>
+        <div className="text-xs text-[var(--color-danger)]">薄弱维度：{item.flags.low_dims.join('、')}</div>
       )}
     </div>
   )
@@ -553,41 +593,41 @@ function EvalReportBody({ detail, onOpenTrace }: { detail: EvalTaskDetail; onOpe
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-3 gap-3">
-        <div className="rounded-lg border border-gray-200 px-4 py-3">
-          <div className="text-xs text-gray-500">综合得分</div>
+        <div className="rounded-lg border border-[var(--color-border)] px-4 py-3">
+          <div className="text-xs text-[var(--color-text-secondary)]">综合得分</div>
           <div className="text-2xl font-semibold leading-tight" style={{ color: overall != null ? scoreColor(overall) : undefined }}>
             {overall ?? '-'}
           </div>
         </div>
-        <div className="rounded-lg border border-gray-200 px-4 py-3">
-          <div className="text-xs text-gray-500">产出评分 / 失败会话</div>
-          <div className="text-2xl font-semibold leading-tight text-gray-900">
+        <div className="rounded-lg border border-[var(--color-border)] px-4 py-3">
+          <div className="text-xs text-[var(--color-text-secondary)]">产出评分 / 失败会话</div>
+          <div className="text-2xl font-semibold leading-tight text-[var(--color-text-primary)]">
             {summary.evaluated}
-            <span className="text-sm text-gray-400"> / {summary.failed}</span>
+            <span className="text-sm text-[var(--color-text-tertiary)]"> / {summary.failed}</span>
             {!!(summary as { skipped?: number }).skipped && (
-              <span className="ml-1 text-[11px] text-gray-400">跳过 {(summary as { skipped?: number }).skipped}</span>
+              <span className="ml-1 text-[11px] text-[var(--color-text-tertiary)]">跳过 {(summary as { skipped?: number }).skipped}</span>
             )}
           </div>
         </div>
-        <div className="rounded-lg border border-gray-200 px-4 py-3">
-          <div className="text-xs text-gray-500">judge 模型调用</div>
-          <div className="text-2xl font-semibold leading-tight text-gray-900">{summary.llm_calls}</div>
+        <div className="rounded-lg border border-[var(--color-border)] px-4 py-3">
+          <div className="text-xs text-[var(--color-text-secondary)]">judge 模型调用</div>
+          <div className="text-2xl font-semibold leading-tight text-[var(--color-text-primary)]">{summary.llm_calls}</div>
         </div>
       </div>
 
       <div>
-        <div className="mb-2 text-sm font-medium text-gray-900">维度得分</div>
+        <div className="mb-2 text-sm font-medium text-[var(--color-text-primary)]">维度得分</div>
         <div className="space-y-2">
           {Object.entries(summary.dimensions ?? {}).map(([key, stat]) => (
             <div key={key} className="flex items-center gap-3">
-              <span className="w-20 shrink-0 text-xs text-gray-500">{stat.label}</span>
+              <span className="w-20 shrink-0 text-xs text-[var(--color-text-secondary)]">{stat.label}</span>
               <Progress
                 percent={stat.avg}
                 size="small"
                 strokeColor={scoreColor(stat.avg)}
                 format={() => `${stat.avg}`}
               />
-              <span className="shrink-0 text-[11px] text-gray-400">
+              <span className="shrink-0 text-[11px] text-[var(--color-text-tertiary)]">
                 最低 {stat.min} · 最高 {stat.max} · n={stat.count}
               </span>
             </div>
@@ -597,8 +637,8 @@ function EvalReportBody({ detail, onOpenTrace }: { detail: EvalTaskDetail; onOpe
 
       <div>
         <div className="mb-2 flex items-baseline justify-between">
-          <span className="text-sm font-medium text-gray-900">会话明细</span>
-          <span className="text-[11px] text-gray-400">
+          <span className="text-sm font-medium text-[var(--color-text-primary)]">会话明细</span>
+          <span className="text-[11px] text-[var(--color-text-tertiary)]">
             引擎 {summary.engine} · judge：{detail.judge_model_name || '-'} · 耗时{' '}
             {detail.duration_ms != null ? `${(detail.duration_ms / 1000).toFixed(1)}s` : '-'}
           </span>
@@ -622,7 +662,15 @@ function EvalTrendChart({ trend, loading }: { trend: TrendPoint[]; loading: bool
     const seriesKeys: string[] = latest ? ['overall', ...Object.keys(latest.dimensions ?? {})] : []
     const palette = CHART_SERIES_PALETTE
     return {
-      tooltip: { trigger: 'axis' },
+      ...baseChartOption(),
+      // 趋势图是 axis tooltip，覆盖 base 的 item tooltip，但保留统一浮层样式（DESIGN.md §5.2）
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: CHART_TOOLTIP_BG,
+        borderColor: CHART_TOOLTIP_BORDER,
+        textStyle: { color: CHART_TEXT_STRONG, fontSize: 12 },
+        extraCssText: CHART_TOOLTIP_CSS,
+      },
       legend: { top: 0, textStyle: { color: CHART_TEXT, fontSize: 11 } },
       grid: { left: 40, right: 16, top: 36, bottom: 28 },
       xAxis: {
@@ -660,7 +708,7 @@ function EvalTrendChart({ trend, loading }: { trend: TrendPoint[]; loading: bool
   }
   return (
     <div className="mt-5">
-      <div className="mb-2 text-sm font-medium text-gray-900">历史趋势（同助手）</div>
+      <div className="mb-2 text-sm font-medium text-[var(--color-text-primary)]">历史趋势（同助手）</div>
       <ReactECharts option={option} style={{ height: 220 }} notMerge />
     </div>
   )
@@ -687,30 +735,30 @@ function TraceModal({ open, onClose, loading, trace }: {
       ) : (
         <div className="space-y-4">
           <div>
-            <div className="text-xs text-gray-500">用户问题</div>
-            <div className="mt-1 whitespace-pre-wrap rounded bg-gray-50 px-3 py-2 text-sm text-gray-800">
+            <div className="text-xs text-[var(--color-text-secondary)]">用户问题</div>
+            <div className="mt-1 whitespace-pre-wrap rounded bg-[var(--color-muted)] px-3 py-2 text-sm text-[var(--color-text-primary)]">
               {trace.query}
             </div>
           </div>
           <div>
-            <div className="text-xs text-gray-500">助手答复</div>
-            <div className="mt-1 whitespace-pre-wrap rounded bg-gray-50 px-3 py-2 text-sm text-gray-800">
+            <div className="text-xs text-[var(--color-text-secondary)]">助手答复</div>
+            <div className="mt-1 whitespace-pre-wrap rounded bg-[var(--color-muted)] px-3 py-2 text-sm text-[var(--color-text-primary)]">
               {trace.response}
             </div>
           </div>
           {trace.actions.length > 0 && (
             <div>
-              <div className="mb-1 text-xs text-gray-500">
+              <div className="mb-1 text-xs text-[var(--color-text-secondary)]">
                 工具调用（{trace.actions.length} · 失败 {trace.tool_error_count}）
               </div>
               <div className="space-y-1">
                 {trace.actions.map((a, i) => (
-                  <div key={i} className="rounded border border-gray-100 px-2 py-1 text-xs">
+                  <div key={i} className="rounded border border-[var(--color-border)] px-2 py-1 text-xs">
                     <Space size={6}>
                       <Tag color={a.failed ? 'error' : 'default'}>{String(a.name)}</Tag>
-                      <span className="text-gray-500">{a.failed ? '失败' : '成功'}</span>
+                      <span className="text-[var(--color-text-secondary)]">{a.failed ? '失败' : '成功'}</span>
                     </Space>
-                    <div className="mt-1 whitespace-pre-wrap break-all text-gray-600">
+                    <div className="mt-1 whitespace-pre-wrap break-all text-[var(--color-text-secondary)]">
                       {String(a.preview ?? '')}
                     </div>
                   </div>
@@ -719,16 +767,16 @@ function TraceModal({ open, onClose, loading, trace }: {
             </div>
           )}
           <div>
-            <div className="mb-1 text-xs text-gray-500">消息轨迹（OpenAI 格式）</div>
+            <div className="mb-1 text-xs text-[var(--color-text-secondary)]">消息轨迹（OpenAI 格式）</div>
             <div className="max-h-64 space-y-1 overflow-y-auto">
               {trace.openai_messages.map((m, i) => {
                 const toolCalls = Array.isArray(m.tool_calls) ? (m.tool_calls as unknown[]) : []
                 return (
-                  <div key={i} className="rounded bg-gray-50 px-2 py-1 text-xs">
+                  <div key={i} className="rounded bg-[var(--color-muted)] px-2 py-1 text-xs">
                     <span className="mr-1 font-medium">{String(m.role)}</span>
-                    <span className="text-gray-600">{String(m.content ?? '')}</span>
+                    <span className="text-[var(--color-text-secondary)]">{String(m.content ?? '')}</span>
                     {toolCalls.length > 0 && (
-                      <span className="ml-1 text-gray-400">（{toolCalls.length} 次工具调用）</span>
+                      <span className="ml-1 text-[var(--color-text-tertiary)]">（{toolCalls.length} 次工具调用）</span>
                     )}
                   </div>
                 )
@@ -797,11 +845,11 @@ function RubricCreateModal({ open, onClose, onCreated, models }: {
     >
       <div className="space-y-3">
         <div>
-          <div className="mb-1 text-xs text-gray-500">名称</div>
+          <div className="mb-1 text-xs text-[var(--color-text-secondary)]">名称</div>
           <Input value={name} onChange={e => setName(e.target.value)} placeholder="如：本体构建质量" maxLength={200} />
         </div>
         <div>
-          <div className="mb-1 text-xs text-gray-500">任务描述（生成的评分标准将围绕它展开）</div>
+          <div className="mb-1 text-xs text-[var(--color-text-secondary)]">任务描述（生成的评分标准将围绕它展开）</div>
           <Input.TextArea
             value={taskDescription}
             onChange={e => setTaskDescription(e.target.value)}
@@ -810,17 +858,17 @@ function RubricCreateModal({ open, onClose, onCreated, models }: {
           />
         </div>
         <div>
-          <div className="mb-1 text-xs text-gray-500">样例问题（可选，每行一条）</div>
+          <div className="mb-1 text-xs text-[var(--color-text-secondary)]">样例问题（可选，每行一条）</div>
           <Input.TextArea value={samples} onChange={e => setSamples(e.target.value)} rows={2} />
         </div>
         <div className="flex items-center gap-4">
-          <div className="text-xs text-gray-500">分值区间</div>
+          <div className="text-xs text-[var(--color-text-secondary)]">分值区间</div>
           <InputNumber min={0} max={10} value={minScore} onChange={v => setMinScore(v ?? 0)} />
-          <span className="text-gray-400">-</span>
+          <span className="text-[var(--color-text-tertiary)]">-</span>
           <InputNumber min={1} max={10} value={maxScore} onChange={v => setMaxScore(v ?? 5)} />
         </div>
         <div>
-          <div className="mb-1 text-xs text-gray-500">生成所用 judge 模型（默认：平台默认模型）</div>
+          <div className="mb-1 text-xs text-[var(--color-text-secondary)]">生成所用 judge 模型（默认：平台默认模型）</div>
           <Select
             className="w-full"
             allowClear
@@ -841,15 +889,26 @@ function RubricCreateModal({ open, onClose, onCreated, models }: {
 function AssistantEvalTab() {
   const [pane, setPane] = useState<'eval' | 'flywheel'>('eval')
   return (
-    <div className="space-y-4">
-      <Segmented
-        value={pane}
-        onChange={value => setPane(value as 'eval' | 'flywheel')}
-        options={[
-          { label: '评估任务', value: 'eval' },
-          { label: '数据飞轮', value: 'flywheel' },
-        ]}
-      />
+    <div className="space-y-5">
+      {/* 页头骨架（DESIGN.md §6）：标题 + 副标题左置，视图切换右置 */}
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--color-border)] pb-3">
+        <div className="min-w-0">
+          <h1 className="text-lg font-semibold leading-tight text-[var(--color-text-primary)]">
+            助手评估
+          </h1>
+          <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+            基于 OpenJudge 的助手会话质量评估与数据飞轮（基准集 → 提案 → 实验 → 投产 → 值守）
+          </p>
+        </div>
+        <Segmented
+          value={pane}
+          onChange={value => setPane(value as 'eval' | 'flywheel')}
+          options={[
+            { label: '评估任务', value: 'eval' },
+            { label: '数据飞轮', value: 'flywheel' },
+          ]}
+        />
+      </div>
       {pane === 'eval' ? <AssistantEvalPanel /> : <AssistantFlywheelSection />}
     </div>
   )
