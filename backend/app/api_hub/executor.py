@@ -417,7 +417,10 @@ def run_interface(
             return result
 
         session = requests.Session()
-        tls.configure_session(session)
+        # On Windows, use the OS-managed CA stores so corporate roots pushed
+        # via Group Policy (e.g. Huawei internal CAs) are trusted for outbound
+        # calls to internal HTTPS endpoints. certifi alone lacks these roots.
+        tls.configure_session(session, use_system_trust=True)
 
         try:
             kwargs, snapshot = _build_kwargs(iface, overrides)
