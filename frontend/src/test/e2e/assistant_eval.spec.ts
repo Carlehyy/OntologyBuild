@@ -190,8 +190,8 @@ test('数据飞轮：基准集与时间线视图', async ({ page }) => {
   await mockAssistantEvalApi(page)
   await page.goto('/#/settings/assistant-eval')
 
-  // 切到数据飞轮页签
-  await page.getByText('数据飞轮').click()
+  // 切到数据飞轮页签（精确匹配 Segmented 选项文本，避免命中页头副标题）
+  await page.getByText('数据飞轮', { exact: true }).click()
 
   // 基准集视图：切分计数与留出标记
   await expect(page.getByText('飞轮基准集')).toBeVisible()
