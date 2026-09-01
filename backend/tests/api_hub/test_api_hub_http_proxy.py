@@ -154,6 +154,14 @@ def proxy_env(tmp_path, monkeypatch):
     app.include_router(backup.router)
     app.include_router(http_proxy.admin_router)
     app.include_router(http_proxy.public_router)
+    from app.deps import get_current_user
+    from types import SimpleNamespace
+    # These tests exercise the HTTP proxy + interface CRUD without real JWTs;
+    # override the router-level user dependency to a mock admin so the new
+    # created_by filter stays transparent (admin sees all).
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id="test-admin-id", role="admin", is_active=True
+    )
     with TestClient(app) as client:
         yield {
             "app": app,

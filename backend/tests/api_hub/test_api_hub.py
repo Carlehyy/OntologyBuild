@@ -26,7 +26,17 @@ from app.api_hub.routers import backup, http_proxy, interfaces, mcp, proxy
 
 
 @pytest.fixture
-def hub_client(tmp_path, monkeypatch):
+def hub_user():
+    """A mock admin user so router-level ``Depends(get_current_user)`` resolves
+    without a real JWT/DB round-trip.  Tests that need per-user isolation build
+    a non-admin user and override the dependency themselves.
+    """
+    return SimpleNamespace(id="test-admin-id", role="admin", is_active=True)
+
+
+@pytest.fixture
+def hub_client(tmp_path, monkeypatch, hub_user):
+    from app.deps import get_current_user
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "api_hub.db")
     monkeypatch.setattr(config, "INTERNAL_PROXY_TOKEN", "internal-proxy-test-token")
     # Most unit tests use .example placeholders and replace the actual request
@@ -42,6 +52,10 @@ def hub_client(tmp_path, monkeypatch):
     app.include_router(proxy.internal_router)
     app.include_router(http_proxy.admin_router)
     app.include_router(http_proxy.public_router)
+    # Existing tests call /interfaces without auth headers.  Override
+    # get_current_user to return a mock admin so the new created_by filter
+    # stays transparent for legacy assertions (admin sees all).
+    app.dependency_overrides[get_current_user] = lambda: hub_user
     return TestClient(app)
 
 
@@ -761,3 +775,82 @@ def test_cross_origin_redirect_drops_configured_credentials(monkeypatch):
     second_kwargs = session.calls[1][1]
     assert second_kwargs["headers"] == {"X-Tenant": "tenant-a"}
     assert "cookies" not in second_kwargs
+
+
+# ---------------------------------------------------------------------------
+# 接口私有可见：非 admin 只能看到/改/调自己 created_by 的接口
+# ---------------------------------------------------------------------------
+
+def _make_client_as(tmp_path, monkeypatch, user):
+    """Build a hub_client whose get_current_user returns ``user``."""
+    from app.deps import get_current_user
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "api_hub.db")
+    monkeypatch.setattr(config, "INTERNAL_PROXY_TOKEN", "internal-proxy-test-token")
+    monkeypatch.setattr(config, "OUTBOUND_BLOCK_PRIVATE_NETWORKS", False)
+    db.init_db()
+    app = FastAPI()
+    app.include_router(interfaces.router)
+    app.include_router(interfaces.runs_router)
+    app.dependency_overrides[get_current_user] = lambda: user
+    return TestClient(app)
+
+
+def _user(uid, role="editor"):
+    return SimpleNamespace(id=uid, role=role, is_active=True)
+
+
+def test_non_admin_only_sees_own_interfaces(tmp_path, monkeypatch):
+    alice = _user("alice-id")
+    bob = _user("bob-id")
+    # Alice creates an interface
+    ca = _make_client_as(tmp_path, monkeypatch, alice)
+    created = ca.post("/interfaces", json=_interface(name="Alice's API"))
+    assert created.status_code == 200
+    assert created.json()["created_by"] == "alice-id"
+
+    # Bob cannot see Alice's interface
+    cb = _make_client_as(tmp_path, monkeypatch, bob)
+    listed = cb.get("/interfaces").json()
+    assert listed == []
+
+    # Bob creates his own
+    created_b = cb.post("/interfaces", json=_interface(name="Bob's API"))
+    assert created_b.json()["created_by"] == "bob-id"
+    listed_b = cb.get("/interfaces").json()
+    assert [r["name"] for r in listed_b] == ["Bob's API"]
+
+    # Alice now sees only her own
+    listed_a = ca.get("/interfaces").json()
+    assert [r["name"] for r in listed_a] == ["Alice's API"]
+
+
+def test_non_admin_cannot_get_update_delete_others_interface(tmp_path, monkeypatch):
+    alice = _user("alice-id")
+    bob = _user("bob-id")
+    ca = _make_client_as(tmp_path, monkeypatch, alice)
+    created = ca.post("/interfaces", json=_interface(name="Alice's API"))
+    iid = created.json()["id"]
+
+    cb = _make_client_as(tmp_path, monkeypatch, bob)
+    # GET 404
+    assert cb.get(f"/interfaces/{iid}").status_code == 404
+    # PUT 404
+    assert cb.put(f"/interfaces/{iid}", json=_interface(name="Hijacked")).status_code == 404
+    # DELETE 404
+    assert cb.delete(f"/interfaces/{iid}").status_code == 404
+    # Alice still owns it
+    assert ca.get(f"/interfaces/{iid}").status_code == 200
+
+
+def test_admin_sees_all_interfaces(tmp_path, monkeypatch):
+    admin = _user("admin-id", role="admin")
+    alice = _user("alice-id")
+    ca = _make_client_as(tmp_path, monkeypatch, alice)
+    ca.post("/interfaces", json=_interface(name="Alice's API"))
+
+    cadmin = _make_client_as(tmp_path, monkeypatch, admin)
+    listed = cadmin.get("/interfaces").json()
+    assert [r["name"] for r in listed] == ["Alice's API"]
+    # Admin can GET/PUT/DELETE any interface
+    iid = listed[0]["id"]
+    assert cadmin.get(f"/interfaces/{iid}").status_code == 200

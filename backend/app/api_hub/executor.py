@@ -66,6 +66,10 @@ class RequestOverrides:
     proxy_key_id: int | None = None
     proxy_key_name: str | None = None
     source_ip: str | None = None
+    # 当前调用者，用于解析接口配置里的 {{privacy:KEY}} 占位符。
+    # 仅 JWT 路径（接口管理调试 / 已存接口调用）传入；公开代理与 n8n
+    # 内部代理无用户上下文，留空即不解析占位符。
+    actor: Any = None
 
 
 def _parse_form(text: str) -> list[tuple[str, str]]:
@@ -182,9 +186,38 @@ def _build_kwargs(
     iface: dict,
     overrides: RequestOverrides,
 ) -> tuple[dict, dict]:
-    resolved_url = _resolve_url(iface.get("url") or "", overrides.path_params)
+    from .privacy_ref import PRIVACY_REF_RE, resolve_privacy_refs
+
+    actor = overrides.actor
+    orig_url = iface.get("url") or ""
+    orig_headers = iface.get("headers", [])
+    orig_body = iface.get("body_content", "") or ""
+
+    # Track which values carried a privacy placeholder so the audit snapshot
+    # can mask them as *** after resolution.  Redaction by regex would miss the
+    # plaintext (the placeholder is already gone), so we record up front.
+    url_has_ref = bool(PRIVACY_REF_RE.search(orig_url))
+    header_has_ref: set[str] = set()  # lowercased header names
+    for item in orig_headers:
+        if isinstance(item, dict) and PRIVACY_REF_RE.search(item.get("value", "") or ""):
+            header_has_ref.add((item.get("key") or "").lower())
+    body_has_ref = bool(PRIVACY_REF_RE.search(orig_body))
+
+    if actor is not None:
+        resolved_url_raw = resolve_privacy_refs(orig_url, actor)
+        resolved_headers = [
+            {**item, "value": resolve_privacy_refs(item.get("value", ""), actor)}
+            for item in orig_headers
+        ]
+        resolved_body = resolve_privacy_refs(orig_body, actor)
+    else:
+        resolved_url_raw = orig_url
+        resolved_headers = orig_headers
+        resolved_body = orig_body
+
+    resolved_url = _resolve_url(resolved_url_raw, overrides.path_params)
     query = _merge_query(iface.get("query_params", []), overrides.query_params)
-    headers = _merge_headers(iface.get("headers", []), overrides.headers)
+    headers = _merge_headers(resolved_headers, overrides.headers)
     kwargs: dict[str, Any] = {
         "params": query or None,
         "timeout": config.HTTP_TIMEOUT,
@@ -236,7 +269,7 @@ def _build_kwargs(
             _set_header(headers, "Content-Type", overrides.content_type)
     else:
         body_type = iface.get("body_type", "none")
-        body = iface.get("body_content", "") or ""
+        body = resolved_body
         if body_type == "json" and body.strip():
             kwargs["data"] = body.encode("utf-8")
             body_for_snapshot = body
@@ -260,16 +293,40 @@ def _build_kwargs(
             body_for_snapshot = body
 
     kwargs["headers"] = headers or None
+
+    # 审计快照不得记录隐私变量明文。原始值含 {{privacy:}} 的字段，解析后
+    # 明文已进入 kwargs 发往上游；snapshot 里直接整体置 ***，不再靠正则在明文
+    # 里找占位符（占位符解析后已消失，正则必然漏）。
+    _MASKED = "***"
+    snapshot_url = _MASKED if url_has_ref else resolved_url
+    snapshot_headers = {
+        key: (_MASKED if key.lower() in header_has_ref else value)
+        for key, value in headers.items()
+    }
+    snapshot_body = body_for_snapshot
+    if body_has_ref:
+        if isinstance(snapshot_body, str):
+            snapshot_body = _MASKED
+        elif isinstance(snapshot_body, dict) and "fields" in snapshot_body:
+            # multipart form 字段——无法按字段名判断是否含占位符，
+            # 整体脱敏更安全（form 字段值短，丢失可读性可接受）。
+            snapshot_body = {
+                **snapshot_body,
+                "fields": [
+                    {**f, "value": _MASKED}
+                    for f in snapshot_body["fields"]
+                ],
+            }
     snapshot = {
         "method": iface.get("method"),
-        "url": resolved_url,
+        "url": snapshot_url,
         "query_params": [
             {"key": key, "value": str(value)}
             for key, value in query
         ],
-        "headers": _snapshot_headers(headers),
+        "headers": _snapshot_headers(snapshot_headers),
         "body_type": iface.get("body_type"),
-        "body_content": _snapshot_body(body_for_snapshot),
+        "body_content": _snapshot_body(snapshot_body),
         "source": overrides.source,
         "proxy_key_name": overrides.proxy_key_name,
         "source_ip": overrides.source_ip,
@@ -417,9 +474,16 @@ def _save_run(
     if not interface_id:
         return
     if snapshot is None:
+        from .privacy_ref import redact_privacy_refs
+
+        raw_headers_fallback = {
+            item.get("key", ""): redact_privacy_refs(item.get("value", ""))
+            for item in iface.get("headers", [])
+            if item.get("key")
+        }
         snapshot = {
             "method": iface.get("method"),
-            "url": iface.get("url") or "",
+            "url": redact_privacy_refs(iface.get("url") or ""),
             "query_params": [
                 {
                     "key": item.get("key", ""),
@@ -427,15 +491,11 @@ def _save_run(
                 }
                 for item in iface.get("query_params", [])
             ],
-            "headers": _snapshot_headers(
-                {
-                    item.get("key", ""): item.get("value", "")
-                    for item in iface.get("headers", [])
-                    if item.get("key")
-                }
-            ),
+            "headers": _snapshot_headers(raw_headers_fallback),
             "body_type": iface.get("body_type"),
-            "body_content": _snapshot_body(iface.get("body_content", "")),
+            "body_content": _snapshot_body(
+                redact_privacy_refs(iface.get("body_content", ""))
+            ),
             "source": overrides.source,
             "proxy_key_name": overrides.proxy_key_name,
             "source_ip": overrides.source_ip,

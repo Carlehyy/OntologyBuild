@@ -4,11 +4,13 @@ from datetime import datetime, timedelta, timezone
 from typing import List
 
 import anyio
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from starlette.datastructures import FormData, UploadFile
 
+from app.auth.models import User
+from app.deps import get_current_user
 from .. import config, db, executor, mcp_contract, publication
 from ..interface_contracts import (
     _ALLOWED_BODY_TYPES,
@@ -28,6 +30,7 @@ from ..interface_service import (
     _check_group_name,
     _dump_kv,
     _get_or_404,
+    _is_admin,
     _load_json_list,
     _normalize_publish_keys,
     _row_to_dict,
@@ -112,29 +115,40 @@ def _raw_run_response(result: dict) -> Response:
 
 
 @router.get("")
-def list_interfaces():
+def list_interfaces(current_user: User = Depends(get_current_user)):
     with db.get_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM interfaces ORDER BY group_name, sort_order, id"
-        ).fetchall()
+        if _is_admin(current_user):
+            rows = conn.execute(
+                "SELECT * FROM interfaces ORDER BY group_name, sort_order, id"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM interfaces WHERE created_by = ? "
+                "ORDER BY group_name, sort_order, id",
+                (current_user.id,),
+            ).fetchall()
     return [_row_to_dict(r) for r in rows]
 
 
-router.post("")(create_interface)
+@router.post("")
+def create(body: InterfaceIn, current_user: User = Depends(get_current_user)):
+    return create_interface(body, user=current_user)
 
 
 @router.post("/preview-run")
-def preview_run(body: PreviewInterfaceIn):
+def preview_run(body: PreviewInterfaceIn, current_user: User = Depends(get_current_user)):
     """执行当前编辑器草稿，不隐式保存接口配置。"""
     if body.id is not None:
         with db.get_conn() as conn:
-            _get_or_404(conn, body.id)
+            _get_or_404(conn, body.id, user=current_user)
     iface = body.model_dump(mode="json")
-    return executor.run_interface(iface)
+    return executor.run_interface(
+        iface, executor.RequestOverrides(source="ui", actor=current_user)
+    )
 
 
 @router.post("/preview-run/raw")
-async def preview_run_raw(request: Request):
+async def preview_run_raw(request: Request, current_user: User = Depends(get_current_user)):
     """Execute the editor draft and return the upstream bytes unchanged.
 
     JSON requests cover ordinary bodies. Multipart requests carry the serialized
@@ -149,7 +163,7 @@ async def preview_run_raw(request: Request):
             raise HTTPException(status_code=400, detail="Content-Length 无效") from exc
 
     form: FormData | None = None
-    overrides = executor.RequestOverrides(source="ui")
+    overrides = executor.RequestOverrides(source="ui", actor=current_user)
     try:
         content_type = (request.headers.get("content-type") or "").lower()
         if content_type.startswith("multipart/form-data"):
@@ -208,7 +222,7 @@ async def preview_run_raw(request: Request):
 
         if body.id is not None:
             with db.get_conn() as conn:
-                _get_or_404(conn, body.id)
+                _get_or_404(conn, body.id, user=current_user)
         iface = body.model_dump(mode="json")
         result = await anyio.to_thread.run_sync(
             lambda: executor.run_interface(
@@ -222,14 +236,14 @@ async def preview_run_raw(request: Request):
 
 
 @router.get("/{iid}")
-def get_interface(iid: int):
+def get_interface(iid: int, current_user: User = Depends(get_current_user)):
     with db.get_conn() as conn:
-        row = _get_or_404(conn, iid)
+        row = _get_or_404(conn, iid, user=current_user)
     return _row_to_dict(row)
 
 
 @router.get("/{iid}/mcp-contract")
-def get_mcp_contract(iid: int):
+def get_mcp_contract(iid: int, current_user: User = Depends(get_current_user)):
     """Expose the exact, secret-free MCP contract for the management UI.
 
     This preview is available before an interface is enabled for MCP so an
@@ -237,7 +251,7 @@ def get_mcp_contract(iid: int):
     checks ``open_enabled`` again at call time.
     """
     with db.get_conn() as conn:
-        row = _get_or_404(conn, iid)
+        row = _get_or_404(conn, iid, user=current_user)
     interface = _row_to_dict(row)
     return {
         "interface_id": interface["id"],
@@ -248,8 +262,14 @@ def get_mcp_contract(iid: int):
     }
 
 
-router.put("/{iid}")(update_interface)
-router.delete("/{iid}")(delete_interface)
+@router.put("/{iid}")
+def update(iid: int, body: InterfaceIn, current_user: User = Depends(get_current_user)):
+    return update_interface(iid, body, user=current_user)
+
+
+@router.delete("/{iid}")
+def remove(iid: int, current_user: User = Depends(get_current_user)):
+    return delete_interface(iid, user=current_user)
 
 
 class OpenBody(BaseModel):
@@ -271,12 +291,15 @@ class MoveBody(BaseModel):
 
 
 @router.put("/{iid}/move")
-def move_interface(iid: int, body: MoveBody):
+def move_interface(iid: int, body: MoveBody, current_user: User = Depends(get_current_user)):
     """移动接口到指定分组的指定位置。后端重排该组所有接口的 sort_order。"""
     _check_group_name(body.group_name)
     now = datetime.now(timezone.utc).isoformat()
+    # Non-admin users can only move their own interfaces and only reorder
+    # their own rows within a group; admin reorders the whole group as before.
+    admin = _is_admin(current_user)
     with db.get_conn() as conn:
-        current = _row_to_dict(_get_or_404(conn, iid))
+        current = _row_to_dict(_get_or_404(conn, iid, user=current_user))
         source_group = current["group_name"]
         # 更新分组
         conn.execute(
@@ -284,10 +307,18 @@ def move_interface(iid: int, body: MoveBody):
             (body.group_name, now, iid),
         )
         # 取出目标分组所有接口，按当前 sort_order, id 排序
-        rows = conn.execute(
-            "SELECT id FROM interfaces WHERE group_name = ? ORDER BY sort_order, id",
-            (body.group_name,),
-        ).fetchall()
+        if admin:
+            rows = conn.execute(
+                "SELECT id FROM interfaces WHERE group_name = ? "
+                "ORDER BY sort_order, id",
+                (body.group_name,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id FROM interfaces WHERE group_name = ? "
+                "AND created_by = ? ORDER BY sort_order, id",
+                (body.group_name, current_user.id),
+            ).fetchall()
         ids = [r["id"] for r in rows]
         # 把当前接口从原位置移除，插入到 target_index
         if iid in ids:
@@ -298,10 +329,18 @@ def move_interface(iid: int, body: MoveBody):
         for i, rid in enumerate(ids):
             conn.execute("UPDATE interfaces SET sort_order = ? WHERE id = ?", (i, rid))
         if source_group != body.group_name:
-            source_rows = conn.execute(
-                "SELECT id FROM interfaces WHERE group_name = ? ORDER BY sort_order, id",
-                (source_group,),
-            ).fetchall()
+            if admin:
+                source_rows = conn.execute(
+                    "SELECT id FROM interfaces WHERE group_name = ? "
+                    "ORDER BY sort_order, id",
+                    (source_group,),
+                ).fetchall()
+            else:
+                source_rows = conn.execute(
+                    "SELECT id FROM interfaces WHERE group_name = ? "
+                    "AND created_by = ? ORDER BY sort_order, id",
+                    (source_group, current_user.id),
+                ).fetchall()
             for i, row in enumerate(source_rows):
                 conn.execute(
                     "UPDATE interfaces SET sort_order = ? WHERE id = ?",
@@ -310,15 +349,17 @@ def move_interface(iid: int, body: MoveBody):
     return {"ok": True}
 
 
-router.post("/groups/delete")(delete_group)
+@router.post("/groups/delete")
+def remove_group(body: DeleteGroupBody, current_user: User = Depends(get_current_user)):
+    return delete_group(body, user=current_user)
 
 
 @router.post("/{iid}/open")
-def set_open(iid: int, body: OpenBody):
+def set_open(iid: int, body: OpenBody, current_user: User = Depends(get_current_user)):
     """只翻转 MCP 开放状态，不动其它接口字段。"""
     now = datetime.now(timezone.utc).isoformat()
     with db.get_conn() as conn:
-        _get_or_404(conn, iid)
+        _get_or_404(conn, iid, user=current_user)
         conn.execute(
             "UPDATE interfaces SET open_enabled = ?, mcp_enabled = ?, updated_at = ? WHERE id = ?",
             (1 if body.open else 0, 1 if body.open else 0, now, iid),
@@ -328,11 +369,11 @@ def set_open(iid: int, body: OpenBody):
 
 
 @router.put("/{iid}/http-publication")
-def set_http_publication(iid: int, body: HttpPublishIn):
+def set_http_publication(iid: int, body: HttpPublishIn, current_user: User = Depends(get_current_user)):
     """独立更新普通 HTTP 发布配置，不覆盖编辑器里其它接口字段。"""
     now = datetime.now(timezone.utc).isoformat()
     with db.get_conn() as conn:
-        row = _get_or_404(conn, iid)
+        row = _get_or_404(conn, iid, user=current_user)
         draft = InterfaceIn(
             **{
                 **_row_to_dict(row),
@@ -379,11 +420,11 @@ def _auto_slug(conn, interface: dict) -> str:
 
 
 @router.post("/{iid}/http-publication/auto")
-def auto_http_publication(iid: int):
+def auto_http_publication(iid: int, current_user: User = Depends(get_current_user)):
     """Infer a safe forwarding contract and publish without exposing protocol details."""
     now = datetime.now(timezone.utc).isoformat()
     with db.get_conn() as conn:
-        row = _get_or_404(conn, iid)
+        row = _get_or_404(conn, iid, user=current_user)
         interface = _row_to_dict(row)
         body_keys = publication.infer_body_keys(interface)
         draft = InterfaceIn(
@@ -421,16 +462,18 @@ def auto_http_publication(iid: int):
 
 
 @router.post("/{iid}/run")
-def run(iid: int):
+def run(iid: int, current_user: User = Depends(get_current_user)):
     with db.get_conn() as conn:
-        iface = _row_to_dict(_get_or_404(conn, iid))
-    return executor.run_interface(iface)
+        iface = _row_to_dict(_get_or_404(conn, iid, user=current_user))
+    return executor.run_interface(
+        iface, executor.RequestOverrides(source="ui", actor=current_user)
+    )
 
 
 @router.get("/{iid}/runs")
-def list_runs(iid: int):
+def list_runs(iid: int, current_user: User = Depends(get_current_user)):
     with db.get_conn() as conn:
-        _get_or_404(conn, iid)
+        _get_or_404(conn, iid, user=current_user)
         rows = conn.execute(
             "SELECT id, ok, status_code, elapsed_ms, error, relogin, created_at "
             "FROM runs WHERE interface_id = ? ORDER BY id DESC",
@@ -440,9 +483,9 @@ def list_runs(iid: int):
 
 
 @router.get("/{iid}/runs/{run_id}")
-def get_run(iid: int, run_id: int):
+def get_run(iid: int, run_id: int, current_user: User = Depends(get_current_user)):
     with db.get_conn() as conn:
-        _get_or_404(conn, iid)
+        _get_or_404(conn, iid, user=current_user)
         row = conn.execute(
             "SELECT * FROM runs WHERE id = ? AND interface_id = ?", (run_id, iid)
         ).fetchone()
@@ -467,7 +510,7 @@ runs_router = APIRouter(prefix="/runs", tags=["api-hub-runs"])
 
 
 @runs_router.get("/overview")
-def run_overview(timezone_offset_minutes: int = 0):
+def run_overview(timezone_offset_minutes: int = 0, current_user: User = Depends(get_current_user)):
     timezone_offset_minutes = max(-840, min(840, timezone_offset_minutes))
     local_now = datetime.now(timezone.utc) - timedelta(
         minutes=timezone_offset_minutes
@@ -476,36 +519,86 @@ def run_overview(timezone_offset_minutes: int = 0):
     start = today - timedelta(days=6)
     days = [(start + timedelta(days=i)).isoformat() for i in range(7)]
     sqlite_modifier = f"{-timezone_offset_minutes:+d} minutes"
+    # Non-admin users only see their own interfaces and the runs against them.
+    admin = _is_admin(current_user)
     with db.get_conn() as conn:
-        total_interfaces = conn.execute("SELECT COUNT(*) FROM interfaces").fetchone()[0]
-        executed = conn.execute("SELECT COUNT(DISTINCT interface_id) FROM runs").fetchone()[0]
-        today_traffic = conn.execute(
-            "SELECT COUNT(*) FROM runs "
-            "WHERE date(datetime(created_at), ?) = ?",
-            (sqlite_modifier, today.isoformat()),
-        ).fetchone()[0]
-        rows = conn.execute(
-            "SELECT date(datetime(created_at), ?) AS day, COUNT(*) AS count, "
-            "SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failed "
-            "FROM runs WHERE date(datetime(created_at), ?) >= ? "
-            "AND date(datetime(created_at), ?) <= ? "
-            "GROUP BY date(datetime(created_at), ?)",
-            (
-                sqlite_modifier,
-                sqlite_modifier, start.isoformat(),
-                sqlite_modifier, today.isoformat(),
-                sqlite_modifier,
-            ),
-        ).fetchall()
-        recent_rows = conn.execute(
-            "SELECT ok, elapsed_ms FROM runs "
-            "WHERE date(datetime(created_at), ?) >= ? "
-            "AND date(datetime(created_at), ?) <= ?",
-            (
-                sqlite_modifier, start.isoformat(),
-                sqlite_modifier, today.isoformat(),
-            ),
-        ).fetchall()
+        if admin:
+            total_interfaces = conn.execute("SELECT COUNT(*) FROM interfaces").fetchone()[0]
+            executed = conn.execute("SELECT COUNT(DISTINCT interface_id) FROM runs").fetchone()[0]
+            today_traffic = conn.execute(
+                "SELECT COUNT(*) FROM runs "
+                "WHERE date(datetime(created_at), ?) = ?",
+                (sqlite_modifier, today.isoformat()),
+            ).fetchone()[0]
+            rows = conn.execute(
+                "SELECT date(datetime(created_at), ?) AS day, COUNT(*) AS count, "
+                "SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failed "
+                "FROM runs WHERE date(datetime(created_at), ?) >= ? "
+                "AND date(datetime(created_at), ?) <= ? "
+                "GROUP BY date(datetime(created_at), ?)",
+                (
+                    sqlite_modifier,
+                    sqlite_modifier, start.isoformat(),
+                    sqlite_modifier, today.isoformat(),
+                    sqlite_modifier,
+                ),
+            ).fetchall()
+            recent_rows = conn.execute(
+                "SELECT ok, elapsed_ms FROM runs "
+                "WHERE date(datetime(created_at), ?) >= ? "
+                "AND date(datetime(created_at), ?) <= ?",
+                (
+                    sqlite_modifier, start.isoformat(),
+                    sqlite_modifier, today.isoformat(),
+                ),
+            ).fetchall()
+        else:
+            uid = current_user.id
+            total_interfaces = conn.execute(
+                "SELECT COUNT(*) FROM interfaces WHERE created_by = ?",
+                (uid,),
+            ).fetchone()[0]
+            executed = conn.execute(
+                "SELECT COUNT(DISTINCT r.interface_id) FROM runs r "
+                "JOIN interfaces i ON i.id = r.interface_id "
+                "WHERE i.created_by = ?",
+                (uid,),
+            ).fetchone()[0]
+            today_traffic = conn.execute(
+                "SELECT COUNT(*) FROM runs r "
+                "JOIN interfaces i ON i.id = r.interface_id "
+                "WHERE i.created_by = ? "
+                "AND date(datetime(r.created_at), ?) = ?",
+                (uid, sqlite_modifier, today.isoformat()),
+            ).fetchone()[0]
+            rows = conn.execute(
+                "SELECT date(datetime(r.created_at), ?) AS day, COUNT(*) AS count, "
+                "SUM(CASE WHEN r.ok = 0 THEN 1 ELSE 0 END) AS failed "
+                "FROM runs r JOIN interfaces i ON i.id = r.interface_id "
+                "WHERE i.created_by = ? "
+                "AND date(datetime(r.created_at), ?) >= ? "
+                "AND date(datetime(r.created_at), ?) <= ? "
+                "GROUP BY date(datetime(r.created_at), ?)",
+                (
+                    sqlite_modifier,
+                    uid,
+                    sqlite_modifier, start.isoformat(),
+                    sqlite_modifier, today.isoformat(),
+                    sqlite_modifier,
+                ),
+            ).fetchall()
+            recent_rows = conn.execute(
+                "SELECT r.ok, r.elapsed_ms FROM runs r "
+                "JOIN interfaces i ON i.id = r.interface_id "
+                "WHERE i.created_by = ? "
+                "AND date(datetime(r.created_at), ?) >= ? "
+                "AND date(datetime(r.created_at), ?) <= ?",
+                (
+                    uid,
+                    sqlite_modifier, start.isoformat(),
+                    sqlite_modifier, today.isoformat(),
+                ),
+            ).fetchall()
     by_day = {
         row["day"]: {"count": int(row["count"]), "failed": int(row["failed"] or 0)}
         for row in rows
@@ -556,6 +649,7 @@ def list_all_runs(
     result: str = "",
     page: int = 1,
     size: int = 20,
+    current_user: User = Depends(get_current_user),
 ):
     """分页查询全局调用记录，按时间倒序（最新在顶）。
 
@@ -570,6 +664,10 @@ def list_all_runs(
 
     where = []
     params: list = []
+    # Non-admin users only see runs against their own interfaces.
+    if not _is_admin(current_user):
+        where.append("i.created_by = ?")
+        params.append(current_user.id)
     kw = keyword.strip()
     if kw:
         where.append("i.name LIKE ?")
