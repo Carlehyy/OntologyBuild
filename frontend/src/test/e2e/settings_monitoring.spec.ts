@@ -285,5 +285,18 @@ test.describe('系统设置 · 运行监控（admin）', () => {
     await expect(modal.getByText('慢请求分析提示词')).toBeVisible()
     await expect(modal.locator('textarea')).toHaveValue(/未采集到逐步调用链/)
   })
+
+  test('点击接口排行行联动筛选慢请求明细', async ({ page }) => {
+    await mockMonitoring(page)
+    await page.goto('/#/settings/monitoring')
+
+    await expect(page.getByText('接口排行（针对性优化依据）')).toBeVisible()
+    // 排行表第一行 route 为 /api/v2/super-assistant/conversations/x/chat
+    // 点击该行后，慢请求明细的筛选标签应展示该 route，且明细列表被该 route 过滤
+    await page.locator('.ant-table-row').filter({ hasText: '/api/v2/super-assistant/conversations/x/chat' }).first().click()
+    await expect(page.getByText('筛选：/api/v2/super-assistant/conversations/x/chat')).toBeVisible()
+    // 该 route 对应一条慢请求（4.20s），另一接口的慢请求不应出现在过滤后的列表
+    await expect(page.getByText('4.20s')).toBeVisible()
+  })
 })
 
