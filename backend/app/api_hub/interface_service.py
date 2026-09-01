@@ -182,19 +182,36 @@ def _dump_kv(items: List[KV]) -> str:
     )
 
 
-def _get_or_404(conn, iid: int):
-    row = conn.execute(
-        "SELECT * FROM interfaces WHERE id = ?",
-        (iid,),
-    ).fetchone()
+def _is_admin(user) -> bool:
+    """``user`` is a ``User`` object with a ``role`` attribute (see app.deps)."""
+    return getattr(user, "role", None) == "admin"
+
+
+def _get_or_404(conn, iid: int, *, user=None):
+    # ``user=None`` preserves the original system-path behavior (lookup by id
+    # only) for callers such as agent_service that do not pass a user.
+    if user is None or _is_admin(user):
+        row = conn.execute(
+            "SELECT * FROM interfaces WHERE id = ?",
+            (iid,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT * FROM interfaces WHERE id = ? AND created_by = ?",
+            (iid, user.id),
+        ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="接口不存在")
     return row
 
 
-def create_interface(body: InterfaceIn):
+def create_interface(body: InterfaceIn, *, user=None):
     _check_group_name(body.group_name)
     now = datetime.now(timezone.utc).isoformat()
+    # System paths (e.g. agent_service) pass no user; they leave created_by
+    # empty here and stamp it via _record_actor afterwards. UI requests pass
+    # the current user so the row is privately owned from creation.
+    actor_id = user.id if user is not None else ""
     with db.get_conn() as conn:
         slug, query_keys, header_keys, body_keys = _validate_proxy_publish(
             conn,
@@ -205,39 +222,40 @@ def create_interface(body: InterfaceIn):
             "url, query_params, headers, body_type, body_content, file_fields, "
             "mcp_enabled, open_enabled, http_enabled, proxy_slug, "
             "proxy_query_keys, proxy_header_keys, proxy_body_enabled, "
-            "proxy_body_keys, parameter_schema, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "proxy_body_keys, parameter_schema, created_by, updated_by, "
+            "created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            # 23 columns: 10 base + 5 publish + 4 proxy + 3 meta + 2 actor + 2 ts
             (
-                body.name,
-                body.description,
-                body.group_name,
-                body.method.upper(),
-                body.url,
-                _dump_kv(body.query_params),
-                _dump_kv(body.headers),
-                body.body_type,
-                body.body_content,
-                json.dumps(
+                body.name,                 # 1
+                body.description,          # 2
+                body.group_name,           # 3
+                body.method.upper(),       # 4
+                body.url,                  # 5
+                _dump_kv(body.query_params),# 6
+                _dump_kv(body.headers),    # 7
+                body.body_type,            # 8
+                body.body_content,         # 9
+                json.dumps(               # 10
                     [item.model_dump() for item in body.file_fields],
                     ensure_ascii=False,
                 ),
-                1 if body.open_enabled else 0,
-                1 if body.open_enabled else 0,
-                1 if body.http_enabled else 0,
-                slug,
-                json.dumps(query_keys, ensure_ascii=False),
-                json.dumps(header_keys, ensure_ascii=False),
-                1 if body.proxy_body_enabled else 0,
-                json.dumps(body_keys, ensure_ascii=False),
-                json.dumps(
-                    [
-                        item.model_dump(mode="json")
-                        for item in body.parameter_schema
-                    ],
+                1 if body.open_enabled else 0,    # 11 mcp_enabled
+                1 if body.open_enabled else 0,    # 12 open_enabled
+                1 if body.http_enabled else 0,    # 13
+                slug,                             # 14
+                json.dumps(query_keys, ensure_ascii=False),  # 15
+                json.dumps(header_keys, ensure_ascii=False),  # 16
+                1 if body.proxy_body_enabled else 0,          # 17
+                json.dumps(body_keys, ensure_ascii=False),    # 18
+                json.dumps(                              # 19
+                    [item.model_dump(mode="json") for item in body.parameter_schema],
                     ensure_ascii=False,
                 ),
-                now,
-                now,
+                actor_id,                 # 20 created_by
+                actor_id,                 # 21 updated_by
+                now,                      # 22 created_at
+                now,                      # 23 updated_at
             ),
         )
         row = conn.execute(
@@ -247,11 +265,12 @@ def create_interface(body: InterfaceIn):
     return _row_to_dict(row)
 
 
-def update_interface(iid: int, body: InterfaceIn):
+def update_interface(iid: int, body: InterfaceIn, *, user=None):
     _check_group_name(body.group_name)
     now = datetime.now(timezone.utc).isoformat()
+    actor_id = user.id if user is not None else ""
     with db.get_conn() as conn:
-        _get_or_404(conn, iid)
+        _get_or_404(conn, iid, user=user)
         slug, query_keys, header_keys, body_keys = _validate_proxy_publish(
             conn,
             body,
@@ -264,7 +283,8 @@ def update_interface(iid: int, body: InterfaceIn):
             "open_enabled=?, http_enabled=?, proxy_slug=?, "
             "proxy_query_keys=?, proxy_header_keys=?, proxy_body_enabled=?, "
             "proxy_body_keys=?, parameter_schema=?, "
-            "config_revision=config_revision+1, updated_at=? WHERE id=?",
+            "config_revision=config_revision+1, updated_by=?, updated_at=? "
+            "WHERE id=?",
             (
                 body.name,
                 body.description,
@@ -294,6 +314,7 @@ def update_interface(iid: int, body: InterfaceIn):
                     ],
                     ensure_ascii=False,
                 ),
+                actor_id,
                 now,
                 iid,
             ),
@@ -305,16 +326,16 @@ def update_interface(iid: int, body: InterfaceIn):
     return _row_to_dict(row)
 
 
-def delete_interface(iid: int):
+def delete_interface(iid: int, *, user=None):
     with db.get_conn() as conn:
-        _get_or_404(conn, iid)
+        _get_or_404(conn, iid, user=user)
         # Explicitly delete history even though the schema also has a cascade.
         conn.execute("DELETE FROM runs WHERE interface_id = ?", (iid,))
         conn.execute("DELETE FROM interfaces WHERE id = ?", (iid,))
     return {"ok": True}
 
 
-def delete_group(body: DeleteGroupBody):
+def delete_group(body: DeleteGroupBody, *, user=None):
     """删除指定分组：将该分组下所有接口移入默认分组（group_name 置空）。"""
     name = (body.group_name or "").strip()
     if not name:
@@ -326,10 +347,19 @@ def delete_group(body: DeleteGroupBody):
         )
     now = datetime.now(timezone.utc).isoformat()
     with db.get_conn() as conn:
-        cursor = conn.execute(
-            "UPDATE interfaces SET group_name = '', updated_at = ? "
-            "WHERE group_name = ?",
-            (now, name),
-        )
+        # Non-admin users only clear interfaces they own; admin/system paths
+        # (user=None or role=admin) affect the whole group as before.
+        if user is None or _is_admin(user):
+            cursor = conn.execute(
+                "UPDATE interfaces SET group_name = '', updated_at = ? "
+                "WHERE group_name = ?",
+                (now, name),
+            )
+        else:
+            cursor = conn.execute(
+                "UPDATE interfaces SET group_name = '', updated_at = ? "
+                "WHERE group_name = ? AND created_by = ?",
+                (now, name, user.id),
+            )
         count = cursor.rowcount
     return {"ok": True, "count": count}

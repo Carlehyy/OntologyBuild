@@ -5,6 +5,7 @@ import {
   LoaderCircle,
 } from 'lucide-react'
 import { apiError, apiHub, emptyHubInterface, validateHttpUrl, type HubInterface, type KV, type McpContract, type RunResult } from '@/api/apiHub'
+import { authApi, type PrivacyVar } from '@/api/auth'
 import { Button } from '@/components/ui/Button'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import { writeTextToClipboard } from '@/utils/clipboard'
@@ -39,7 +40,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   const [selectedId, setSelectedId] = useState<number | null>(interfaces[0]?.id ?? null)
   const [draft, setDraft] = useState<HubInterface>(() => interfaces[0] ? structuredClone(interfaces[0]) : emptyHubInterface())
   const [baseline, setBaseline] = useState<HubInterface>(() => interfaces[0] ? structuredClone(interfaces[0]) : emptyHubInterface())
-  const [editorTab, setEditorTab] = useState<'params' | 'headers' | 'body' | 'description'>('params')
+  const [editorTab, setEditorTab] = useState<'params' | 'headers' | 'body' | 'description' | 'privacy'>('params')
   const [saving, setSaving] = useState(false)
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<RunResult | null>(null)
@@ -66,6 +67,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   const [newGroupOpen, setNewGroupOpen] = useState(false)
   const [newGroupName, setNewGroupName] = useState('')
   const [newGroupError, setNewGroupError] = useState('')
+  const [privacyVars, setPrivacyVars] = useState<PrivacyVar[]>([])
   const containerRef = useRef<HTMLDivElement>(null)
   const [sizes, setSizes] = useState<[number, number]>([28, 72])
 
@@ -188,6 +190,17 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   }, [isDirty])
 
   useEffect(() => setPublicationCopied(false), [selectedId])
+
+  // 隐私变量列表：插入占位符 {{privacy:KEY}} 用。只取 has_value 的项——
+  // 没有值的变量在调用端无法解析，列出反而误导。按 AGENTS.md §5 副作用验收：
+  // 列表加载失败时静默降级为空列表，不打断编辑，错误由 onError 兜底提示一次。
+  useEffect(() => {
+    let cancelled = false
+    authApi.listPrivacyVars()
+      .then(items => { if (!cancelled) setPrivacyVars(Array.isArray(items) ? items.filter(item => item.has_value) : []) })
+      .catch(() => { /* 静默：列表为空时按钮仍可点击但无项可选 */ })
+    return () => { cancelled = true }
+  }, [])
 
   const save = async (): Promise<HubInterface | null> => {
     if (!draft.name.trim()) { onError('请填写接口名称'); return null }
@@ -492,9 +505,9 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
 
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4">
           <div className="flex gap-5">
-            {(['params', 'headers', 'body', 'description'] as const).map(key => (
+            {(['params', 'headers', 'body', 'description', 'privacy'] as const).map(key => (
               <button key={key} onClick={() => setEditorTab(key)} className={`relative py-2.5 text-xs font-medium ${editorTab === key ? 'text-[var(--color-nav-bg)]' : 'text-[var(--color-text-secondary)]'}`}>
-                {{ params: '查询参数', headers: '请求头', body: '请求体', description: 'MCP 用途说明' }[key]}
+                {{ params: '查询参数', headers: '请求头', body: '请求体', description: 'MCP 用途说明', privacy: '隐私变量' }[key]}
                 {editorTab === key && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-[var(--color-nav-bg)]" />}
               </button>
             ))}
@@ -510,6 +523,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           {editorTab === 'headers' && <KVEditor value={draft.headers} onChange={value => patchDraft('headers', value)} keyPlaceholder="Header" valuePlaceholder="值" />}
           {editorTab === 'body' && <BodyEditor draft={draft} patchDraft={patchDraft} selectedFiles={selectedFiles} setSelectedFiles={setSelectedFiles} />}
           {editorTab === 'description' && <textarea value={draft.description} onChange={event => patchDraft('description', event.target.value)} className="h-28 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder="说明接口用途、可传入的业务参数和返回结果；MCP 中的 Agent 将据此理解何时调用此接口。" />}
+          {editorTab === 'privacy' && <PrivacyVarPanel privacyVars={privacyVars} />}
         </div>
 
         <ResponsePanel result={result} stale={resultStale} loading={running} />
@@ -620,6 +634,61 @@ function Toggle({ label, value, onChange }: { label: string; value: boolean; onC
 
 function PublicationBadge({ label, title, tone = 'mcp' }: { label: 'MCP' | 'HTTP'; title: string; tone?: 'mcp' | 'http' }) {
   return <span title={title} className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold tracking-wide ${tone === 'http' ? 'bg-sky-50 text-sky-700' : 'bg-emerald-50 text-emerald-700'}`}>{label}</span>
+}
+
+function PrivacyVarPanel({ privacyVars }: { privacyVars: PrivacyVar[] }) {
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const [copyError, setCopyError] = useState('')
+
+  const copyFormat = async (key: string) => {
+    const ref = `{{privacy:${key}}}`
+    try {
+      await writeTextToClipboard(ref)
+      setCopiedKey(key)
+      setCopyError('')
+      setTimeout(() => setCopiedKey(null), 2000)
+    } catch {
+      // 非 HTTPS / 非聚焦页面下剪贴板可能不可靠，如实提示并提供手动兜底
+      setCopiedKey(key)
+      setCopyError(ref)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 py-2.5 text-[11px] leading-5 text-[var(--color-text-secondary)]">
+        在「请求头」「请求体」「URL」的值中粘贴 <code className="rounded bg-[var(--color-bg-hover)] px-1 font-mono">{'{{privacy:变量名}}'}</code> 格式，调用时平台会自动用你的隐私变量明文替换。明文不写入接口配置，也不进入调用历史。
+      </div>
+      {privacyVars.length ? (
+        <div className="space-y-1.5">
+          {privacyVars.map(item => (
+            <div key={item.key} className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 py-2">
+              <ShieldCheck size={14} className="shrink-0 text-[var(--color-nav-bg)]" />
+              <span className="font-mono text-xs font-medium text-[var(--color-text-primary)]">{item.key}</span>
+              <code className="ml-1 flex-1 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">{`{{privacy:${item.key}}}`}</code>
+              <button
+                type="button"
+                onClick={() => void copyFormat(item.key)}
+                className="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-[var(--color-nav-bg)] transition-colors hover:bg-[var(--color-nav-light)]"
+              >
+                {copiedKey === item.key ? <Check size={13} /> : <Copy size={13} />}
+                {copiedKey === item.key ? '已尝试复制' : '复制使用格式'}
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-md border border-dashed border-[var(--color-border)] py-9 text-center text-xs text-[var(--color-text-tertiary)]">
+          当前没有可用的隐私变量。请在「个人资料 → 隐私变量」中创建并通过上报脚本上报值。
+        </div>
+      )}
+      {copyError && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-700">
+          剪贴板写入失败，请手动复制：<code className="font-mono">{copyError}</code>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function KVEditor({ value, onChange, keyPlaceholder, valuePlaceholder }: { value: KV[]; onChange: (value: KV[]) => void; keyPlaceholder: string; valuePlaceholder: string }) {
