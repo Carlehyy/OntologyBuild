@@ -25,7 +25,6 @@ const multipartInterface = {
   body_type: 'multipart',
   body_content: 'note=browser-test',
   file_fields: [{ key: 'file', accept: '.txt,text/plain', multiple: false }],
-  use_w3: false,
   mcp_enabled: false,
   open_enabled: false,
   http_enabled: false,

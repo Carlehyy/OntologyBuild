@@ -15,7 +15,6 @@ import {
   GitBranch,
   Globe,
   History,
-  KeyRound,
   LayoutDashboard,
   Network,
   Orbit,
@@ -100,7 +99,6 @@ export const PLATFORM_NAV_ITEMS: PlatformNavItem[] = [
     key: 'api_hub', to: '/api-hub', icon: Waypoints, label: '接口代理', description: '接口接入、调用与授权', subItems: [
       { key: 'api_hub.interfaces', to: '/api-hub/interfaces', icon: PlugZap, label: '接口管理', description: '接口定义与代理配置' },
       { key: 'api_hub.history', to: '/api-hub/history', icon: History, label: '调用历史', description: '接口调用记录' },
-      { key: 'api_hub.authorization', to: '/api-hub/authorization', icon: KeyRound, label: '授权配置', description: '凭据与授权策略' },
     ],
   },
   {

@@ -19,7 +19,7 @@ export function menuKeyForPath(pathname: string): string | null {
   if (pathname.startsWith('/data/pipelines')) return 'data.pipelines'
   if (pathname === '/api-hub' || pathname === '/api-hub/') return 'api_hub'
   if (pathname.startsWith('/api-hub/history')) return 'api_hub.history'
-  if (pathname.startsWith('/api-hub/authorization') || pathname.startsWith('/api-hub/operations')) return 'api_hub.authorization'
+  if (pathname.startsWith('/api-hub/operations') || pathname.startsWith('/api-hub/authorization')) return 'api_hub.interfaces'
   if (pathname.startsWith('/api-hub/interfaces')) return 'api_hub.interfaces'
   if (pathname === '/community' || pathname === '/community/') return 'community'
   if (pathname.startsWith('/community/skills')) return 'community.skills'

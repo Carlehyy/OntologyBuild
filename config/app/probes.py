@@ -247,7 +247,6 @@ def _secret_values(profile: ConfigProfile) -> list[str]:
         profile.minio.access_key,
         profile.minio.secret_key,
         profile.n8n.api_key,
-        profile.advanced.w3_password,
         profile.advanced.api_hub_mcp_token,
         profile.advanced.api_hub_system_mcp_token,
         profile.advanced.api_hub_internal_proxy_token,

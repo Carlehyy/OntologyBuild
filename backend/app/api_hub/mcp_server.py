@@ -13,7 +13,7 @@ Agent 看到的工具数量都不变：
 这样做的好处：
 - 工具面恒定且极小（2 个），上下文友好；接口增减只改变 list 的返回内容，不改变工具签名。
 - “开放”用的就是接口的 open_enabled 标记，网页里勾选即时生效（每次调用都实时查库）。
-- 执行仍走平台已有的 executor，自动带 W3 登录态、自动透明重登。
+- 执行仍走平台已有的 executor，统一动态参数合并与调用审计。
 - 传输用 Streamable HTTP（无状态 + JSON 响应），挂在主服务的
   `/api-hub/mcp` 路径上。
 """
@@ -78,7 +78,6 @@ def _row_to_iface(row: dict) -> dict:
         "body_type": row["body_type"], "body_content": row["body_content"],
         "file_fields": json.loads(row.get("file_fields") or "[]"),
         "parameter_schema": json.loads(row.get("parameter_schema") or "[]"),
-        "use_w3": bool(row["use_w3"]),
     }
 
 
@@ -104,7 +103,6 @@ def _catalog_entry(row: dict) -> dict:
         ),
         "parameters": mcp_contract.public_parameters(iface),
         "body_type": iface["body_type"],
-        "needs_w3": iface["use_w3"],
     }
 
 
@@ -344,7 +342,7 @@ async def sys_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="create_interface",
-            description="新建接口。name 和 url 必填，其余可选（method 默认 GET，use_w3 默认 false）。",
+            description="新建接口。name 和 url 必填，其余可选（method 默认 GET）。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -357,7 +355,6 @@ async def sys_list_tools() -> list[types.Tool]:
                     "headers": {"type": "object", "description": "自定义请求头，键值对如 {\"X-Token\":\"abc\"}。", "additionalProperties": {"type": "string"}},
                     "body_type": {"type": "string", "description": "Body 类型：none/json/form/raw，默认 none。"},
                     "body_content": {"type": "string", "description": "Body 内容。"},
-                    "use_w3": {"type": "boolean", "description": "是否启用 W3 登录，默认 false。"},
                     "parameters": {
                         "type": "array",
                         "description": "可选的动态参数契约（name/location/value_type/required/dynamic/sensitive）。",
@@ -383,7 +380,6 @@ async def sys_list_tools() -> list[types.Tool]:
                     "headers": {"type": "object", "additionalProperties": {"type": "string"}},
                     "body_type": {"type": "string"},
                     "body_content": {"type": "string"},
-                    "use_w3": {"type": "boolean"},
                     "parameters": {"type": "array", "items": {"type": "object"}},
                 },
                 "required": ["id"],
@@ -472,7 +468,6 @@ async def sys_call_tool(name: str, arguments: dict | None) -> list[types.TextCon
             description=args.get("description", ""),
             body_type=args.get("body_type", "none"),
             body_content=args.get("body_content", ""),
-            use_w3=args.get("use_w3", False),
             query_params=[KV(key=str(k), value=str(v)) for k, v in qp.items()],
             headers=[KV(key=str(k), value=str(v)) for k, v in hd.items()],
             parameter_schema=args.get("parameters") or [],
@@ -492,8 +487,6 @@ async def sys_call_tool(name: str, arguments: dict | None) -> list[types.TextCon
                 merged[field] = args[field]
         if "group" in args:
             merged["group_name"] = args["group"]
-        if "use_w3" in args:
-            merged["use_w3"] = bool(args["use_w3"])
         if "query_params" in args:
             merged["query_params"] = [
                 {"key": str(key), "value": str(value)}

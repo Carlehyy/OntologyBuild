@@ -28,7 +28,6 @@ const responseInterface = {
   body_type: 'none',
   body_content: '',
   file_fields: [],
-  use_w3: false,
   mcp_enabled: false,
   open_enabled: false,
   http_enabled: false,

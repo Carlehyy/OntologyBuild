@@ -205,18 +205,15 @@ app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["set
 # 接口代理（API-Hub）管理面统一沿用平台 JWT；对 Agent 的 MCP 端点在
 # /api-hub/mcp 与 /api-hub/mcp/system，继续使用各自独立 token。
 from app.api_hub.routers import backup as api_hub_backup
-from app.api_hub.routers import credential as api_hub_credential
 from app.api_hub.routers import interfaces as api_hub_interfaces
 from app.api_hub.routers import mcp as api_hub_mcp_router
 from app.api_hub.routers import proxy as api_hub_proxy
 from app.api_hub.routers import http_proxy as api_hub_http_proxy
 api_hub_interfaces_guard = menu_guard("api_hub.interfaces")
 api_hub_history_guard = menu_guard("api_hub.history")
-api_hub_authorization_guard = menu_guard("api_hub.authorization")
-app.include_router(api_hub_credential.router, prefix="/api/api-hub", dependencies=api_hub_authorization_guard)
 app.include_router(api_hub_interfaces.router, prefix="/api/api-hub", dependencies=api_hub_interfaces_guard)
 app.include_router(api_hub_interfaces.runs_router, prefix="/api/api-hub", dependencies=api_hub_history_guard)
-app.include_router(api_hub_backup.router, prefix="/api/api-hub", dependencies=api_hub_authorization_guard)
+app.include_router(api_hub_backup.router, prefix="/api/api-hub", dependencies=api_hub_interfaces_guard)
 app.include_router(api_hub_mcp_router.router, prefix="/api/api-hub", dependencies=api_hub_interfaces_guard)
 app.include_router(
     api_hub_http_proxy.admin_router,

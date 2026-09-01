@@ -26,7 +26,6 @@ ALL_MENU_KEYS = (
     "api_hub",
     "api_hub.interfaces",
     "api_hub.history",
-    "api_hub.authorization",
     "community",
     "community.skills",
     "community.plugins",
@@ -54,7 +53,6 @@ PARENT_MENU_KEYS = {
     "data.structured": "data",
     "api_hub.interfaces": "api_hub",
     "api_hub.history": "api_hub",
-    "api_hub.authorization": "api_hub",
     "community.skills": "community",
     "community.plugins": "community",
     "world_model.models": "world_model",
@@ -68,7 +66,6 @@ GROUP_MENU_KEYS = {
     "api_hub": (
         "api_hub.interfaces",
         "api_hub.history",
-        "api_hub.authorization",
     ),
     "community": (
         "community.skills",

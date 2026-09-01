@@ -566,30 +566,9 @@
               </div>
             </div>
             <details class="advanced-details">
-              <summary>API Hub 与 W3 高级连接</summary>
-              <p>仅在需要通过 API Hub 对接 W3 时填写账号。三个内部令牌建议使用随机值。</p>
+              <summary>API Hub 高级连接</summary>
+              <p>三个内部令牌建议使用随机值。</p>
               <div class="field-grid">
-                <div class="field">
-                  <label for="w3-username">W3 账号，可留空</label>
-                  <input id="w3-username" data-path="advanced.w3_username" name="advanced.w3_username" type="text" autocomplete="username">
-                  <p class="field-help">没有接入 W3 时可以留空。</p>
-                  <p class="field-error" data-error-for="advanced.w3_username"></p>
-                </div>
-                <div class="field">
-                  <label for="w3-password">W3 密码，可留空</label>
-                  <div class="secret-control">
-                    <input id="w3-password" data-path="advanced.w3_password" data-secret="advanced.w3_password" name="advanced.w3_password" type="password" autocomplete="new-password">
-                    <button class="text-button secret-toggle" type="button" data-toggle-secret="w3-password" aria-label="显示 W3 密码">显示</button>
-                  </div>
-                  <p class="field-help secret-help">留空表示不启用 W3 登录。</p>
-                  <p class="field-error" data-error-for="advanced.w3_password"></p>
-                </div>
-                <div class="field field-span-two">
-                  <label for="w3-login-url">W3 登录地址，可留空</label>
-                  <input id="w3-login-url" data-path="advanced.w3_login_url" name="advanced.w3_login_url" type="url" value="https://login.huawei.com/login1/rest/hwidcenter/login" required autocomplete="url">
-                  <p class="field-help">不使用 W3 时保留默认值即可，不会主动发起登录。</p>
-                  <p class="field-error" data-error-for="advanced.w3_login_url"></p>
-                </div>
                 <div class="field">
                   <label for="api-hub-mcp-token">API Hub MCP 令牌</label>
                   <input id="api-hub-mcp-token" data-path="advanced.api_hub_mcp_token" data-secret="advanced.api_hub_mcp_token" name="advanced.api_hub_mcp_token" type="password" required autocomplete="new-password">
@@ -608,9 +587,6 @@
                   <p class="field-help secret-help">保护后端内部代理接口，建议使用自动生成值。</p>
                   <p class="field-error" data-error-for="advanced.api_hub_internal_proxy_token"></p>
                 </div>
-              </div>
-              <div class="details-actions">
-                <button class="secondary-button help-button" type="button" data-guide="w3">我不知道 W3 账号信息</button>
               </div>
             </details>
             <div class="section-actions split-actions">

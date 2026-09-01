@@ -84,7 +84,6 @@ class InterfaceIn(BaseModel):
     body_type: str = "none"   # none | json | form | multipart | raw
     body_content: str = ""
     file_fields: List[FileField] = Field(default_factory=list)
-    use_w3: bool = False
     mcp_enabled: bool = False
     open_enabled: bool = False
     http_enabled: bool = False

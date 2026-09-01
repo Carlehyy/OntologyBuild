@@ -31,7 +31,6 @@ const publishedInterface = {
   body_type: 'json',
   body_content: '{"productId":1001,"password":"private"}',
   file_fields: [],
-  use_w3: false,
   mcp_enabled: false,
   open_enabled: false,
   http_enabled: true,

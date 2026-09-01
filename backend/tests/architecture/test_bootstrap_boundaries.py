@@ -126,7 +126,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
 ):
     from app.api_hub import db as api_hub_db
     from app.api_hub import mcp_server as api_hub_mcp
-    from app.api_hub import scheduler as api_hub_scheduler
     from app.bootstrap import lifecycle
     from app.data_channel.file_assets import service as file_asset_service
     from app.data_channel.steward import browser_runtime
@@ -175,16 +174,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
         api_hub_db,
         "init_db",
         lambda: events.append("api_hub_db.init"),
-    )
-    monkeypatch.setattr(
-        api_hub_scheduler,
-        "start",
-        lambda: events.append("api_hub_scheduler.start"),
-    )
-    monkeypatch.setattr(
-        api_hub_scheduler,
-        "shutdown",
-        lambda: events.append("api_hub_scheduler.shutdown"),
     )
     monkeypatch.setattr(
         sentinel,
@@ -267,7 +256,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
         "neo4j_indexes.setup",
         "neo4j_projections.repair",
         "api_hub_db.init",
-        "api_hub_scheduler.start",
         "sentinel_cdc.register:True",
         "sentinel_scan.start",
         "data_scheduler.start",
@@ -283,7 +271,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
         "data_scheduler.shutdown",
         "sentinel_scan.stop",
         "sentinel_cdc.stop",
-        "api_hub_scheduler.shutdown",
     ]
 
 
@@ -291,7 +278,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
 async def test_lifecycle_dependency_failure_starts_no_background_resources(
     monkeypatch,
 ):
-    from app.api_hub import scheduler as api_hub_scheduler
     from app.bootstrap import lifecycle
     from app.services import sentinel
     from app.shared import dependency_probe
@@ -308,11 +294,6 @@ async def test_lifecycle_dependency_failure_starts_no_background_resources(
         dependency_probe,
         "probe_startup_dependencies",
         reject_dependencies,
-    )
-    monkeypatch.setattr(
-        api_hub_scheduler,
-        "start",
-        lambda: events.append("api_hub_scheduler.start"),
     )
     monkeypatch.setattr(
         sentinel,
@@ -335,7 +316,6 @@ async def test_lifecycle_partial_startup_failure_cleans_started_resources(
     monkeypatch,
 ):
     from app.api_hub import db as api_hub_db
-    from app.api_hub import scheduler as api_hub_scheduler
     from app.bootstrap import lifecycle
     from app.ontologies import projection_state
     from app.services import sentinel
@@ -365,16 +345,6 @@ async def test_lifecycle_partial_startup_failure_cleans_started_resources(
         api_hub_db,
         "init_db",
         lambda: events.append("api_hub_db.init"),
-    )
-    monkeypatch.setattr(
-        api_hub_scheduler,
-        "start",
-        lambda: events.append("api_hub_scheduler.start"),
-    )
-    monkeypatch.setattr(
-        api_hub_scheduler,
-        "shutdown",
-        lambda: events.append("api_hub_scheduler.shutdown"),
     )
 
     def fail_sentinel(*, start_worker):
@@ -406,9 +376,7 @@ async def test_lifecycle_partial_startup_failure_cleans_started_resources(
         "neo4j_indexes.setup",
         "neo4j_projections.repair",
         "api_hub_db.init",
-        "api_hub_scheduler.start",
         "sentinel.register:True",
         "sentinel_scan.stop",
         "sentinel_cdc.stop",
-        "api_hub_scheduler.shutdown",
     ]

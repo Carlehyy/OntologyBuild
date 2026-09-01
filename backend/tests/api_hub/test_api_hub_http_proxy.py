@@ -92,7 +92,6 @@ def test_http_proxy_migrates_existing_api_hub_database(tmp_path, monkeypatch):
                 headers TEXT NOT NULL DEFAULT '[]',
                 body_type TEXT NOT NULL DEFAULT 'none',
                 body_content TEXT NOT NULL DEFAULT '',
-                use_w3 INTEGER NOT NULL DEFAULT 1,
                 mcp_enabled INTEGER NOT NULL DEFAULT 0,
                 open_enabled INTEGER NOT NULL DEFAULT 0,
                 sort_order INTEGER NOT NULL DEFAULT 0,
@@ -138,8 +137,6 @@ def test_http_proxy_migrates_existing_api_hub_database(tmp_path, monkeypatch):
 @pytest.fixture
 def proxy_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "api_hub.db")
-    monkeypatch.setattr(config, "SESSION_PATH", tmp_path / "w3_session.json")
-    monkeypatch.setattr(config, "SESSION_LOCK_PATH", tmp_path / "w3_session.lock")
     monkeypatch.setattr(config, "HTTP_TIMEOUT", 5)
     monkeypatch.setattr(config, "PROXY_MAX_REQUEST_BYTES", 1024 * 1024)
     # The test upstream intentionally runs on loopback; production loopback
@@ -182,7 +179,6 @@ def _interface(client: TestClient, upstream_url: str, **overrides):
         "headers": [{"key": "X-Fixed", "value": "fixed"}],
         "body_type": "none",
         "body_content": "",
-        "use_w3": False,
         "mcp_enabled": False,
         "open_enabled": False,
         "http_enabled": True,
@@ -285,28 +281,8 @@ def test_http_proxy_auth_scope_query_headers_response_and_audit(proxy_env):
     assert "key_hash" not in listed[0]
 
 
-def test_http_proxy_body_w3_cookie_status_and_binary_passthrough(proxy_env):
+def test_http_proxy_body_status_and_binary_passthrough(proxy_env):
     client = proxy_env["client"]
-    config.SESSION_PATH.write_text(
-        json.dumps(
-            {
-                "acquired_at": datetime.now(timezone.utc).isoformat(),
-                "cookies": [
-                    {
-                        "name": "W3_SESSION",
-                        "value": "platform-cookie",
-                        "domain": "127.0.0.1",
-                        "path": "/",
-                        "expires": (
-                            datetime.now(timezone.utc) + timedelta(hours=1)
-                        ).timestamp(),
-                        "secure": False,
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
     _interface(
         client,
         proxy_env["upstream_url"],
@@ -320,7 +296,6 @@ def test_http_proxy_body_w3_cookie_status_and_binary_passthrough(proxy_env):
         body_type="json",
         body_content='{"default":true}',
         proxy_body_enabled=True,
-        use_w3=True,
     )
     _interface(
         client,
@@ -349,7 +324,7 @@ def test_http_proxy_body_w3_cookie_status_and_binary_passthrough(proxy_env):
         headers={
             config.PROXY_KEY_HEADER: key["secret"],
             "Content-Type": "application/json",
-            "Cookie": "theme=dark; W3_SESSION=caller-must-not-win",
+            "Cookie": "theme=dark; W3_SESSION=caller-cookie",
             "Authorization": "Bearer business",
         },
         content=b'{"page":2,"password":"private"}',
@@ -359,10 +334,12 @@ def test_http_proxy_body_w3_cookie_status_and_binary_passthrough(proxy_env):
     headers = {name.lower(): value for name, value in echoed["headers"].items()}
     assert echoed["body"] == '{"page":2,"password":"private"}'
     assert headers["authorization"] == "Bearer business"
-    assert "W3_SESSION=platform-cookie" in headers["cookie"]
+    # The caller-supplied Cookie header is forwarded verbatim; no platform
+    # session cookie is injected now that the W3 login-injection feature is gone.
+    assert "W3_SESSION=caller-cookie" in headers["cookie"]
     assert "theme=dark" in headers["cookie"]
-    assert "caller-must-not-win" not in headers["cookie"]
-    assert "set-cookie" not in response.headers
+    # Upstream Set-Cookie is a legitimate non-W3 response header and is forwarded.
+    assert response.headers["set-cookie"] == "UPSTREAM_SECRET=must-not-leak"
 
     status = client.get(
         "/proxy/teapot",
@@ -390,11 +367,9 @@ def test_http_proxy_body_w3_cookie_status_and_binary_passthrough(proxy_env):
     snapshot = json.loads(snapshot_text)
     assert "private" in snapshot_text
     assert json.loads(snapshot["body_content"])["password"] == "private"
-    assert "platform-cookie" not in snapshot_text
     response_headers = json.loads(persisted_run["response_headers"])
     assert response_headers["Set-Cookie"] == "UPSTREAM_SECRET=must-not-leak"
     assert "private" in persisted_run["response_body"]
-    assert "platform-cookie" in persisted_run["response_body"]
 
 
 def test_editor_direct_call_uploads_multipart_and_downloads_binary(proxy_env):
@@ -573,7 +548,7 @@ def test_http_proxy_key_lifecycle_publication_validation_and_backup(proxy_env):
     )
     assert backup_response.status_code == 200
     payload = backup_response.json()
-    assert payload["version"] == 6
+    assert payload["version"] == 7
     assert "proxy_keys" not in payload
     assert key["secret"] not in backup_response.text
     exported = next(item for item in payload["interfaces"] if item["name"] == "Echo")
@@ -771,7 +746,6 @@ def test_http_proxy_real_tcp_end_to_end(proxy_env):
                 "url": proxy_env["upstream_url"] + "/echo",
                 "query_params": [{"key": "tenant", "value": "live"}],
                 "headers": [{"key": "X-Fixed", "value": "tcp"}],
-                "use_w3": False,
                 "http_enabled": True,
                 "proxy_slug": "tcp-e2e",
                 "proxy_query_keys": ["page"],

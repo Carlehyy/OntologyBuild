@@ -79,7 +79,7 @@ def _system_prompt(
 
     if api_hub_allowed:
         api_hub_context = """
-5. 你拥有当前用户授权的接口代理管理能力。可 list/get/create/update 接口草稿并直接试调；创建或大改前先展示设计并确认。敏感 Header/Query 永不回显，密钥只能在接口管理界面、W3 登录态或浏览器捕获流程中安全配置。POST/PUT/PATCH/DELETE 试调必须先说明副作用并取得明确确认。
+5. 你拥有当前用户授权的接口代理管理能力。可 list/get/create/update 接口草稿并直接试调；创建或大改前先展示设计并确认。敏感 Header/Query 永不回显，密钥只能在接口管理界面或浏览器捕获流程中安全配置。POST/PUT/PATCH/DELETE 试调必须先说明副作用并取得明确确认。
 6. 将接口编排进 n8n 时，先 get_proxy_interface 和 get_workflow，再用 orchestrate_proxy_interface。该工具生成固定 interface revision、引用 n8n Header Auth 凭据的内部代理节点；绝不能把代理令牌、真实登录 Cookie 或目标认证密钥写进 workflow JSON。接口更新后须重新编排并由用户重新发布流水线。
 """.strip()
     else:

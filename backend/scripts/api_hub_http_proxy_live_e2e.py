@@ -78,7 +78,6 @@ def main() -> int:
                         {"key": "take", "value": "2"},
                     ],
                     "headers": [{"key": "User-Agent", "value": AIHOT_USER_AGENT}],
-                    "use_w3": False,
                     "http_enabled": True,
                     "proxy_slug": "aihot-live-e2e",
                     "proxy_query_keys": ["mode", "take", "cursor"],

@@ -36,7 +36,6 @@ SECRET_FIELDS: dict[str, tuple[str, str]] = {
     "minio.access_key": ("minio", "access_key"),
     "minio.secret_key": ("minio", "secret_key"),
     "n8n.api_key": ("n8n", "api_key"),
-    "advanced.w3_password": ("advanced", "w3_password"),
     "advanced.api_hub_mcp_token": ("advanced", "api_hub_mcp_token"),
     "advanced.api_hub_system_mcp_token": (
         "advanced",
@@ -239,11 +238,6 @@ class LocalEnvStore:
                     "STEWARD_WORKSPACE_ROOT",
                     defaults.advanced.steward_workspace_root,
                 ),
-                w3_username=values.get("W3_USERNAME", ""),
-                w3_password=values.get("W3_PASSWORD", ""),
-                w3_login_url=values.get(
-                    "W3_LOGIN_URL", defaults.advanced.w3_login_url
-                ),
                 api_hub_mcp_token=values.get(
                     "API_HUB_MCP_TOKEN",
                     default_secret(defaults.advanced.api_hub_mcp_token),
@@ -309,9 +303,7 @@ class LocalEnvStore:
             if old_value:
                 payload[section][key] = old_value
                 continue
-            if field == "advanced.w3_password" and not payload["advanced"]["w3_username"]:
-                continue
-            if field in REQUIRED_SECRET_FIELDS or field == "advanced.w3_password":
+            if field in REQUIRED_SECRET_FIELDS:
                 missing.append(field)
 
         if missing:
@@ -516,14 +508,6 @@ def render_env(profile: ConfigProfile) -> str:
                     "API_HUB_MCP_ALLOWED_ORIGINS",
                     "http://localhost:*,http://127.0.0.1:*",
                 ),
-            ],
-        ),
-        (
-            "可选 W3 登录。留空账号时不会启用",
-            [
-                ("W3_USERNAME", profile.advanced.w3_username),
-                ("W3_PASSWORD", profile.advanced.w3_password),
-                ("W3_LOGIN_URL", profile.advanced.w3_login_url),
             ],
         ),
         (

@@ -3,7 +3,7 @@ import ssl
 import requests
 from requests.adapters import HTTPAdapter
 
-from app.api_hub import config, credential, executor, tls
+from app.api_hub import config, tls
 
 
 def test_explicit_ca_bundle_has_priority(monkeypatch):
@@ -64,30 +64,4 @@ def test_windows_w3_uses_system_context_with_strict_verification(monkeypatch):
     assert "ca_cert_dir" not in pool_kwargs
 
 
-def test_w3_session_opts_into_system_trust(monkeypatch):
-    observed = {}
 
-    def fake_configure(session, **kwargs):
-        observed.update(kwargs)
-        return session
-
-    monkeypatch.setattr(tls, "configure_session", fake_configure)
-
-    credential._new_session()
-
-    assert observed == {"use_system_trust": True}
-
-
-def test_regular_interface_session_does_not_opt_into_system_trust(monkeypatch):
-    observed = {}
-
-    def fake_configure(session, **kwargs):
-        observed.update(kwargs)
-        return session
-
-    monkeypatch.setattr(tls, "configure_session", fake_configure)
-
-    session = executor._session_for_request(False, {})
-
-    assert session is not None
-    assert observed == {}

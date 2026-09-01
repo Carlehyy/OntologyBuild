@@ -183,14 +183,14 @@ def main() -> int:
     with api_hub_db.get_conn() as conn:
         cursor = conn.execute(
             "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
-            "body_type, body_content, use_w3, mcp_enabled, open_enabled, parameter_schema, "
-            "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "body_type, body_content, mcp_enabled, open_enabled, parameter_schema, "
+            "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 "AI HOT live proxy E2E", "Temporary legal public API acceptance test",
                 "数据管家测试", "GET", AIHOT_URL,
                 json.dumps([{"key": "mode", "value": "all"}, {"key": "take", "value": "2"}]),
                 json.dumps([{"key": "User-Agent", "value": AIHOT_USER_AGENT}]),
-                "none", "", 0, 0, 0,
+                "none", "", 0, 0,
                 json.dumps([
                     {"name": "mode", "location": "query", "value_type": "string", "dynamic": True},
                     {"name": "take", "location": "query", "value_type": "integer", "dynamic": True},

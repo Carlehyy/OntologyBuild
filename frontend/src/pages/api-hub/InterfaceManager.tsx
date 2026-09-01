@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Braces, Check, ChevronRight, CirclePlus, Copy, Download, FileCode2, FileUp, Folder, Play,
-  Plus, Send, Trash2, X, Database, Globe2, GripVertical, KeyRound, Share2,
+  Plus, Send, Trash2, X, Database, Globe2, GripVertical, KeyRound, Share2, ShieldCheck,
   LoaderCircle,
 } from 'lucide-react'
 import { apiError, apiHub, emptyHubInterface, validateHttpUrl, type HubInterface, type KV, type McpContract, type RunResult } from '@/api/apiHub'
@@ -12,6 +12,7 @@ import {
   OpenInterfacesModal, ProxyKeysModal, SystemDataModal,
 } from './InterfaceDataModals'
 import { HttpPublicationModal } from './HttpPublicationModal'
+import SystemMcpModal from './SystemMcpModal'
 import { buildProxyCallExample } from './proxyCallExample'
 
 interface Props {
@@ -47,10 +48,6 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [callExampleDraft, setCallExampleDraft] = useState<HubInterface | null>(null)
-  const [callExampleCookie, setCallExampleCookie] = useState('')
-  const [includeLogin, setIncludeLogin] = useState(false)
-  const [cookieLoading, setCookieLoading] = useState(false)
-  const [cookieMessage, setCookieMessage] = useState('')
   const [callExampleCopyState, setCallExampleCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [draggingId, setDraggingId] = useState<number | null>(null)
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
@@ -64,6 +61,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   const [publicationCopied, setPublicationCopied] = useState(false)
   const [proxyKeys, setProxyKeys] = useState(false)
   const [systemData, setSystemData] = useState(false)
+  const [systemMcpOpen, setSystemMcpOpen] = useState(false)
   const [extraGroups, setExtraGroups] = useState<string[]>([])
   const [newGroupOpen, setNewGroupOpen] = useState(false)
   const [newGroupName, setNewGroupName] = useState('')
@@ -120,8 +118,8 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     result && resultFingerprint !== requestFingerprint(draft, selectedFiles)
   )
   const callExample = useMemo(
-    () => callExampleDraft ? buildCallExample(callExampleDraft, includeLogin ? callExampleCookie : '') : '',
-    [callExampleCookie, callExampleDraft, includeLogin],
+    () => callExampleDraft ? buildCallExample(callExampleDraft) : '',
+    [callExampleDraft],
   )
 
   const selectNow = (item: HubInterface) => {
@@ -273,47 +271,10 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   const showCallExample = async () => {
     const validationError = validateHttpUrl(draft.url)
     if (validationError) { onError(validationError); return }
-    buildCallExample(draft, '')
+    buildCallExample(draft)
     setCallExampleDraft(structuredClone(draft))
-    setCallExampleCookie('')
-    setIncludeLogin(false)
-    setCookieMessage('')
     setCallExampleCopyState('idle')
 
-    if (!draft.use_w3) return
-    setCookieLoading(true)
-    try {
-      const value = await apiHub.credentialCookieHeader()
-      setCallExampleCookie(value.cookie || '')
-      if (!value.cookie) {
-        setCookieMessage('当前没有可用的 W3 登录态，请先在“授权配置”中刷新登录。')
-      }
-    } catch (error) {
-      setCookieMessage(apiError(error))
-    } finally {
-      setCookieLoading(false)
-    }
-  }
-
-  const toggleExampleLogin = async (checked: boolean) => {
-    setCallExampleCopyState('idle')
-    if (!checked) { setIncludeLogin(false); return }
-    if (callExampleCookie) { setIncludeLogin(true); return }
-    setCookieLoading(true)
-    setCookieMessage('')
-    try {
-      const value = await apiHub.credentialCookieHeader()
-      if (!value.cookie) {
-        setIncludeLogin(false)
-        setCookieMessage('当前没有可用的 W3 登录态，请先在“授权配置”中刷新登录。')
-        return
-      }
-      setCallExampleCookie(value.cookie)
-      setIncludeLogin(true)
-    } catch (error) {
-      setIncludeLogin(false)
-      setCookieMessage(apiError(error))
-    } finally { setCookieLoading(false) }
   }
 
   const copyCallExample = async () => {
@@ -483,10 +444,11 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
             </div>
           ))}
         </div>
-        <div className="grid shrink-0 grid-cols-3 gap-2 border-t border-[var(--color-border)] bg-white/60 px-3 py-[1.125rem]">
+        <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-[var(--color-border)] bg-white/60 px-3 py-[1.125rem] lg:grid-cols-4">
           <Button variant="outline" size="sm" onClick={() => setOpenInterfaces(true)}><Globe2 size={13} />MCP 开放</Button>
           <Button variant="outline" size="sm" onClick={() => setProxyKeys(true)}><KeyRound size={13} />HTTP 调用方</Button>
           <Button variant="outline" size="sm" onClick={() => setSystemData(true)}><Database size={13} />系统数据</Button>
+          <Button variant="outline" size="sm" onClick={() => setSystemMcpOpen(true)}><ShieldCheck size={13} />系统 MCP</Button>
         </div>
       </aside>
 
@@ -538,7 +500,6 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
             ))}
           </div>
           <div className="flex items-center gap-4">
-            <Toggle label="注入 W3 登录态" value={draft.use_w3} onChange={value => patchDraft('use_w3', value)} />
             <Toggle label="MCP 开放" value={draft.open_enabled} onChange={value => patchDraft('open_enabled', value)} />
             {draft.id && <button type="button" onClick={() => void showMcpContract()} className="flex items-center gap-1 rounded px-1.5 py-1 text-[11px] font-medium text-[var(--color-nav-bg)] transition-colors hover:bg-[var(--color-nav-light)]" title="查看并复制 MCP 的实际参数契约"><Braces size={13} />MCP 调用示例</button>}
           </div>
@@ -551,7 +512,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           {editorTab === 'description' && <textarea value={draft.description} onChange={event => patchDraft('description', event.target.value)} className="h-28 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder="说明接口用途、可传入的业务参数和返回结果；MCP 中的 Agent 将据此理解何时调用此接口。" />}
         </div>
 
-        <ResponsePanel result={result} stale={resultStale} loading={running} useW3={draft.use_w3} />
+        <ResponsePanel result={result} stale={resultStale} loading={running} />
       </section>
 
       <ConfirmModal open={deleteOpen} onClose={() => setDeleteOpen(false)} onConfirm={remove} loading={saving} variant="danger" title={`删除“${draft.name}”？`} description="接口配置及其全部调用历史都会被删除，此操作不可撤销。" confirmText="删除接口" />
@@ -592,16 +553,6 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
             此命令直连真实上游地址，仅用于管理员调试；对外系统请使用“HTTP 发布”生成的调用包。CMD / PowerShell / bash 通用。
           </div>
           <pre aria-label="cURL 命令" className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-[10px] border border-slate-200 bg-slate-50 px-4 py-3.5 font-mono text-[12.5px] leading-[1.7] text-slate-700">{callExample}</pre>
-          {callExampleDraft?.use_w3 && (
-            <label className={`flex cursor-pointer items-start gap-2.5 rounded-lg border px-3.5 py-2.5 text-xs leading-5 transition-colors ${includeLogin ? 'border-teal-200 bg-teal-50/70' : 'border-slate-200 bg-white hover:border-teal-200 hover:bg-teal-50/50'}`}>
-              <input type="checkbox" checked={includeLogin} disabled={cookieLoading || !callExampleCookie} onChange={event => void toggleExampleLogin(event.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-teal-600" />
-              <span className="min-w-0 text-slate-600">
-                包含当前登录 Cookie（用于在 Postman 复用登录态，<b className="font-semibold text-amber-600">会过期</b>）
-              </span>
-              {cookieLoading && <LoaderCircle size={15} aria-label="正在读取登录态" className="ml-auto mt-0.5 shrink-0 animate-spin text-teal-600" />}
-            </label>
-          )}
-          {cookieMessage && <div role="status" className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">{cookieMessage}</div>}
           <span className="sr-only" role="status" aria-live="polite">
             {callExampleCopyState === 'copied' ? 'cURL 命令已复制' : callExampleCopyState === 'failed' ? '复制失败，请重试' : ''}
           </span>
@@ -620,7 +571,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
         ) : mcpContract ? (
           <div className="space-y-4">
             <div className={`rounded-lg border px-3.5 py-3 text-xs leading-5 ${mcpContract.open_enabled ? 'border-emerald-100 bg-emerald-50/70 text-emerald-800' : 'border-amber-100 bg-amber-50 text-amber-800'}`}>
-              {mcpContract.open_enabled ? '此接口已向 MCP 开放。' : '此接口尚未向 MCP 开放；可先核对下方映射，再打开「MCP 开放」。'} 固定默认值、认证 Header 和 W3 登录态均由平台保管，不会出现在此示例中。
+              {mcpContract.open_enabled ? '此接口已向 MCP 开放。' : '此接口尚未向 MCP 开放；可先核对下方映射，再打开「MCP 开放」。'} 固定默认值和认证 Header 均由平台保管，不会出现在此示例中。
             </div>
             <section className="overflow-hidden rounded-lg border border-[var(--color-border)]">
               <div className="border-b border-[var(--color-border)] bg-[var(--color-bg-base)] px-3.5 py-2.5 text-xs font-semibold">可由 Agent 传入的参数</div>
@@ -638,6 +589,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
       <HttpPublicationModal open={Boolean(publicationTarget)} onClose={() => setPublicationTarget(null)} item={publicationTarget} reload={reloadPublication} onError={onError} />
       <ProxyKeysModal open={proxyKeys} onClose={() => setProxyKeys(false)} interfaces={interfaces} onError={onError} />
       <SystemDataModal open={systemData} onClose={() => setSystemData(false)} interfaces={interfaces} reload={reload} onError={onError} />
+      <SystemMcpModal open={systemMcpOpen} onClose={() => setSystemMcpOpen(false)} onError={onError} />
     </div>
   )
 }
@@ -758,7 +710,7 @@ function BodyEditor({
   )
 }
 
-function ResponsePanel({ result, stale, loading, useW3 }: { result: RunResult | null; stale: boolean; loading: boolean; useW3: boolean }) {
+function ResponsePanel({ result, stale, loading }: { result: RunResult | null; stale: boolean; loading: boolean }) {
   const response = useMemo(() => formatResponseBody(result?.response_body ?? ''), [result?.response_body])
   const copyText = response.text || result?.error || ''
   const [copyFeedback, setCopyFeedback] = useState<{ text: string; status: 'copied' | 'failed' } | null>(null)
@@ -824,7 +776,7 @@ function ResponsePanel({ result, stale, loading, useW3 }: { result: RunResult | 
       </div>
 
       {loading ? (
-        <div className="flex flex-1 flex-col items-center justify-center px-8 text-center"><div className="relative mb-5 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50"><span className="absolute inset-0 animate-ping rounded-full bg-emerald-100 opacity-70" /><LoaderCircle size={22} className="relative animate-spin text-emerald-600" /></div><div className="text-sm font-semibold text-slate-700">正在调用接口</div><div className="mt-1.5 text-xs text-slate-500">{useW3 ? '正在注入 W3 登录态并等待接口响应…' : '正在连接目标服务并等待响应…'}</div><div className="mt-5 w-full max-w-sm space-y-2"><span className="block h-2 animate-pulse rounded bg-slate-200" /><span className="block h-2 w-4/5 animate-pulse rounded bg-slate-100" /><span className="block h-2 w-3/5 animate-pulse rounded bg-slate-100" /></div></div>
+        <div className="flex flex-1 flex-col items-center justify-center px-8 text-center"><div className="relative mb-5 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50"><span className="absolute inset-0 animate-ping rounded-full bg-emerald-100 opacity-70" /><LoaderCircle size={22} className="relative animate-spin text-emerald-600" /></div><div className="text-sm font-semibold text-slate-700">正在调用接口</div><div className="mt-1.5 text-xs text-slate-500">正在连接目标服务并等待响应…</div><div className="mt-5 w-full max-w-sm space-y-2"><span className="block h-2 animate-pulse rounded bg-slate-200" /><span className="block h-2 w-4/5 animate-pulse rounded bg-slate-100" /><span className="block h-2 w-3/5 animate-pulse rounded bg-slate-100" /></div></div>
       ) : !result ? (
         <div className="flex flex-1 items-center justify-center text-xs text-[var(--color-text-tertiary)]"><Send size={18} className="mr-2 opacity-50" />点击“调用”查看响应</div>
       ) : (
@@ -899,7 +851,6 @@ function requestFingerprint(item: HubInterface, selectedFiles: File[][] = []) {
       type: file.type,
       lastModified: file.lastModified,
     }))),
-    use_w3: item.use_w3,
   })
 }
 
@@ -930,7 +881,7 @@ function formatFileSize(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-function buildCallExample(draft: HubInterface, cookie: string) {
+function buildCallExample(draft: HubInterface) {
   const url = new URL(draft.url)
   draft.query_params.filter(item => item.key.trim()).forEach(item => url.searchParams.append(item.key.trim(), item.value))
   const method = methods.includes(draft.method.toUpperCase()) ? draft.method.toUpperCase() : 'GET'
@@ -955,7 +906,6 @@ function buildCallExample(draft: HubInterface, cookie: string) {
 
   const pieces = [`curl -X ${method} ${shellQuote(url.toString())}`]
   headers.forEach(item => pieces.push(`  -H ${shellQuote(`${item.key}: ${item.value}`)}`))
-  if (cookie) pieces.push(`  -b ${shellQuote(cookie)}`)
   if (draft.body_type === 'multipart') {
     draft.body_content.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#') && line.includes('=')).forEach(line => pieces.push(`  -F ${shellQuote(line)}`))
     draft.file_fields.filter(field => field.key.trim()).forEach(field => pieces.push(`  -F ${shellQuote(`${field.key.trim()}=@/path/to/file`)}`))

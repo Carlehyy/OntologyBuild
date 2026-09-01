@@ -1,7 +1,7 @@
 """统一接口执行器。
 
-网页调试、MCP、n8n 内部代理与普通 HTTP 发布都走这里，确保 W3 登录态注入、
-透明重登、动态参数合并和调用审计的行为一致。
+网页调试、MCP、n8n 内部代理与普通 HTTP 发布都走这里，确保动态参数合并
+和调用审计的行为一致。
 """
 from __future__ import annotations
 
@@ -13,16 +13,14 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from http.cookies import SimpleCookie
 from typing import Any
 from urllib.parse import quote
 
 import requests
 
-from . import config, credential, db, mcp_bridge, tls
+from . import config, db, mcp_bridge, tls
 from .outbound_security import OutboundTargetError, request_with_safe_redirects
 
-_LOGIN_HOST = "login.huawei.com"
 _MAX_BODY_CHARS = 1_000_000
 _MAX_SNAPSHOT_BODY_CHARS = 100_000
 _UNSET = object()
@@ -68,25 +66,6 @@ class RequestOverrides:
     proxy_key_id: int | None = None
     proxy_key_name: str | None = None
     source_ip: str | None = None
-
-
-def _looks_expired(resp: requests.Response) -> bool:
-    if resp.status_code in (401, 403):
-        return True
-    final = resp.url or ""
-    if _LOGIN_HOST in final:
-        return True
-    content_type = (resp.headers.get("Content-Type") or "").lower()
-    if "html" in content_type:
-        try:
-            head = resp.text[:4000].lower()
-        except Exception:  # noqa: BLE001
-            head = ""
-        if _LOGIN_HOST in head and (
-            "loginaccount" in head or "login1" in head or "hwidcenter" in head
-        ):
-            return True
-    return False
 
 
 def _parse_form(text: str) -> list[tuple[str, str]]:
@@ -169,15 +148,6 @@ def _set_header(headers: dict[str, str], name: str, value: str) -> None:
     headers[name] = value
 
 
-def _caller_cookies(cookie_header: str) -> dict[str, str]:
-    parsed = SimpleCookie()
-    try:
-        parsed.load(cookie_header)
-    except Exception:  # noqa: BLE001
-        return {}
-    return {key: morsel.value for key, morsel in parsed.items()}
-
-
 def _snapshot_body(value: Any) -> Any:
     """保留调用历史中的原始请求体，仅限制快照大小。"""
     if value is _UNSET:
@@ -211,9 +181,6 @@ def _snapshot_headers(headers: dict[str, str]) -> list[dict[str, str]]:
 def _build_kwargs(
     iface: dict,
     overrides: RequestOverrides,
-    *,
-    use_w3: bool,
-    session: requests.Session,
 ) -> tuple[dict, dict]:
     resolved_url = _resolve_url(iface.get("url") or "", overrides.path_params)
     query = _merge_query(iface.get("query_params", []), overrides.query_params)
@@ -292,24 +259,6 @@ def _build_kwargs(
             kwargs["data"] = body.encode("utf-8")
             body_for_snapshot = body
 
-    # W3 模式下可透传其它业务 Cookie，但同名登录 Cookie 永远以平台会话为准。
-    cookie_header = None
-    for key, value in list(headers.items()):
-        if key.lower() == "cookie":
-            cookie_header = value
-            if use_w3:
-                headers.pop(key)
-            break
-    if use_w3 and cookie_header:
-        platform_cookie_names = set(session.cookies.get_dict())
-        extra_cookies = {
-            key: value
-            for key, value in _caller_cookies(cookie_header).items()
-            if key not in platform_cookie_names
-        }
-        if extra_cookies:
-            kwargs["cookies"] = extra_cookies
-
     kwargs["headers"] = headers or None
     snapshot = {
         "method": iface.get("method"),
@@ -321,7 +270,6 @@ def _build_kwargs(
         "headers": _snapshot_headers(headers),
         "body_type": iface.get("body_type"),
         "body_content": _snapshot_body(body_for_snapshot),
-        "use_w3": iface.get("use_w3"),
         "source": overrides.source,
         "proxy_key_name": overrides.proxy_key_name,
         "source_ip": overrides.source_ip,
@@ -369,33 +317,6 @@ def _blank_result() -> dict:
     }
 
 
-def _session_for_request(use_w3: bool, result: dict) -> requests.Session | None:
-    if not use_w3:
-        session = requests.Session()
-        tls.configure_session(session)
-        return session
-
-    session = credential.build_session_from_saved()
-    if session is None or credential.saved_is_expired():
-        had_session = session is not None
-        status = credential.refresh(force=False)
-        if status.get("last_result") != "success":
-            result["error"] = (
-                "该接口需要 W3 登录态，自动登录失败："
-                f"{status.get('message') or '未知原因'}"
-            )
-            result["error_type"] = "w3_login"
-            return None
-        session = credential.build_session_from_saved()
-        if session is None:
-            result["error"] = "该接口需要 W3 登录态，但刷新后仍未能建立会话"
-            result["error_type"] = "w3_login"
-            return None
-        if had_session:
-            result["relogin"] = True
-    return session
-
-
 def run_interface(
     iface: dict,
     overrides: RequestOverrides | None = None,
@@ -407,7 +328,6 @@ def run_interface(
     """执行接口；旧的 query_override/body_override 参数继续兼容 n8n 调用。"""
     method = (iface.get("method") or "GET").upper()
     url = (iface.get("url") or "").strip()
-    use_w3 = bool(iface.get("use_w3", 1))
     if overrides is None:
         overrides = RequestOverrides(
             query_params=list((query_override or {}).items()) if query_override else None,
@@ -439,19 +359,11 @@ def run_interface(
             _save_run(iface, result, overrides, snapshot)
             return result
 
-        # Take the gate before W3 preparation as well as before the upstream
-        # request.  ``credential.refresh`` is serialized already, but without
-        # this boundary a burst of expired W3 calls could still consume every
-        # worker thread while waiting for that refresh lock.
-        session = _session_for_request(use_w3, result)
-        if session is None:
-            _save_run(iface, result, overrides, None)
-            return result
+        session = requests.Session()
+        tls.configure_session(session)
 
         try:
-            kwargs, snapshot = _build_kwargs(
-                iface, overrides, use_w3=use_w3, session=session
-            )
+            kwargs, snapshot = _build_kwargs(iface, overrides)
             request_url = snapshot["url"]
         except ValueError as exc:
             result["error"] = str(exc)
@@ -459,41 +371,12 @@ def run_interface(
             _save_run(iface, result, overrides, None)
             return result
 
-        # W3 has its narrow service/login exception, while explicitly configured
-        # deployment-wide intranet targets must continue to work for W3-backed
-        # interfaces too.  Neither setting weakens certificate verification.
-        trusted_hosts = config.OUTBOUND_TRUSTED_HOSTS + (
-            config.W3_OUTBOUND_TRUSTED_HOSTS if use_w3 else ()
-        )
+        trusted_hosts = config.OUTBOUND_TRUSTED_HOSTS
         start = time.perf_counter()
         try:
             resp = request_with_safe_redirects(
                 session, method, request_url, trusted_hosts=trusted_hosts, **kwargs
             )
-            if use_w3 and _looks_expired(resp):
-                status = credential.refresh()
-                if status.get("last_result") == "success":
-                    session2 = credential.build_session_from_saved()
-                    if session2 is not None:
-                        kwargs, snapshot = _build_kwargs(
-                            iface, overrides, use_w3=use_w3, session=session2
-                        )
-                        request_url = snapshot["url"]
-                        resp = request_with_safe_redirects(
-                            session2, method, request_url,
-                            trusted_hosts=trusted_hosts, **kwargs
-                        )
-                        result["relogin"] = True
-                    else:
-                        result["error"] = "登录态疑似过期，自动重登后仍未能建立会话"
-                        result["error_type"] = "w3_login"
-                else:
-                    result["error"] = (
-                        "登录态疑似过期，自动重登失败："
-                        f"{status.get('message') or '未知原因'}"
-                    )
-                    result["error_type"] = "w3_login"
-
             result["status_code"] = resp.status_code
             result["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
             result["response_headers"] = dict(resp.headers)
@@ -553,7 +436,6 @@ def _save_run(
             ),
             "body_type": iface.get("body_type"),
             "body_content": _snapshot_body(iface.get("body_content", "")),
-            "use_w3": iface.get("use_w3"),
             "source": overrides.source,
             "proxy_key_name": overrides.proxy_key_name,
             "source_ip": overrides.source_ip,
@@ -604,9 +486,3 @@ def _save_run(
         result.pop("run_id", None)
         _LOG.warning("API-Hub audit write skipped because SQLite stayed busy")
         return
-
-    if iface.get("use_w3"):
-        try:
-            db.record_credential_usage(iface, result, now)
-        except sqlite3.OperationalError:
-            _LOG.warning("API-Hub W3 usage audit skipped because SQLite stayed busy")

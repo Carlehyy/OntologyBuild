@@ -25,8 +25,6 @@ async def application_lifespan(
     *,
     seed_database: Callable[[], None],
 ) -> AsyncIterator[None]:
-    api_hub_scheduler = None
-    api_hub_scheduler_attempted = False
     sentinel_attempted = False
     data_scheduler = None
     data_scheduler_attempted = False
@@ -91,15 +89,9 @@ async def application_lifespan(
         # External state is now validated. Only after that barrier may the
         # process create background workers which would otherwise leak when a
         # later startup check fails.
-        from app.api_hub import (
-            db as api_hub_db,
-            scheduler as current_api_hub_scheduler,
-        )
+        from app.api_hub import db as api_hub_db
 
-        api_hub_scheduler = current_api_hub_scheduler
         api_hub_db.init_db()
-        api_hub_scheduler_attempted = True
-        api_hub_scheduler.start()
 
         # 哨兵引擎：注册 CDC(监听对象改动→变化驱动) + 启动定期扫描 worker
         try:
@@ -234,8 +226,3 @@ async def application_lifespan(
                 stop_cdc_worker()
             except Exception:  # noqa: BLE001
                 _main_logger.exception("Sentinel cleanup failed")
-        if api_hub_scheduler_attempted and api_hub_scheduler is not None:
-            try:
-                api_hub_scheduler.shutdown()
-            except Exception:  # noqa: BLE001
-                _main_logger.exception("API Hub scheduler cleanup failed")

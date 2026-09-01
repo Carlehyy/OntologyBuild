@@ -39,7 +39,6 @@ export interface HubInterface {
   body_type: 'none' | 'json' | 'form' | 'multipart' | 'raw'
   body_content: string
   file_fields: FileField[]
-  use_w3: boolean
   mcp_enabled: boolean
   open_enabled: boolean
   http_enabled: boolean
@@ -89,53 +88,6 @@ export interface RunDetail extends RunSummary {
   request_snapshot: Record<string, unknown> | null
   response_headers: Record<string, string> | null
   response_body: string
-}
-
-export interface CredentialStatus {
-  configured: boolean
-  has_session: boolean
-  expired: boolean
-  expires_at: string | null
-  acquired_at: string | null
-  last_result: 'success' | 'failed' | null
-  message: string
-  refreshed_at: string | null
-  cron: string
-  next_run: string | null
-  username: string
-  credential_source: 'online' | 'environment'
-}
-
-export interface CredentialConfig {
-  username: string
-  password_configured: boolean
-  login_url: string
-  source: 'online' | 'environment'
-}
-
-export interface CredentialCookieHeader {
-  cookie: string
-  count: number
-}
-
-export interface CredentialUsageRecord {
-  id: number
-  interface_id: number | null
-  interface_name: string
-  ok: boolean
-  relogin: boolean
-  status_code: number | null
-  error: string | null
-  created_at: string
-}
-
-export interface CredentialUsage {
-  total: number
-  success: number
-  failed: number
-  relogin: number
-  success_rate: number
-  recent: CredentialUsageRecord[]
 }
 
 export interface RunOverview {
@@ -270,13 +222,6 @@ export const apiHub = {
   runOverview: (timezoneOffsetMinutes = new Date().getTimezoneOffset()) =>
     data<RunOverview>(http.get('/runs/overview', { params: { timezone_offset_minutes: timezoneOffsetMinutes } })),
   getRun: (interfaceId: number, runId: number) => data<RunDetail>(http.get(`/interfaces/${interfaceId}/runs/${runId}`)),
-  credentialStatus: () => data<CredentialStatus>(http.get('/credential/status')),
-  credentialConfig: () => data<CredentialConfig>(http.get('/credential/config')),
-  credentialCookieHeader: () => data<CredentialCookieHeader>(http.get('/credential/cookie-header')),
-  updateCredentialConfig: (body: { username: string; password?: string; login_url: string; clear_password?: boolean }) => data<CredentialConfig>(http.put('/credential/config', body)),
-  credentialUsage: (limit = 60) => data<CredentialUsage>(http.get('/credential/usage', { params: { limit } })),
-  refreshCredential: () => data<CredentialStatus>(http.post('/credential/refresh')),
-  setSchedule: (cron: string) => data<{ cron: string; next_run: string | null }>(http.put('/credential/schedule', { cron })),
   mcpInfo: () => data<McpInfo>(http.get('/mcp/info')),
   systemMcpInfo: () => data<McpInfo>(http.get('/mcp/system/info')),
   proxyInfo: () => data<ProxyInfo>(http.get('/proxy/info')),
@@ -303,7 +248,6 @@ export function emptyHubInterface(): HubInterface {
     body_type: 'none',
     body_content: '',
     file_fields: [],
-    use_w3: false,
     mcp_enabled: false,
     open_enabled: false,
     http_enabled: false,

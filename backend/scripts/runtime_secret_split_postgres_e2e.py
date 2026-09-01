@@ -18,7 +18,6 @@ import json
 import os
 import re
 import shutil
-import sqlite3
 import stat
 import subprocess
 import sys
@@ -38,7 +37,7 @@ REPO_ROOT = BACKEND_DIR.parent
 # Add the backend package root explicitly before the late application imports.
 sys.path.insert(0, str(BACKEND_DIR))
 POSTGRES_LOCATION_COUNT = 9
-SQLITE_LOCATION_COUNT = 1
+SQLITE_LOCATION_COUNT = 0
 TOTAL_LOCATION_COUNT = POSTGRES_LOCATION_COUNT + SQLITE_LOCATION_COUNT
 SYNTHETIC_MANIFEST_CREDENTIALS = {
     "synthetic-postgres-password",
@@ -57,7 +56,6 @@ REPORT_FIELDS = {
     "sqlite_locations",
     "ciphertext_unchanged",
     "decrypt_roundtrips",
-    "api_hub_runtime_credentials",
     "deploy_secret_split",
     "synthetic_only",
 }
@@ -67,7 +65,6 @@ REPORT_STAGES = {
     "fixture_insert",
     "deploy_secret_split",
     "postgres_verify",
-    "sqlite_verify",
     "complete",
     "self_test",
 }
@@ -84,7 +81,6 @@ def _report_template() -> dict[str, Any]:
         "sqlite_locations": SQLITE_LOCATION_COUNT,
         "ciphertext_unchanged": 0,
         "decrypt_roundtrips": 0,
-        "api_hub_runtime_credentials": False,
         "deploy_secret_split": False,
         "synthetic_only": True,
     }
@@ -114,7 +110,6 @@ def _assert_sanitized_report(
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError(f"invalid report count: {field}")
     for field in (
-        "api_hub_runtime_credentials",
         "deploy_secret_split",
         "synthetic_only",
     ):
@@ -278,7 +273,6 @@ def _legacy_fixture_values() -> tuple[dict[str, str], dict[str, str], str]:
         "v2_pipeline_file_assets.share_token_encrypted": (
             "synthetic-pipeline-share-token"
         ),
-        "api_hub.settings.w3_password_encrypted": "synthetic-w3-password",
     }
     if len(plaintexts) != TOTAL_LOCATION_COUNT:
         raise AssertionError("persistent ciphertext inventory changed")
@@ -416,25 +410,6 @@ def _run(report_path: Path) -> None:
 
             api_hub_dir = temp_root / "api-hub-data"
             api_hub_dir.mkdir()
-            sqlite_path = api_hub_dir / "app.db"
-            with sqlite3.connect(sqlite_path) as sqlite_db:
-                sqlite_db.execute(
-                    "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)"
-                )
-                sqlite_db.executemany(
-                    "INSERT INTO settings(key,value) VALUES (?,?)",
-                    [
-                        ("w3_config_mode", "online"),
-                        ("w3_username", "synthetic-user"),
-                        (
-                            "w3_password_encrypted",
-                            ciphertexts[
-                                "api_hub.settings.w3_password_encrypted"
-                            ],
-                        ),
-                        ("w3_login_url", "https://synthetic-login.invalid"),
-                    ],
-                )
 
             stage = "deploy_secret_split"
             report["stage"] = stage
@@ -499,32 +474,8 @@ def _run(report_path: Path) -> None:
                     raise AssertionError("PostgreSQL decrypt failed")
                 round_trips += 1
 
-            stage = "sqlite_verify"
-            report["stage"] = stage
-            with sqlite3.connect(sqlite_path) as sqlite_db:
-                stored = sqlite_db.execute(
-                    "SELECT value FROM settings "
-                    "WHERE key='w3_password_encrypted'"
-                ).fetchone()[0]
-            sqlite_location = "api_hub.settings.w3_password_encrypted"
-            if stored != ciphertexts[sqlite_location]:
-                raise AssertionError("API Hub ciphertext changed")
-            unchanged += 1
-            if decrypt(stored) != plaintexts[sqlite_location]:
-                raise AssertionError("API Hub decrypt failed")
-            round_trips += 1
-            from app.api_hub.credential import runtime_credentials
-
-            username, password, login_url = runtime_credentials()
-            if (username, password, login_url) != (
-                "synthetic-user",
-                "synthetic-w3-password",
-                "https://synthetic-login.invalid",
-            ):
-                raise AssertionError("API Hub runtime credential read failed")
             if unchanged != TOTAL_LOCATION_COUNT or round_trips != TOTAL_LOCATION_COUNT:
                 raise AssertionError("persistent ciphertext coverage is incomplete")
-            report["api_hub_runtime_credentials"] = True
             report["ciphertext_unchanged"] = unchanged
             report["decrypt_roundtrips"] = round_trips
 

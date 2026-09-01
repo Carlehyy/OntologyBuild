@@ -155,7 +155,6 @@ def _row_to_dict(row) -> dict:
         "body_type": row["body_type"],
         "body_content": row["body_content"],
         "file_fields": _load_json_list(row["file_fields"]),
-        "use_w3": bool(row["use_w3"]),
         # ``mcp_enabled`` is retained only for backup compatibility. The one
         # authoritative MCP state is ``open_enabled`` so the UI has exactly
         # two publication concepts: MCP and HTTP.
@@ -204,10 +203,10 @@ def create_interface(body: InterfaceIn):
         cursor = conn.execute(
             "INSERT INTO interfaces(name, description, group_name, method, "
             "url, query_params, headers, body_type, body_content, file_fields, "
-            "use_w3, mcp_enabled, open_enabled, http_enabled, proxy_slug, "
+            "mcp_enabled, open_enabled, http_enabled, proxy_slug, "
             "proxy_query_keys, proxy_header_keys, proxy_body_enabled, "
             "proxy_body_keys, parameter_schema, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 body.name,
                 body.description,
@@ -222,7 +221,6 @@ def create_interface(body: InterfaceIn):
                     [item.model_dump() for item in body.file_fields],
                     ensure_ascii=False,
                 ),
-                1 if body.use_w3 else 0,
                 1 if body.open_enabled else 0,
                 1 if body.open_enabled else 0,
                 1 if body.http_enabled else 0,
@@ -262,7 +260,7 @@ def update_interface(iid: int, body: InterfaceIn):
         conn.execute(
             "UPDATE interfaces SET name=?, description=?, group_name=?, "
             "method=?, url=?, query_params=?, headers=?, body_type=?, "
-            "body_content=?, file_fields=?, use_w3=?, mcp_enabled=?, "
+            "body_content=?, file_fields=?, mcp_enabled=?, "
             "open_enabled=?, http_enabled=?, proxy_slug=?, "
             "proxy_query_keys=?, proxy_header_keys=?, proxy_body_enabled=?, "
             "proxy_body_keys=?, parameter_schema=?, "
@@ -281,7 +279,6 @@ def update_interface(iid: int, body: InterfaceIn):
                     [item.model_dump() for item in body.file_fields],
                     ensure_ascii=False,
                 ),
-                1 if body.use_w3 else 0,
                 1 if body.open_enabled else 0,
                 1 if body.open_enabled else 0,
                 1 if body.http_enabled else 0,

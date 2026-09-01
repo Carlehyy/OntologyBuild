@@ -125,7 +125,6 @@ def run_bridge_interface(
         "headers": [],
         "body_type": iface.get("body_type"),
         "body_content": _request_body(iface, overrides)[:4000],
-        "use_w3": iface.get("use_w3"),
         "source": getattr(overrides, "source", None),
         "proxy_key_name": getattr(overrides, "proxy_key_name", None),
         "source_ip": getattr(overrides, "source_ip", None),

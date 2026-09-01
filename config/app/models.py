@@ -178,9 +178,6 @@ class AdvancedConfig(StrictModel):
     api_hub_data_dir: str = "./runtime/api-hub"
     super_assistant_skill_root: str = "./runtime/super-assistant/skills"
     steward_workspace_root: str = "./runtime/steward-sessions"
-    w3_username: str = Field(default="", max_length=300)
-    w3_password: str = Field(default="", max_length=1000)
-    w3_login_url: str = "https://login.huawei.com/login1/rest/hwidcenter/login"
     api_hub_mcp_token: str = Field(default="", max_length=2000)
     api_hub_system_mcp_token: str = Field(default="", max_length=2000)
     api_hub_internal_proxy_token: str = Field(default="", max_length=2000)
@@ -195,7 +192,6 @@ class AdvancedConfig(StrictModel):
             ("数据管家工作区", self.steward_workspace_root),
         ):
             _validate_relative_path(raw, label)
-        _validate_http_origin(self.w3_login_url, "W3 登录地址", allow_path=True)
         return self
 
 

@@ -114,7 +114,7 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
       open={open}
       onClose={onClose}
       title={`HTTP 发布 · ${current.name}`}
-      description="勾选调用方可传入的业务参数后，平台生成可直接复制的调用包；固定值、认证信息和 W3 登录态继续由平台保管。"
+      description="勾选调用方可传入的业务参数后，平台生成可直接复制的调用包；固定值和认证信息继续由平台保管。"
       size="3xl"
       headerIcon={<Share2 size={19} className="text-emerald-700" />}
       footer={callPackage ? (
@@ -174,7 +174,7 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
 
             <section className="flex items-start gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3">
               <ShieldCheck size={18} className="mt-0.5 shrink-0 text-emerald-700" />
-              <div><div className="text-xs font-semibold text-emerald-900">{current.use_w3 ? '转发时将注入 W3 登录态' : '转发时不注入 W3 登录态'}</div><p className="mt-1 text-[10px] leading-4 text-emerald-800">{current.use_w3 ? '登录 Cookie 由平台维护，不会作为转发参数暴露；过期时仍会自动重登。' : '如目标是需要 W3 认证的内网接口，请回到接口详情开启“注入 W3 登录态”并保存。'}</p></div>
+              <div><div className="text-xs font-semibold text-emerald-900">转发时不注入登录态</div><p className="mt-1 text-[10px] leading-4 text-emerald-800">如目标需要登录态认证，请改为在接口详情中配置认证 Header 或查询参数并保存。</p></div>
             </section>
           </>
         )}
@@ -182,7 +182,7 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
         {current.http_enabled && !callPackage && (
           <section className="rounded-xl border border-[var(--color-border)] bg-white p-4">
             <div className="flex items-center justify-between gap-4">
-              <div><div className="text-xs font-semibold text-slate-800">当前调用地址</div><div className="mt-1 text-[11px] text-slate-500">调用方无需知道真实接口和平台登录态。</div></div>
+              <div><div className="text-xs font-semibold text-slate-800">当前调用地址</div><div className="mt-1 text-[11px] text-slate-500">调用方无需知道真实接口。</div></div>
               <button type="button" onClick={() => void copy(publicUrl, 'url')} className="rounded-md px-2 py-1 text-xs font-medium text-teal-700 hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">{copied === 'url' ? '已复制' : '复制地址'}</button>
             </div>
             <code className="mt-3 block break-all rounded-lg bg-slate-950 px-3 py-2.5 text-[11px] text-slate-100">{publicUrl}</code>

@@ -16,7 +16,6 @@ CREATE TABLE IF NOT EXISTS interfaces (
     body_type     TEXT    NOT NULL DEFAULT 'none', -- none|json|form|multipart|raw
     body_content  TEXT    NOT NULL DEFAULT '',
     file_fields   TEXT    NOT NULL DEFAULT '[]',   -- JSON: multipart file field definitions
-    use_w3        INTEGER NOT NULL DEFAULT 0,
     mcp_enabled   INTEGER NOT NULL DEFAULT 0,
     open_enabled  INTEGER NOT NULL DEFAULT 0,
     http_enabled  INTEGER NOT NULL DEFAULT 0,
@@ -79,20 +78,6 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
-
-CREATE TABLE IF NOT EXISTS credential_usage (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    interface_id   INTEGER,
-    interface_name TEXT    NOT NULL DEFAULT '',
-    ok             INTEGER NOT NULL DEFAULT 0,
-    relogin        INTEGER NOT NULL DEFAULT 0,
-    status_code    INTEGER,
-    error          TEXT,
-    created_at     TEXT    NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_credential_usage_created
-ON credential_usage(created_at DESC);
 """
 
 
@@ -224,55 +209,3 @@ def set_setting(key: str, value: str) -> None:
             (key, value),
         )
 
-
-def record_credential_usage(interface: dict, result: dict, created_at: str) -> None:
-    """Record one W3-assisted interface attempt without retaining credentials."""
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO credential_usage(interface_id, interface_name, ok, relogin, "
-            "status_code, error, created_at) VALUES(?,?,?,?,?,?,?)",
-            (
-                interface.get("id"),
-                interface.get("name") or "未命名接口",
-                1 if result.get("ok") else 0,
-                1 if result.get("relogin") else 0,
-                result.get("status_code"),
-                result.get("error"),
-                created_at,
-            ),
-        )
-
-
-def credential_usage_stats(limit: int = 60) -> dict:
-    limit = max(1, min(limit, 200))
-    with get_conn() as conn:
-        totals = conn.execute(
-            "SELECT COUNT(*) AS total, "
-            "SUM(CASE WHEN ok = 1 THEN 1 ELSE 0 END) AS success, "
-            "SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failed, "
-            "SUM(CASE WHEN relogin = 1 THEN 1 ELSE 0 END) AS relogin "
-            "FROM credential_usage"
-        ).fetchone()
-        rows = conn.execute(
-            "SELECT id, interface_id, interface_name, ok, relogin, status_code, "
-            "error, created_at FROM credential_usage ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    total = int(totals["total"] or 0)
-    success = int(totals["success"] or 0)
-    failed = int(totals["failed"] or 0)
-    return {
-        "total": total,
-        "success": success,
-        "failed": failed,
-        "relogin": int(totals["relogin"] or 0),
-        "success_rate": round(success * 100 / total, 1) if total else 0,
-        "recent": [
-            {
-                **dict(row),
-                "ok": bool(row["ok"]),
-                "relogin": bool(row["relogin"]),
-            }
-            for row in rows
-        ],
-    }

@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 
 from app.api_hub import (
     config,
-    credential as credential_service,
     db,
     executor,
     mcp_contract,
@@ -23,26 +22,18 @@ from app.api_hub.outbound_security import (
     request_with_safe_redirects,
     validate_outbound_url,
 )
-from app.api_hub.routers import backup, credential, http_proxy, interfaces, mcp, proxy
+from app.api_hub.routers import backup, http_proxy, interfaces, mcp, proxy
 
 
 @pytest.fixture
 def hub_client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "api_hub.db")
-    monkeypatch.setattr(config, "SESSION_PATH", tmp_path / "w3_session.json")
-    monkeypatch.setattr(config, "SESSION_LOCK_PATH", tmp_path / "w3_session.lock")
     monkeypatch.setattr(config, "INTERNAL_PROXY_TOKEN", "internal-proxy-test-token")
     # Most unit tests use .example placeholders and replace the actual request
     # method.  Dedicated outbound-security tests enable the guard explicitly.
     monkeypatch.setattr(config, "OUTBOUND_BLOCK_PRIVATE_NETWORKS", False)
-    monkeypatch.setattr(
-        config,
-        "W3_LOGIN_ALLOWED_HOSTS",
-        ("login.huawei.com", "login.example"),
-    )
     db.init_db()
     app = FastAPI()
-    app.include_router(credential.router)
     app.include_router(interfaces.router)
     app.include_router(interfaces.runs_router)
     app.include_router(backup.router)
@@ -65,7 +56,6 @@ def _interface(**overrides):
         "headers": [{"key": "X-Trace", "value": "test"}],
         "body_type": "none",
         "body_content": "",
-        "use_w3": False,
         "mcp_enabled": True,
         "open_enabled": True,
     }
@@ -229,28 +219,8 @@ def test_interface_move_reorders_within_and_across_groups(hub_client):
     ]
 
 
-def test_admin_call_example_can_request_saved_cookie_header(hub_client):
-    config.SESSION_PATH.write_text(
-        json.dumps(
-            {
-                "cookies": [
-                    {"name": "W3_SESSION", "value": "admin-visible-session"},
-                    {"name": "route", "value": "cn"},
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    cookie_header = hub_client.get("/credential/cookie-header")
-    assert cookie_header.status_code == 200
-    assert cookie_header.json() == {
-        "cookie": "W3_SESSION=admin-visible-session; route=cn",
-        "count": 2,
-    }
-
-
 def test_run_history_and_response_capture(hub_client, monkeypatch):
-    item = hub_client.post("/interfaces", json=_interface(use_w3=True)).json()
+    item = hub_client.post("/interfaces", json=_interface()).json()
 
     def fake_request(session, method, url, **kwargs):
         response = requests.Response()
@@ -262,10 +232,6 @@ def test_run_history_and_response_capture(hub_client, monkeypatch):
         return response
 
     monkeypatch.setattr(requests.Session, "request", fake_request)
-    monkeypatch.setattr(
-        credential_service, "build_session_from_saved", lambda: requests.Session()
-    )
-    monkeypatch.setattr(credential_service, "saved_is_expired", lambda: False)
     result = hub_client.post(f"/interfaces/{item['id']}/run")
     assert result.status_code == 200
     assert result.json()["ok"] is True
@@ -279,11 +245,6 @@ def test_run_history_and_response_capture(hub_client, monkeypatch):
     ).json()
     assert detail["request_snapshot"]["url"] == item["url"]
     assert json.loads(detail["response_body"])["ok"] is True
-
-    usage = hub_client.get("/credential/usage", params={"limit": 60}).json()
-    assert usage["total"] == 1
-    assert usage["success"] == 1
-    assert usage["recent"][0]["interface_name"] == "健康检查"
 
     overview = hub_client.get("/runs/overview").json()
     assert overview["total_interfaces"] == 1
@@ -334,10 +295,10 @@ def test_run_history_filters_failures_and_slow_calls(hub_client):
     assert sum(item["failed"] for item in overview["daily"]) == 1
 
 
-def test_non_2xx_response_is_failure_in_history_and_credential_usage(
+def test_non_2xx_response_is_failure_in_history(
     hub_client, monkeypatch
 ):
-    item = hub_client.post("/interfaces", json=_interface(use_w3=True)).json()
+    item = hub_client.post("/interfaces", json=_interface()).json()
 
     def fake_request(session, method, url, **kwargs):
         response = requests.Response()
@@ -349,10 +310,6 @@ def test_non_2xx_response_is_failure_in_history_and_credential_usage(
         return response
 
     monkeypatch.setattr(requests.Session, "request", fake_request)
-    monkeypatch.setattr(
-        credential_service, "build_session_from_saved", lambda: requests.Session()
-    )
-    monkeypatch.setattr(credential_service, "saved_is_expired", lambda: False)
 
     response = hub_client.post(f"/interfaces/{item['id']}/run")
     assert response.status_code == 200
@@ -376,17 +333,9 @@ def test_non_2xx_response_is_failure_in_history_and_credential_usage(
     assert detail["error"] == "上游返回 HTTP 567"
     assert json.loads(detail["response_body"])["error"] == "blocked"
 
-    usage = hub_client.get("/credential/usage", params={"limit": 60}).json()
-    assert usage["total"] == 1
-    assert usage["success"] == 0
-    assert usage["failed"] == 1
-    assert usage["success_rate"] == 0
-    assert usage["recent"][0]["ok"] is False
-    assert usage["recent"][0]["error"] == "上游返回 HTTP 567"
-
 
 def test_n8n_proxy_is_fail_closed_and_forwards_dynamic_pagination(
-    hub_client, monkeypatch
+    hub_client, monkeypatch,
 ):
     item = hub_client.post("/interfaces", json=_interface(open_enabled=True)).json()
     monkeypatch.setattr(config, "SYSTEM_MCP_TOKEN", "proxy-token")
@@ -484,124 +433,33 @@ def test_backup_round_trip_skips_duplicates(hub_client):
     assert restored_item["http_enabled"] is False
 
 
-def test_online_credential_config_is_encrypted_and_password_is_never_returned(hub_client):
-    response = hub_client.put(
-        "/credential/config",
-        json={
-            "username": "w3-user",
-            "password": "private-password",
-            "login_url": "https://login.example/session",
-        },
-    )
-    assert response.status_code == 200
-    public = response.json()
-    assert public == {
-        "username": "w3-user",
-        "password_configured": True,
-        "login_url": "https://login.example/session",
-        "source": "online",
+def test_backup_import_silently_ignores_legacy_use_w3_field(hub_client):
+    # A backup file produced before the W3 login-injection removal may still
+    # carry a use_w3 field on each interface. InterfaceIn follows Pydantic
+    # default extra=ignore, so the legacy field must not break import and the
+    # created interface must never expose use_w3.
+    legacy_payload = {
+        "app": "API-Hub",
+        "version": 7,
+        "name": "legacy-with-use-w3",
+        "exported_at": "2024-01-01T00:00:00+00:00",
+        "mode": "full",
+        "interface_count": 1,
+        "interfaces": [
+            {
+                **_interface(name="legacy-w3-iface"),
+                "use_w3": True,
+            }
+        ],
     }
-    assert "password" not in public
-    stored = db.get_setting("w3_password_encrypted")
-    assert stored and stored != "private-password"
-    username, password, login_url = credential_service.runtime_credentials()
-    assert (username, password, login_url) == (
-        "w3-user", "private-password", "https://login.example/session"
-    )
+    imported = hub_client.post("/backup/import", json=legacy_payload)
+    assert imported.status_code == 200
+    assert imported.json()["imported"] == 1
 
-    fetched = hub_client.get("/credential/config").json()
-    assert fetched == public
-
-    retained_password_attack = hub_client.put(
-        "/credential/config",
-        json={
-            "username": "another-user",
-            "login_url": "https://login.example/other",
-        },
-    )
-    assert retained_password_attack.status_code == 400
-    assert "必须重新输入密码" in retained_password_attack.json()["detail"]
-
-    malicious_login_url = hub_client.put(
-        "/credential/config",
-        json={
-            "username": "w3-user",
-            "password": "new-password",
-            "login_url": "https://attacker.example/collect",
-        },
-    )
-    assert malicious_login_url.status_code == 400
-    assert "允许清单" in malicious_login_url.json()["detail"]
-
-
-def test_w3_login_uses_native_redirects_and_keeps_sso_cookie_jar(monkeypatch):
-    class FakeResponse:
-        @staticmethod
-        def raise_for_status():
-            return None
-
-        @staticmethod
-        def json():
-            return {"statusCode": 0}
-
-    class FakeSession:
-        def __init__(self):
-            self.cookies = requests.cookies.RequestsCookieJar()
-            self.max_redirects = 30
-            self.post_call = None
-
-        def post(self, url, **kwargs):
-            self.post_call = (url, kwargs)
-            self.cookies.set("JSESSIONID", "login-session", domain="login.example")
-            self.cookies.set("hwssot", "sso-token", domain=".example")
-            return FakeResponse()
-
-    session = FakeSession()
-    monkeypatch.setattr(credential_service, "_new_session", lambda: session)
-    monkeypatch.setattr(config, "W3_LOGIN_ALLOWED_HOSTS", ("login.example",))
-    monkeypatch.setattr(config, "OUTBOUND_MAX_REDIRECTS", 7)
-    monkeypatch.setattr(config, "HTTP_TIMEOUT", 12)
-
-    result = credential_service._login_with(
-        "w3-user", "private-password", "https://login.example/session"
-    )
-
-    assert result is session
-    assert session.max_redirects == 7
-    assert session.cookies.get("hwssot", domain=".example") == "sso-token"
-    assert session.post_call == (
-        "https://login.example/session",
-        {
-            "json": {
-                "loginAccount": "w3-user",
-                "uid": "w3-user",
-                "password": "private-password",
-                "encryptedPasswordSwitch": "off",
-            },
-            "headers": {"Content-Type": "application/json; charset=UTF-8"},
-            "allow_redirects": True,
-            "timeout": 12,
-        },
-    )
-
-
-def test_w3_session_validates_every_native_redirect(monkeypatch):
-    monkeypatch.setattr(config, "W3_LOGIN_ALLOWED_HOSTS", ("login.example",))
-    session = credential_service._W3Session()
-    response = requests.Response()
-    response.status_code = 302
-    response.url = "https://login.example/session"
-
-    response.headers["Location"] = "/sso/complete"
-    assert session.get_redirect_target(response) == (
-        "https://login.example/sso/complete"
-    )
-
-    response.headers["Location"] = "https://attacker.example/collect"
-    with pytest.raises(
-        requests.exceptions.InvalidURL, match="W3 登录重定向被拒绝"
-    ):
-        session.get_redirect_target(response)
+    restored = hub_client.get("/interfaces").json()
+    assert len(restored) == 1
+    assert restored[0]["name"] == "legacy-w3-iface"
+    assert "use_w3" not in restored[0]
 
 
 def test_preview_run_uses_draft_without_saving_and_keeps_full_history(
@@ -666,7 +524,6 @@ def test_mcp_contract_merges_only_declared_runtime_fields():
         "body_content": '{"include":false,"token":"platform-secret"}',
         "file_fields": [],
         "parameter_schema": [],
-        "use_w3": True,
     }
 
     public = mcp_contract.public_parameters(interface)
@@ -765,7 +622,6 @@ def test_single_worker_request_gate_fails_fast_when_saturated(monkeypatch):
             "headers": [],
             "body_type": "none",
             "body_content": "",
-            "use_w3": False,
         }
     )
     assert result["error_type"] == "overloaded"
@@ -797,7 +653,6 @@ def test_sqlite_audit_contention_does_not_fail_completed_upstream_call(monkeypat
             "headers": [],
             "body_type": "none",
             "body_content": "",
-            "use_w3": False,
         }
     )
     assert result["ok"] is True
@@ -805,51 +660,14 @@ def test_sqlite_audit_contention_does_not_fail_completed_upstream_call(monkeypat
     assert "run_id" not in result
 
 
-def test_w3_calls_keep_global_and_w3_trusted_host_exceptions(monkeypatch):
-    observed = {}
-
-    def fake_request(_session, _method, url, **kwargs):
-        observed["trusted_hosts"] = kwargs["trusted_hosts"]
-        response = requests.Response()
-        response.status_code = 200
-        response.url = url
-        response.headers["Content-Type"] = "application/json"
-        response._content = b'{}'
-        return response
-
-    monkeypatch.setattr(config, "OUTBOUND_TRUSTED_HOSTS", ("intranet.example",))
-    monkeypatch.setattr(config, "W3_OUTBOUND_TRUSTED_HOSTS", ("his.huawei.com",))
-    monkeypatch.setattr(executor, "request_with_safe_redirects", fake_request)
-    monkeypatch.setattr(
-        credential_service, "build_session_from_saved", lambda: requests.Session()
-    )
-    monkeypatch.setattr(credential_service, "saved_is_expired", lambda: False)
-    result = executor.run_interface(
-        {
-            "id": None,
-            "name": "W3 内网服务",
-            "method": "GET",
-            "url": "https://his.huawei.com/msa/service",
-            "query_params": [],
-            "headers": [],
-            "body_type": "none",
-            "body_content": "",
-            "use_w3": True,
-        }
-    )
-    assert result["ok"] is True
-    assert observed["trusted_hosts"] == ("intranet.example", "his.huawei.com")
-
-
-def test_outbound_urls_block_private_targets_but_keep_w3_trusted_hosts(
+def test_outbound_urls_block_private_targets_but_keep_explicit_trusted_hosts(
     hub_client, monkeypatch
 ):
     monkeypatch.setattr(config, "OUTBOUND_BLOCK_PRIVATE_NETWORKS", True)
     monkeypatch.setattr(config, "OUTBOUND_TRUSTED_HOSTS", ())
-    monkeypatch.setattr(config, "W3_OUTBOUND_TRUSTED_HOSTS", ("his.huawei.com",))
 
     def resolve(host, _port, **_kwargs):
-        address = "10.8.0.12" if host in {"private.example", "his.huawei.com"} else "8.8.8.8"
+        address = "10.8.0.12" if host in {"private.example", "intranet.example"} else "8.8.8.8"
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443))]
 
     monkeypatch.setattr(outbound_security.socket, "getaddrinfo", resolve)
@@ -857,8 +675,8 @@ def test_outbound_urls_block_private_targets_but_keep_w3_trusted_hosts(
     with pytest.raises(OutboundTargetError, match="受保护的内网地址"):
         validate_outbound_url("https://private.example/data")
     assert validate_outbound_url(
-        "https://his.huawei.com/msa/service",
-        trusted_hosts=config.W3_OUTBOUND_TRUSTED_HOSTS,
+        "https://intranet.example/msa/service",
+        trusted_hosts=("intranet.example",),
     ).startswith("https://")
     assert validate_outbound_url(
         "http://127.0.0.1:8000/private",

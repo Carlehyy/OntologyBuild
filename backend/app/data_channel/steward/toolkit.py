@@ -393,7 +393,6 @@ TOOL_DEFS: list[dict] = [
                 "capture_id": {"type": "string"},
                 "name": {"type": "string"},
                 "description": {"type": "string"},
-                "use_w3": {"type": "boolean", "description": "公司 W3 接口设 true；默认 false"},
                 "include_auth": {"type": "boolean", "description": "复制浏览器捕获的 Authorization/Cookie 等认证头"},
             },
             "required": ["capture_id", "name"],
@@ -434,7 +433,6 @@ TOOL_DEFS: list[dict] = [
                 "headers": {"type": "object", "additionalProperties": {}},
                 "body_type": {"type": "string", "enum": ["none", "json", "form", "multipart", "raw"]},
                 "body_content": {"type": "string"},
-                "use_w3": {"type": "boolean"},
                 "parameters": {
                     "type": "array",
                     "description": "动态参数契约：name/location(path|query|header|body)/value_type/required/default/description/dynamic/sensitive",
@@ -454,7 +452,7 @@ TOOL_DEFS: list[dict] = [
                 "expected_revision": {"type": "integer"},
                 "changes": {
                     "type": "object",
-                    "description": "可改 name/url/method/group/description/query_params/headers/body_type/body_content/use_w3/parameters；删除参数用 remove_query_params/remove_headers",
+                    "description": "可改 name/url/method/group/description/query_params/headers/body_type/body_content/parameters；删除参数用 remove_query_params/remove_headers",
                 },
             },
             "required": ["interface_id", "expected_revision", "changes"],
@@ -1086,7 +1084,7 @@ class ToolRunner:
         query_params: dict | list | None = None,
         headers: dict | list | None = None,
         body_type: str | None = None, body_content: str | None = None,
-        use_w3: bool | None = None, parameters: list[dict] | None = None,
+        parameters: list[dict] | None = None,
     ) -> dict:
         self._require_api_hub()
         return api_hub_agent.create_interface_for_agent(
@@ -1100,7 +1098,6 @@ class ToolRunner:
             headers=headers,
             body_type=body_type or "none",
             body_content=body_content or "",
-            use_w3=bool(use_w3),
             parameters=parameters,
         )
 
@@ -1344,7 +1341,6 @@ class ToolRunner:
 
     def tool_register_proxy_interface(self, capture_id: str, name: str,
                                       description: str | None = None,
-                                      use_w3: bool | None = None,
                                       include_auth: bool | None = None) -> dict:
         self._require_api_hub()
         capture = workspace.require_capture(self._conversation(), capture_id)
@@ -1386,14 +1382,14 @@ class ToolRunner:
         with api_hub_db.get_conn() as conn:
             cur = conn.execute(
                 "INSERT INTO interfaces(name, description, group_name, method, url, query_params, headers, "
-                "body_type, body_content, use_w3, mcp_enabled, open_enabled, parameter_schema, "
-                "created_by, updated_by, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "body_type, body_content, mcp_enabled, open_enabled, parameter_schema, "
+                "created_by, updated_by, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     name.strip()[:200] or "浏览器发现接口",
                     (description or f"数据管家会话 {self._conversation()[:8]} 从页面网络请求发现").strip(),
                     "数据管家发现", str(capture.get("method") or "GET").upper(), base_url,
                     json.dumps(query_params, ensure_ascii=False), json.dumps(headers, ensure_ascii=False),
-                    body_type, body_content, 1 if use_w3 else 0, 0, 0,
+                    body_type, body_content, 0, 0,
                     json.dumps(parameter_schema, ensure_ascii=False),
                     str(self.user_id or ""), str(self.user_id or ""), now, now,
                 ),
@@ -1408,7 +1404,6 @@ class ToolRunner:
                 "id": interface_id, "name": name.strip(), "method": capture.get("method"),
                 "targetUrl": base_url, "queryParams": [item["key"] for item in query_params],
                 "authCopied": bool(include_auth and any(h["key"].lower() in sensitive for h in headers)),
-                "useW3": bool(use_w3),
             },
             "proxyUrl": proxy_url,
             "n8n": {

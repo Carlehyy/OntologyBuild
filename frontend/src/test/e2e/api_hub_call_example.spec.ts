@@ -25,7 +25,6 @@ const exampleInterface = {
   body_type: 'none',
   body_content: '',
   file_fields: [],
-  use_w3: true,
   mcp_enabled: false,
   open_enabled: false,
   http_enabled: false,
@@ -37,7 +36,7 @@ const exampleInterface = {
   parameter_schema: [],
 }
 
-test('调用示例以导出 cURL 弹窗展示并可选择登录 Cookie 后复制', async ({ page, context }, testInfo) => {
+test('调用示例以导出 cURL 弹窗展示并复制', async ({ page, context }, testInfo) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
   await loginAsAdmin(page)
 
@@ -46,20 +45,6 @@ test('调用示例以导出 cURL 弹窗展示并可选择登录 Cookie 后复制
     const path = new URL(request.url()).pathname
     if (request.method() === 'GET' && path === '/api/api-hub/interfaces') {
       await route.fulfill({ json: [exampleInterface] })
-      return
-    }
-    if (request.method() === 'GET' && path === '/api/api-hub/credential/cookie-header') {
-      await route.fulfill({ json: { cookie: 'session_id=test-cookie', count: 1 } })
-      return
-    }
-    if (request.method() === 'GET' && path === '/api/api-hub/proxy/info') {
-      await route.fulfill({ json: {
-        path: '/proxy',
-        key_header: 'X-API-Hub-Key',
-        port: 8000,
-        key_count: 0,
-        published: [],
-      } })
       return
     }
     await route.fulfill({ json: {} })
@@ -73,16 +58,11 @@ test('调用示例以导出 cURL 弹窗展示并可选择登录 Cookie 后复制
   await expect(dialog).toBeVisible()
   await expect(dialog.getByText(/此命令直连真实上游地址，仅用于管理员调试/)).toBeVisible()
   await expect(dialog.getByLabel('cURL 命令')).toContainText('order_id=A-1024')
-  await expect(dialog.getByLabel('cURL 命令')).not.toContainText(' -k')
-
-  const includeCookie = dialog.getByRole('checkbox', { name: /包含当前登录 Cookie/ })
-  await expect(includeCookie).toBeEnabled()
-  await includeCookie.check()
-  await expect(dialog.getByLabel('cURL 命令')).toContainText("session_id=test-cookie")
+  await expect(dialog.getByLabel('cURL 命令')).not.toContainText(' -b ')
 
   await dialog.getByRole('button', { name: '复制', exact: true }).click()
   await expect(dialog.getByRole('button', { name: '已复制', exact: true })).toBeVisible()
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('session_id=test-cookie')
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('order_id=A-1024')
   await page.screenshot({ path: testInfo.outputPath('call-example-dialog.png'), fullPage: true })
 })
 

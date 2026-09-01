@@ -358,12 +358,11 @@ def _authenticate_proxy_key(conn, secret: str, interface_id: int):
     return row
 
 
-def _response_headers(headers: dict, *, use_w3: bool) -> dict[str, str]:
+def _response_headers(headers: dict) -> dict[str, str]:
     return {
         key: value
         for key, value in (headers or {}).items()
         if key.lower() not in _OUTBOUND_RESPONSE_BLOCKLIST
-        and not (use_w3 and key.lower() == "set-cookie")
     }
 
 
@@ -576,9 +575,6 @@ async def call_published_interface(slug: str, request: Request):
             else (result.get("response_content") or b"")
         ),
         status_code=result["status_code"],
-        headers=_response_headers(
-            result.get("response_headers") or {},
-            use_w3=bool(iface.get("use_w3")),
-        ),
+        headers=_response_headers(result.get("response_headers") or {}),
         media_type=None,
     )

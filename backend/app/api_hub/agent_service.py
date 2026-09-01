@@ -94,7 +94,7 @@ def _reject_agent_secrets(items: list[dict], *, field: str) -> None:
     if blocked:
         raise AgentInterfaceError(
             f"{field} 含敏感字段（{', '.join(blocked)}），数据管家不能接收或回写密钥。"
-            "请在接口管理界面安全配置，或使用 W3 登录态/浏览器捕获登记。"
+            "请在接口管理界面安全配置，或使用浏览器捕获登记。"
         )
 
 
@@ -272,7 +272,6 @@ def _agent_view(interface: dict, *, detail: bool = True) -> dict:
         "method": interface["method"],
         "url": _redacted_url(interface["url"]),
         "bodyType": interface.get("body_type") or "none",
-        "useW3": bool(interface.get("use_w3")),
         "configRevision": int(interface.get("config_revision") or 1),
         "parameterSchema": parameter_schema,
         "exposure": {
@@ -327,7 +326,7 @@ def create_interface_for_agent(
     *, actor_user_id: str | None, name: str, url: str, method: str = "GET",
     group: str = "", description: str = "", query_params: Any = None,
     headers: Any = None, body_type: str = "none", body_content: str = "",
-    use_w3: bool = False, parameters: list[dict] | None = None,
+    parameters: list[dict] | None = None,
 ) -> dict:
     query = _pairs(query_params, field="query_params")
     header_pairs = _pairs(headers, field="headers")
@@ -347,7 +346,6 @@ def create_interface_for_agent(
             headers=[KV(**item) for item in header_pairs],
             body_type=body_type,
             body_content=body_content,
-            use_w3=use_w3,
             parameter_schema=[InterfaceParameter(**item) for item in parameters or []],
             # Agent-created interfaces are internal drafts. Exposure remains a
             # separate human-governed action in API Hub.
@@ -385,7 +383,6 @@ def update_interface_for_agent(
         "description": "description",
         "body_type": "body_type",
         "body_content": "body_content",
-        "use_w3": "use_w3",
     }
     for source, target in field_map.items():
         if source in changes:
