@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Braces,
+  Check,
   CircleUserRound,
+  Copy,
   Download,
+  Eye,
+  EyeOff,
   KeyRound,
   Loader2,
   LockKeyhole,
@@ -16,6 +20,7 @@ import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { authApi, type PrivacyVar, type UserEnvVar } from '@/api/auth'
 import { useAuthStore } from '@/stores/authStore'
+import { writeTextToClipboard } from '@/utils/clipboard'
 /**
  * 个人资料弹窗（用户头像下拉 → 个人资料，MYW-56）。
  *
@@ -26,7 +31,8 @@ import { useAuthStore } from '@/stores/authStore'
  *   服务端加密落库；本期仅做个人配置的保存与维护，不注入任何执行链路。
  * - 「隐私变量」：由本地脚本 RSA 公钥加密上报、平台私钥解密后 Fernet
  *   落库的变量。用户创建变量（首次创建生成上报 token，仅此一次可见）、
- *   下载 Python 上报脚本模板、重置上报 token。平台侧不回显 value。
+ *   下载 Python 上报脚本模板、重置上报 token、查看已上报变量的明文值
+ *   （数据所有者取回自己的值，不脱敏，可复制）。
  */
 
 const ENV_VAR_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/
@@ -99,6 +105,11 @@ export default function ProfileModal({ open, onClose }: { open: boolean; onClose
   const [privacyLoading, setPrivacyLoading] = useState(false)
   const [privacyNewKey, setPrivacyNewKey] = useState('')
   const [privacyBusy, setPrivacyBusy] = useState(false)
+  // 隐私变量明文查看：每项可独立展开/收起，明文按需加载（不一次性拉取所有值）。
+  const [revealedKey, setRevealedKey] = useState<string | null>(null)
+  const [revealedValue, setRevealedValue] = useState('')
+  const [revealing, setRevealing] = useState(false)
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
 
   const [notice, setNotice] = useState<Notice | null>(null)
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -283,6 +294,40 @@ export default function ProfileModal({ open, onClose }: { open: boolean; onClose
       showToast('error', errorMessage(error, '重置上报 token 失败'))
     } finally {
       setPrivacyBusy(false)
+    }
+  }
+
+  const toggleReveal = async (item: PrivacyVar) => {
+    // 再次点击同一个 key → 收起
+    if (revealedKey === item.key) {
+      setRevealedKey(null)
+      setRevealedValue('')
+      return
+    }
+    if (!item.has_value) return // 尚未上报，无值可看
+    setRevealing(true)
+    try {
+      const data = await authApi.getPrivacyVarValue(item.key)
+      setRevealedKey(item.key)
+      setRevealedValue(data.value)
+    } catch (error) {
+      showToast('error', errorMessage(error, '取回明文失败'))
+    } finally {
+      setRevealing(false)
+    }
+  }
+
+  const copyRevealedValue = async (key: string) => {
+    if (!revealedValue) return
+    try {
+      await writeTextToClipboard(revealedValue)
+      // 副作用类交互（AGENTS.md §5）：writeTextToClipboard 在非聚焦/HTTP 场景
+      // 可能静默失败，提示文案如实（"已尝试复制"），不依据中间返回值宣称已复制。
+      setCopiedKey(key)
+      window.setTimeout(() => setCopiedKey(current => current === key ? null : current), 1600)
+      showToast('success', '已尝试复制到剪贴板')
+    } catch (error) {
+      showToast('error', errorMessage(error, '复制失败，请手动选中复制'))
     }
   }
 
@@ -518,25 +563,64 @@ export default function ProfileModal({ open, onClose }: { open: boolean; onClose
                     <p className="px-1 py-3 text-xs text-[var(--color-text-tertiary)]">暂无隐私变量，在上方创建</p>
                   ) : (
                     <ul className="space-y-1">
-                      {privacyVars.map(item => (
-                        <li key={item.id} className="flex items-center justify-between rounded-lg border border-[var(--color-border)] px-3 py-2">
-                          <div className="min-w-0">
-                            <p className="truncate font-mono text-sm text-[var(--color-text-primary)]">{item.key}</p>
-                            <p className="text-xs text-[var(--color-text-tertiary)]">
-                              {item.has_value ? '已上报' : '尚未上报'} · 上次上报 {formatTime(item.last_reported_at)}
-                            </p>
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={`删除变量 ${item.key}`}
-                            disabled={privacyBusy}
-                            onClick={() => void deletePrivacyVar(item.key)}
-                          >
-                            <Trash2 size={14} />
-                          </Button>
-                        </li>
-                      ))}
+                      {privacyVars.map(item => {
+                        const isOpen = revealedKey === item.key
+                        return (
+                          <li key={item.id} className="rounded-lg border border-[var(--color-border)] px-3 py-2">
+                            <div className="flex items-center justify-between">
+                              <div className="min-w-0">
+                                <p className="truncate font-mono text-sm text-[var(--color-text-primary)]">{item.key}</p>
+                                <p className="text-xs text-[var(--color-text-tertiary)]">
+                                  {item.has_value ? '已上报' : '尚未上报'} · 上次上报 {formatTime(item.last_reported_at)}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  aria-label={isOpen ? `收起 ${item.key} 的值` : `查看 ${item.key} 的值`}
+                                  aria-expanded={isOpen}
+                                  disabled={!item.has_value || privacyBusy}
+                                  loading={revealing && !isOpen}
+                                  onClick={() => void toggleReveal(item)}
+                                >
+                                  {isOpen ? <EyeOff size={14} /> : <Eye size={14} />}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  aria-label={`删除变量 ${item.key}`}
+                                  disabled={privacyBusy}
+                                  onClick={() => void deletePrivacyVar(item.key)}
+                                >
+                                  <Trash2 size={14} />
+                                </Button>
+                              </div>
+                            </div>
+                            {isOpen && (
+                              <div className="mt-2 rounded-md bg-[var(--color-muted)] px-2 py-1.5">
+                                <pre
+                                  className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs text-[var(--color-text-primary)]"
+                                  data-testid={`privacy-value-${item.key}`}
+                                >{revealedValue}</pre>
+                                <div className="mt-1.5 flex items-center gap-2">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => void copyRevealedValue(item.key)}
+                                  >
+                                    {copiedKey === item.key ? <Check size={13} /> : <Copy size={13} />}
+                                    {copiedKey === item.key ? '已尝试复制' : '复制'}
+                                  </Button>
+                                  <span className="text-[10px] text-[var(--color-text-tertiary)]">
+                                    明文仅在页面展示，请妥善保管
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+                          </li>
+                        )
+                      })}
                     </ul>
                   )}
                 </div>

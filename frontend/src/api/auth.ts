@@ -6,14 +6,22 @@ export interface UserEnvVar {
   value: string
 }
 
-/** 隐私变量列表项：刻意不含 value（隐私变量值由本地脚本上报，平台侧仅
- * 存储，不对前端明文展示）。has_value 表示平台是否已收到过上报值。 */
+/** 隐私变量列表项：列表刻意不含 value（避免明文在列表响应里大范围流转）。
+ * has_value 表示平台是否已收到过上报值。需要取回明文时单独调
+ * getPrivacyVarValue，鉴权走当前用户 JWT，仅返回该用户自己的明文。 */
 export interface PrivacyVar {
   id: string
   key: string
   has_value: boolean
   last_reported_at: string | null
   created_at: string
+}
+
+/** 隐私变量明文值（数据所有者取回自己的值，不脱敏）。 */
+export interface PrivacyVarValue {
+  key: string
+  value: string
+  last_reported_at: string | null
 }
 
 /** 创建隐私变量响应：首次创建（生成上报 token）时附带 report_token 明文，
@@ -42,6 +50,9 @@ export const authApi = {
     apiClient.post<PrivacyVarCreated>('/auth/privacy-vars', { key }),
   deletePrivacyVar: (key: string) =>
     apiClient.delete(`/auth/privacy-vars/${encodeURIComponent(key)}`),
+  // 取回指定隐私变量的明文值（数据所有者取回自己的值，不脱敏、可复制）。
+  getPrivacyVarValue: (key: string) =>
+    apiClient.get<PrivacyVarValue>(`/auth/privacy-vars/${encodeURIComponent(key)}/value`),
   resetReportToken: () =>
     apiClient.post<{ report_token: string }>('/auth/privacy-vars/report-token/reset'),
   // 下载上报脚本模板（Blob）。下载依赖浏览器副作用，按 AGENTS.md §5
