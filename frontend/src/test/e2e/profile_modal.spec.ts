@@ -282,3 +282,71 @@ test('隐私变量支持创建、列表回显、下载脚本与重置token', asy
   await expect(dialog.getByText('已重置')).toBeVisible()
   expect(captured.resetCalled).toBe(true)
 })
+
+// 隐私变量明文查看与复制：授予剪贴板读写权限，断言真实剪贴板内容
+// （AGENTS.md §5 副作用验收：不依赖中间提示，断言最终结果）。
+test.use({ contextOptions: { permissions: ['clipboard-read', 'clipboard-write'] } })
+test('隐私变量支持查看明文值并复制到剪贴板', async ({ page }) => {
+  await mockPlatformShell(page)
+
+  const plaintextValue = 'session-cookie-value-非常机密-2026'
+  const storedVars = [
+    {
+      id: 'pv-reported',
+      key: 'MY_REPORTED_COOKIE',
+      has_value: true,
+      last_reported_at: now,
+      created_at: now,
+    },
+    {
+      id: 'pv-empty',
+      key: 'MY_EMPTY_COOKIE',
+      has_value: false,
+      last_reported_at: null,
+      created_at: now,
+    },
+  ].sort((a, b) => a.key.localeCompare(b.key))
+
+  await page.route('**/api/v1/auth/privacy-vars', async route => {
+    if (route.request().method() === 'GET') return json(route, storedVars)
+    return route.continue()
+  })
+
+  await page.route('**/api/v1/auth/privacy-vars/*/value', async route => {
+    const url = new URL(route.request().url())
+    const key = decodeURIComponent(url.pathname.split('/').slice(-2, -1)[0])
+    if (key === 'MY_REPORTED_COOKIE' && route.request().method() === 'GET') {
+      return json(route, { key, value: plaintextValue, last_reported_at: now })
+    }
+    return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ detail: 'Privacy var not found' }) })
+  })
+
+  await page.goto('/#/inbox', { waitUntil: 'domcontentloaded' })
+  const dialog = await openProfileDialog(page)
+
+  await dialog.getByRole('tab', { name: '隐私变量' }).click()
+  const panel = dialog.getByRole('tabpanel', { name: '隐私变量' })
+  await expect(panel).toBeVisible()
+
+  // 未上报的变量：查看值按钮禁用
+  const emptyViewBtn = panel.getByRole('button', { name: '查看 MY_EMPTY_COOKIE 的值' })
+  await expect(emptyViewBtn).toBeDisabled()
+
+  // 已上报的变量：点击查看值 → 明文展示（断言真实明文，不脱敏）
+  const reportedViewBtn = panel.getByRole('button', { name: '查看 MY_REPORTED_COOKIE 的值' })
+  await reportedViewBtn.click()
+  const valueBox = panel.getByTestId('privacy-value-MY_REPORTED_COOKIE')
+  await expect(valueBox).toBeVisible()
+  await expect(valueBox).toHaveText(plaintextValue)
+
+  // 复制：断言真实剪贴板内容（非中间提示，AGENTS.md §5）
+  await panel.getByRole('button', { name: '复制' }).click()
+  // 等待复制完成（"已尝试复制"提示出现作为时序信号，但断言以剪贴板真实内容为准）
+  await expect(dialog.getByText('已尝试复制到剪贴板')).toBeVisible()
+  const clipboardText = await page.evaluate(() => navigator.clipboard.readText())
+  expect(clipboardText).toBe(plaintextValue)
+
+  // 再次点击查看值 → 收起明文
+  await panel.getByRole('button', { name: '收起 MY_REPORTED_COOKIE 的值' }).click()
+  await expect(valueBox).not.toBeVisible()
+})
