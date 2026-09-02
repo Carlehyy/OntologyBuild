@@ -169,6 +169,10 @@ jobs:
         run: npm run check:feature-boundaries
         working-directory: frontend
 
+      - name: Frontend component-convergence gate
+        run: npm run check:component-convergence
+        working-directory: frontend
+
       - name: Frontend lint
         run: npm run lint
         working-directory: frontend

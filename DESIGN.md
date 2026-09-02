@@ -87,19 +87,22 @@ success `--color-success #2d8a4e` · warning `#c9861a` · danger
 
 | 层 | 来源 | 说明 |
 |---|---|---|
-| 基础件 | `components/ui/*`（shadcn 语义约定） | Button/Card/Badge/Input/Dialog 等，样式全部走 token |
+| 基础件 | `components/ui/*`（shadcn 语义约定） | Button/Card/Badge/Input/Dialog/Select 等，样式全部走 token |
+| 交互与复合控件 | ReUI（[reui.io](https://reui.io)，shadcn 注册表扩展，copy-and-own） | **默认来源**：筛选、表单、日期、看板、甘特、步骤条等交互/复合控件一律先用 ReUI；场景→组件映射查 `frontend/src/components/component-catalog.ts`，拷贝后按 4.2 规则换肤 |
 | 复杂件 | antd 6 | 表格/树/穿梭等重组件，经 ConfigProvider token 对齐平台色 |
-| 样例库 | ReUI（shadcn 注册表扩展） | 按需拷贝源码，拷贝后按 4.2 规则换肤 |
-| 动效组件 | beUI（beui.dev，MIT 开源） | shadcn 式源码拷贝，按 4.2 映射平台 token；动效依赖 `motion`，文案默认中文、可用 props 覆盖；已落地 `components/availability-scheduler` 与 `components/motion-ui/`（Switch/Checkbox/Tooltip/Select/MultiSelect/IconButton 等原语），预览路由 `/design/components` |
+| 动效例外层 | beUI 存量（`components/motion-ui/`、`components/availability-scheduler/`，上游 starc007/ui-components @ afba7fa055dd） | 仅限 ReUI 无平替的动效能力（morph 弹窗、弹簧手势、AnimatedNumber 等）；**只维护现存消费方，新代码禁用**，由 `npm run check:component-convergence` 强制；预览路由 `/design/components` |
 | 表格块参考 | Tremor Blocks | 只参考布局结构，配色按 4.2 映射 |
 
+「场景 → 标准组件」选型单一事实源：
+[`frontend/src/components/component-catalog.ts`](./frontend/src/components/component-catalog.ts)；
 组件清单、引入流程与存量页面渐进采用策略见
 [`frontend/src/components/README.md`](./frontend/src/components/README.md)。
 
 ### 4.2 外部样例拷贝规则（治理条款）
 
-- **ReUI**：与 shadcn 同构，可放心作为复杂控件样例；拷贝进仓库前必须把示例中的
-  调色板 hex 全部替换为平台 token（或删除纯装饰用色）。
+- **ReUI**：交互/复合控件的默认来源，与 shadcn 同构；拷贝进仓库前必须把示例中的
+  调色板 hex 全部替换为平台 token（或删除纯装饰用色），并完成
+  `components/README.md` 引入流程中的 Tailwind 3.4 兼容与中文文案适配。
 - **Tremor**：自带 `tremor-*` 类命名空间与灰阶体系，**不得原样入库**。布局结构可
   参考，颜色一律映射：`text-gray-900`→`text-foreground`、`dark:text-gray-50`→
   深色前景、`bg-tremor-background-muted`→`bg-muted`、`tremor-border`→`border-border`；
@@ -179,7 +182,10 @@ ECharts 关系图能力不足时可选 G6（图可视化）/X6（图编辑），
 2. 再新建页域级 `*chartTheme*`/`*colors*` 常量文件（存量三处已收敛或待迁移）；
 3. 第三方样例（Tremor/ReUI 等）配色未经映射直接入库；
 4. 单独调整某个页面的颜色而不经过 tokens/共享主题（「顺手硬编码」）；
-5. 一个 PR 内混合结构调整与视觉重构（遵循 AGENTS.md §3 分开提交）。
+5. 一个 PR 内混合结构调整与视觉重构（遵循 AGENTS.md §3 分开提交）；
+6. 新增 motion-ui/availability-scheduler（beUI 例外层）消费方，或在白名单外
+   新文件使用原生 `<select>`——由 `check:component-convergence` CI 强制，
+   选型一律查 `component-catalog.ts`。
 
 ## 9. 变更方式
 

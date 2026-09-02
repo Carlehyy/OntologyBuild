@@ -102,8 +102,10 @@ app/services/v2/graph/neo4j_service.py
 界面颜色取自 `frontend/src/styles/tokens.css` 的语义令牌，ECharts 图表取值统一
 导入 `frontend/src/lib/echartsTheme.ts`；禁止在页域新建平行的主题常量或色板。
 页面视觉/动效优化（含"优化某页"类请求）的组件选型与引入规范见
-`frontend/src/components/README.md`——beUI 上游目录速查在
-`frontend/src/components/motion-ui/catalog.ts`，活示例见 `/#/design/components`。
+`frontend/src/components/README.md`——「场景 → 标准组件」策展单一事实源在
+`frontend/src/components/component-catalog.ts`（默认组件库为 ReUI，beUI
+`motion-ui/` 为例外存量层，新代码禁用），收敛白名单由
+`npm run check:component-convergence` 在 CI 强制。
 
 ## 2. 编码与设计原则
 
@@ -196,6 +198,7 @@ cd ../frontend
 npm ci
 npm run test:unit
 npm run check:feature-boundaries
+npm run check:component-convergence
 npm run test:e2e:classification
 npm run lint
 npm run build

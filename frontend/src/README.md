@@ -13,7 +13,7 @@ src/
 ├── palantir-graph/    本体图谱编辑与运行视图（见 palantir-graph/README.md）
 ├── api/               API 客户端（v2 版本化接口封装位于 api/v2/）
 ├── assets/            由源码显式引用的静态资源
-├── components/        UI 与跨页面组件（分层选型与 beUI 引入规范见 components/README.md）
+├── components/        UI 与跨页面组件（分层选型查 components/component-catalog.ts，引入规范见 components/README.md）
 ├── config/            导航等应用配置
 ├── stores/            客户端状态
 ├── styles/            全局和共享样式

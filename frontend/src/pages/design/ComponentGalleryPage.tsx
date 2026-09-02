@@ -28,6 +28,7 @@ import {
   CenterMorphModalContent,
 } from '@/components/motion-ui/center-morph-modal'
 import { MOTION_UI_CATALOG, UPSTREAM } from '@/components/motion-ui/catalog'
+import { COMPONENT_CATALOG } from '@/components/component-catalog'
 
 /**
  * 平台共享组件画廊与 beUI 目录（/design/components，不进入导航）。
@@ -193,6 +194,35 @@ export default function ComponentGalleryPage() {
         >
           {JSON.stringify(week, null, 2)}
         </pre>
+      </section>
+
+      {/* ── 组件选型策展（数据源 component-catalog.ts，新功能选型单一事实源） ── */}
+      <section data-testid="component-catalog" className="mt-8" aria-label="组件选型策展">
+        <p className="mb-2 text-xs font-medium text-muted-foreground">
+          组件选型策展 · 场景 → 标准组件（数据源 component-catalog.ts；新功能选型先查此表）
+        </p>
+        <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-border text-xs text-muted-foreground">
+                <th className="px-4 py-2 font-medium">场景</th>
+                <th className="px-4 py-2 font-medium">标准组件</th>
+                <th className="px-4 py-2 font-medium">状态</th>
+                <th className="px-4 py-2 font-medium">要点</th>
+              </tr>
+            </thead>
+            <tbody>
+              {COMPONENT_CATALOG.map(entry => (
+                <tr key={entry.scenario} className="border-b border-border transition-colors hover:bg-muted">
+                  <td className="px-4 py-2 text-muted-foreground">{entry.scenario}</td>
+                  <td className="px-4 py-2 font-mono text-xs text-foreground">{entry.component}</td>
+                  <td className="px-4 py-2 text-xs text-muted-foreground">{entry.status}</td>
+                  <td className="px-4 py-2 text-xs text-muted-foreground">{entry.note ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       {/* ── 上游目录速查（数据源 motion-ui/catalog.ts） ── */}
