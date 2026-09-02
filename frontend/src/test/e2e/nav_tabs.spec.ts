@@ -307,6 +307,38 @@ test('左侧导航：「数据集成」显示新名称且收展行为与其他�
   await expect(page).toHaveURL(/\/#\/data\/pipelines$/)
 })
 
+test('左侧导航折叠态：一级导航全部可点击，分组直达第一个可见子项', async ({ page }) => {
+  await mockNavTabs(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/#/agent')
+
+  const nav = page.getByRole('navigation')
+  // 折叠侧边栏（Logo 按钮 aria-label 随折叠态切换）
+  await page.getByRole('button', { name: '折叠平台导航' }).click()
+
+  // 回归点：折叠态曾直接吞掉分组按钮点击（if (collapsed) return），
+  // 本体模型/世界模型/数据集成等一级导航完全不可达。现在应与展开态
+  // “未激活时跳第一个子项”的行为对齐，直达第一个可见子项。
+  const groups: Array<[string, RegExp]> = [
+    ['本体模型', /\/#\/ontologies$/],
+    ['世界模型', /\/#\/world-model\/models$/],
+    ['数据集成', /\/#\/data\/pipelines$/],
+    ['接口代理', /\/#\/api-hub\/interfaces$/],
+    ['开放社区', /\/#\/community\/skills$/],
+    ['系统设置', /\/#\/settings\/users$/],
+  ]
+  for (const [name, url] of groups) {
+    await nav.getByRole('button', { name, exact: true }).click()
+    await expect(page).toHaveURL(url)
+  }
+
+  // 叶子项在折叠态本就可达，一并回归
+  await nav.getByRole('link', { name: '三维场景' }).click()
+  await expect(page).toHaveURL(/\/#\/scenes$/)
+  await nav.getByRole('link', { name: '事件登记' }).click()
+  await expect(page).toHaveURL(/\/#\/events$/)
+})
+
 test('左上角 Logo 折叠/展开侧边栏：图标水平位置全程稳定不闪动', async ({ page }) => {
   await mockNavTabs(page)
   await page.setViewportSize({ width: 1440, height: 900 })

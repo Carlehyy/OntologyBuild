@@ -158,7 +158,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     type="button"
                     aria-expanded={groupExpanded}
                     onClick={() => {
-                      if (collapsed) return
+                      // 折叠态下子菜单不可见，点击组按钮直接跳转第一个可见子项，
+                      // 与展开态“未激活时跳第一个子项”的行为对齐，保证一级导航始终可达
+                      if (collapsed) {
+                        if (item.subItems && item.subItems.length > 0) {
+                          navigate(item.subItems[0].to)
+                          setMobileNavOpen(false)
+                        }
+                        return
+                      }
                       if (groupExpanded) {
                         setExpandedGroup(null)
                         setCollapsedActiveGroup(item.to)
@@ -173,7 +181,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     }}
                     className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${groupActive
                         ? 'text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'}`}
-                    style={groupActive ? { background: 'var(--color-nav-bg)' } : {}}>
+                    style={groupActive ? { background: 'var(--color-nav-bg)' } : {}}
+                    title={collapsed ? item.label : undefined}>
                     <Icon size={18} className="shrink-0" />
                     <span className={`flex-1 text-left font-medium ${labelAnimWide}`}>{item.label}</span>
                     <ChevronDown size={14} className={`shrink-0 overflow-hidden transition-all ${SIDEBAR_EASE} ${groupExpanded ? 'rotate-180' : ''} ${collapsed ? 'w-0 opacity-0' : 'w-3.5 opacity-100'}`} />
