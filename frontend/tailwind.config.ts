@@ -1,4 +1,5 @@
 import type { Config } from 'tailwindcss'
+import tailwindcssAnimate from 'tailwindcss-animate'
 
 // palantir-graph 编辑器色板：色值经 CSS 变量（RGB 通道三元组）下发，
 // 深色默认值与浅色覆盖见 src/palantir-graph/palantir-graph.css 的
@@ -140,6 +141,6 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  plugins: [tailwindcssAnimate],
 }
 export default config
