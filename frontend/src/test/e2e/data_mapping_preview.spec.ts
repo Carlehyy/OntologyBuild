@@ -203,9 +203,9 @@ test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async
   const lineage = page.getByRole('dialog', { name: '订单', exact: true })
   await expect(lineage).toBeVisible()
   await expect(page.getByText('把本体结构，接到真实数据上')).toHaveCount(0)
-  // 供给全景图是懒加载图表，落地前会把清单头部向下推；先等其 y 连续两次
-  // 采样不变，再在同一个 JS 任务内原子量测两个元素——分两次 await 读取会
-  // 在中间插入重排，造成对齐断言偶发失败。
+  // 画布已随视图互斥移出清单视图；KPI 动画/字体落地仍会轻微移动清单头部，
+  // 先等其 y 连续两次采样不变，再在同一个 JS 任务内原子量测两个元素——
+  // 分两次 await 读取会在中间插入重排，造成对齐断言偶发失败。
   const registerHead = page.locator('.dmo-register-head')
   let anchor = await registerHead.boundingBox()
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -237,10 +237,10 @@ test('数据源眼睛按钮打开分页预览，宽表提供横向滚动', async
   // MYW-77：汇总带头部改 flex 换行、卡片撑满一屏，任何宽度都不出现左右滚动条
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBeTruthy()
   expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth + 1)).toBeTruthy()
-  // MYW-77：卡片撑满一屏可用高度——内容少时不再留大片页底空白
+  // 清单视图独占工作区（画布已移出）：内容少时卡片仍不低于 min-height 下限
   const cardBox = await page.locator('.dmo-card').boundingBox()
   expect(cardBox).not.toBeNull()
-  expect(cardBox!.height).toBeGreaterThanOrEqual(460)
+  expect(cardBox!.height).toBeGreaterThanOrEqual(420)
 
   await lineage.getByRole('button', { name: '预览数据源 订单宽表' }).click()
   const dialog = page.getByRole('dialog', { name: '订单宽表' })
@@ -414,35 +414,85 @@ test('各视口宽度下数据映射页均不出现水平滚动条', async ({ pa
     // （如 opacity-0 的悬停提示）不会变成页面滚动条，故只断言页面级为零。
     expect(overflow, `width=${width}`).toEqual({ doc: 0, body: 0 })
   }
+
+  // 全景画布视图同样严格单页：切到画布后按宽度扫描（sessionStorage 保持视图）
+  await page.getByRole('group', { name: '切换视图' }).getByRole('button', { name: '全景画布' }).click()
+  await expect(page.getByTestId('mapping-chain-panorama')).toBeVisible()
+  for (const width of [960, 1180, 1366, 1600, 1920]) {
+    await page.setViewportSize({ width, height: 800 })
+    await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+    await page.waitForTimeout(500)
+    const overflow = await page.evaluate(() => ({
+      doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      body: document.body.scrollWidth - document.body.clientWidth,
+    }))
+    expect(overflow, `panorama width=${width}`).toEqual({ doc: 0, body: 0 })
+  }
 })
 
-test('对象与关系很多时纵向三段完整呈现：卡片随内容撑高、清单随页面滚动', async ({ page }) => {
+test('对象与关系很多时两视图各自完整呈现：清单随内容撑高、画布独占视口高度', async ({ page }) => {
   await mockMappingPreview(page, { manyRows: true })
   await page.setViewportSize({ width: 1440, height: 800 })
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
   await expect(page.getByText('映射结果清单')).toBeVisible()
   await expect(page.getByText('批量对象01')).toBeVisible()
 
-  // 纵向三段（beUI 重排）：卡片不再定高一屏，行多时随内容自然撑高
+  // 清单视图（默认）：卡片随内容自然撑高，行多时页面级滚动可达末行
   const viewportHeight = page.viewportSize()?.height ?? 800
   const card = page.locator('.dmo-card')
   const cardBox = await card.boundingBox()
   expect(cardBox!.height).toBeGreaterThan(viewportHeight - 200)
 
-  // 清单不再承担内部滚动（自然高度，仅容忍亚像素级伪差——旧单页布局下此处
-  // 内滚达上千像素）：末行经页面滚动可达，表头/筛选行仍随清单呈现
+  // 清单不承担内部滚动（自然高度，仅容忍亚像素级伪差）：末行经页面滚动可达，
+  // 表头/筛选行仍随清单呈现
   const rowList = page.locator('.dmo-row-list')
   expect(await rowList.evaluate(element => element.scrollHeight - element.clientHeight < 24)).toBeTruthy()
   await rowList.getByText('批量对象24').scrollIntoViewIfNeeded()
   await expect(rowList.getByText('批量对象24')).toBeInViewport()
   await expect(page.locator('.dmo-table-head')).toBeVisible()
+
+  // 切到全景画布：清单不在场，画布独占且高度给足（旧纵向三段仅 300-430px），
+  // 25 个本体元素卡 + 1 个数据资产卡全部渲染
+  await page.getByRole('group', { name: '切换视图' }).getByRole('button', { name: '全景画布' }).click()
+  const chart = page.getByTestId('mapping-chain-panorama')
+  await expect(chart).toBeVisible()
+  await expect(page.getByText('映射结果清单')).toHaveCount(0)
+  const flowBox = await page.locator('.dmo-flow').boundingBox()
+  expect(flowBox).not.toBeNull()
+  expect(flowBox!.height).toBeGreaterThanOrEqual(460)
+  await expect(chart.locator('.dmo-chain-node')).toHaveCount(26)
 })
 
-test('数据供给全景：节点卡链路渲染，图与清单、血缘弹窗联动', async ({ page }) => {
+test('视图互斥切换：画布与清单二选一，按本体记住上次选择', async ({ page }) => {
   await mockMappingPreview(page)
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
-  // MYW-77 二轮：卡片顶部「数据供给全景」标题/说明已移除，画布直接铺满面板
+  // 默认清单视图：画布不渲染
+  const toggle = page.getByRole('group', { name: '切换视图' })
+  await expect(toggle.getByRole('button', { name: '映射清单' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByText('映射结果清单')).toBeVisible()
+  await expect(page.getByTestId('mapping-chain-panorama')).toHaveCount(0)
+
+  // 切到全景画布：清单不在场，选择按本体写回 sessionStorage
+  await toggle.getByRole('button', { name: '全景画布' }).click()
+  await expect(page.getByTestId('mapping-chain-panorama')).toBeVisible()
+  await expect(page.getByText('映射结果清单')).toHaveCount(0)
+  expect(await page.evaluate(() => window.sessionStorage.getItem('dmo:mapping-view:ontology-preview'))).toBe('panorama')
+
+  // 同会话重新进入记住画布；切回清单后画布卸载
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+  await expect(page.getByTestId('mapping-chain-panorama')).toBeVisible()
+  await toggle.getByRole('button', { name: '映射清单' }).click()
+  await expect(page.getByText('映射结果清单')).toBeVisible()
+  await expect(page.getByTestId('mapping-chain-panorama')).toHaveCount(0)
+})
+
+test('全景画布视图：节点卡链路渲染，点击节点打开血缘弹窗', async ({ page }) => {
+  await mockMappingPreview(page)
+  await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+
+  // 视图互斥后画布在全景视图下渲染：先切换再断言；画布直接铺满面板
+  await page.getByRole('group', { name: '切换视图' }).getByRole('button', { name: '全景画布' }).click()
   await expect(page.getByRole('region', { name: '数据供给全景' })).toBeVisible()
   await expect(page.locator('.dmo-flow-title')).toHaveCount(0)
   const chart = page.getByTestId('mapping-chain-panorama')
@@ -467,14 +517,17 @@ test('数据供给全景：节点卡链路渲染，图与清单、血缘弹窗�
   await expect(chart).toBeVisible()
 })
 
-test('无映射本体显示诚实空态而非空画布', async ({ page }) => {
+test('无映射本体：清单如实呈现，画布视图显示诚实空态而非空画布', async ({ page }) => {
   await mockMappingPreview(page, { noMappings: true })
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
+  // 默认清单视图：未配置元素的去向在清单中如实呈现，画布不渲染
+  await expect(page.getByText('映射结果清单')).toBeVisible()
+  await expect(page.getByTestId('mapping-chain-panorama')).toHaveCount(0)
+  // 切到全景画布：无可见链路时显示空态而非空画布
+  await page.getByRole('group', { name: '切换视图' }).getByRole('button', { name: '全景画布' }).click()
   await expect(page.getByText('暂无数据流')).toBeVisible()
   await expect(page.getByTestId('mapping-chain-panorama')).toHaveCount(0)
-  // MYW-77 二轮：原「未接入数据流」caption 已随卡片顶部文字一并移除；
-  // 未接入元素的去向仍可在右侧映射结果清单中如实查看
 })
 
 test('实例数链接跳转实例数据 Tab 并选中对应类型', async ({ page }) => {
@@ -494,6 +547,7 @@ test('深色模式下数据映射页保持固定浅色作用域（DESIGN.md §5.
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
 
   await expect(page.locator('html')).toHaveClass(/dark/)
+  await page.getByRole('group', { name: '切换视图' }).getByRole('button', { name: '全景画布' }).click()
   await expect(page.getByTestId('mapping-chain-panorama')).toBeVisible()
   await expect.poll(async () => page.locator('.dmo-flow-canvas svg path').count()).toBeGreaterThan(0)
   // 本体详情域为固定浅色：html.dark 下映射卡片不翻深（--dmo-surface 浅色钉死）
@@ -596,6 +650,7 @@ test('悬停全景节点卡时静止非聚焦连线粒子，移开后恢复流�
   // 静止语义由连线 data.still 承载（原 data-still 属性机制已下线）。
   await mockMappingPreview(page)
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+  await page.getByRole('group', { name: '切换视图' }).getByRole('button', { name: '全景画布' }).click()
 
   const canvas = page.getByTestId('mapping-chain-panorama')
   await expect(canvas).toBeVisible()
@@ -620,6 +675,7 @@ test('供给全景连线不可命中，悬停节点卡无 enter/leave 振荡', a
   // 表现为「鼠标悬停画布卡片一直在闪」。连线改为纯视觉元素后必须保持零振荡。
   await mockMappingPreview(page)
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+  await page.getByRole('group', { name: '切换视图' }).getByRole('button', { name: '全景画布' }).click()
 
   const canvas = page.getByTestId('mapping-chain-panorama')
   await expect(canvas).toBeVisible()
@@ -669,6 +725,7 @@ test('供给全景列抬头居中于卡片列，且整块内容水平居中于�
   // 节点测量完成后必须重新 fitView 居中，抬头也要水平居中于自己的卡片列。
   await mockMappingPreview(page)
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+  await page.getByRole('group', { name: '切换视图' }).getByRole('button', { name: '全景画布' }).click()
 
   const canvas = page.getByTestId('mapping-chain-panorama')
   await expect(canvas).toBeVisible()
@@ -715,6 +772,7 @@ test('供给全景两列卡片按列垂直居中，滚轮可缩放画布', async
   // 画布滚轮从"只透传页面滚动"改为缩放（preventScrolling 捕获滚轮）。
   await mockMappingPreview(page, { withSecondMappedObject: true })
   await page.goto('/#/ontologies/ontology-preview?tab=data-mapping', { waitUntil: 'domcontentloaded' })
+  await page.getByRole('group', { name: '切换视图' }).getByRole('button', { name: '全景画布' }).click()
 
   const canvas = page.getByTestId('mapping-chain-panorama')
   await expect(canvas).toBeVisible()
