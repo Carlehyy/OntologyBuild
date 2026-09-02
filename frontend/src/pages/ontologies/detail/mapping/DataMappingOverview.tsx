@@ -1,12 +1,12 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { motion, useReducedMotion } from 'motion/react'
 import {
   AlertCircle, AlertTriangle, ArrowRight, Boxes, CheckCircle2, ChevronLeft,
-  ChevronRight, Database, Eye, ExternalLink, GitBranch, Link2, Loader2,
-  RefreshCw, Search, Table2, Workflow, X,
+  ChevronRight, Database, Eye, ExternalLink, GitBranch, Link2, List, Loader2,
+  RefreshCw, Search, Table2, Waypoints, Workflow, X,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 import curatedApi from '@/api/v2/curated'
@@ -27,6 +27,7 @@ import './mapping-overview.css'
 const MappingChainPanorama = lazy(() => import('./MappingChainPanorama'))
 
 type TargetSelection = { kind: 'object'; id: string } | { kind: 'relation'; id: string }
+type MappingViewMode = 'list' | 'panorama'
 const PREVIEW_PAGE_SIZES = [10, 20, 50]
 
 type MappingRowStatus = 'ready' | 'no-data' | 'incomplete' | 'type-risk' | 'unmapped' | 'missing-source'
@@ -53,6 +54,14 @@ function readSessionFilter(ontologyId: string): MappingFilter {
 }
 function readSessionSearch(ontologyId: string): string {
   try { return window.sessionStorage.getItem(dmoSearchKey(ontologyId)) ?? '' } catch { return '' }
+}
+/** 视图模式按本体隔离存 sessionStorage：默认映射清单（操作主导），
+    全景画布按需切换；刷新/从字段级映射页返回后保持上次选择。 */
+const dmoViewKey = (ontologyId: string) => `dmo:mapping-view:${ontologyId}`
+function readSessionView(ontologyId: string): MappingViewMode {
+  try {
+    return window.sessionStorage.getItem(dmoViewKey(ontologyId)) === 'panorama' ? 'panorama' : 'list'
+  } catch { return 'list' }
 }
 
 interface FieldPair {
@@ -519,18 +528,20 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
   const [previewDataset, setPreviewDataset] = useState<MappingDataset | null>(null)
   const [reconcileTarget, setReconcileTarget] = useState<MappingRow | null>(null)
   const [reconcilingMappingId, setReconcilingMappingId] = useState<string | null>(null)
-  // 行 ↔ 桑基图双向联动：rowHoverKey 由行 hover 置起驱动图高亮；chartHoverKey 反向高亮行
-  const [rowHoverKey, setRowHoverKey] = useState<string | null>(null)
-  const [chartHoverKey, setChartHoverKey] = useState<string | null>(null)
-  const rowRefs = useRef(new Map<string, HTMLElement>())
+  // 视图互斥（画布/清单二选一）：清单是默认操作视图，画布按需切换独占展示。
+  // 同屏共存曾长期争夺纵向空间并催生 hover 联动等共存补丁，互斥后一并退役。
+  const [viewMode, setViewMode] = useState<MappingViewMode>(() => readSessionView(ontologyId))
 
-  // 筛选与搜索词存 sessionStorage：从字段级映射页返回后不丢
+  // 筛选/搜索词/视图模式存 sessionStorage：从字段级映射页返回或刷新后不丢
   useEffect(() => {
     try { window.sessionStorage.setItem(dmoFilterKey(ontologyId), mappingFilter) } catch { /* noop */ }
   }, [mappingFilter, ontologyId])
   useEffect(() => {
     try { window.sessionStorage.setItem(dmoSearchKey(ontologyId), mappingSearch) } catch { /* noop */ }
   }, [mappingSearch, ontologyId])
+  useEffect(() => {
+    try { window.sessionStorage.setItem(dmoViewKey(ontologyId), viewMode) } catch { /* noop */ }
+  }, [viewMode, ontologyId])
 
   const [reconcileFeedback, setReconcileFeedback] = useState<{
     mappingId: string
@@ -732,11 +743,10 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
   const openInstances = (row: MappingRow) => {
     navigate(`/ontologies/${ontologyId}?tab=data&type=${row.kind === 'object' ? 'object' : 'link'}:${row.selection.id}`)
   }
+  /** 画布视图点击元素节点 → 打开血缘详情弹窗（清单不在场，无需滚动定位）。 */
   const selectFromChart = (key: string) => {
     const row = mappingRows.find(candidate => candidate.key === key)
-    if (!row) return
-    selectElement(row.selection)
-    rowRefs.current.get(key)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    if (row) selectElement(row.selection)
   }
   const flowRows = useMemo<ChainFlowRow[]>(() => mappingRows.map(row => ({
     key: row.key,
@@ -816,44 +826,52 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
             <span>来源数据资产</span><b><AnimatedNumber value={usedDatasetIds.size} duration={0.9} /></b><small>{usedDatasetIds.size > 0 ? `成品 ${usedCuratedCount} · 人工 ${usedManualCount}` : '尚未连接数据资产'}</small>
           </motion.div>
         </div>
-        <button type="button" className="dmo-primary-button" onClick={() => openMappingWorkspace()}>
-          <Workflow size={15} />查看字段级映射
-        </button>
+        <div className="dmo-summary-actions">
+          <div className="dmo-view-toggle" role="group" aria-label="切换视图">
+            <button type="button" data-active={viewMode === 'list'} aria-pressed={viewMode === 'list'} onClick={() => setViewMode('list')}>
+              <List size={13} />映射清单
+            </button>
+            <button type="button" data-active={viewMode === 'panorama'} aria-pressed={viewMode === 'panorama'} onClick={() => setViewMode('panorama')}>
+              <Waypoints size={13} />全景画布
+            </button>
+          </div>
+          <button type="button" className="dmo-primary-button" onClick={() => openMappingWorkspace()}>
+            <Workflow size={15} />查看字段级映射
+          </button>
+        </div>
       </header>
 
-      {/* ═══ 纵向三段：KPI 顶带 / 数据供给全景（全宽）/ 映射结果清单（全宽）═══
-          全景链路拿全宽横向展开，清单六列网格随页面纵向滚动；
-          窄屏无需再降档（天然单列）。 */}
-      <div className="dmo-workspace">
-        {/* MYW-77 二轮：卡片顶部说明文字按用户要求移除，画布内容直接铺满面板 */}
-        <section className="dmo-flow" aria-label="数据供给全景">
-          {mappedFlowCount === 0 ? (
-            <div className="dmo-flow-empty">
-              <motion.div animate={reduce ? undefined : { y: [0, -6, 0] }} transition={{ repeat: Infinity, duration: 3, ease: 'easeInOut' }}>
-                <Link2 size={22} />
-              </motion.div>
-              <b>暂无数据流</b>
-              <span>当前发布版本尚未建立可见的映射链路；完成映射配置并发布后，这里会呈现数据资产流入本体的全景。</span>
-            </div>
-          ) : (
-            <Suspense fallback={<div className="dmo-flow-skeleton" aria-label="正在加载供给全景图" />}>
-              <MappingChainPanorama
-                rows={flowRows}
-                hoverKey={rowHoverKey}
-                selectedKey={dialogRow?.key ?? null}
-                onSelectElement={selectFromChart}
-                onPreviewDataset={(datasetId) => {
-                  const dataset = data.datasets.find(item => item.id === datasetId)
-                  if (dataset) setPreviewDataset(dataset)
-                }}
-                onHoverNode={setChartHoverKey}
-                ontologyId={ontologyId}
-              />
-            </Suspense>
-          )}
-        </section>
-
-        <main className="dmo-register">
+      {/* ═══ 工作区视图互斥：映射清单（默认操作视图）/ 数据供给全景（按需切换）═══
+          二者不再同屏纵向堆叠争夺空间：清单视图整页铺满可操作行，
+          画布视图独占高度给足全景；选择按本体记 sessionStorage。 */}
+      <div className="dmo-workspace" data-view={viewMode}>
+        {viewMode === 'panorama' ? (
+          <section className="dmo-flow" aria-label="数据供给全景">
+            {mappedFlowCount === 0 ? (
+              <div className="dmo-flow-empty">
+                <motion.div animate={reduce ? undefined : { y: [0, -6, 0] }} transition={{ repeat: Infinity, duration: 3, ease: 'easeInOut' }}>
+                  <Link2 size={22} />
+                </motion.div>
+                <b>暂无数据流</b>
+                <span>当前发布版本尚未建立可见的映射链路；完成映射配置并发布后，这里会呈现数据资产流入本体的全景。</span>
+              </div>
+            ) : (
+              <Suspense fallback={<div className="dmo-flow-skeleton" aria-label="正在加载供给全景图" />}>
+                <MappingChainPanorama
+                  rows={flowRows}
+                  selectedKey={dialogRow?.key ?? null}
+                  onSelectElement={selectFromChart}
+                  onPreviewDataset={(datasetId) => {
+                    const dataset = data.datasets.find(item => item.id === datasetId)
+                    if (dataset) setPreviewDataset(dataset)
+                  }}
+                  ontologyId={ontologyId}
+                />
+              </Suspense>
+            )}
+          </section>
+        ) : (
+          <main className="dmo-register">
           <div className="dmo-register-head">
             <div className="dmo-register-title">
               <b>映射结果清单</b>
@@ -889,12 +907,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
                   tabIndex={0}
                   className="dmo-map-row"
                   data-selected={active}
-                  data-chart-hover={chartHoverKey === row.key || undefined}
                   key={row.key}
-                  ref={element => {
-                    if (element) rowRefs.current.set(row.key, element)
-                    else rowRefs.current.delete(row.key)
-                  }}
                   initial={reduce ? false : { opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ ...SPRING_LAYOUT, delay: reduce ? 0 : Math.min(index * 0.035, 0.35) }}
@@ -905,8 +918,6 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
                       selectElement(row.selection)
                     }
                   }}
-                  onMouseEnter={() => setRowHoverKey(row.key)}
-                  onMouseLeave={() => setRowHoverKey(null)}
                   aria-pressed={active}
                 >
                   <span className="dmo-target-cell">
@@ -964,7 +975,8 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
               </div>
             )}
           </div>
-        </main>
+          </main>
+        )}
       </div>
 
       {dialogRow && (

@@ -48,12 +48,9 @@ export interface ChainFlowRow extends FlowRowInput {
 
 interface MappingChainPanoramaProps {
   rows: ChainFlowRow[]
-  /** 清单行 hover 时下发对应图节点 id,驱动节点高亮。 */
-  hoverKey: string | null
   selectedKey: string | null
   onSelectElement: (key: string) => void
   onPreviewDataset: (datasetId: string) => void
-  onHoverNode: (key: string | null) => void
   /** 节点拖拽位置按本体持久化（localStorage 新增 key，不改既有存储契约）。 */
   ontologyId: string
 }
@@ -214,11 +211,9 @@ export default function MappingChainPanorama(props: MappingChainPanoramaProps) {
 
 function MappingChainPanoramaInner({
   rows,
-  hoverKey,
   selectedKey,
   onSelectElement,
   onPreviewDataset,
-  onHoverNode,
   ontologyId,
 }: MappingChainPanoramaProps) {
   const model = useMemo(() => buildFlowModel(rows), [rows])
@@ -288,7 +283,7 @@ function MappingChainPanoramaInner({
       },
     ]
     const push = (nodeId: string, column: number, index: number, card: ChainCardFields, offsetY: number) => {
-      const highlighted = Boolean(highlightSet?.has(nodeId)) || hoverKey === nodeId || selectedKey === nodeId
+      const highlighted = Boolean(highlightSet?.has(nodeId)) || selectedKey === nodeId
       result.push({
         id: nodeId,
         type: 'mappingChainNode',
@@ -320,7 +315,7 @@ function MappingChainPanoramaInner({
       }, elementOffsetY)
     })
     return result
-  }, [model, rows, datasetCards, highlightSet, hoverKey, selectedKey, dragPositions, containerSize.width])
+  }, [model, rows, datasetCards, highlightSet, selectedKey, dragPositions, containerSize.width])
 
   // 高亮集合以稳定字符串参与依赖：成员不变时重建的 Set 不再触发连线数组重算
   const highlightSetKey = useMemo(
@@ -328,7 +323,7 @@ function MappingChainPanoramaInner({
     [highlightSet],
   )
   // 悬停检视（未聚焦）期间非聚焦连线静止防闪烁；点选/选中聚焦时保持流动（MYW-77 二轮）
-  const still = (hoveringNode || hoverKey != null) && !highlightSet && selectedKey == null
+  const still = hoveringNode && !highlightSet && selectedKey == null
   const flowEdges = useMemo<Edge[]>(() => {
     const members = highlightSetKey ? new Set(highlightSetKey.split('|')) : null
     return model.links.map((link, index) => {
@@ -403,11 +398,9 @@ function MappingChainPanoramaInner({
           onNodeMouseEnter={(_, node) => {
             if (node.type !== 'mappingChainNode') return
             setHoveringNode(true)
-            onHoverNode(node.id)
           }}
           onNodeMouseLeave={() => {
             setHoveringNode(false)
-            onHoverNode(null)
           }}
           proOptions={{ hideAttribution: true }}
         >

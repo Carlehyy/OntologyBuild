@@ -54,8 +54,7 @@
   width: 100%;
   /* 对齐「本体总览·本体概况」卡片的观感语言（overview-panel）：
      细边框、14px 圆角、无投影、近白底。
-     纵向三段（MYW-77 后重排）：卡片随内容自然撑高，页面纵向滚动——
-     全景链路与清单都拿全宽，不再共享一屏高度 */
+     工作区视图互斥（画布/清单二选一）：卡片随内容自然撑高，页面纵向滚动 */
   border: 1px solid var(--dmo-line);
   border-radius: 14px;
   display: flex;
@@ -104,27 +103,32 @@
 .dmo-kpis b { margin-top: 3px; color: var(--dmo-num); font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.025em; }
 .dmo-kpis b i { color: var(--dmo-num-suffix); font-size: 12px; font-style: normal; font-weight: 600; letter-spacing: 0; }
 .dmo-kpis small { margin-top: 1px; overflow: hidden; color: var(--dmo-faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.dmo-primary-button { min-height: 38px; padding: 0 15px; border: 1px solid var(--dmo-teal-strong); border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; margin-left: auto; color: #fff; background: var(--dmo-teal); box-shadow: 0 5px 13px rgba(11,143,131,.18); font-size: 13px; font-weight: 700; cursor: pointer; transition: transform .18s ease, background-color .18s ease, box-shadow .18s ease; }
+.dmo-summary-actions { min-width: 0; margin-left: auto; display: flex; flex: none; align-items: center; gap: 10px; }
+.dmo-view-toggle { display: flex; flex: none; align-items: center; gap: 3px; padding: 3px; border: 1px solid var(--dmo-line); border-radius: 9px; background: var(--dmo-workspace-bg); }
+.dmo-view-toggle button { min-height: 28px; padding: 0 11px; border: 1px solid transparent; border-radius: 7px; display: inline-flex; align-items: center; gap: 5px; color: var(--dmo-muted); background: transparent; font-size: 12px; font-weight: 600; cursor: pointer; transition: color .18s ease, background-color .18s ease, box-shadow .18s ease; }
+.dmo-view-toggle button:hover { color: var(--dmo-text); }
+.dmo-view-toggle button[data-active="true"] { color: var(--dmo-teal-ink); background: var(--dmo-cell-bg); box-shadow: 0 1px 3px rgba(15,23,42,.08); }
+.dmo-primary-button { min-height: 38px; padding: 0 15px; border: 1px solid var(--dmo-teal-strong); border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; color: #fff; background: var(--dmo-teal); box-shadow: 0 5px 13px rgba(11,143,131,.18); font-size: 13px; font-weight: 700; cursor: pointer; transition: transform .18s ease, background-color .18s ease, box-shadow .18s ease; }
 .dmo-primary-button:hover { transform: translateY(-1px); background: var(--dmo-teal-strong); box-shadow: 0 8px 17px rgba(11,143,131,.23); }
 .dmo-primary-button:active { transform: translateY(0); }
 
-/* ═══ 数据供给全景（纵向三段的中段面板，全宽横向链路） ═══ */
+/* ═══ 数据供给全景（画布视图独占面板，全宽横向链路） ═══
+   独占展示时高度给足：约铺满内容区剩余视口（详情头部+Tab+KPI 带约 300px），
+   上限防超长屏失控，下限保证 4-5 行节点卡完整可读。 */
 .dmo-flow {
   min-width: 0;
   min-height: 0;
   flex: none;
-  height: clamp(300px, 38dvh, 430px);
+  height: clamp(440px, calc(100dvh - 300px), 880px);
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-bottom: 1px solid var(--dmo-line);
   background: var(--dmo-panel);
 }
-/* 画布随左栏富余高度拉伸（组件侧只给 minHeight 下限），图区越大全景越可读。
-   画布盒在堆叠模式下只有 minHeight 而无确定高度，React Flow 根节点自带的
-   height:100% 内联样式会塌缩为 0——组件侧用绝对定位填充层包住画布，
-   两种模式下都成立 */
+/* 画布撑满面板剩余高度（组件侧只给 minHeight 下限），图区越大全景越可读。
+   画布盒只有 minHeight 而无确定高度时，React Flow 根节点自带的
+   height:100% 内联样式会塌缩为 0——组件侧用绝对定位填充层包住画布 */
 .dmo-flow-canvas { flex: 1 1 auto; min-height: 200px; position: relative; }
 .dmo-flow-skeleton { flex: 1 1 auto; min-height: 240px; border-radius: 12px; background: linear-gradient(100deg, var(--dmo-line-soft) 38%, var(--dmo-hover-bg) 50%, var(--dmo-line-soft) 62%); background-size: 200% 100%; }
 @media (prefers-reduced-motion: no-preference) {
@@ -135,8 +139,8 @@
 .dmo-flow-empty b { color: var(--dmo-muted); font-size: 13px; }
 .dmo-flow-empty span { max-width: 460px; color: var(--dmo-faint); font-size: 12px; line-height: 1.6; }
 
-/* ═══ 纵向三段：全景（中段全宽）+ 清单（底段全宽） ═══
-   全景链路拿全宽横向展开；清单六列网格随页面纵向滚动。
+/* ═══ 工作区：映射清单（默认）/ 数据供给全景（切换）二选一渲染 ═══
+   清单六列网格随页面纵向滚动；全景独占画布视图高度。
    清单仍是容器查询的容器：行网格的紧凑档位跟「清单宽」走；
    窄屏 ≤700px 的整行换版式由视口媒体查询负责（见文件末尾）。 */
 .dmo-workspace {
@@ -174,7 +178,7 @@
 .dmo-row-list { min-height: 0; flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-color: #c7d1d6 transparent; scrollbar-width: thin; }
 .dmo-table-head span:nth-child(3), .dmo-table-head span:nth-child(4) { text-align: center; }
 .dmo-map-row { width: 100%; min-height: 68px; padding: 8px 15px; border: 0; border-bottom: 1px solid var(--dmo-line-soft); color: inherit; text-align: left; background: var(--dmo-cell-bg); cursor: pointer; transition: background-color .16s ease, box-shadow .16s ease; }
-.dmo-map-row:hover, .dmo-map-row[data-chart-hover="true"] { background: var(--dmo-hover-bg); }
+.dmo-map-row:hover { background: var(--dmo-hover-bg); }
 .dmo-map-row[data-selected="true"] { position: relative; background: var(--dmo-selected-bg); box-shadow: inset 3px 0 var(--dmo-teal); }
 .dmo-map-row[data-selected="true"]::after { content: ''; position: absolute; inset: 0 0 0 auto; width: 1px; background: var(--dmo-teal-line); }
 /* 清单行网格随栏宽降档（容器查询）：声明位于视口媒体查询之前，
