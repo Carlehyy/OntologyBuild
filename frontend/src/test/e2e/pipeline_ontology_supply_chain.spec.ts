@@ -72,7 +72,7 @@ async function login(page: Page) {
   await page.getByLabel('用户名', { exact: true }).fill(STACK_ADMIN_USERNAME)
   await page.getByLabel('密码', { exact: true }).fill(STACK_ADMIN_PASSWORD)
   await page.click('button[type="submit"]')
-  await page.waitForURL('**/#/agent', { timeout: 10_000 })
+  await page.waitForURL('**/#/super-assistant', { timeout: 10_000 })
 }
 
 async function apiJson(request: APIRequestContext, method: 'GET' | 'POST' | 'PUT', url: string, token: string, data?: unknown) {

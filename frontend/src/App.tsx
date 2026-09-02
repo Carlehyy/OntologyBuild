@@ -77,7 +77,7 @@ function AuthenticatedRoute({ children }: { children: React.ReactNode }) {
   return children
 }
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+function ProtectedRoute({ children, bare = false }: { children: React.ReactNode; bare?: boolean }) {
   const token = useAuthStore(s => s.token)
   const user = useAuthStore(s => s.user)
   const location = useLocation()
@@ -100,6 +100,8 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
       : firstAccessiblePath(user)
     return <Layout><AccessDeniedPage returnTo={returnTo} /></Layout>
   }
+  // bare：AI 原生前台（超级助手工作台）自带工作台侧栏，不套后台 Layout
+  if (bare) return children
   return <Layout>{children}</Layout>
 }
 
@@ -193,7 +195,7 @@ export default function App() {
           <Route path="/agent/reports" element={<ProtectedRoute><ReportStudioPage /></ProtectedRoute>} />
           <Route path="/agent/reports/:templateId" element={<ProtectedRoute><ReportStudioPage /></ProtectedRoute>} />
           <Route path="/agent" element={<ProtectedRoute><AgentWorkbenchPage /></ProtectedRoute>} />
-          <Route path="/super-assistant" element={<ProtectedRoute><SuperAssistantPage /></ProtectedRoute>} />
+          <Route path="/super-assistant" element={<ProtectedRoute bare><SuperAssistantPage /></ProtectedRoute>} />
           <Route path="/events" element={<ProtectedRoute><EventRegistryPage /></ProtectedRoute>} />
           <Route path="/scenes" element={<ProtectedRoute><SceneListPage /></ProtectedRoute>} />
           <Route path="/scenes/modeling" element={<ProtectedRoute><SceneModelingPage /></ProtectedRoute>} />

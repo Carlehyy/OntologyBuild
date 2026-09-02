@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import {
-  Network, Settings, LogOut, ChevronLeft, ChevronRight, ChevronDown,
+  BrainCircuit, Network, Settings, LogOut, ChevronLeft, ChevronRight, ChevronDown,
   UserCircle, User, Menu, X,
 } from 'lucide-react'
 import FloatingAssistantWidget from '@/components/assistant-widget/FloatingAssistantWidget'
@@ -11,7 +11,7 @@ import NavTabs from '@/components/NavTabs'
 import PreferencesModal from '@/components/preferences/PreferencesModal'
 import ProfileModal from '@/components/profile/ProfileModal'
 import TicketPopover from '@/components/tickets/TicketPopover'
-import { PLATFORM_NAV_ITEMS, visibleNavigation, type PlatformNavItem } from '@/config/navigation'
+import { PLATFORM_NAV_ITEMS, hasMenuAccess, visibleNavigation, type PlatformNavItem } from '@/config/navigation'
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const logout = useAuthStore(s => s.logout)
@@ -101,7 +101,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     && new URLSearchParams(location.search).get('tab') === 'data'
   // 场景助手（对话式建模）与本体网络页同为「左画布 + 右操作」双卡全高布局，
   // 需要相同的 edge-to-edge 容器（h-full 无内边距，间距由页面自身 p-1 提供，MYW-64）。
-  const isEdgeToEdgePage = isActive('/explore') || isActive('/agent') || isActive('/super-assistant') || isActive('/events') || isActive('/tickets') || isActive('/api-hub') || isActive('/ontology-model/network') || isActive('/scenes/modeling') || isMappingWorkspace
+  const isEdgeToEdgePage = isActive('/explore') || isActive('/agent') || isActive('/events') || isActive('/tickets') || isActive('/api-hub') || isActive('/ontology-model/network') || isActive('/scenes/modeling') || isMappingWorkspace
   const isStewardPage = isActive('/data/pipelines/steward')
   // 标签栏独立于所有页面，所有页面统一显示（含业务探索、智能助手等全屏页）
   const showTopTabBar = true
@@ -146,6 +146,18 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Nav */}
         <nav className="flex-1 py-3 px-2 space-y-1.5 overflow-y-auto">
+          {/* AI 工作台（前台）入口：从后台随时返回超级助手工作台 */}
+          {hasMenuAccess(user, 'super_assistant') && (
+            <>
+              <Link to="/super-assistant" onClick={() => setMobileNavOpen(false)}
+                className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] transition-all"
+                title={collapsed ? 'AI 工作台' : undefined}>
+                <BrainCircuit size={18} className="shrink-0" />
+                <span className={`font-medium ${labelAnim}`}>AI 工作台</span>
+              </Link>
+              <div className="border-b border-[var(--color-border)]" aria-hidden="true" />
+            </>
+          )}
           {navItems.map((item) => {
             const Icon = item.icon
             const groupActive = isGroupActive(item)

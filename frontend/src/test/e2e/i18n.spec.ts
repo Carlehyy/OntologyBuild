@@ -10,7 +10,7 @@ async function login(page: any) {
   await page.getByLabel('用户名', { exact: true }).fill(STACK_ADMIN_USERNAME)
   await page.getByLabel('密码', { exact: true }).fill(STACK_ADMIN_PASSWORD)
   await page.click('button[type="submit"]')
-  await page.waitForURL('**/#/agent')
+  await page.waitForURL('**/#/super-assistant')
 }
 
 test.describe('Internationalization (i18n)', () => {

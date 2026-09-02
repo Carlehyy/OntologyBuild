@@ -16,8 +16,8 @@ async function login(page: Page) {
   await page.getByLabel('用户名', { exact: true }).fill(STACK_ADMIN_USERNAME)
   await page.getByLabel('密码', { exact: true }).fill(STACK_ADMIN_PASSWORD)
   await page.getByRole('button', { name: '登录' }).click()
-  // 登录落地页现为智能助手（本体助手），不再是平台概览
-  await page.waitForURL(/\/#\/agent$/)
+  // 登录落地页现为超级助手（AI 工作台前台），不再是本体助手
+  await page.waitForURL(/\/#\/super-assistant$/)
   const token = await page.evaluate(() => localStorage.getItem('token'))
   const domainResponse = await page.request.post(`${API}/api/v1/domains`, {
     headers: { Authorization: `Bearer ${token}` },

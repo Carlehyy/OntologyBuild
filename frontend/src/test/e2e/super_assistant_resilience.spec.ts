@@ -18,7 +18,7 @@ async function authenticate(page: Page) {
   await page.getByLabel('用户名', { exact: true }).fill(STACK_ADMIN_USERNAME)
   await page.getByLabel('密码', { exact: true }).fill(STACK_ADMIN_PASSWORD)
   await page.locator('button[type="submit"]').click()
-  await page.waitForURL('**/#/agent')
+  await page.waitForURL('**/#/super-assistant')
 }
 
 test('MCP 列表失败时仍加载文本模型并允许输入', async ({ page }) => {

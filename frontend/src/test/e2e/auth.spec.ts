@@ -14,7 +14,7 @@ async function loginAs(
   await page.getByLabel('用户名', { exact: true }).fill(username)
   await page.getByLabel('密码', { exact: true }).fill(password)
   await page.click('button[type="submit"]')
-  await page.waitForURL('**/#/agent')
+  await page.waitForURL('**/#/super-assistant')
 }
 
 test.describe('Authentication', () => {
@@ -31,7 +31,7 @@ test.describe('Authentication', () => {
 
   test('login with valid credentials', async ({ page }) => {
     await loginAs(page)
-    await expect(page).toHaveURL(/\/#\/agent$/)
+    await expect(page).toHaveURL(/\/#\/super-assistant$/)
   })
 
   test('login with wrong password shows error', async ({ page }) => {

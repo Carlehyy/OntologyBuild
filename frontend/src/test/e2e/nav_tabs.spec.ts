@@ -150,15 +150,13 @@ test('顶栏多标签页：打开、切换、域内路径恢复、关闭与刷�
   await expect(tabList.getByRole('tab', { name: '本体助手' })).toHaveCount(0)
   await expect(ontologiesTab).toHaveAttribute('aria-selected', 'true')
 
-  // 关闭最后一个标签，回到默认落地页并重新记录标签
+  // 关闭最后一个标签，回到默认落地页（AI 原生工作台为裸布局，无顶栏标签栏）
   await ontologiesTab.getByRole('button', { name: '关闭 本体模型 · 本体管理' }).click()
-  await expect(page).toHaveURL(/\/#\/agent$/)
-  await expect(tabList.getByRole('tab', { name: '本体助手' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page).toHaveURL(/\/#\/super-assistant$/)
+  await expect(tabList).toHaveCount(0)
 
-  // 边界：在落地页上关闭唯一的标签，标签应随同路径导航重新记录
-  await tabList.getByRole('tab', { name: '本体助手' })
-    .getByRole('button', { name: '关闭 本体助手' }).click()
-  await expect(page).toHaveURL(/\/#\/agent$/)
+  // 从工作台回到后台页面，标签随同路径导航重新记录
+  await page.goto('/#/agent')
   await expect(tabList.getByRole('tab', { name: '本体助手' })).toHaveAttribute('aria-selected', 'true')
 })
 

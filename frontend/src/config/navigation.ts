@@ -221,11 +221,11 @@ export function firstAccessiblePath(user: User | null): string {
 }
 
 /**
- * 登录成功或访问根路径时的默认落地页：优先进入本体助手；
- * 无本体助手权限（如只分配了部分菜单的 custom 用户）时退回第一个可访问页面。
+ * 登录成功或访问根路径时的默认落地页：优先进入超级助手工作台（AI 原生前台）；
+ * 无超级助手权限（如只分配了部分菜单的 custom 用户）时退回第一个可访问页面。
  */
 export function defaultLandingPath(user: User | null): string {
-  if (user && hasMenuAccess(user, 'agent')) return '/agent'
+  if (user && hasMenuAccess(user, 'super_assistant')) return '/super-assistant'
   return firstAccessiblePath(user)
 }
 
