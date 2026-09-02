@@ -83,12 +83,15 @@ test('本体领域筛选只使用系统设置领域，不合并本体孤儿值',
   const filter = page.getByLabel('按所属领域筛选', { exact: true })
   await expect(filter).toBeVisible()
   await filter.click()
+  // Radix Select 展开时会把面板外内容置为 aria-hidden，卡片断言前先收起面板
   const listbox = page.getByRole('listbox')
   await expect(listbox.getByRole('option', { name: '配置领域', exact: true })).toHaveCount(1)
   await expect(listbox.getByRole('option', { name: '孤儿领域', exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
   await expect(page.getByRole('button', { name: '孤儿领域本体', exact: true })).toBeVisible()
 
-  await listbox.getByRole('option', { name: '配置领域', exact: true }).click()
+  await filter.click()
+  await page.getByRole('listbox').getByRole('option', { name: '配置领域', exact: true }).click()
   await expect(page.getByRole('button', { name: '配置领域本体', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '孤儿领域本体', exact: true })).toHaveCount(0)
 })

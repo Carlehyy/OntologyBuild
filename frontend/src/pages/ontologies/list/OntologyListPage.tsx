@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/Input'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/motion-ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ICON_OPTIONS, OntologyAvatar } from '@/components/OntologyAvatar'
 import type { OntologyListItem } from '@/types/ontology'
 import {
@@ -621,15 +621,16 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
             </button>
           )}
         </div>
+        {/* Radix Select 不允许空字符串 value，「全部领域」用哨兵值 __all__ 映射为空 */}
         <Select
-          value={domainFilter}
-          onValueChange={value => setDomainFilter(value)}
+          value={domainFilter || '__all__'}
+          onValueChange={value => setDomainFilter(value === '__all__' ? '' : value)}
         >
           <SelectTrigger aria-label="按所属领域筛选" className="h-9 min-w-36 rounded-lg">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">全部领域</SelectItem>
+            <SelectItem value="__all__">全部领域</SelectItem>
             {domains.map(item => <SelectItem key={item.id} value={item.name}>{item.name}</SelectItem>)}
           </SelectContent>
         </Select>
