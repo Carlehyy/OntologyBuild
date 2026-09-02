@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Sender } from '@ant-design/x'
 import { ConfigProvider, theme as antdTheme } from 'antd'
 import {
-  Check, History, List, Loader2, MessageSquare, Pencil,
+  Check, List, Loader2, Menu, Pencil,
   Send, Settings2, Square, X,
 } from 'lucide-react'
 
@@ -17,10 +17,10 @@ import {
   type ToolStep,
 } from '@/api/superAssistant'
 import { useToast } from '@/components/ui/Toast'
-import SessionHistoryPopover from '@/components/SessionHistoryPopover'
 import { pickInitialConversationId } from '@/components/assistant-widget/logic'
 import { useThemeStore } from '@/stores/themeStore'
 import ConfigurationPanel, { errorText } from './components/AssistantConfiguration'
+import WorkbenchSidebar from './components/WorkbenchSidebar'
 import {
   ChatMessage, ConfirmationCard, ContextUsage, EmptyState,
   type PendingConfirmation,
@@ -46,7 +46,7 @@ export default function SuperAssistantPage() {
   const [stopping, setStopping] = useState(false)
   const [pending, setPending] = useState<PendingConfirmation | null>(null)
   const [decisionBusy, setDecisionBusy] = useState(false)
-  const [sessionsOpen, setSessionsOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [showMessageHistory, setShowMessageHistory] = useState(false)
   const [configOpen, setConfigOpen] = useState(false)
   const [editingTitle, setEditingTitle] = useState(false)
@@ -153,6 +153,18 @@ export default function SuperAssistantPage() {
       if (selectedId === conversation.id) { setSelectedId(next[0]?.id || null); setMessages([]) }
       toast({ tone: 'success', title: '会话已删除' })
     } catch (error) { toast({ tone: 'error', title: '删除失败', description: errorText(error) }) }
+  }
+
+  const setConversationArchived = async (conversationId: string, archived: boolean) => {
+    try {
+      const updated = await superAssistantApi.updateConversation(conversationId, {
+        status: archived ? 'archived' : 'active',
+      })
+      setConversations(current => current.map(item => item.id === updated.id ? updated : item))
+      toast({ tone: 'success', title: archived ? '会话已归档' : '会话已恢复' })
+    } catch (error) {
+      toast({ tone: 'error', title: archived ? '归档失败' : '恢复失败', description: errorText(error) })
+    }
   }
 
   const changeModel = async (modelId: string) => {
@@ -370,8 +382,29 @@ export default function SuperAssistantPage() {
 
   return (
     <div className="relative flex h-full min-h-0 overflow-hidden bg-[var(--color-bg-base)]">
+      <WorkbenchSidebar
+        conversations={conversations}
+        selectedId={selectedId}
+        mobileOpen={sidebarOpen}
+        onCloseMobile={() => setSidebarOpen(false)}
+        onCreate={async () => { await createConversation() }}
+        onSelect={id => setSelectedId(id)}
+        onDelete={id => {
+          const conversation = conversations.find(item => item.id === id)
+          if (conversation) return deleteConversation(conversation)
+        }}
+        onSetArchived={(id, archived) => void setConversationArchived(id, archived)}
+      />
       <section className="flex min-w-0 flex-1 flex-col bg-[var(--color-bg-elevated)]">
         <header className="relative z-10 flex h-[4.3125rem] shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 sm:px-4">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="打开工作台导航"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] md:hidden"
+          >
+            <Menu size={18} />
+          </button>
           <div className="min-w-0 flex-1">
             {editingTitle ? (
               <form className="flex max-w-lg items-center gap-1.5" onSubmit={event => { event.preventDefault(); void saveTitle() }}>
@@ -422,7 +455,7 @@ export default function SuperAssistantPage() {
           </select>
           <button
             type="button"
-            onClick={() => { setSessionsOpen(false); setConfigOpen(value => !value) }}
+            onClick={() => setConfigOpen(value => !value)}
             aria-label={configOpen ? '关闭助手配置' : '打开助手配置'}
             aria-expanded={configOpen}
             title="助手配置"
@@ -432,38 +465,6 @@ export default function SuperAssistantPage() {
           >
             <Settings2 size={15} />
           </button>
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setSessionsOpen(value => !value)}
-              aria-label="查看会话记录"
-              aria-expanded={sessionsOpen}
-              title="查看会话记录"
-              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 ${sessionsOpen
-                ? 'border-sky-400 bg-sky-100 text-sky-800'
-                : 'border-sky-200 bg-sky-50 text-sky-700 hover:border-sky-300 hover:bg-sky-100 hover:text-sky-800'}`}
-            >
-              <History size={15} />
-            </button>
-            <SessionHistoryPopover
-              open={sessionsOpen}
-              items={conversations.map(conversation => ({ ...conversation, updatedAt: conversation.updated_at }))}
-              currentId={selectedId}
-              onClose={() => setSessionsOpen(false)}
-              onCreate={async () => {
-                const created = await createConversation()
-                if (created) setSessionsOpen(false)
-              }}
-              onSelect={id => { setSelectedId(id); setSessionsOpen(false) }}
-              onDelete={id => {
-                const conversation = conversations.find(item => item.id === id)
-                if (conversation) return deleteConversation(conversation)
-              }}
-              renderItemIcon={() => <MessageSquare size={16} />}
-              emptyDescription="新建会话后，可随时回到之前的任务、Skill 调用与 MCP 执行记录。"
-              topOffsetClassName="mt-[22px]"
-            />
-          </div>
         </header>
 
         <ConfigProvider

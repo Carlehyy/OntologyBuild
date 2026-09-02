@@ -226,11 +226,11 @@ test('跳转完整页携带当前会话并直达同一会话', async ({ page }) 
 
   await panel.getByTestId('assistant-widget-open-full').click()
   await expect(page).toHaveURL(/#\/super-assistant\?conversation=conversation-2/)
-  // 完整页头部标题按钮显示目标会话，且历史消息一致
-  await expect(page.getByRole('button', { name: /会话二/ })).toBeVisible()
+  // 完整页头部标题按钮显示目标会话，且历史消息一致（侧栏会话行同名，需限定在头部）
+  await expect(page.locator('header').getByRole('button', { name: /会话二/ })).toBeVisible()
   await expect(page.getByText('第二个会话的内容')).toBeVisible()
-  // 悬浮入口在超级助手页面依旧可用
-  await expect(page.getByTestId('assistant-widget-fab')).toBeVisible()
+  // 超级助手页即 AI 工作台前台，不再挂载悬浮入口（页面本身就是助手）
+  await expect(page.getByTestId('assistant-widget-fab')).toHaveCount(0)
 })
 
 test('流式进行中点击停止可立即取消生成', async ({ page }) => {
@@ -381,9 +381,9 @@ test('管理员配置的隐藏目录不再渲染悬浮入口', async ({ page }) 
   await page.goto('/#/settings/users')
   await expect(fab).toHaveCount(0)
 
-  // 未隐藏目录照常显示（超级助手主页不在可配置目录内，始终可见）
+  // 超级助手页为 AI 工作台前台（裸布局），不挂载悬浮入口
   await page.goto('/#/super-assistant')
-  await expect(fab).toBeVisible()
+  await expect(fab).toHaveCount(0)
 
   // 切回未隐藏页面时恢复显示
   await page.goto('/#/overview')

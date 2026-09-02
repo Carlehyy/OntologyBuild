@@ -225,7 +225,7 @@ export const superAssistantApi = {
   conversations: () => apiClientV2.get<SuperConversation[]>('/super-assistant/conversations'),
   createConversation: (body: { title?: string; model_config_id?: string | null } = {}) =>
     apiClientV2.post<SuperConversation>('/super-assistant/conversations', body),
-  updateConversation: (id: string, body: { title?: string; model_config_id?: string | null }) =>
+  updateConversation: (id: string, body: { title?: string; model_config_id?: string | null; status?: 'active' | 'archived' }) =>
     apiClientV2.patch<SuperConversation>(`/super-assistant/conversations/${id}`, body),
   deleteConversation: (id: string) => apiClientV2.delete(`/super-assistant/conversations/${id}`),
   messages: (id: string) => apiClientV2.get<SuperMessage[]>(`/super-assistant/conversations/${id}/messages`),

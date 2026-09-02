@@ -37,7 +37,7 @@ async function loginAsAdmin(page: Page) {
   await page.getByLabel('用户名', { exact: true }).fill(STACK_ADMIN_USERNAME)
   await page.getByLabel('密码', { exact: true }).fill(STACK_ADMIN_PASSWORD)
   await page.locator('button[type="submit"]').click()
-  await page.waitForURL('**/#/agent')
+  await page.waitForURL('**/#/super-assistant')
 }
 
 async function mockSuperAssistant(page: Page) {
@@ -139,29 +139,25 @@ test('标题编辑与顶部工具默认使用可识别的状态色', async ({ pa
 
   const contextUsage = page.getByTestId('super-assistant-context-usage')
   const configButton = page.getByRole('button', { name: '打开助手配置' })
-  const historyButton = page.getByRole('button', { name: '查看会话记录' })
 
   await expect(contextUsage).toHaveCSS('background-color', 'rgba(240, 253, 250, 0.8)')
   await expect(configButton).toHaveCSS('background-color', 'rgb(255, 251, 235)')
-  await expect(historyButton).toHaveCSS('background-color', 'rgb(240, 249, 255)')
 
   const contextBox = await contextUsage.boundingBox()
   const configBox = await configButton.boundingBox()
-  const historyBox = await historyButton.boundingBox()
   expect(contextBox).not.toBeNull()
   expect(configBox).not.toBeNull()
-  expect(historyBox).not.toBeNull()
   expect(Math.abs(contextBox!.y - configBox!.y)).toBeLessThan(2)
-  expect(Math.abs(contextBox!.y - historyBox!.y)).toBeLessThan(2)
 
-  await page.getByRole('button', { name: /Markdown 渲染验证/ }).click()
+  // 侧栏会话行与头栏标题按钮同名，标题编辑入口需限定在头部
+  await page.locator('header').getByRole('button', { name: /Markdown 渲染验证/ }).click()
   const cancelButton = page.getByRole('button', { name: '取消编辑会话名称' })
   await expect(page.getByRole('textbox', { name: '编辑会话名称' })).toBeVisible()
   await expect(cancelButton).toHaveCSS('background-color', 'rgb(255, 241, 242)')
   await expect(cancelButton).toHaveCSS('color', 'rgb(225, 29, 72)')
 })
 
-test('打开会话记录时保留已展示的助手配置', async ({ page }) => {
+test('打开助手配置时工作台侧栏保持可用', async ({ page }) => {
   await mockSuperAssistant(page)
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/#/super-assistant')
@@ -169,10 +165,9 @@ test('打开会话记录时保留已展示的助手配置', async ({ page }) => 
   await page.getByRole('button', { name: '打开助手配置' }).click()
   await expect(page.getByRole('heading', { name: '助手配置' })).toBeVisible()
 
-  await page.getByRole('button', { name: '查看会话记录' }).click()
-
-  await expect(page.getByRole('dialog', { name: '历史会话' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '助手配置' })).toBeVisible()
+  // 历史会话已迁入左侧工作台常驻时间线，不再是顶栏浮层
+  await expect(page.getByRole('button', { name: '查看会话记录' })).toHaveCount(0)
+  await expect(page.locator('[data-workbench-conversation="conversation-1"]')).toBeVisible()
   await expect(page.locator('button[title="助手配置"]')).toHaveAttribute('aria-expanded', 'true')
 })
 
@@ -185,24 +180,11 @@ test('消息输入框默认获得焦点并展示绿色边框', async ({ page }) 
   await expect(page.getByTestId('super-assistant-composer')).toHaveCSS('border-color', 'rgb(20, 184, 166)')
 })
 
-test('历史会话与消息跳转浮层和相邻区域保留间距', async ({ page }) => {
+test('消息跳转浮层与输入区保留间距', async ({ page }) => {
   await mockSuperAssistant(page)
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/#/super-assistant')
 
-  const historyButton = page.getByRole('button', { name: '查看会话记录' })
-  await historyButton.click()
-  const historyPopover = page.getByRole('dialog', { name: '历史会话' })
-  const pageHeader = historyButton.locator('xpath=ancestor::header[1]')
-  const [historyBox, headerBox] = await Promise.all([
-    historyPopover.boundingBox(),
-    pageHeader.boundingBox(),
-  ])
-  expect(historyBox).not.toBeNull()
-  expect(headerBox).not.toBeNull()
-  expect(historyBox!.y - (headerBox!.y + headerBox!.height)).toBeGreaterThanOrEqual(4)
-
-  await page.mouse.click(400, 400)
   await page.getByRole('button', { name: '查看我发送的消息' }).click()
   const [messageHistoryBox, composerBox] = await Promise.all([
     page.getByTestId('super-assistant-message-history').boundingBox(),

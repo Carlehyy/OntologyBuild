@@ -233,7 +233,9 @@ export default function AssistantWidgetPanel() {
               content={(
                 <div className="max-h-72 w-64 overflow-y-auto" data-testid="assistant-widget-history">
                   <Conversations
-                    items={conversations.map(item => ({ key: item.id, label: item.title }))}
+                    items={conversations
+                      .filter(item => item.status !== 'archived')
+                      .map(item => ({ key: item.id, label: item.title }))}
                     activeKey={activeId ?? undefined}
                     onActiveChange={key => {
                       setHistoryOpen(false)
