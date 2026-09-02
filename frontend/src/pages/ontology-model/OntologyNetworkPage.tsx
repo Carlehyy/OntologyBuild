@@ -92,6 +92,10 @@ export default function OntologyNetworkPage() {
   const { data: overview = [], isLoading: overviewLoading } = useQuery({
     queryKey: ['ontology-network-overview', refreshToken],
     queryFn: () => ontologyNetworkApi.overview(Date.now() < freshUntilRef.current),
+    // 切回浏览器 tab 时不自动重拉：graph 为同步全量重建，聚焦刷新会让
+    // “正在构建全局图谱”遮罩反复打断浏览；刷新一律走页面手动刷新按钮。
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
   })
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const seededRef = useRef(false)
@@ -121,6 +125,9 @@ export default function OntologyNetworkPage() {
       fresh: Date.now() < freshUntilRef.current,
     }),
     enabled: graphKey !== null,
+    // 同 overview：禁止窗口聚焦自动 refetch（切 tab 回来不再触发全图重建遮罩）。
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
   })
 
   // -- 分析（浏览 / 路径 / 推演）--

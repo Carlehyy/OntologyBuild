@@ -158,6 +158,7 @@ async function mockNetworkApi(page: Page) {
   })
 
   const graphQueries: string[] = []
+  const overviewQueries: string[] = []
   await page.route(/^https?:\/\/[^/]+\/api\/v[12]\//, async (route: Route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -167,7 +168,10 @@ async function mockNetworkApi(page: Page) {
       body: JSON.stringify({ data, message: 'ok' }),
     })
 
-    if (url.pathname === '/api/v2/ontology-network/overview') return ok(overview)
+    if (url.pathname === '/api/v2/ontology-network/overview') {
+      overviewQueries.push(url.searchParams.toString())
+      return ok(overview)
+    }
     if (url.pathname === '/api/v2/ontology-network/graph') {
       graphQueries.push(url.searchParams.toString())
       return ok(graphResponse)
@@ -179,7 +183,7 @@ async function mockNetworkApi(page: Page) {
     if (url.pathname === '/api/v2/inbox') return ok({ items: [], total: 0 })
     return ok({})
   })
-  return { graphQueries }
+  return { graphQueries, overviewQueries }
 }
 
 test('本体网络画布渲染全局图：默认结构层、统计、图例与节点标签可见', async ({ page }) => {
@@ -322,4 +326,37 @@ test('悬停节点：一跳邻接强亮、其余 blur 淡出并可恢复', async
   // 移出画布后 blur 恢复，淡出元素回到基线
   await page.mouse.move(5, 5)
   await expect.poll(dimmedCount).toBe(baseline)
+})
+
+// 与 governance_async_refresh.spec.ts 同款：覆写 visibilityState 后派发事件，
+// 模拟「切走标签页再切回」触发的 React Query 窗口聚焦。
+async function setDocumentVisibility(page: Page, state: 'visible' | 'hidden') {
+  await page.evaluate(nextState => {
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => nextState,
+    })
+    document.dispatchEvent(new Event('visibilitychange'))
+    if (nextState === 'visible') window.dispatchEvent(new Event('focus'))
+  }, state)
+}
+
+test('切回浏览器标签页不触发全局图谱重建（无新请求、无构建遮罩）', async ({ page }) => {
+  const { graphQueries, overviewQueries } = await mockNetworkApi(page)
+  await page.goto('/#/ontology-model/network', { waitUntil: 'domcontentloaded' })
+
+  const card = page.getByTestId('network-canvas-card')
+  await expect(card.getByText('2 个本体 · 7 节点 / 4 边')).toBeVisible()
+  const graphBefore = graphQueries.length
+  const overviewBefore = overviewQueries.length
+  assert.ok(graphBefore > 0 && overviewBefore > 0, '首屏应已发出 overview 与 graph 请求')
+
+  await setDocumentVisibility(page, 'hidden')
+  await setDocumentVisibility(page, 'visible')
+
+  // 给潜在的聚焦 refetch 留出执行窗口：overview/graph 均不应重新请求
+  await page.waitForTimeout(600)
+  expect(graphQueries.length).toBe(graphBefore)
+  expect(overviewQueries.length).toBe(overviewBefore)
+  await expect(card.getByText('正在构建全局图谱')).toHaveCount(0)
 })
