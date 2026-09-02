@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 
 /**
  * 本体管理卡片交互（MYW-77）：
- * ①「查看」按钮跳转本体详情；②右下角时间带「更新于/创建于」前缀；
+ * ①「查看」按钮与本体描述跳转本体详情；②右下角时间带「更新于/创建于」前缀；
  * ③拖拽卡片改变相对位置并经 localStorage 持久化，筛选态禁用拖拽。
  */
 const ok = (route: Route, data: unknown) => route.fulfill({
@@ -71,6 +71,17 @@ test('卡片「查看」按钮跳转本体详情页', async ({ page }) => {
   await expect(page.getByRole('button', { name: '阿尔法本体', exact: true })).toBeVisible()
 
   await page.getByRole('button', { name: '查看本体 阿尔法本体 详情' }).click()
+  await expect(page).toHaveURL(/#\/ontologies\/ont-alpha$/)
+})
+
+test('点击卡片本体描述跳转本体详情页', async ({ page }) => {
+  await mockListPage(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/#/ontologies', { waitUntil: 'domcontentloaded' })
+  const alphaCard = page.getByTestId('ontology-card').filter({ hasText: '阿尔法本体' })
+  await expect(alphaCard).toBeVisible()
+
+  await alphaCard.getByRole('button', { name: '阿尔法本体的描述', exact: true }).click()
   await expect(page).toHaveURL(/#\/ontologies\/ont-alpha$/)
 })
 

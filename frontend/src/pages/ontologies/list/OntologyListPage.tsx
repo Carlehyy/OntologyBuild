@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/Input'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/motion-ui/select'
 import { ICON_OPTIONS, OntologyAvatar } from '@/components/OntologyAvatar'
 import type { OntologyListItem } from '@/types/ontology'
 import {
@@ -378,13 +379,15 @@ function OntologyCard({
           </div>
         </div>
 
-        <p
-          className="mt-4 min-h-[44px] text-sm leading-[22px] text-slate-500"
+        <button
+          type="button"
+          onClick={onDetail}
+          className="mt-4 min-h-[44px] w-full cursor-pointer text-left text-sm leading-[22px] text-slate-500 transition-colors hover:text-teal-700"
           style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
           title={item.description || '暂无描述'}
         >
           {item.description || '暂无描述'}
-        </p>
+        </button>
 
         <div className="mt-3 grid grid-cols-4 gap-1.5">
           {[
@@ -618,15 +621,18 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
             </button>
           )}
         </div>
-        <select
+        <Select
           value={domainFilter}
-          onChange={event => setDomainFilter(event.target.value)}
-          aria-label="按所属领域筛选"
-          className="h-9 min-w-36 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-600 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+          onValueChange={value => setDomainFilter(value)}
         >
-          <option value="">全部领域</option>
-          {domains.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
-        </select>
+          <SelectTrigger aria-label="按所属领域筛选" className="h-9 min-w-36 rounded-lg">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">全部领域</SelectItem>
+            {domains.map(item => <SelectItem key={item.id} value={item.name}>{item.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
         {(nameFilter || domainFilter) && (
           <button
             type="button"
