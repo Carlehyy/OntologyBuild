@@ -2,8 +2,9 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 
 const ontologyId = 'ontology-structure-initial-view'
 
-async function mockOntologyStructure(page: Page, options: { includeUxFixtures?: boolean } = {}) {
+async function mockOntologyStructure(page: Page, options: { includeUxFixtures?: boolean; holdLayoutResponse?: boolean } = {}) {
   const includeUxFixtures = options.includeUxFixtures === true
+  const holdLayoutResponse = options.holdLayoutResponse === true
   await page.addInitScript(() => {
     localStorage.setItem('token', 'structure-view-token')
     localStorage.setItem('auth-store', JSON.stringify({
@@ -22,6 +23,11 @@ async function mockOntologyStructure(page: Page, options: { includeUxFixtures?: 
   })
   const layoutCalls: Array<{ positions: Record<string, { x: number; y: number }> }> = []
   let layoutFailure: string | null = null
+  // holdLayoutResponse：把 PUT /layout 的响应挂起，直到测试显式放行，
+  // 让「正在保存布局」瞬态在慢 CI 上也能被确定性地断言到（顺序安全：
+  // 放行先于请求到达时直接落开门闩，处理器随后 await 立即通过）。
+  let layoutGateOpen = false
+  let layoutGateResolve: (() => void) | null = null
 
   await page.route(/^https?:\/\/[^/]+\/api\/v[12]\//, async (route) => {
     const path = new URL(route.request().url()).pathname
@@ -197,8 +203,15 @@ async function mockOntologyStructure(page: Page, options: { includeUxFixtures?: 
           body: JSON.stringify({ detail: layoutFailure }),
         })
       }
-      // 让「正在保存布局」状态停留足够长，便于断言捕获
-      await new Promise(resolve => setTimeout(resolve, 400))
+      if (holdLayoutResponse) {
+        await new Promise<void>(resolve => {
+          if (layoutGateOpen) { resolve(); return }
+          layoutGateResolve = resolve
+        })
+      } else {
+        // 让「正在保存布局」状态停留足够长，便于断言捕获
+        await new Promise(resolve => setTimeout(resolve, 400))
+      }
       return ok(route, { versionId: 'release-1', positions: {} })
     }
     return ok(route, [])
@@ -208,6 +221,10 @@ async function mockOntologyStructure(page: Page, options: { includeUxFixtures?: 
     layoutCalls,
     failLayout: (message: string) => { layoutFailure = message },
     recoverLayout: () => { layoutFailure = null },
+    releaseLayout: () => {
+      layoutGateOpen = true
+      layoutGateResolve?.()
+    },
   }
 }
 
@@ -389,7 +406,7 @@ test('结构工具栏使用友好层级名称、完整下拉文案并在输入�
 })
 
 test('拖拽节点后自动保存提示按 3→2→1 倒计时并复位', async ({ page }) => {
-  const { layoutCalls } = await mockOntologyStructure(page)
+  const { layoutCalls, releaseLayout } = await mockOntologyStructure(page, { holdLayoutResponse: true })
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/#/ontologies/' + ontologyId, { waitUntil: 'domcontentloaded' })
   await page.getByRole('button', { name: '本体结构', exact: true }).click()
@@ -411,7 +428,10 @@ test('拖拽节点后自动保存提示按 3→2→1 倒计时并复位', async 
   expect(await status.evaluate(element => getComputedStyle(element).color)).toBe('rgb(217, 119, 6)')
   await expect(status).toContainText('2 秒后自动保存', { timeout: 2500 })
   await expect(status).toContainText('1 秒后自动保存', { timeout: 2500 })
+  // 布局接口响应被 mock 挂起：「正在保存布局」会稳定停留，消除慢 CI 上
+  // 错过瞬态的抖动（回归点：CI 曾从「1 秒后」直接跳到「布局已保存」）
   await expect(status).toContainText('正在保存布局', { timeout: 3000 })
+  releaseLayout()
   await expect(status).toContainText('布局已保存', { timeout: 3000 })
   // 成功阶段使用绿色强调
   expect(await status.evaluate(element => getComputedStyle(element).color)).toBe('rgb(5, 150, 105)')
