@@ -106,6 +106,8 @@ def update_conversation(
         if body.model_config_id:
             _enabled_model(db, body.model_config_id)
         item.model_config_id = body.model_config_id
+    if body.status is not None:
+        item.status = body.status
     db.commit()
     db.refresh(item)
     return item

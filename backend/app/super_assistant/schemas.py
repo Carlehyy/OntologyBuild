@@ -18,6 +18,8 @@ class ConversationCreate(BaseModel):
 class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     model_config_id: str | None = None
+    # 归档/恢复：deleted 不走此通道（删除是硬删除端点）
+    status: Literal["active", "archived"] | None = None
 
 
 class ConversationOut(ORMModel):

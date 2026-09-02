@@ -136,3 +136,63 @@ def test_user_can_manage_conversations_folder_skills_and_mcp(tmp_path, monkeypat
     assert client.delete(
         f"/api/v2/super-assistant/conversations/{conversation['id']}"
     ).status_code == 204
+
+
+def test_conversation_archive_and_restore(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "environment", "development")
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'archive.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(bind=engine, tables=[
+        User.__table__, SuperAssistantConversation.__table__,
+    ])
+    TestingSession = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    with TestingSession() as db:
+        db.add(User(
+            id="user-1", username="owner", email="owner@example.com",
+            password_hash="unused", role="editor",
+        ))
+        db.commit()
+
+    def override_db():
+        db = TestingSession()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app = FastAPI()
+    app.include_router(router.router, prefix="/api/v2/super-assistant")
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: User(
+        id="user-1", username="owner", email="owner@example.com",
+        password_hash="unused", role="editor",
+    )
+    client = TestClient(app)
+
+    conversation = client.post("/api/v2/super-assistant/conversations", json={}).json()
+    assert conversation["status"] == "active"
+    patch_url = f"/api/v2/super-assistant/conversations/{conversation['id']}"
+
+    archived = client.patch(patch_url, json={"status": "archived"})
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["status"] == "archived"
+
+    # 归档不隐藏：列表语义不变，分组/展示由前端负责
+    listed = client.get("/api/v2/super-assistant/conversations").json()
+    assert [item["status"] for item in listed] == ["archived"]
+
+    restored = client.patch(patch_url, json={"status": "active"})
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["status"] == "active"
+
+    assert client.patch(patch_url, json={"status": "deleted"}).status_code == 422
+    assert client.patch(patch_url, json={"status": "bogus"}).status_code == 422
+
+    # 既有字段行为回归：仅改标题不影响归档状态
+    client.patch(patch_url, json={"status": "archived"})
+    renamed = client.patch(patch_url, json={"title": "改名后"})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["title"] == "改名后"
+    assert renamed.json()["status"] == "archived"
