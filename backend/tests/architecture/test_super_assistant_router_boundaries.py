@@ -19,6 +19,7 @@ from app.super_assistant import (
     router as assistant_router,
     runtime,
     schemas,
+    search_service,
     skill_service,
     skill_store,
 )
@@ -43,6 +44,12 @@ ROUTE_PARAMETERS = {
     ),
     "list_messages": (
         "conversation_id",
+        "db",
+        "current_user",
+    ),
+    "search_conversations": (
+        "q",
+        "limit",
         "db",
         "current_user",
     ),
@@ -214,6 +221,10 @@ DELEGATES = {
     ),
     "chat": ("_conversation_service", "chat"),
     "cancel_chat": ("_conversation_service", "cancel_chat"),
+    "search_conversations": (
+        "search_service",
+        "search_conversations",
+    ),
     "list_conversation_files": (
         "conversation_files",
         "list_files",
@@ -422,16 +433,20 @@ def test_super_assistant_route_signatures_remain_stable():
 
 
 def test_super_assistant_handlers_delegate_without_orm_or_transactions():
-    path = ASSISTANT_DIR / "router.py"
-    tree = ast.parse(
-        path.read_text(encoding="utf-8"),
-        filename=str(path),
-    )
-    functions = {
-        node.name: node
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
+    # router.py 已贴近行数上限，新端点（如搜索）落在独立子路由模块；
+    # 委托与事务禁令对两者同样生效。
+    functions = {}
+    for filename in ("router.py", "search.py"):
+        path = ASSISTANT_DIR / filename
+        tree = ast.parse(
+            path.read_text(encoding="utf-8"),
+            filename=str(path),
+        )
+        functions.update({
+            node.name: node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        })
     for name, (module_name, function_name) in DELEGATES.items():
         function = functions[name]
         service_calls = [
@@ -556,6 +571,7 @@ def test_super_assistant_services_do_not_import_http_router():
         mcp_server_service,
         memory_service,
         reflection_service,
+        search_service,
         skill_service,
     ):
         imports = _imports(Path(module.__file__))
@@ -599,9 +615,9 @@ def test_super_assistant_openapi_matches_pre_extraction_baseline():
     # /memories/distill-report 与 /memories/distill 两个端点；
     # 0080 悬浮助手可见范围配置新增 /widget-config 的 GET/PUT；
     # 会话附件新增 /conversations/{id}/files 的 list/upload/download/preview/delete
-    # 5 个端点（3 条路径）
-    assert len(paths) == 28
-    assert sum(len(item) for item in paths.values()) == 42
+    # 5 个端点（3 条路径）；全局搜索新增 /search/conversations（search.py 子路由）。
+    assert len(paths) == 29
+    assert sum(len(item) for item in paths.values()) == 43
     assert hashlib.sha256(payload).hexdigest() == (
-        "7b9f0891306eb0d9bb98cdbd3889afa9fcf2dd7c283137c926bcb444e1a5babf"
+        "b5e99feaabeb98ce2223ec83a2c4bc53ba8529b5ea79e3808088e718b2566f9a"
     )

@@ -73,6 +73,7 @@ from app.super_assistant.skill_store import (
     skill_directory,
     write_text_file,
 )
+from app.super_assistant.search import search_conversations  # noqa: F401  # 再导出供架构测试签名守卫
 from app.settings.object_storage.service import (
     get_workspace_minio_service,
     minio_tool_manifest,
