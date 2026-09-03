@@ -7,9 +7,6 @@ v1 兼容：仅保留仍在支持范围内的 /api/v1/* 路由
 
 启动：uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
-import hmac
-import json
-
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -86,62 +83,6 @@ app.add_middleware(
 )
 
 
-async def _send_json(send, status: int, obj: dict):
-    body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-    await send({
-        "type": "http.response.start",
-        "status": status,
-        "headers": [(b"content-type", b"application/json; charset=utf-8")],
-    })
-    await send({"type": "http.response.body", "body": body})
-
-
-class McpMiddleware:
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope.get("type") != "http":
-            await self.app(scope, receive, send)
-            return
-        path = scope.get("path", "")
-        from app.api_hub import config as api_hub_config
-        from app.api_hub import mcp_server as api_hub_mcp
-        if path == api_hub_config.SYSTEM_MCP_PATH or path.startswith(api_hub_config.SYSTEM_MCP_PATH + "/"):
-            if not api_hub_config.SYSTEM_MCP_TOKEN:
-                await _send_json(send, 503, {"error": "system MCP is disabled"})
-                return
-            headers = dict(scope.get("headers") or [])
-            auth = headers.get(b"authorization", b"").decode("latin-1")
-            if not hmac.compare_digest(
-                auth, f"Bearer {api_hub_config.SYSTEM_MCP_TOKEN}"
-            ):
-                await _send_json(send, 401, {"error": "unauthorized"})
-                return
-            hub_scope = dict(scope)
-            hub_scope["path"] = "/"
-            hub_scope["raw_path"] = b"/"
-            await api_hub_mcp.handle_mcp_system(hub_scope, receive, send)
-            return
-        if path == api_hub_config.MCP_PATH or path.startswith(api_hub_config.MCP_PATH + "/"):
-            if not api_hub_config.MCP_TOKEN:
-                await _send_json(send, 503, {"error": "API-Hub MCP is disabled"})
-                return
-            headers = dict(scope.get("headers") or [])
-            auth = headers.get(b"authorization", b"").decode("latin-1")
-            if not hmac.compare_digest(auth, f"Bearer {api_hub_config.MCP_TOKEN}"):
-                await _send_json(send, 401, {"error": "unauthorized"})
-                return
-            hub_scope = dict(scope)
-            hub_scope["path"] = "/"
-            hub_scope["raw_path"] = b"/"
-            await api_hub_mcp.handle_mcp(hub_scope, receive, send)
-            return
-        await self.app(scope, receive, send)
-
-
-app.add_middleware(McpMiddleware)
-
 # 运行健康度观测：为所有 HTTP 路由记录耗时聚合与慢请求证据。
 # 纯 ASGI 中间件，不缓冲 SSE；健康检查/MCP/监控自身按路径豁免。
 from app.platform.observability.middleware import PerfMonitoringMiddleware
@@ -202,11 +143,11 @@ app.include_router(domains.router, prefix="/api/v1/domains", tags=["domains"])
 app.include_router(model_configs_router, prefix="/api/v1/models", tags=["models"], dependencies=models_guard)
 app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["settings"], dependencies=admin_guard)
 
-# 接口代理（API-Hub）管理面统一沿用平台 JWT；对 Agent 的 MCP 端点在
-# /api-hub/mcp 与 /api-hub/mcp/system，继续使用各自独立 token。
+# 接口代理（API-Hub）管理面统一沿用平台 JWT；机器调用走两条链路：
+# n8n 内部代理（Bearer 服务令牌 + revision 钉定）与公开 HTTP 代理
+# （per-caller proxy key + /proxy/<slug>）。
 from app.api_hub.routers import backup as api_hub_backup
 from app.api_hub.routers import interfaces as api_hub_interfaces
-from app.api_hub.routers import mcp as api_hub_mcp_router
 from app.api_hub.routers import proxy as api_hub_proxy
 from app.api_hub.routers import http_proxy as api_hub_http_proxy
 api_hub_interfaces_guard = menu_guard("api_hub.interfaces")
@@ -214,17 +155,14 @@ api_hub_history_guard = menu_guard("api_hub.history")
 app.include_router(api_hub_interfaces.router, prefix="/api/api-hub", dependencies=api_hub_interfaces_guard)
 app.include_router(api_hub_interfaces.runs_router, prefix="/api/api-hub", dependencies=api_hub_history_guard)
 app.include_router(api_hub_backup.router, prefix="/api/api-hub", dependencies=api_hub_interfaces_guard)
-app.include_router(api_hub_mcp_router.router, prefix="/api/api-hub", dependencies=api_hub_interfaces_guard)
 app.include_router(
     api_hub_http_proxy.admin_router,
     prefix="/api/api-hub",
     dependencies=api_hub_interfaces_guard,
 )
-# n8n service-to-service calls use API_HUB_SYSTEM_MCP_TOKEN and only reach
-# interfaces explicitly added to the open list.
-app.include_router(api_hub_proxy.router)
-# n8n invocation authority is separate from the system management MCP token;
-# the endpoint also pins interface revisions and validates dynamic parameters.
+# n8n invocation uses API_HUB_INTERNAL_PROXY_TOKEN (falls back to the
+# historical API_HUB_SYSTEM_MCP_TOKEN); the endpoint pins interface revisions
+# and validates dynamic parameters against the interface contract.
 app.include_router(api_hub_proxy.internal_router)
 # Ordinary HTTP consumers use per-caller proxy keys and stable /proxy/<slug> URLs.
 app.include_router(api_hub_http_proxy.public_router)

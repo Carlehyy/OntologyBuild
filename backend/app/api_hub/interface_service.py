@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from . import config, db
 from .interface_contracts import DeleteGroupBody, InterfaceIn, KV
+from .personal_ref import interface_has_personal_refs
 
 
 _RESERVED_GROUP = "默认分组"
@@ -96,6 +97,15 @@ def _validate_proxy_publish(
                 status_code=400,
                 detail="发布 HTTP 接口前必须填写真实 URL",
             )
+        if interface_has_personal_refs(body):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "接口配置含个人变量占位符（{{privacy:}}/{{env:}}）：公开代理"
+                    "链路没有用户身份、不会解析占位符，发布后调用必然失败；"
+                    "请先去除占位符再发布。"
+                ),
+            )
         sql = (
             "SELECT id FROM interfaces "
             "WHERE proxy_slug = ? AND http_enabled = 1"
@@ -155,9 +165,8 @@ def _row_to_dict(row) -> dict:
         "body_type": row["body_type"],
         "body_content": row["body_content"],
         "file_fields": _load_json_list(row["file_fields"]),
-        # ``mcp_enabled`` is retained only for backup compatibility. The one
-        # authoritative MCP state is ``open_enabled`` so the UI has exactly
-        # two publication concepts: MCP and HTTP.
+        # MCP 开放已退役：两列仅作备份兼容保留（老备份导入仍能恢复行数据），
+        # 不再有任何运行时行为挂在它们上面。
         "mcp_enabled": bool(row["open_enabled"]),
         "open_enabled": bool(row["open_enabled"]),
         "http_enabled": bool(row["http_enabled"]),

@@ -125,7 +125,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
     monkeypatch,
 ):
     from app.api_hub import db as api_hub_db
-    from app.api_hub import mcp_server as api_hub_mcp
     from app.bootstrap import lifecycle
     from app.data_channel.file_assets import service as file_asset_service
     from app.data_channel.steward import browser_runtime
@@ -161,8 +160,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
             events.append("data_scheduler.shutdown")
 
     scheduler = Scheduler()
-    api_hub_public = Manager("api_hub_public_mcp")
-    api_hub_system = Manager("api_hub_system_mcp")
 
     monkeypatch.setattr(lifecycle.settings, "environment", "development")
     monkeypatch.setattr(
@@ -213,13 +210,6 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
         "get_sync_scheduler",
         lambda: scheduler,
     )
-    monkeypatch.setattr(
-        api_hub_mcp,
-        "reset_session_managers",
-        lambda: events.append("api_hub_mcp.reset")
-        or (api_hub_public, api_hub_system),
-    )
-
     async def cleanup_loop():
         await asyncio.Future()
 
@@ -259,14 +249,9 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
         "sentinel_cdc.register:True",
         "sentinel_scan.start",
         "data_scheduler.start",
-        "api_hub_mcp.reset",
         "task.create.1",
         "task.create.2",
-        "api_hub_public_mcp.enter",
-        "api_hub_system_mcp.enter",
         "application.ready",
-        "api_hub_system_mcp.exit",
-        "api_hub_public_mcp.exit",
         "browser.close_all",
         "data_scheduler.shutdown",
         "sentinel_scan.stop",

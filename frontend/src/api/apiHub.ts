@@ -105,35 +105,6 @@ export interface RunOverview {
   daily: { date: string; count: number; failed: number }[]
 }
 
-export interface McpInfo {
-  endpoint: string
-  host: string
-  port: number
-  lan_ip: string
-  server_name: string
-  transport: string
-  lan_exposed: boolean
-  token_required: boolean
-  published?: { id: number; name: string; tool_name: string }[]
-  tools?: { name: string; desc: string }[]
-}
-
-export interface McpContractParameter {
-  name: string
-  location: 'path' | 'query' | 'header' | 'body'
-  value_type: InterfaceParameter['value_type']
-  required: boolean
-  description: string
-}
-
-export interface McpContract {
-  interface_id: number
-  interface_name: string
-  open_enabled: boolean
-  parameters: McpContractParameter[]
-  call_example: Record<string, unknown>
-}
-
 export interface ProxyInfo {
   path: string
   key_header: string
@@ -199,8 +170,6 @@ export const apiHub = {
     data<{ ok: boolean }>(http.put(`/interfaces/${id}/move`, body)),
   deleteInterface: (id: number) => data<{ ok: boolean }>(http.delete(`/interfaces/${id}`)),
   deleteGroup: (group_name: string) => data<{ ok: boolean; count: number }>(http.post('/interfaces/groups/delete', { group_name })),
-  setOpen: (id: number, open: boolean) => data<HubInterface>(http.post(`/interfaces/${id}/open`, { open })),
-  mcpContract: (id: number) => data<McpContract>(http.get(`/interfaces/${id}/mcp-contract`)),
   setHttpPublication: (
     id: number,
     body: { enabled: boolean; slug: string; query_keys: string[]; header_keys: string[]; body_enabled: boolean; body_keys?: string[] },
@@ -222,8 +191,6 @@ export const apiHub = {
   runOverview: (timezoneOffsetMinutes = new Date().getTimezoneOffset()) =>
     data<RunOverview>(http.get('/runs/overview', { params: { timezone_offset_minutes: timezoneOffsetMinutes } })),
   getRun: (interfaceId: number, runId: number) => data<RunDetail>(http.get(`/interfaces/${interfaceId}/runs/${runId}`)),
-  mcpInfo: () => data<McpInfo>(http.get('/mcp/info')),
-  systemMcpInfo: () => data<McpInfo>(http.get('/mcp/system/info')),
   proxyInfo: () => data<ProxyInfo>(http.get('/proxy/info')),
   listProxyKeys: () => data<ProxyKey[]>(http.get('/proxy/keys')),
   createProxyKey: (body: ProxyKeyPayload) => data<ProxyKey>(http.post('/proxy/keys', body)),

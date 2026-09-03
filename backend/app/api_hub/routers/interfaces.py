@@ -11,7 +11,7 @@ from starlette.datastructures import FormData, UploadFile
 
 from app.auth.models import User
 from app.deps import get_current_user
-from .. import config, db, executor, mcp_contract, publication
+from .. import config, db, executor, publication
 from ..interface_contracts import (
     _ALLOWED_BODY_TYPES,
     _ALLOWED_METHODS,
@@ -242,26 +242,6 @@ def get_interface(iid: int, current_user: User = Depends(get_current_user)):
     return _row_to_dict(row)
 
 
-@router.get("/{iid}/mcp-contract")
-def get_mcp_contract(iid: int, current_user: User = Depends(get_current_user)):
-    """Expose the exact, secret-free MCP contract for the management UI.
-
-    This preview is available before an interface is enabled for MCP so an
-    administrator can verify the mapping first.  The public MCP endpoint still
-    checks ``open_enabled`` again at call time.
-    """
-    with db.get_conn() as conn:
-        row = _get_or_404(conn, iid, user=current_user)
-    interface = _row_to_dict(row)
-    return {
-        "interface_id": interface["id"],
-        "interface_name": interface["name"],
-        "open_enabled": interface["open_enabled"],
-        "parameters": mcp_contract.public_parameters(interface),
-        "call_example": mcp_contract.call_example(interface),
-    }
-
-
 @router.put("/{iid}")
 def update(iid: int, body: InterfaceIn, current_user: User = Depends(get_current_user)):
     return update_interface(iid, body, user=current_user)
@@ -270,10 +250,6 @@ def update(iid: int, body: InterfaceIn, current_user: User = Depends(get_current
 @router.delete("/{iid}")
 def remove(iid: int, current_user: User = Depends(get_current_user)):
     return delete_interface(iid, user=current_user)
-
-
-class OpenBody(BaseModel):
-    open: bool
 
 
 class HttpPublishIn(BaseModel):
@@ -352,20 +328,6 @@ def move_interface(iid: int, body: MoveBody, current_user: User = Depends(get_cu
 @router.post("/groups/delete")
 def remove_group(body: DeleteGroupBody, current_user: User = Depends(get_current_user)):
     return delete_group(body, user=current_user)
-
-
-@router.post("/{iid}/open")
-def set_open(iid: int, body: OpenBody, current_user: User = Depends(get_current_user)):
-    """只翻转 MCP 开放状态，不动其它接口字段。"""
-    now = datetime.now(timezone.utc).isoformat()
-    with db.get_conn() as conn:
-        _get_or_404(conn, iid, user=current_user)
-        conn.execute(
-            "UPDATE interfaces SET open_enabled = ?, mcp_enabled = ?, updated_at = ? WHERE id = ?",
-            (1 if body.open else 0, 1 if body.open else 0, now, iid),
-        )
-        row = conn.execute("SELECT * FROM interfaces WHERE id = ?", (iid,)).fetchone()
-    return _row_to_dict(row)
 
 
 @router.put("/{iid}/http-publication")

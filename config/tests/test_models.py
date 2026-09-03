@@ -20,7 +20,6 @@ def test_default_profile_generates_stable_security_material() -> None:
     assert len(profile.platform.first_admin_password) >= 12
     assert len(profile.platform.secret_key) >= 32
     assert len(profile.platform.encryption_key) == 44
-    assert profile.advanced.api_hub_mcp_token
     assert profile.advanced.api_hub_system_mcp_token
     assert profile.platform.backend_host == "127.0.0.1"
     assert profile.platform.frontend_host == "127.0.0.1"

@@ -21,6 +21,10 @@ RETIRED_OPENAPI_OPERATIONS = {
     ("get", "/api/v1/mcp/info"),
     ("get", "/api/v1/mcp/interfaces"),
     ("post", "/api/v1/mcp/interfaces/{operation_id}/open"),
+    ("get", "/api/api-hub/mcp/info"),
+    ("get", "/api/api-hub/mcp/system/info"),
+    ("get", "/api/api-hub/interfaces/{iid}/mcp-contract"),
+    ("post", "/api/api-hub/interfaces/{iid}/open"),
     ("get", "/api/v1/ontologies/{ontology_id}/files"),
     ("post", "/api/v1/ontologies/{ontology_id}/files"),
     ("delete", "/api/v1/ontologies/{ontology_id}/files/{file_id}"),
@@ -33,7 +37,6 @@ RETIRED_OPENAPI_OPERATIONS = {
 }
 
 PRESERVED_MCP_OPERATIONS = {
-    ("get", "/api/api-hub/mcp/info"),
     ("get", "/api/v2/community/mcp-servers"),
     ("get", "/api/v2/super-assistant/mcp-servers"),
     ("post", "/api/v2/super-assistant/mcp-servers/platform-minio"),
@@ -56,8 +59,8 @@ def _openapi_operations() -> set[tuple[str, str]]:
     return operations
 
 
-def test_exactly_22_legacy_openapi_operations_are_retired():
-    assert len(RETIRED_OPENAPI_OPERATIONS) == 22
+def test_exactly_26_legacy_openapi_operations_are_retired():
+    assert len(RETIRED_OPENAPI_OPERATIONS) == 26
     operations = _openapi_operations()
     assert RETIRED_OPENAPI_OPERATIONS.isdisjoint(operations)
 
@@ -75,13 +78,13 @@ def test_manual_minio_settings_operations_are_retired():
     ]
 
 
-def test_raw_legacy_mcp_and_external_minio_mcp_are_gone_but_api_hub_remains(client):
+def test_raw_legacy_mcp_and_external_minio_mcp_are_gone(client):
     assert client.post("/mcp").status_code == 404
     assert client.post("/mcp/minio").status_code == 404
 
-    # This is a middleware endpoint and therefore intentionally absent from
-    # OpenAPI. Missing/disabled credentials still prove the route was claimed.
-    assert client.post("/api-hub/mcp").status_code in {401, 503}
+    # API-Hub MCP 开放（含 system 端点）已整体退役：中间件不再声明路径。
+    assert client.post("/api-hub/mcp").status_code == 404
+    assert client.post("/api-hub/mcp/system").status_code == 404
 
 
 def test_retired_runtime_modules_do_not_return_as_compatibility_facades():
