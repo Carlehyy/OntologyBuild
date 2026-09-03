@@ -1,19 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Braces, Check, ChevronRight, CirclePlus, Copy, Download, FileCode2, FileUp, Folder, Play,
-  Plus, Send, Trash2, X, Database, Globe2, GripVertical, KeyRound, Share2, ShieldCheck,
+  Plus, Send, Trash2, X, Database, GripVertical, KeyRound, Share2, ShieldCheck,
   LoaderCircle,
 } from 'lucide-react'
-import { apiError, apiHub, emptyHubInterface, validateHttpUrl, type HubInterface, type KV, type McpContract, type RunResult } from '@/api/apiHub'
-import { authApi, type PrivacyVar } from '@/api/auth'
+import { apiError, apiHub, emptyHubInterface, validateHttpUrl, type HubInterface, type KV, type RunResult } from '@/api/apiHub'
+import { authApi, type PrivacyVar, type UserEnvVar } from '@/api/auth'
 import { Button } from '@/components/ui/Button'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import { writeTextToClipboard } from '@/utils/clipboard'
-import {
-  OpenInterfacesModal, ProxyKeysModal, SystemDataModal,
-} from './InterfaceDataModals'
+import { ProxyKeysModal, SystemDataModal } from './InterfaceDataModals'
 import { HttpPublicationModal } from './HttpPublicationModal'
-import SystemMcpModal from './SystemMcpModal'
 import { buildProxyCallExample } from './proxyCallExample'
 
 interface Props {
@@ -52,22 +49,17 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
   const [callExampleCopyState, setCallExampleCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [draggingId, setDraggingId] = useState<number | null>(null)
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
-  const [openInterfaces, setOpenInterfaces] = useState(false)
-  const [mcpContractOpen, setMcpContractOpen] = useState(false)
-  const [mcpContract, setMcpContract] = useState<McpContract | null>(null)
-  const [mcpContractLoading, setMcpContractLoading] = useState(false)
-  const [mcpContractCopyState, setMcpContractCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [publicationTarget, setPublicationTarget] = useState<HubInterface | null>(null)
   const [publicationCopying, setPublicationCopying] = useState(false)
   const [publicationCopied, setPublicationCopied] = useState(false)
   const [proxyKeys, setProxyKeys] = useState(false)
   const [systemData, setSystemData] = useState(false)
-  const [systemMcpOpen, setSystemMcpOpen] = useState(false)
   const [extraGroups, setExtraGroups] = useState<string[]>([])
   const [newGroupOpen, setNewGroupOpen] = useState(false)
   const [newGroupName, setNewGroupName] = useState('')
   const [newGroupError, setNewGroupError] = useState('')
   const [privacyVars, setPrivacyVars] = useState<PrivacyVar[]>([])
+  const [envVars, setEnvVars] = useState<UserEnvVar[]>([])
   const containerRef = useRef<HTMLDivElement>(null)
   const [sizes, setSizes] = useState<[number, number]>([28, 72])
 
@@ -191,14 +183,18 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
 
   useEffect(() => setPublicationCopied(false), [selectedId])
 
-  // 隐私变量列表：插入占位符 {{privacy:KEY}} 用。只取 has_value 的项——
-  // 没有值的变量在调用端无法解析，列出反而误导。按 AGENTS.md §5 副作用验收：
-  // 列表加载失败时静默降级为空列表，不打断编辑，错误由 onError 兜底提示一次。
+  // 个人变量列表：隐私变量插入 {{privacy:KEY}}、环境变量插入 {{env:KEY}} 占位符用。
+  // 隐私变量只取 has_value 的项——没有值的变量在调用端无法解析，列出反而误导；
+  // 环境变量保存即有值，全部列出。按 AGENTS.md §5 副作用验收：列表加载失败时
+  // 静默降级为空列表，不打断编辑，错误由 onError 兜底提示一次。
   useEffect(() => {
     let cancelled = false
     authApi.listPrivacyVars()
       .then(items => { if (!cancelled) setPrivacyVars(Array.isArray(items) ? items.filter(item => item.has_value) : []) })
       .catch(() => { /* 静默：列表为空时按钮仍可点击但无项可选 */ })
+    authApi.listEnvVars()
+      .then(items => { if (!cancelled) setEnvVars(Array.isArray(items) ? items : []) })
+      .catch(() => { /* 静默降级为空列表，同上 */ })
     return () => { cancelled = true }
   }, [])
 
@@ -220,16 +216,6 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     } catch (error) {
       onError(apiError(error)); return null
     } finally { setSaving(false) }
-  }
-
-  const reloadOpenState = async () => {
-    const items = await reload()
-    const refreshed = items.find(item => item.id === selectedId)
-    if (refreshed) {
-      setDraft(current => ({ ...current, open_enabled: refreshed.open_enabled }))
-      setBaseline(current => ({ ...current, open_enabled: refreshed.open_enabled }))
-    }
-    return items
   }
 
   const reloadPublication = async () => {
@@ -363,32 +349,6 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     }
   }
 
-  const showMcpContract = async () => {
-    if (!draft.id) return
-    setMcpContractOpen(true)
-    setMcpContract(null)
-    setMcpContractCopyState('idle')
-    setMcpContractLoading(true)
-    try {
-      setMcpContract(await apiHub.mcpContract(draft.id))
-    } catch (error) {
-      onError(apiError(error))
-      setMcpContractOpen(false)
-    } finally {
-      setMcpContractLoading(false)
-    }
-  }
-
-  const copyMcpContractExample = async () => {
-    if (!mcpContract) return
-    try {
-      await writeTextToClipboard(JSON.stringify(mcpContract.call_example, null, 2))
-      setMcpContractCopyState('copied')
-    } catch {
-      setMcpContractCopyState('failed')
-    }
-  }
-
   return (
     <div ref={containerRef} className="scrollbar-none grid h-full min-h-0 overflow-x-auto overflow-y-hidden p-1" style={{ gridTemplateColumns: `minmax(250px, ${sizes[0]}fr) 4px minmax(680px, ${sizes[1]}fr)` }}>
       <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-sm">
@@ -438,8 +398,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
                     <button type="button" onClick={() => select(item)} className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500">
                       <span className={`w-12 shrink-0 rounded px-1.5 py-0.5 text-center text-[10px] font-bold ${methodTone[item.method] || methodTone.HEAD}`}>{item.method}</span>
                       <span className={`min-w-0 flex-1 truncate text-xs ${selectedId === item.id ? 'font-semibold text-[var(--color-nav-bg)]' : 'text-[var(--color-text-primary)]'}`}>{item.name}</span>
-                      {item.open_enabled && <PublicationBadge label="MCP" title="已向 AI / MCP 开放" />}
-                      {item.http_enabled && <PublicationBadge label="HTTP" title="已发布 HTTP 接口" tone="http" />}
+                      {item.http_enabled && <PublicationBadge title="已发布 HTTP 接口" />}
                       <ChevronRight size={12} className="shrink-0 text-[var(--color-text-tertiary)] opacity-0 group-hover:opacity-100" />
                     </button>
                     <button
@@ -457,11 +416,9 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
             </div>
           ))}
         </div>
-        <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-[var(--color-border)] bg-white/60 px-3 py-[1.125rem] lg:grid-cols-4">
-          <Button variant="outline" size="sm" onClick={() => setOpenInterfaces(true)}><Globe2 size={13} />MCP 开放</Button>
+        <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-[var(--color-border)] bg-white/60 px-3 py-[1.125rem]">
           <Button variant="outline" size="sm" onClick={() => setProxyKeys(true)}><KeyRound size={13} />HTTP 调用方</Button>
           <Button variant="outline" size="sm" onClick={() => setSystemData(true)}><Database size={13} />系统数据</Button>
-          <Button variant="outline" size="sm" onClick={() => setSystemMcpOpen(true)}><ShieldCheck size={13} />系统 MCP</Button>
         </div>
       </aside>
 
@@ -503,18 +460,14 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           {urlError && <p id="api-hub-url-error" role="alert" className="mt-2 text-[11px] text-red-600">{urlError}</p>}
         </div>
 
-        <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4">
+        <div className="flex shrink-0 items-center border-b border-[var(--color-border)] px-4">
           <div className="flex gap-5">
             {(['params', 'headers', 'body', 'description', 'privacy'] as const).map(key => (
               <button key={key} onClick={() => setEditorTab(key)} className={`relative py-2.5 text-xs font-medium ${editorTab === key ? 'text-[var(--color-nav-bg)]' : 'text-[var(--color-text-secondary)]'}`}>
-                {{ params: '查询参数', headers: '请求头', body: '请求体', description: 'MCP 用途说明', privacy: '隐私变量' }[key]}
+                {{ params: '查询参数', headers: '请求头', body: '请求体', description: '用途说明', privacy: '个人变量' }[key]}
                 {editorTab === key && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-[var(--color-nav-bg)]" />}
               </button>
             ))}
-          </div>
-          <div className="flex items-center gap-4">
-            <Toggle label="MCP 开放" value={draft.open_enabled} onChange={value => patchDraft('open_enabled', value)} />
-            {draft.id && <button type="button" onClick={() => void showMcpContract()} className="flex items-center gap-1 rounded px-1.5 py-1 text-[11px] font-medium text-[var(--color-nav-bg)] transition-colors hover:bg-[var(--color-nav-light)]" title="查看并复制 MCP 的实际参数契约"><Braces size={13} />MCP 调用示例</button>}
           </div>
         </div>
 
@@ -522,8 +475,8 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           {editorTab === 'params' && <KVEditor value={draft.query_params} onChange={value => patchDraft('query_params', value)} keyPlaceholder="参数名" valuePlaceholder="参数值" />}
           {editorTab === 'headers' && <KVEditor value={draft.headers} onChange={value => patchDraft('headers', value)} keyPlaceholder="Header" valuePlaceholder="值" />}
           {editorTab === 'body' && <BodyEditor draft={draft} patchDraft={patchDraft} selectedFiles={selectedFiles} setSelectedFiles={setSelectedFiles} />}
-          {editorTab === 'description' && <textarea value={draft.description} onChange={event => patchDraft('description', event.target.value)} className="h-28 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder="说明接口用途、可传入的业务参数和返回结果；MCP 中的 Agent 将据此理解何时调用此接口。" />}
-          {editorTab === 'privacy' && <PrivacyVarPanel privacyVars={privacyVars} />}
+          {editorTab === 'description' && <textarea value={draft.description} onChange={event => patchDraft('description', event.target.value)} className="h-28 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder="说明接口用途、可传入的业务参数和返回结果；数据管家编排与 AI 助手将据此理解此接口的用途。" />}
+          {editorTab === 'privacy' && <PersonalVarPanel privacyVars={privacyVars} envVars={envVars} />}
         </div>
 
         <ResponsePanel result={result} stale={resultStale} loading={running} />
@@ -572,38 +525,9 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           </span>
         </div>
       </Modal>
-      <Modal
-        open={mcpContractOpen}
-        onClose={() => setMcpContractOpen(false)}
-        title="MCP 调用示例"
-        description="这里展示的是服务端实际执行的参数契约，可直接复制到 MCP 客户端的 call_open_interface 调用参数中。"
-        size="2xl"
-        footer={<><Button variant="outline" onClick={() => setMcpContractOpen(false)}>关闭</Button><Button disabled={!mcpContract} onClick={() => void copyMcpContractExample()}>{mcpContractCopyState === 'copied' ? <Check size={14} /> : <Copy size={14} />}{mcpContractCopyState === 'copied' ? '已复制' : mcpContractCopyState === 'failed' ? '重试复制' : '复制 MCP 调用参数'}</Button></>}
-      >
-        {mcpContractLoading ? (
-          <div className="flex min-h-52 items-center justify-center gap-2 text-xs text-[var(--color-text-tertiary)]"><LoaderCircle size={16} className="animate-spin text-emerald-600" />正在读取实际参数契约…</div>
-        ) : mcpContract ? (
-          <div className="space-y-4">
-            <div className={`rounded-lg border px-3.5 py-3 text-xs leading-5 ${mcpContract.open_enabled ? 'border-emerald-100 bg-emerald-50/70 text-emerald-800' : 'border-amber-100 bg-amber-50 text-amber-800'}`}>
-              {mcpContract.open_enabled ? '此接口已向 MCP 开放。' : '此接口尚未向 MCP 开放；可先核对下方映射，再打开「MCP 开放」。'} 固定默认值和认证 Header 均由平台保管，不会出现在此示例中。
-            </div>
-            <section className="overflow-hidden rounded-lg border border-[var(--color-border)]">
-              <div className="border-b border-[var(--color-border)] bg-[var(--color-bg-base)] px-3.5 py-2.5 text-xs font-semibold">可由 Agent 传入的参数</div>
-              {!mcpContract.parameters.length ? <div className="px-3.5 py-5 text-center text-xs text-[var(--color-text-tertiary)]">该接口没有可动态覆盖的参数；MCP 调用会使用平台保存的固定请求。</div> : <div className="max-h-44 overflow-auto"><table className="w-full text-left text-[11px]"><thead className="sticky top-0 bg-white text-[var(--color-text-tertiary)]"><tr><th className="px-3.5 py-2 font-medium">位置</th><th className="px-3.5 py-2 font-medium">字段</th><th className="px-3.5 py-2 font-medium">说明</th></tr></thead><tbody>{mcpContract.parameters.map(parameter => <tr key={`${parameter.location}-${parameter.name}`} className="border-t border-[var(--color-border)]"><td className="px-3.5 py-2 font-medium text-[var(--color-nav-bg)]">{mcpLocationLabel(parameter.location)}{parameter.required ? ' · 必填' : ''}</td><td className="px-3.5 py-2 font-mono text-slate-700">{parameter.name}</td><td className="px-3.5 py-2 text-[var(--color-text-tertiary)]">{parameter.description || parameter.value_type}</td></tr>)}</tbody></table></div>}
-            </section>
-            <section>
-              <div className="mb-1.5 flex items-center justify-between"><span className="text-xs font-semibold">call_open_interface 参数</span><span className="text-[10px] text-[var(--color-text-tertiary)]">仅占位符，按业务值替换</span></div>
-              <pre aria-label="MCP 调用参数" className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-3.5 font-mono text-[11px] leading-5 text-slate-100">{JSON.stringify(mcpContract.call_example, null, 2)}</pre>
-            </section>
-            <span className="sr-only" role="status" aria-live="polite">{mcpContractCopyState === 'copied' ? 'MCP 调用参数已复制' : mcpContractCopyState === 'failed' ? '复制失败，请重试' : ''}</span>
-          </div>
-        ) : <div className="min-h-52 px-4 py-12 text-center text-xs text-[var(--color-text-tertiary)]">暂无可展示的 MCP 参数契约。</div>}
-      </Modal>
-      <OpenInterfacesModal open={openInterfaces} onClose={() => setOpenInterfaces(false)} interfaces={interfaces} reload={reloadOpenState} onError={onError} />
       <HttpPublicationModal open={Boolean(publicationTarget)} onClose={() => setPublicationTarget(null)} item={publicationTarget} reload={reloadPublication} onError={onError} />
       <ProxyKeysModal open={proxyKeys} onClose={() => setProxyKeys(false)} interfaces={interfaces} onError={onError} />
       <SystemDataModal open={systemData} onClose={() => setSystemData(false)} interfaces={interfaces} reload={reload} onError={onError} />
-      <SystemMcpModal open={systemMcpOpen} onClose={() => setSystemMcpOpen(false)} onError={onError} />
     </div>
   )
 }
@@ -612,76 +536,70 @@ function EmptyList({ onCreate }: { onCreate: () => void }) {
   return <div className="flex flex-col items-center px-5 py-14 text-center"><Braces size={28} className="mb-3 text-[var(--color-text-tertiary)]" /><p className="text-xs text-[var(--color-text-secondary)]">还没有接口</p><button onClick={onCreate} className="mt-2 text-xs font-medium text-[var(--color-nav-bg)]">新建一个接口</button></div>
 }
 
-function mcpLocationLabel(location: 'path' | 'query' | 'header' | 'body') {
-  return { path: 'Path', query: 'Query', header: 'Header', body: 'Body' }[location]
+function PublicationBadge({ title }: { title: string }) {
+  return <span title={title} className="shrink-0 rounded bg-sky-50 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-sky-700">HTTP</span>
 }
 
-function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (value: boolean) => void }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={value}
-      onClick={() => onChange(!value)}
-      className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-sm text-[11px] text-[var(--color-text-secondary)] outline-none transition-colors hover:text-[var(--color-text-primary)] focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
-    >
-      <span aria-hidden="true" className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${value ? 'bg-[var(--color-nav-bg)]' : 'bg-[var(--color-border-hover)]'}`}>
-        <span className={`absolute left-0 top-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${value ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
-      </span>
-      <span>{label}</span>
-    </button>
-  )
-}
-
-function PublicationBadge({ label, title, tone = 'mcp' }: { label: 'MCP' | 'HTTP'; title: string; tone?: 'mcp' | 'http' }) {
-  return <span title={title} className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold tracking-wide ${tone === 'http' ? 'bg-sky-50 text-sky-700' : 'bg-emerald-50 text-emerald-700'}`}>{label}</span>
-}
-
-function PrivacyVarPanel({ privacyVars }: { privacyVars: PrivacyVar[] }) {
-  const [copiedKey, setCopiedKey] = useState<string | null>(null)
+function PersonalVarPanel({ privacyVars, envVars }: { privacyVars: PrivacyVar[]; envVars: UserEnvVar[] }) {
+  const [copiedRef, setCopiedRef] = useState<string | null>(null)
   const [copyError, setCopyError] = useState('')
 
-  const copyFormat = async (key: string) => {
-    const ref = `{{privacy:${key}}}`
+  const copyFormat = async (ref: string) => {
     try {
       await writeTextToClipboard(ref)
-      setCopiedKey(key)
+      setCopiedRef(ref)
       setCopyError('')
-      setTimeout(() => setCopiedKey(null), 2000)
+      setTimeout(() => setCopiedRef(null), 2000)
     } catch {
       // 非 HTTPS / 非聚焦页面下剪贴板可能不可靠，如实提示并提供手动兜底
-      setCopiedKey(key)
+      setCopiedRef(ref)
       setCopyError(ref)
     }
   }
 
+  const section = (
+    title: string,
+    prefix: 'privacy' | 'env',
+    items: { key: string }[],
+    icon: ReactNode,
+    emptyText: string,
+  ) => (
+    <section className="space-y-1.5">
+      <div className="text-[11px] font-semibold text-[var(--color-text-secondary)]">{title}</div>
+      {items.length ? (
+        items.map(item => {
+          const ref = `{{${prefix}:${item.key}}}`
+          return (
+            <div key={ref} className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 py-2">
+              <span className="shrink-0 text-[var(--color-nav-bg)]">{icon}</span>
+              <span className="font-mono text-xs font-medium text-[var(--color-text-primary)]">{item.key}</span>
+              <code className="ml-1 flex-1 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">{ref}</code>
+              <button
+                type="button"
+                onClick={() => void copyFormat(ref)}
+                className="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-[var(--color-nav-bg)] transition-colors hover:bg-[var(--color-nav-light)]"
+              >
+                {copiedRef === ref ? <Check size={13} /> : <Copy size={13} />}
+                {copiedRef === ref ? '已尝试复制' : '复制使用格式'}
+              </button>
+            </div>
+          )
+        })
+      ) : (
+        <div className="rounded-md border border-dashed border-[var(--color-border)] py-5 text-center text-xs text-[var(--color-text-tertiary)]">
+          {emptyText}
+        </div>
+      )}
+    </section>
+  )
+
   return (
     <div className="space-y-3">
       <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 py-2.5 text-[11px] leading-5 text-[var(--color-text-secondary)]">
-        在「请求头」「请求体」「URL」的值中粘贴 <code className="rounded bg-[var(--color-bg-hover)] px-1 font-mono">{'{{privacy:变量名}}'}</code> 格式，调用时平台会自动用你的隐私变量明文替换。明文不写入接口配置，也不进入调用历史。
+        在「请求头」「请求体」「URL」的值中粘贴 <code className="rounded bg-[var(--color-bg-hover)] px-1 font-mono">{'{{privacy:变量名}}'}</code> 或 <code className="rounded bg-[var(--color-bg-hover)] px-1 font-mono">{'{{env:变量名}}'}</code> 格式，调用时平台会自动用你本人的变量明文替换。明文不写入接口配置，也不进入调用历史；「HTTP 发布」与 n8n 流水线链路没有用户身份，不会解析这些占位符。
       </div>
-      {privacyVars.length ? (
-        <div className="space-y-1.5">
-          {privacyVars.map(item => (
-            <div key={item.key} className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 py-2">
-              <ShieldCheck size={14} className="shrink-0 text-[var(--color-nav-bg)]" />
-              <span className="font-mono text-xs font-medium text-[var(--color-text-primary)]">{item.key}</span>
-              <code className="ml-1 flex-1 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">{`{{privacy:${item.key}}}`}</code>
-              <button
-                type="button"
-                onClick={() => void copyFormat(item.key)}
-                className="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-[var(--color-nav-bg)] transition-colors hover:bg-[var(--color-nav-light)]"
-              >
-                {copiedKey === item.key ? <Check size={13} /> : <Copy size={13} />}
-                {copiedKey === item.key ? '已尝试复制' : '复制使用格式'}
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="rounded-md border border-dashed border-[var(--color-border)] py-9 text-center text-xs text-[var(--color-text-tertiary)]">
-          当前没有可用的隐私变量。请在「个人资料 → 隐私变量」中创建并通过上报脚本上报值。
-        </div>
-      )}
+      {section('隐私变量', 'privacy', privacyVars, <ShieldCheck size={14} />, '当前没有可用的隐私变量。请在「个人资料 → 隐私变量」中创建并通过上报脚本上报值。')}
+      {section('环境变量', 'env', envVars, <Braces size={14} />, '当前没有环境变量。请在「个人资料 → 环境变量」中添加。')}
       {copyError && (
         <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-700">
           剪贴板写入失败，请手动复制：<code className="font-mono">{copyError}</code>

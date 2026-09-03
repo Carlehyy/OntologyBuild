@@ -39,8 +39,9 @@ class UserEnvVar(Base):
     """用户私有环境变量（MYW-56）。
 
     key 明文存储用于列表展示与 (user_id, key) 唯一约束；value 为 Fernet
-    密文（与 MCP 服务器配置同一加密设施）。本期仅做个人配置的保存与
-    维护，不注入任何执行链路。
+    密文（与 MCP 服务器配置同一加密设施）。接口代理的 URL/Header/Body 里
+    可以 ``{{env:KEY}}`` 占位符引用，UI 调用链路以本人身份解析（见
+    app.api_hub.personal_ref）；无用户身份的链路（公开代理 / n8n）不解析。
     """
 
     __tablename__ = "user_env_vars"

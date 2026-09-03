@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Check, CheckCircle2, Code2, Copy, RefreshCw, Share2, ShieldCheck, SlidersHorizontal,
+  AlertTriangle, Check, CheckCircle2, Code2, Copy, RefreshCw, Share2, ShieldCheck, SlidersHorizontal,
 } from 'lucide-react'
 import {
   apiError, apiHub, type ForwardingPackage, type HubInterface,
@@ -45,6 +45,15 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
   }, [item, onError, open])
 
   const candidates = useMemo(() => publicationCandidates(current), [current])
+  // 与后端 interface_has_personal_refs 同口径：URL/Header 值/Body 含个人变量
+  // 占位符时公开链路永不解析，发布必被后端 400 拒绝——这里提前说明原因。
+  const hasPersonalRefs = useMemo(() => Boolean(
+    current && (
+      personalRefPattern.test(current.url)
+      || current.headers.some(header => personalRefPattern.test(header.value))
+      || personalRefPattern.test(current.body_content)
+    ),
+  ), [current])
 
   if (!item || !current || !configuration) return null
 
@@ -147,6 +156,15 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
 
         {!callPackage && (
           <>
+            {hasPersonalRefs && (
+              <section className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-600" />
+                <div>
+                  <div className="text-xs font-semibold text-amber-900">此接口含个人变量占位符，不能发布</div>
+                  <p className="mt-1 text-[10px] leading-4 text-amber-800">URL / 请求头 / 请求体中存在 {'{{privacy:}}'} 或 {'{{env:}}'} 占位符；公开代理链路没有用户身份、不会解析占位符，发布后调用必然失败。请先在接口编辑器中移除占位符，再发布。</p>
+                </div>
+              </section>
+            )}
             <section className="rounded-xl border border-[var(--color-border)] bg-white p-4">
               <label className="text-xs font-semibold text-slate-800" htmlFor="api-hub-proxy-slug">HTTP 公开路径</label>
               <p className="mt-1 text-[11px] leading-5 text-slate-500">保存后调用地址保持稳定；只能使用小写字母、数字、短横线和下划线。</p>
@@ -254,6 +272,8 @@ function ParameterGroup({
 
 const sensitiveName = /(authorization|authentication|auth(?:[-_]?(?:code|key|token))?(?:$|[-_])|cookie|credential|token|secret|password|passwd|api[-_]?key|private[-_]?key|session|signature|bearer|jwt)/i
 const managedHeaders = new Set(['accept', 'accept-encoding', 'authorization', 'connection', 'content-length', 'content-type', 'cookie', 'host', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'user-agent', 'x-api-hub-key'])
+// 个人变量占位符（与后端 PERSONAL_REF_RE 同字符集）；不用 g 标志，避免 test 状态残留
+const personalRefPattern = /\{\{(privacy|env):[A-Za-z0-9_.-]+\}\}/
 
 function publicationDraft(item: HubInterface): PublicationDraft {
   const hasStoredConfiguration = item.http_enabled || Boolean(item.proxy_slug)

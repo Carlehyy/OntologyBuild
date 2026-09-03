@@ -101,9 +101,19 @@ n8n 在非测试环境中只有一个配置权威：启动环境中的 `N8N_API_
 `https://n8n.example.com`）；运行时会规范化为 `/api/v1`。历史清单中已经带
 `/api/v1` 的地址继续兼容，不要求为本次升级改写。
 
+n8n 工作流调用接口管理中的接口走平台内部代理
+`POST /api-hub/internal/interfaces/{id}/invoke`（Bearer
+`API_HUB_INTERNAL_PROXY_TOKEN`，未配置时回退历史名 `API_HUB_SYSTEM_MCP_TOKEN`；
+参数按接口参数契约校验并钉定 `interface_revision`）。数据管家编排接口时把
+该地址写进 n8n HTTP 节点，地址取自 `STEWARD_INTERNAL_PROXY_BASE_URL`：默认是
+compose 内网地址 `http://backend:8000/api-hub/internal/interfaces`，仅供 n8n 与
+后端同网部署时可用；n8n 为外部实例时必须在服务器 `.env` 中覆盖为平台公网
+origin（例如 `https://<平台域名>/api-hub/internal/interfaces`，Nginx 已代理该
+前缀）。修改后重启 backend 与 pipeline_executor。
+
 非测试 API 的 lifespan 会先完成 PostgreSQL、Redis、Neo4j、MinIO、n8n 的
 真实连接探测，再初始化 Neo4j 索引、修复非 ready 本体投影，最后才启动 API
-Hub、Sentinel、数据调度器和 MCP 会话。任一阻塞型依赖或投影修复失败都不会
+Hub、Sentinel 和数据调度器。任一阻塞型依赖或投影修复失败都不会
 留下后台 worker。Chromium CDP 同样会在此时探测，但只记录提示并允许 API
 进程提供诊断；`/health/ready` 在 CDP 恢复前仍返回 503。
 
@@ -246,7 +256,7 @@ Actions 日志。普通 push 不具有创建新加密 authority 的权限，后�
 证据行落库（api_perf_slow_requests，含 request_id、用户名、来源 IP、
 User-Agent 与调用链）。聚合由进程内内存缓冲每
 API_PERF_FLUSH_INTERVAL_SECONDS 批量写入；进程崩溃最多丢失最后几秒聚合，
-慢请求证据不丢。/health*、/api/health、/api-hub/mcp*、SSE 流式、
+慢请求证据不丢。/health*、/api/health、SSE 流式、
 WebSocket、OPTIONS 与监控查询接口自身不参与统计。
 
 慢请求的调用链（breakdown 列 JSON 的 spans 数组）记录请求内部各步骤的

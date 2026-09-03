@@ -527,7 +527,7 @@ def test_data_steward_api_hub_management_is_permissioned_and_revision_safe(
     assert "error" not in created, created
     assert created["interface"]["configRevision"] == 1
     assert created["interface"]["exposure"] == {
-        "openMcp": False, "httpPublished": False,
+        "httpPublished": False,
     }
     changed = runner.run("update_proxy_interface", {
         "interface_id": created["interface"]["id"],

@@ -96,26 +96,12 @@ PROXY_MAX_REQUEST_BYTES = max(
     int(_env("API_HUB_PROXY_MAX_REQUEST_BYTES", str(10 * 1024 * 1024))),
 )
 
-MCP_TOKEN = _env("API_HUB_MCP_TOKEN", _env("MCP_TOKEN"))
+# MCP 开放端点（/api-hub/mcp 与 /api-hub/mcp/system）已退役。历史变量名
+# SYSTEM_MCP_TOKEN 保留：生产部署里它事实上是 n8n 服务令牌，作为
+# INTERNAL_PROXY_TOKEN 未显式配置时的回退，保证既有部署在轮换到
+# API_HUB_INTERNAL_PROXY_TOKEN 前持续可用。
 SYSTEM_MCP_TOKEN = _env("API_HUB_SYSTEM_MCP_TOKEN", _env("SYSTEM_MCP_TOKEN"))
-# n8n only needs invocation authority.  Keep it separate from the system MCP
-# management token; fall back during upgrades so existing deployments keep
-# working until they rotate to API_HUB_INTERNAL_PROXY_TOKEN.
 INTERNAL_PROXY_TOKEN = _env("API_HUB_INTERNAL_PROXY_TOKEN") or SYSTEM_MCP_TOKEN
-MCP_PATH = "/api-hub/mcp"
-SYSTEM_MCP_PATH = "/api-hub/mcp/system"
-MCP_SERVER_NAME = _env("API_HUB_MCP_SERVER_NAME", _env("MCP_SERVER_NAME", "api-hub"))
-MCP_MAX_BODY_CHARS = int(
-    _env("API_HUB_MCP_MAX_BODY_CHARS", _env("MCP_MAX_BODY_CHARS", "20000"))
-)
-MCP_ALLOWED_HOSTS = _csv_env(
-    "API_HUB_MCP_ALLOWED_HOSTS",
-    "localhost:*,127.0.0.1:*,[::1]:*",
-)
-MCP_ALLOWED_ORIGINS = _csv_env(
-    "API_HUB_MCP_ALLOWED_ORIGINS",
-    "http://localhost:*,https://localhost:*,http://127.0.0.1:*,https://127.0.0.1:*",
-)
 
 
 def is_lan_exposed() -> bool:

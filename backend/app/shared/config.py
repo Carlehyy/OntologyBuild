@@ -165,7 +165,6 @@ class Settings(BaseSettings):
     steward_browser_reaper_interval_seconds: int = 30
     steward_browser_allow_private_networks: bool = True
     # URL used inside generated n8n workflows to reach this backend.
-    steward_proxy_base_url: str = "http://backend:8000/api-hub/proxy"
     steward_internal_proxy_base_url: str = "http://backend:8000/api-hub/internal/interfaces"
     # Header Auth credential already configured in n8n.  The data steward only
     # stores its id/name reference in workflow JSON, never the secret value.

@@ -178,7 +178,6 @@ class AdvancedConfig(StrictModel):
     api_hub_data_dir: str = "./runtime/api-hub"
     super_assistant_skill_root: str = "./runtime/super-assistant/skills"
     steward_workspace_root: str = "./runtime/steward-sessions"
-    api_hub_mcp_token: str = Field(default="", max_length=2000)
     api_hub_system_mcp_token: str = Field(default="", max_length=2000)
     api_hub_internal_proxy_token: str = Field(default="", max_length=2000)
 
@@ -218,7 +217,6 @@ class ConfigProfile(StrictModel):
             ("MinIO Access Key", self.minio.access_key),
             ("MinIO Secret Key", self.minio.secret_key),
             ("n8n API Key", self.n8n.api_key),
-            ("API Hub MCP Token", self.advanced.api_hub_mcp_token),
             ("API Hub System MCP Token", self.advanced.api_hub_system_mcp_token),
             ("API Hub Internal Proxy Token", self.advanced.api_hub_internal_proxy_token),
         )
@@ -259,7 +257,6 @@ def default_profile() -> ConfigProfile:
         ),
         n8n=N8nConfig(api_key=""),
         advanced=AdvancedConfig(
-            api_hub_mcp_token=_random_token(),
             api_hub_system_mcp_token=_random_token(),
             api_hub_internal_proxy_token=_random_token(),
         ),

@@ -34,7 +34,6 @@ _EXCLUDED_PATH_PREFIXES = (
     "/health",
     "/health/",
     "/api/health",
-    "/api-hub/mcp",
     "/api/v1/settings/monitoring",
 )
 

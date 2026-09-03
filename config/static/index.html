@@ -567,18 +567,12 @@
             </div>
             <details class="advanced-details">
               <summary>API Hub 高级连接</summary>
-              <p>三个内部令牌建议使用随机值。</p>
+              <p>两个内部令牌建议使用随机值。</p>
               <div class="field-grid">
                 <div class="field">
-                  <label for="api-hub-mcp-token">API Hub MCP 令牌</label>
-                  <input id="api-hub-mcp-token" data-path="advanced.api_hub_mcp_token" data-secret="advanced.api_hub_mcp_token" name="advanced.api_hub_mcp_token" type="password" required autocomplete="new-password">
-                  <p class="field-help secret-help">用于校验 MCP 请求，建议使用自动生成值。</p>
-                  <p class="field-error" data-error-for="advanced.api_hub_mcp_token"></p>
-                </div>
-                <div class="field">
-                  <label for="api-hub-system-token">API Hub 系统令牌</label>
+                  <label for="api-hub-system-token">API Hub 服务令牌</label>
                   <input id="api-hub-system-token" data-path="advanced.api_hub_system_mcp_token" data-secret="advanced.api_hub_system_mcp_token" name="advanced.api_hub_system_mcp_token" type="password" required autocomplete="new-password">
-                  <p class="field-help secret-help">用于系统级 MCP 调用，建议使用自动生成值。</p>
+                  <p class="field-help secret-help">历史名 SYSTEM_MCP_TOKEN：MCP 已退役，现作为 n8n 服务令牌的回退值。</p>
                   <p class="field-error" data-error-for="advanced.api_hub_system_mcp_token"></p>
                 </div>
                 <div class="field field-span-two">

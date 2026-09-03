@@ -14,7 +14,6 @@ from app.api_hub import (
     config,
     db,
     executor,
-    mcp_contract,
     outbound_security,
 )
 from app.api_hub.outbound_security import (
@@ -22,7 +21,7 @@ from app.api_hub.outbound_security import (
     request_with_safe_redirects,
     validate_outbound_url,
 )
-from app.api_hub.routers import backup, http_proxy, interfaces, mcp, proxy
+from app.api_hub.routers import backup, http_proxy, interfaces, proxy
 
 
 @pytest.fixture
@@ -47,8 +46,6 @@ def hub_client(tmp_path, monkeypatch, hub_user):
     app.include_router(interfaces.router)
     app.include_router(interfaces.runs_router)
     app.include_router(backup.router)
-    app.include_router(mcp.router)
-    app.include_router(proxy.router)
     app.include_router(proxy.internal_router)
     app.include_router(http_proxy.admin_router)
     app.include_router(http_proxy.public_router)
@@ -196,6 +193,101 @@ def test_internal_n8n_proxy_validates_dynamic_parameters_and_revision(
     )
     assert stale.status_code == 409
     assert "revision=1" in stale.json()["detail"]
+
+
+def test_internal_n8n_proxy_rejects_personal_variable_placeholders(hub_client):
+    """流水线链路无用户身份：含 {{privacy:}}/{{env:}} 的接口明确 400，不把占位符发给上游。"""
+    item = hub_client.post(
+        "/interfaces",
+        json=_interface(headers=[{"key": "Cookie", "value": "{{env:session}}"}]),
+    ).json()
+    response = hub_client.post(
+        f"/api-hub/internal/interfaces/{item['id']}/invoke",
+        headers={"Authorization": "Bearer internal-proxy-test-token"},
+        json={"interface_revision": item["config_revision"]},
+    )
+    assert response.status_code == 400
+    assert "个人变量" in response.json()["detail"]
+
+
+def test_http_publication_rejects_personal_variable_placeholders(hub_client):
+    """公开代理同样无用户身份：三条发布路径对含占位符的接口一律 400。"""
+    item = hub_client.post(
+        "/interfaces",
+        json=_interface(url="https://service.example/{{env:host}}/x"),
+    ).json()
+    manual = hub_client.put(
+        f"/interfaces/{item['id']}/http-publication",
+        json={
+            "enabled": True,
+            "slug": "pub",
+            "query_keys": [],
+            "header_keys": [],
+            "body_enabled": False,
+            "body_keys": [],
+        },
+    )
+    assert manual.status_code == 400
+    assert "个人变量" in manual.json()["detail"]
+
+    auto = hub_client.post(f"/interfaces/{item['id']}/http-publication/auto")
+    assert auto.status_code == 400
+    assert "个人变量" in auto.json()["detail"]
+
+    direct = hub_client.put(
+        f"/interfaces/{item['id']}",
+        json=_interface(
+            url="https://service.example/{{privacy:host}}/x",
+            http_enabled=True,
+            proxy_slug="pub2",
+        ),
+    )
+    assert direct.status_code == 400
+    assert "个人变量" in direct.json()["detail"]
+
+    # 取消发布不受占位符影响（允许下线）
+    unpublished = hub_client.put(
+        f"/interfaces/{item['id']}/http-publication",
+        json={
+            "enabled": False,
+            "slug": "",
+            "query_keys": [],
+            "header_keys": [],
+            "body_enabled": False,
+            "body_keys": [],
+        },
+    )
+    assert unpublished.status_code == 200
+
+
+def test_preview_run_resolves_env_placeholders_for_current_user(
+    hub_client, monkeypatch
+):
+    """UI 调用链路以本人身份解析 {{env:KEY}}，明文只进上游请求。"""
+    observed = {}
+
+    def fake_request(session, method, url, **kwargs):
+        observed.update({"url": url, "kwargs": kwargs})
+        response = requests.Response()
+        response.status_code = 200
+        response.url = url
+        response.headers["Content-Type"] = "application/json"
+        response._content = json.dumps({"ok": True}).encode()
+        response.encoding = "utf-8"
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    monkeypatch.setattr(
+        "app.api_hub.personal_ref._load_env_plaintext",
+        lambda keys, user: {f"env:{key}": f"value-{key}" for key in keys},
+    )
+    response = hub_client.post(
+        "/interfaces/preview-run",
+        json=_interface(headers=[{"key": "X-Region", "value": "{{env:REGION}}"}]),
+    )
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert observed["kwargs"]["headers"]["X-Region"] == "value-REGION"
 
 
 def test_interface_move_reorders_within_and_across_groups(hub_client):
@@ -348,45 +440,28 @@ def test_non_2xx_response_is_failure_in_history(
     assert json.loads(detail["response_body"])["error"] == "blocked"
 
 
-def test_n8n_proxy_is_fail_closed_and_forwards_dynamic_pagination(
-    hub_client, monkeypatch,
-):
+def test_legacy_open_list_proxy_channel_is_retired(hub_client, monkeypatch):
+    """旧 /api-hub/proxy/{id} 开放清单通道已随 MCP 开放退役。
+
+    n8n 机器调用只剩 /api-hub/internal/interfaces/{id}/invoke（revision 钉定 +
+    参数契约校验，见 test_internal_n8n_proxy_validates_dynamic_parameters_and_revision）。
+    """
     item = hub_client.post("/interfaces", json=_interface(open_enabled=True)).json()
     monkeypatch.setattr(config, "SYSTEM_MCP_TOKEN", "proxy-token")
-    observed = {}
-
-    def fake_run(iface, overrides=None, **_kwargs):
-        observed.update({
-            "id": iface["id"],
-            "query": dict(overrides.query_params or []),
-            "body": overrides.body,
-            "source": overrides.source,
-        })
-        return {
-            "ok": True, "status_code": 200, "response_body": '{"rows":[1]}',
-            "content_type": "application/json", "run_id": 42, "error": None,
-        }
-
-    monkeypatch.setattr("app.api_hub.routers.proxy.executor.run_interface", fake_run)
     unauthenticated = hub_client.post(
         f"/api-hub/proxy/{item['id']}", json={"query": {"page": 3}}
     )
-    assert unauthenticated.status_code == 401
-
-    response = hub_client.post(
-        f"/api-hub/proxy/{item['id']}?tenant=cn",
+    assert unauthenticated.status_code == 404
+    authenticated = hub_client.post(
+        f"/api-hub/proxy/{item['id']}",
         headers={"Authorization": "Bearer proxy-token"},
-        json={"query": {"page": 3, "pageSize": 100}, "body": {"active": True}},
     )
-    assert response.status_code == 200
-    assert response.json() == {"rows": [1]}
-    assert response.headers["x-api-hub-run-id"] == "42"
-    assert observed == {
-        "id": item["id"],
-        "query": {"tenant": "cn", "page": "3", "pageSize": "100"},
-        "body": '{"active": true}',
-        "source": "n8n_proxy",
-    }
+    assert authenticated.status_code == 404
+
+    # 内部代理保持 fail-closed：未带服务令牌一律 401。
+    assert hub_client.post(
+        f"/api-hub/internal/interfaces/{item['id']}/invoke", json={}
+    ).status_code == 401
 
 
 def test_backup_round_trip_skips_duplicates(hub_client):
@@ -523,103 +598,6 @@ def test_preview_run_uses_draft_without_saving_and_keeps_full_history(
     assert "upstream-secret" in detail["response_body"]
 
 
-def test_mcp_contract_merges_only_declared_runtime_fields():
-    interface = {
-        "id": 99,
-        "name": "订单详情",
-        "method": "POST",
-        "url": "https://service.example/orders/{order_id}",
-        "query_params": [{"key": "page", "value": "1"}],
-        "headers": [
-            {"key": "X-Tenant", "value": "default"},
-            {"key": "Authorization", "value": "Bearer platform-secret"},
-        ],
-        "body_type": "json",
-        "body_content": '{"include":false,"token":"platform-secret"}',
-        "file_fields": [],
-        "parameter_schema": [],
-    }
-
-    public = mcp_contract.public_parameters(interface)
-    assert {item["name"] for item in public} >= {"order_id", "page", "X-Tenant", "/include"}
-    assert all("token" not in item["name"].lower() for item in public)
-
-    overrides = mcp_contract.request_overrides(
-        interface,
-        {
-            "path": {"order_id": "A-1024"},
-            "query": {"page": 2},
-            "headers": {"X-Tenant": "tenant-a"},
-            "body": {"include": True},
-        },
-    )
-    assert overrides.path_params == [("order_id", "A-1024")]
-    assert overrides.query_params == [("page", "2")]
-    assert overrides.headers == [("X-Tenant", "tenant-a")]
-    assert json.loads(overrides.body) == {
-        "include": True,
-        "token": "platform-secret",
-    }
-
-    with pytest.raises(mcp_contract.McpContractError, match="未在 MCP 契约中开放"):
-        mcp_contract.request_overrides(
-            interface,
-            {"path": {"order_id": "A-1024"}, "query": {"debug": "1"}},
-        )
-
-    explicit = {
-        **interface,
-        "parameter_schema": [
-            {"name": "page", "location": "query", "dynamic": True},
-            {"name": "Authorization", "location": "header", "dynamic": True},
-            {"name": "api_token", "location": "query", "dynamic": True},
-        ],
-    }
-    assert mcp_contract.public_parameters(explicit) == [
-        {
-            "name": "page",
-            "location": "query",
-            "value_type": "string",
-            "required": False,
-            "description": "",
-        }
-    ]
-
-
-def test_mcp_contract_preview_matches_runtime_mapping_without_secrets(hub_client):
-    item = hub_client.post(
-        "/interfaces",
-        json=_interface(
-            name="订单详情",
-            method="POST",
-            url="https://service.example/orders/{order_id}",
-            query_params=[{"key": "page", "value": "1"}],
-            headers=[
-                {"key": "X-Tenant", "value": "default"},
-                {"key": "Authorization", "value": "Bearer platform-secret"},
-            ],
-            body_type="json",
-            body_content='{"include":false,"token":"platform-secret"}',
-        ),
-    ).json()
-
-    response = hub_client.get(f"/interfaces/{item['id']}/mcp-contract")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["open_enabled"] is True
-    names = {parameter["name"] for parameter in payload["parameters"]}
-    assert {"order_id", "page", "X-Tenant", "/include"} <= names
-    serialized = json.dumps(payload, ensure_ascii=False)
-    assert "platform-secret" not in serialized
-    assert payload["call_example"] == {
-        "interface_id": item["id"],
-        "path": {"order_id": "<order_id>"},
-        "query": {"page": "<page>"},
-        "headers": {"X-Tenant": "<X-Tenant>"},
-        "body": {"include": "<include>"},
-    }
-
-
 def test_single_worker_request_gate_fails_fast_when_saturated(monkeypatch):
     gate = threading.BoundedSemaphore(1)
     assert gate.acquire(blocking=False)
@@ -703,20 +681,17 @@ def test_outbound_urls_block_private_targets_but_keep_explicit_trusted_hosts(
 
     from app.main import app as platform_app
 
-    monkeypatch.setattr(config, "MCP_TOKEN", "")
-    monkeypatch.setattr(config, "SYSTEM_MCP_TOKEN", "")
+    # MCP 开放与旧开放清单代理通道已退役：路由与中间件不再声明这些路径。
     client = TestClient(platform_app)
     assert client.post(
-        config.MCP_PATH, headers={"Content-Type": "application/json"}, json={}
-    ).status_code == 503
+        "/api-hub/mcp", headers={"Content-Type": "application/json"}, json={}
+    ).status_code == 404
     assert client.post(
-        config.SYSTEM_MCP_PATH,
+        "/api-hub/mcp/system",
         headers={"Content-Type": "application/json"},
         json={},
-    ).status_code == 503
-
-    assert "token" not in hub_client.get("/mcp/info").json()
-    assert "token" not in hub_client.get("/mcp/system/info").json()
+    ).status_code == 404
+    assert client.post("/api-hub/proxy/1").status_code == 404
 
 
 def test_outbound_redirect_target_is_revalidated(monkeypatch):

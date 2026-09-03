@@ -36,7 +36,6 @@ SECRET_FIELDS: dict[str, tuple[str, str]] = {
     "minio.access_key": ("minio", "access_key"),
     "minio.secret_key": ("minio", "secret_key"),
     "n8n.api_key": ("n8n", "api_key"),
-    "advanced.api_hub_mcp_token": ("advanced", "api_hub_mcp_token"),
     "advanced.api_hub_system_mcp_token": (
         "advanced",
         "api_hub_system_mcp_token",
@@ -58,7 +57,6 @@ REQUIRED_SECRET_FIELDS = frozenset(
         "minio.access_key",
         "minio.secret_key",
         "n8n.api_key",
-        "advanced.api_hub_mcp_token",
         "advanced.api_hub_system_mcp_token",
         "advanced.api_hub_internal_proxy_token",
     }
@@ -237,10 +235,6 @@ class LocalEnvStore:
                 steward_workspace_root=values.get(
                     "STEWARD_WORKSPACE_ROOT",
                     defaults.advanced.steward_workspace_root,
-                ),
-                api_hub_mcp_token=values.get(
-                    "API_HUB_MCP_TOKEN",
-                    default_secret(defaults.advanced.api_hub_mcp_token),
                 ),
                 api_hub_system_mcp_token=values.get(
                     "API_HUB_SYSTEM_MCP_TOKEN",
@@ -494,7 +488,6 @@ def render_env(profile: ConfigProfile) -> str:
             "API Hub 本地数据与独立权限令牌",
             [
                 ("API_HUB_DATA_DIR", profile.advanced.api_hub_data_dir),
-                ("API_HUB_MCP_TOKEN", profile.advanced.api_hub_mcp_token),
                 (
                     "API_HUB_SYSTEM_MCP_TOKEN",
                     profile.advanced.api_hub_system_mcp_token,
@@ -502,11 +495,6 @@ def render_env(profile: ConfigProfile) -> str:
                 (
                     "API_HUB_INTERNAL_PROXY_TOKEN",
                     profile.advanced.api_hub_internal_proxy_token,
-                ),
-                ("API_HUB_MCP_ALLOWED_HOSTS", "localhost:*,127.0.0.1:*"),
-                (
-                    "API_HUB_MCP_ALLOWED_ORIGINS",
-                    "http://localhost:*,http://127.0.0.1:*",
                 ),
             ],
         ),
@@ -519,7 +507,6 @@ def render_env(profile: ConfigProfile) -> str:
                 ),
                 ("PIPELINE_FILE_PUBLIC_APP_BASE_URL", frontend_origin),
                 ("PIPELINE_FILE_PUBLIC_API_BASE_URL", backend_origin),
-                ("STEWARD_PROXY_BASE_URL", f"{backend_origin}/api-hub/proxy"),
                 (
                     "STEWARD_INTERNAL_PROXY_BASE_URL",
                     f"{backend_origin}/api-hub/internal/interfaces",

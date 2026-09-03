@@ -275,7 +275,6 @@ def _agent_view(interface: dict, *, detail: bool = True) -> dict:
         "configRevision": int(interface.get("config_revision") or 1),
         "parameterSchema": parameter_schema,
         "exposure": {
-            "openMcp": bool(interface.get("open_enabled")),
             "httpPublished": bool(interface.get("http_enabled")),
         },
         "updatedAt": interface.get("updated_at"),

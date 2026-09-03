@@ -113,8 +113,9 @@ services:
       STEWARD_BROWSER_MAX_SESSIONS_PER_USER: ${STEWARD_BROWSER_MAX_SESSIONS_PER_USER:-3}
       STEWARD_BROWSER_IDLE_TIMEOUT_SECONDS: ${STEWARD_BROWSER_IDLE_TIMEOUT_SECONDS:-900}
       STEWARD_BROWSER_REAPER_INTERVAL_SECONDS: ${STEWARD_BROWSER_REAPER_INTERVAL_SECONDS:-30}
-      STEWARD_PROXY_BASE_URL: http://backend:8000/api-hub/proxy
-      STEWARD_INTERNAL_PROXY_BASE_URL: http://backend:8000/api-hub/internal/interfaces
+      # 外部托管的 n8n 实例必须能解析该地址；默认 compose 内网地址仅供
+      # n8n 与后端同网部署时使用，跨网部署在 .env 里覆盖为平台公网 origin。
+      STEWARD_INTERNAL_PROXY_BASE_URL: ${STEWARD_INTERNAL_PROXY_BASE_URL:-http://backend:8000/api-hub/internal/interfaces}
       PYTHON_KERNEL_GATEWAY_URL: http://python_kernel_gateway:8088
       PYTHON_KERNEL_GATEWAY_AUTH_TOKEN: ${PYTHON_KERNEL_GATEWAY_AUTH_TOKEN:-dev-python-gateway-token}
       # 流水线任务派发通道，仅 compose 内网可达；宿主机源码运行时使用
@@ -167,8 +168,9 @@ services:
     env_file: .env
     environment:
       STEWARD_BROWSER_CDP_URL: http://browser:9222
-      STEWARD_PROXY_BASE_URL: http://backend:8000/api-hub/proxy
-      STEWARD_INTERNAL_PROXY_BASE_URL: http://backend:8000/api-hub/internal/interfaces
+      # 外部托管的 n8n 实例必须能解析该地址；默认 compose 内网地址仅供
+      # n8n 与后端同网部署时使用，跨网部署在 .env 里覆盖为平台公网 origin。
+      STEWARD_INTERNAL_PROXY_BASE_URL: ${STEWARD_INTERNAL_PROXY_BASE_URL:-http://backend:8000/api-hub/internal/interfaces}
       # executor 会执行整条流水线（含 python 脚本引擎），需要内核网关地址
       PYTHON_KERNEL_GATEWAY_URL: http://python_kernel_gateway:8088
       PYTHON_KERNEL_GATEWAY_AUTH_TOKEN: ${PYTHON_KERNEL_GATEWAY_AUTH_TOKEN:-dev-python-gateway-token}

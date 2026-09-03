@@ -10,20 +10,11 @@ from fastapi.responses import Response
 from .. import config, db, executor
 from ..agent_service import AgentInterfaceError, request_overrides_for_interface
 from ..interface_service import _row_to_dict
+from ..personal_ref import interface_has_personal_refs
 
-router = APIRouter(prefix="/api-hub/proxy", tags=["api-hub-proxy"])
 internal_router = APIRouter(
     prefix="/api-hub/internal/interfaces", tags=["api-hub-internal-proxy"]
 )
-
-
-def _authorize(authorization: str | None) -> None:
-    expected = config.SYSTEM_MCP_TOKEN
-    supplied = (authorization or "").removeprefix("Bearer ").strip()
-    if not expected:
-        raise HTTPException(503, "API_HUB_SYSTEM_MCP_TOKEN 尚未配置，接口代理拒绝服务")
-    if not supplied or not secrets.compare_digest(supplied, expected):
-        raise HTTPException(401, "接口代理令牌无效")
 
 
 def _authorize_internal(authorization: str | None) -> None:
@@ -83,55 +74,6 @@ def _inflate_internal_payload(payload: dict) -> dict:
     return restored
 
 
-@router.api_route("/{interface_id}", methods=["GET", "POST"])
-async def invoke_interface(interface_id: int, request: Request,
-                           authorization: str | None = Header(None)):
-    _authorize(authorization)
-    with db.get_conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM interfaces WHERE id = ? AND open_enabled = 1", (interface_id,)
-        ).fetchone()
-    if not row:
-        raise HTTPException(404, "接口不存在或尚未加入开放清单")
-    iface = _row_to_dict(row)
-
-    query_override = list(request.query_params.multi_items())
-    override_args = {"source": "n8n_proxy"}
-    if request.method == "POST":
-        raw = await request.body()
-        if raw:
-            try:
-                payload = json.loads(raw)
-            except ValueError as exc:
-                raise HTTPException(422, "代理 POST Body 必须是 JSON") from exc
-            if not isinstance(payload, dict):
-                raise HTTPException(422, "代理 POST Body 必须是对象")
-            extra_query = payload.get("query") or {}
-            if not isinstance(extra_query, dict):
-                raise HTTPException(422, "query 必须是对象")
-            replaced = {str(key) for key in extra_query}
-            query_override = [
-                (key, value) for key, value in query_override if key not in replaced
-            ]
-            query_override.extend(
-                (str(key), str(value))
-                for key, value in extra_query.items()
-                if value is not None
-            )
-            if "body" in payload:
-                body_value = payload["body"]
-                override_args["body"] = (
-                    body_value
-                    if isinstance(body_value, str)
-                    else json.dumps(body_value, ensure_ascii=False)
-                )
-
-    override_args["query_params"] = query_override or None
-    overrides = executor.RequestOverrides(**override_args)
-    result = executor.run_interface(iface, overrides)
-    return _proxy_response(result)
-
-
 @internal_router.post("/{interface_id}/invoke")
 async def invoke_internal_interface(
     interface_id: int,
@@ -158,6 +100,12 @@ async def invoke_internal_interface(
     if row is None:
         raise HTTPException(404, "接口不存在")
     interface = _row_to_dict(row)
+    if interface_has_personal_refs(interface):
+        raise HTTPException(
+            400,
+            "接口配置含个人变量占位符（{{privacy:}}/{{env:}}）：流水线链路没有"
+            "用户身份、不会解析占位符；请去除占位符后重新编排，或改用平台 UI 调用。",
+        )
 
     supplied_revision = payload.get("interface_revision")
     current_revision = int(interface.get("config_revision") or 1)
