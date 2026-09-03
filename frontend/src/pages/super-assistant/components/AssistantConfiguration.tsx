@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   FileCode2, FileText, Folder, Loader2, Pencil, PlugZap, Plus,
   Save, Trash2, Upload, Wrench, X,
@@ -13,15 +13,24 @@ import {
 } from '@/api/superAssistant'
 import { useToast } from '@/components/ui/Toast'
 import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select'
+import {
   parseMcpClientConfig,
   type ParsedMcpClientServer,
 } from '@/lib/mcpClientConfig'
 import { ApprovalTab, EvolutionPendingBadge, MemoryTab } from './AssistantEvolution'
 import { errorText } from './assistantPanelUtils'
+import ConfirmActionDialog from './ConfirmActionDialog'
 
 export { errorText }
 
 
+// 薄封装 ui/dialog：统一配置域弹层的头部与尺寸语言；
+// 遮罩、Esc 关闭与焦点管理交给 Radix，不再自绘 fixed 弹层和焦点陷阱。
 function DialogShell({ title, description, size = 'default', onClose, children }: {
   title: string
   description?: string
@@ -29,59 +38,24 @@ function DialogShell({ title, description, size = 'default', onClose, children }
   onClose: () => void
   children: React.ReactNode
 }) {
-  const titleId = useId()
-  const descriptionId = useId()
-  const dialogRef = useRef<HTMLElement>(null)
-
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-    const previousFocus = document.activeElement as HTMLElement | null
-    const focusableSelector = 'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary, [tabindex]:not([tabindex="-1"])'
-    const focusables = () => Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
-    focusables()[0]?.focus()
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); onClose(); return }
-      if (event.key !== 'Tab') return
-      const items = focusables()
-      if (!items.length) return
-      const first = items[0]
-      const last = items[items.length - 1]
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault(); last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault(); first.focus()
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-      previousFocus?.focus()
-    }
-  }, [onClose])
-
   const sizeClass = {
-    default: 'max-h-[90dvh] max-w-xl',
-    large: 'max-h-[85dvh] max-w-3xl',
-    wide: 'max-h-[90dvh] max-w-5xl',
+    default: 'max-h-[90dvh] w-[min(92vw,36rem)]',
+    large: 'max-h-[85dvh] w-[min(94vw,48rem)]',
+    wide: 'max-h-[90dvh] w-[min(96vw,64rem)]',
   }[size]
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/35 p-4" onMouseDown={onClose}>
-      <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined}
-        onMouseDown={event => event.stopPropagation()}
-        className={`flex w-full flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-2xl ${sizeClass}`}>
-        <header className="flex shrink-0 items-start justify-between border-b border-[var(--color-border)] px-5 py-4">
+    <Dialog open onOpenChange={value => { if (!value) onClose() }}>
+      <DialogContent className={`flex flex-col overflow-hidden p-0 ${sizeClass}`}>
+        <DialogHeader className="mb-0 shrink-0 border-b border-[var(--color-border)] px-5 py-4 pr-12">
           <div>
-            <h2 id={titleId} className="text-sm font-semibold text-[var(--color-text-primary)]">{title}</h2>
-            {description && <p id={descriptionId} className="mt-1 text-xs text-[var(--color-text-tertiary)]">{description}</p>}
+            <DialogTitle className="text-sm">{title}</DialogTitle>
+            {description && <DialogDescription className="text-xs">{description}</DialogDescription>}
           </div>
-          <button type="button" onClick={onClose} aria-label="关闭"
-            className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"><X size={17} /></button>
-        </header>
+        </DialogHeader>
         {children}
-      </section>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 function SkillCreateDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => Promise<void> }) {
@@ -156,6 +130,8 @@ function SkillEditor({ skill, onClose, onSaved }: { skill: SuperSkill; onClose: 
   const [saving, setSaving] = useState(false)
   const [newPath, setNewPath] = useState('')
   const [error, setError] = useState('')
+  const [confirmingRemove, setConfirmingRemove] = useState(false)
+  const [removing, setRemoving] = useState(false)
 
   const loadFile = useCallback(async (path: string) => {
     setLoading(true); setError('')
@@ -184,17 +160,21 @@ function SkillEditor({ skill, onClose, onSaved }: { skill: SuperSkill; onClose: 
     setSelectedPath(path); setContent(''); setNewPath(''); setLoading(false); setError('')
   }
 
+  // SKILL.md 保护由删除按钮的渲染条件（selectedPath !== 'SKILL.md'）保证
   const removeFile = async () => {
-    if (selectedPath === 'SKILL.md' || !window.confirm(`确定删除 ${selectedPath}？`)) return
+    setRemoving(true)
     try {
       await superAssistantApi.deleteSkillFile(skill.id, selectedPath)
       const next = await superAssistantApi.skillFiles(skill.id)
       setFiles(next); await loadFile('SKILL.md'); await onSaved()
       toast({ tone: 'success', title: '文件已删除' })
-    } catch (error) { setError(errorText(error, '删除失败')) }
+    } catch (error) { setError(errorText(error, '删除失败')) } finally {
+      setRemoving(false); setConfirmingRemove(false)
+    }
   }
 
   return (
+    <>
     <DialogShell size="wide" title={`编辑 Skill：${skill.name}`} description={`revision ${revision} · ${files.length} 个文件`} onClose={onClose}>
       <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[260px_minmax(0,1fr)]">
         <aside className="flex min-h-40 flex-col border-b border-[var(--color-border)] bg-[var(--color-bg-base)] md:border-b-0 md:border-r">
@@ -222,7 +202,7 @@ function SkillEditor({ skill, onClose, onSaved }: { skill: SuperSkill; onClose: 
             <span className="truncate font-mono text-xs text-[var(--color-text-secondary)]">{selectedPath}</span>
             <div className="flex gap-1">
               {selectedPath !== 'SKILL.md' && (
-                <button onClick={removeFile} aria-label="删除当前文件" className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] hover:bg-red-50 hover:text-red-600"><Trash2 size={14} /></button>
+                <button onClick={() => setConfirmingRemove(true)} aria-label="删除当前文件" className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] hover:bg-red-50 hover:text-red-600"><Trash2 size={14} /></button>
               )}
               <button onClick={save} disabled={saving || loading} className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-teal-700 px-3 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50">
                 {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />} 保存
@@ -239,6 +219,15 @@ function SkillEditor({ skill, onClose, onSaved }: { skill: SuperSkill; onClose: 
         </div>
       </div>
     </DialogShell>
+    <ConfirmActionDialog
+      open={confirmingRemove}
+      title="删除文件"
+      message={`确定删除 ${selectedPath}？`}
+      busy={removing}
+      onConfirm={() => void removeFile()}
+      onCancel={() => setConfirmingRemove(false)}
+    />
+    </>
   )
 }
 
@@ -372,19 +361,23 @@ function McpDialog({ server, onClose, onSaved }: {
             {clientConfigOptions.length > 1 && (
               <label className="block text-xs text-[var(--color-text-secondary)]">
                 选择要填入的 MCP Server
-                <select
-                  value={selectedClientConfig}
-                  onChange={event => {
-                    const nextIndex = Number(event.target.value)
+                <Select
+                  value={String(selectedClientConfig)}
+                  onValueChange={value => {
+                    const nextIndex = Number(value)
                     setSelectedClientConfig(nextIndex)
                     fillFromClientConfig(clientConfigOptions[nextIndex])
                   }}
-                  className="mt-1.5 min-h-10 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-3 text-xs outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
                 >
-                  {clientConfigOptions.map((config, index) => (
-                    <option key={`${config.name}-${index}`} value={index}>{config.name}</option>
-                  ))}
-                </select>
+                  <SelectTrigger aria-label="选择要填入的 MCP Server" className="mt-1.5 min-h-10 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {clientConfigOptions.map((config, index) => (
+                      <SelectItem key={`${config.name}-${index}`} value={String(index)}>{config.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </label>
             )}
             {clientConfigMessage && <p role="status" className="rounded-lg bg-teal-50 px-3 py-2 text-[10px] leading-5 text-teal-800">{clientConfigMessage}</p>}
@@ -395,12 +388,16 @@ function McpDialog({ server, onClose, onSaved }: {
             className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 font-mono text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100 disabled:opacity-60" />
         </label>
         <label className="block text-xs text-[var(--color-text-secondary)]">传输方式 <span className="text-red-500">*</span>
-          <select value={transport} onChange={event => setTransport(event.target.value as McpTransport)}
-            className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100">
-            <option value="streamable_http">Streamable HTTP（推荐）</option>
-            <option value="sse">SSE（旧版兼容）</option>
-            <option value="stdio">stdio（启动本地进程）</option>
-          </select>
+          <Select value={transport} onValueChange={value => setTransport(value as McpTransport)}>
+            <SelectTrigger aria-label="传输方式" className="mt-1.5 min-h-11 text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="streamable_http">Streamable HTTP（推荐）</SelectItem>
+              <SelectItem value="sse">SSE（旧版兼容）</SelectItem>
+              <SelectItem value="stdio">stdio（启动本地进程）</SelectItem>
+            </SelectContent>
+          </Select>
         </label>
         {transport === 'stdio' ? <>
           <label className="block text-xs text-[var(--color-text-secondary)]">command <span className="text-red-500">*</span>
@@ -487,6 +484,9 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
   const [testingId, setTestingId] = useState<string | null>(null)
   const [updatingSkillId, setUpdatingSkillId] = useState<string | null>(null)
   const [updatingServerSetting, setUpdatingServerSetting] = useState<string | null>(null)
+  const [removingSkill, setRemovingSkill] = useState<SuperSkill | null>(null)
+  const [removingServer, setRemovingServer] = useState<SuperMcpServer | null>(null)
+  const [removeBusy, setRemoveBusy] = useState(false)
   const uploadRef = useRef<HTMLInputElement>(null)
   const configurableServers = servers.filter(server => server.builtin_key !== 'minio')
 
@@ -527,9 +527,10 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
   }
 
   const removeSkill = async (skill: SuperSkill) => {
-    if (!window.confirm(`确定删除 Skill「${skill.name}」及其整个文件夹？`)) return
+    setRemoveBusy(true)
     try { await superAssistantApi.deleteSkill(skill.id); await refreshSkills(); toast({ tone: 'success', title: 'Skill 已删除' }) }
     catch (error) { toast({ tone: 'error', title: '删除失败', description: errorText(error) }) }
+    finally { setRemoveBusy(false); setRemovingSkill(null) }
   }
 
   const testServer = async (server: SuperMcpServer) => {
@@ -561,9 +562,10 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
   }
 
   const removeServer = async (server: SuperMcpServer) => {
-    if (!window.confirm(`确定删除 MCP Server「${server.name}」？`)) return
+    setRemoveBusy(true)
     try { await superAssistantApi.deleteMcpServer(server.id); await refreshServers(); toast({ tone: 'success', title: 'MCP Server 已删除' }) }
     catch (error) { toast({ tone: 'error', title: '删除失败', description: errorText(error) }) }
+    finally { setRemoveBusy(false); setRemovingServer(null) }
   }
 
   return (
@@ -655,7 +657,7 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
                         <button type="button" onClick={() => setEditingSkill(skill)} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-teal-50 hover:text-teal-800"><Pencil size={12} /> 文件</button>
-                        <button type="button" onClick={() => void removeSkill(skill)} aria-label={`删除 ${skill.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
+                        <button type="button" onClick={() => setRemovingSkill(skill)} aria-label={`删除 ${skill.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
                       </div>
                     </div>
                   </article>
@@ -694,7 +696,7 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
                       <div className="flex shrink-0 items-center gap-1">
                         <button type="button" onClick={() => void testServer(server)} disabled={testingId === server.id} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-teal-700 transition-colors hover:bg-teal-50 disabled:opacity-50">{testingId === server.id ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />} 测试</button>
                         {!server.builtin_key && <button type="button" onClick={() => setEditingMcp(server)} aria-label={`编辑 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)]"><Pencil size={12} /></button>}
-                        <button type="button" onClick={() => void removeServer(server)} aria-label={`删除 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
+                        <button type="button" onClick={() => setRemovingServer(server)} aria-label={`删除 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
                       </div>
                     </div>
                   </article>
@@ -728,6 +730,22 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
       {creatingSkill && <SkillCreateDialog onClose={() => setCreatingSkill(false)} onSaved={refreshSkills} />}
       {editingSkill && <SkillEditor skill={editingSkill} onClose={() => setEditingSkill(null)} onSaved={refreshSkills} />}
       {editingMcp && <McpDialog server={editingMcp === 'new' ? undefined : editingMcp} onClose={() => setEditingMcp(null)} onSaved={refreshServers} />}
+      <ConfirmActionDialog
+        open={removingSkill !== null}
+        title="删除 Skill"
+        message={removingSkill ? `确定删除 Skill「${removingSkill.name}」及其整个文件夹？` : ''}
+        busy={removeBusy}
+        onConfirm={() => { if (removingSkill) void removeSkill(removingSkill) }}
+        onCancel={() => setRemovingSkill(null)}
+      />
+      <ConfirmActionDialog
+        open={removingServer !== null}
+        title="删除 MCP Server"
+        message={removingServer ? `确定删除 MCP Server「${removingServer.name}」？` : ''}
+        busy={removeBusy}
+        onConfirm={() => { if (removingServer) void removeServer(removingServer) }}
+        onCancel={() => setRemovingServer(null)}
+      />
     </>
   )
 }

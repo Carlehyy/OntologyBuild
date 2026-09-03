@@ -27,6 +27,17 @@ export interface ToolStep {
   preview?: string
 }
 
+/** 会话附件（服务端会话目录 manifest 行）：仅所属会话可见 */
+export interface SuperConversationFile {
+  id: string
+  filename: string
+  mimeType: string
+  size: number
+  extractedChars: number
+  extractError: string | null
+  createdAt: string
+}
+
 export interface SkillFile {
   path: string
   size: number
@@ -229,6 +240,15 @@ export const superAssistantApi = {
     apiClientV2.patch<SuperConversation>(`/super-assistant/conversations/${id}`, body),
   deleteConversation: (id: string) => apiClientV2.delete(`/super-assistant/conversations/${id}`),
   messages: (id: string) => apiClientV2.get<SuperMessage[]>(`/super-assistant/conversations/${id}/messages`),
+  conversationFiles: (id: string) =>
+    apiClientV2.get<SuperConversationFile[]>(`/super-assistant/conversations/${id}/files`),
+  uploadConversationFile: (id: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return apiClientV2.post<SuperConversationFile>(`/super-assistant/conversations/${id}/files`, form)
+  },
+  deleteConversationFile: (id: string, fileId: string) =>
+    apiClientV2.delete(`/super-assistant/conversations/${id}/files/${fileId}`),
   streamChat,
   cancel: (id: string) => apiClientV2.post(`/super-assistant/conversations/${id}/cancel`),
   decideToolRun: (id: string, decision: 'approve' | 'deny') =>

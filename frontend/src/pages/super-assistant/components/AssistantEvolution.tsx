@@ -11,6 +11,13 @@ import {
   type SuperMemory,
 } from '@/api/superAssistant'
 import { useToast } from '@/components/ui/Toast'
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select'
+import ConfirmActionDialog from './ConfirmActionDialog'
 import { errorText } from './assistantPanelUtils'
 import {
   ZONE_LABELS,
@@ -199,6 +206,8 @@ export function MemoryTab() {
   const [distillClusters, setDistillClusters] = useState<DistillCluster[]>([])
   const [distillLoading, setDistillLoading] = useState(false)
   const [distillBusy, setDistillBusy] = useState<string | null>(null)
+  const [removingMemory, setRemovingMemory] = useState<SuperMemory | null>(null)
+  const [removeBusy, setRemoveBusy] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -275,13 +284,16 @@ export function MemoryTab() {
   }
 
   const removeMemory = async (memory: SuperMemory) => {
-    if (!window.confirm('确定删除这条记忆？')) return
+    setRemoveBusy(true)
     try {
       await superAssistantApi.deleteMemory(memory.id)
       toast({ tone: 'success', title: '记忆已删除' })
       await refresh()
     } catch (error) {
       toast({ tone: 'error', title: '删除失败', description: errorText(error) })
+    } finally {
+      setRemoveBusy(false)
+      setRemovingMemory(null)
     }
   }
 
@@ -342,14 +354,16 @@ export function MemoryTab() {
           placeholder="搜索记忆内容或标签…"
           className="min-h-9 flex-1 rounded-lg border border-[var(--color-border)] bg-transparent px-3 text-xs outline-none focus:border-teal-500"
         />
-        <select
-          value={zone}
-          onChange={event => setZone(event.target.value)}
-          className="min-h-9 rounded-lg border border-[var(--color-border)] bg-transparent px-2 text-xs outline-none focus:border-teal-500"
-        >
-          <option value="">全部分区</option>
-          {zones.map(item => <option key={item} value={item}>{zoneLabel(item)}</option>)}
-        </select>
+        {/* Radix Select 不允许空字符串 value，「全部分区」用哨兵值 __all__ 映射为空 */}
+        <Select value={zone || '__all__'} onValueChange={value => setZone(value === '__all__' ? '' : value)}>
+          <SelectTrigger aria-label="分区筛选" className="min-h-9 w-auto px-2 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">全部分区</SelectItem>
+            {zones.map(item => <SelectItem key={item} value={item}>{zoneLabel(item)}</SelectItem>)}
+          </SelectContent>
+        </Select>
         <button
           type="button"
           onClick={openDistill}
@@ -391,7 +405,7 @@ export function MemoryTab() {
                 className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)]">
                 {memory.pinned ? <PinOff size={13} /> : <Pin size={13} />}
               </button>
-              <button type="button" onClick={() => removeMemory(memory)} aria-label="删除记忆"
+              <button type="button" onClick={() => setRemovingMemory(memory)} aria-label="删除记忆"
                 className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-tertiary)] hover:bg-red-50 hover:text-red-600">
                 <Trash2 size={13} />
               </button>
@@ -413,20 +427,15 @@ export function MemoryTab() {
         </details>
       )}
 
-      {distillOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="记忆蒸馏收敛">
-          <div className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-2xl bg-[var(--color-bg-elevated)] p-5 shadow-xl">
-            <div className="flex shrink-0 items-start justify-between">
-              <div>
-                <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">记忆蒸馏收敛</h3>
-                <p className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">语义相近的记忆可合并为一条，减少冗余上下文</p>
-              </div>
-              <button type="button" onClick={() => setDistillOpen(false)} aria-label="关闭"
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">
-                <X size={15} />
-              </button>
+      <Dialog open={distillOpen} onOpenChange={value => { if (!value) setDistillOpen(false) }}>
+        <DialogContent className="flex max-h-[85dvh] w-[min(92vw,32rem)] flex-col overflow-hidden">
+          <DialogHeader className="mb-0 shrink-0">
+            <div>
+              <DialogTitle className="text-sm">记忆蒸馏收敛</DialogTitle>
+              <DialogDescription className="mt-0.5 text-[10px] leading-4">语义相近的记忆可合并为一条，减少冗余上下文</DialogDescription>
             </div>
-            <div className="mt-3 grid gap-3 overflow-y-auto">
+          </DialogHeader>
+          <div className="mt-3 grid gap-3 overflow-y-auto">
               {distillLoading && (
                 <div className="p-10 text-center text-xs text-[var(--color-text-tertiary)]"><Loader2 size={18} className="mx-auto animate-spin" /></div>
               )}
@@ -499,21 +508,15 @@ export function MemoryTab() {
                   </article>
                 )
               })}
-            </div>
           </div>
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
 
-      {creating && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="新增记忆">
-          <div className="w-full max-w-md rounded-2xl bg-[var(--color-bg-elevated)] p-5 shadow-xl">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">新增记忆</h3>
-              <button type="button" onClick={() => setCreating(false)} aria-label="关闭"
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">
-                <X size={15} />
-              </button>
-            </div>
+      <Dialog open={creating} onOpenChange={value => { if (!value) setCreating(false) }}>
+        <DialogContent className="w-[min(92vw,28rem)]">
+          <DialogHeader className="mb-0">
+            <DialogTitle className="text-sm">新增记忆</DialogTitle>
+          </DialogHeader>
             <textarea
               value={draft.content}
               onChange={event => setDraft({ ...draft, content: event.target.value })}
@@ -522,13 +525,14 @@ export function MemoryTab() {
               className="mt-3 w-full rounded-lg border border-[var(--color-border)] bg-transparent p-3 text-xs leading-5 outline-none focus:border-teal-500"
             />
             <div className="mt-3 flex items-center gap-3">
-              <select
-                value={draft.zone}
-                onChange={event => setDraft({ ...draft, zone: event.target.value })}
-                className="min-h-9 rounded-lg border border-[var(--color-border)] bg-transparent px-2 text-xs outline-none focus:border-teal-500"
-              >
-                {Object.entries(ZONE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
+              <Select value={draft.zone} onValueChange={value => setDraft({ ...draft, zone: value })}>
+                <SelectTrigger aria-label="记忆分区" className="min-h-9 w-auto px-2 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(ZONE_LABELS).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+                </SelectContent>
+              </Select>
               <label className="flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
                 <input
                   type="checkbox"
@@ -547,9 +551,17 @@ export function MemoryTab() {
               {saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
               保存记忆
             </button>
-          </div>
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmActionDialog
+        open={removingMemory !== null}
+        title="删除记忆"
+        message="确定删除这条记忆？"
+        busy={removeBusy}
+        onConfirm={() => { if (removingMemory) void removeMemory(removingMemory) }}
+        onCancel={() => setRemovingMemory(null)}
+      />
     </div>
   )
 }

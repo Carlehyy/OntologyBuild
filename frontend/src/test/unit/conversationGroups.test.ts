@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { groupConversations } from '../../pages/super-assistant/conversationGroups.ts'
+import { capGroupItems, groupConversations } from '../../pages/super-assistant/conversationGroups.ts'
 
 // 固定「现在」为 2026-09-03 15:00 本地时间，保证分组断言确定
 const NOW = new Date(2026, 8, 3, 15, 0, 0)
@@ -41,5 +41,34 @@ describe('groupConversations', () => {
       item('b', new Date(2026, 8, 3, 8, 0).toISOString()),
     ], NOW)
     assert.deepEqual(groups.today.map(i => i.id), ['a', 'b'])
+  })
+
+  it('naive UTC 时间串（无 Z 后缀）按 UTC 解析，分组与带 Z 时一致', () => {
+    // 后端实际返回形态：同一瞬间、无时区后缀；误按本地解析会在午夜前后错组
+    const explicit = new Date(2026, 8, 3, 9, 30).toISOString()
+    const naive = explicit.slice(0, -1)
+    const groups = groupConversations([
+      item('naive', naive),
+      item('explicit', explicit),
+    ], NOW)
+    assert.deepEqual(groups.today.map(i => i.id), ['naive', 'explicit'])
+  })
+})
+
+describe('capGroupItems', () => {
+  it('超限量时截断并报告隐藏条数', () => {
+    const items = Array.from({ length: 12 }, (_, index) => ({ id: `c-${index}` }))
+    const capped = capGroupItems(items, false)
+    assert.equal(capped.visible.length, 10)
+    assert.equal(capped.hiddenCount, 2)
+  })
+
+  it('展开或未超限时返回全部', () => {
+    const items = Array.from({ length: 12 }, (_, index) => ({ id: `c-${index}` }))
+    assert.equal(capGroupItems(items, true).visible.length, 12)
+    assert.deepEqual(capGroupItems(items.slice(0, 5), false), {
+      visible: items.slice(0, 5),
+      hiddenCount: 0,
+    })
   })
 })

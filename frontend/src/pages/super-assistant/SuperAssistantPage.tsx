@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Sender } from '@ant-design/x'
 import { ConfigProvider, theme as antdTheme } from 'antd'
 import {
-  Check, List, Loader2, Menu, Pencil,
+  Check, List, Loader2, Menu, Paperclip, Pencil,
   Send, Settings2, Square, X,
 } from 'lucide-react'
 
@@ -11,15 +11,21 @@ import { modelApi } from '@/api/ontologies'
 import {
   superAssistantApi,
   type SuperConversation,
+  type SuperConversationFile,
   type SuperMcpServer,
   type SuperMessage,
   type SuperSkill,
   type ToolStep,
 } from '@/api/superAssistant'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select'
 import { useToast } from '@/components/ui/Toast'
 import { pickInitialConversationId } from '@/components/assistant-widget/logic'
 import { useThemeStore } from '@/stores/themeStore'
 import ConfigurationPanel, { errorText } from './components/AssistantConfiguration'
+import ConfirmActionDialog from './components/ConfirmActionDialog'
 import WorkbenchSidebar from './components/WorkbenchSidebar'
 import {
   ChatMessage, ConfirmationCard, ContextUsage, EmptyState,
@@ -27,6 +33,22 @@ import {
 } from './components/AssistantConversation'
 import type { ModelConfig } from '@/types/ontology'
 
+const ATTACH_ACCEPT = '.csv,.xlsx,.xls,.json,.xml,.pdf,.docx,.doc,.pptx,.ppt,.md,.txt'
+
+/** 进行中的流式回复按会话隔离的运行时缓冲：切走再切回时，已生成内容经缓冲续看 */
+interface StreamBuffer {
+  messageId: string
+  content: string
+  steps: ToolStep[]
+  status: SuperMessage['status']
+  tokenUsage: Record<string, number>
+}
+
+function formatFileSize(size: number): string {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
 
 export default function SuperAssistantPage() {
   const { toast } = useToast()
@@ -42,9 +64,10 @@ export default function SuperAssistantPage() {
   const [skills, setSkills] = useState<SuperSkill[]>([])
   const [servers, setServers] = useState<SuperMcpServer[]>([])
   const [input, setInput] = useState('')
-  const [running, setRunning] = useState(false)
+  // 流式生成按会话隔离：只有「当前选中会话正在生成」时，输入区才表现为发送中
+  const [streamingIds, setStreamingIds] = useState<ReadonlySet<string>>(new Set())
   const [stopping, setStopping] = useState(false)
-  const [pending, setPending] = useState<PendingConfirmation | null>(null)
+  const [pendingByConv, setPendingByConv] = useState<Record<string, PendingConfirmation>>({})
   const [decisionBusy, setDecisionBusy] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [showMessageHistory, setShowMessageHistory] = useState(false)
@@ -54,8 +77,16 @@ export default function SuperAssistantPage() {
   const [savingTitle, setSavingTitle] = useState(false)
   const [loading, setLoading] = useState(true)
   const [modelLoadFailed, setModelLoadFailed] = useState(false)
+  const [conversationFiles, setConversationFiles] = useState<SuperConversationFile[]>([])
+  const [uploading, setUploading] = useState(false)
+  const [deletingConversation, setDeletingConversation] = useState<SuperConversation | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const senderRef = useRef<ElementRef<typeof Sender>>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  // 流式回调闭包固定于发起时刻，需经 ref 读取「当前选中的会话」做渲染守卫
+  const selectedIdRef = useRef<string | null>(null)
+  selectedIdRef.current = selectedId
+  const streamsRef = useRef(new Map<string, StreamBuffer>())
 
   const refreshConversations = useCallback(async () => {
     const data = await superAssistantApi.conversations()
@@ -110,10 +141,34 @@ export default function SuperAssistantPage() {
   useEffect(() => {
     setShowMessageHistory(false)
     setEditingTitle(false)
-    if (!selectedId) { setMessages([]); return }
+    if (!selectedId) { setMessages([]); setConversationFiles([]); return }
     let alive = true
-    superAssistantApi.messages(selectedId).then(data => { if (alive) setMessages(data) })
+    superAssistantApi.messages(selectedId).then(data => {
+      if (!alive) return
+      // 切回正在流式生成的会话：服务端的 streaming 占位消息叠加本地缓冲续看。
+      // 无占位消息说明服务端尚未落库本次流式（新建会话首条）——保留本地临时视图，
+      // 流结束后 send 的 finally 会重新拉取对齐。
+      const buffer = streamsRef.current.get(selectedId)
+      if (!buffer) { setMessages(data); return }
+      const placeholder = [...data].reverse().find(
+        item => item.role === 'assistant' && item.status === 'streaming',
+      )
+      if (!placeholder) return
+      buffer.messageId = placeholder.id
+      setMessages(data.map(item => item.id === buffer.messageId
+        ? {
+            ...item,
+            content: buffer.content,
+            steps: buffer.steps,
+            status: buffer.status,
+            token_usage: buffer.tokenUsage,
+          }
+        : item))
+    })
       .catch(error => toast({ tone: 'error', title: '会话消息加载失败', description: errorText(error) }))
+    superAssistantApi.conversationFiles(selectedId)
+      .then(data => { if (alive) setConversationFiles(data) })
+      .catch(() => { if (alive) setConversationFiles([]) })
     return () => { alive = false }
   }, [selectedId, toast])
 
@@ -129,12 +184,14 @@ export default function SuperAssistantPage() {
     }
   }, [requestedConversationId, conversations])
 
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) }, [messages, pending])
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) }, [messages, pendingByConv])
 
   const selectedConversation = conversations.find(item => item.id === selectedId) || null
   const selectedModelId = selectedConversation?.model_config_id || models.find(model => model.is_default)?.id || models[0]?.id || ''
   const selectedModel = models.find(model => model.id === selectedModelId)
   const myMessages = useMemo(() => messages.filter(message => message.role === 'user'), [messages])
+  const runningHere = selectedId !== null && streamingIds.has(selectedId)
+  const pendingHere = selectedId ? pendingByConv[selectedId] ?? null : null
 
   const createConversation = async () => {
     try {
@@ -144,13 +201,15 @@ export default function SuperAssistantPage() {
     } catch (error) { toast({ tone: 'error', title: '新建会话失败', description: errorText(error) }); return null }
   }
 
-  const deleteConversation = async (conversation: SuperConversation) => {
-    if (!window.confirm(`确定删除会话「${conversation.title}」？`)) return
+  const deleteConversation = async () => {
+    const conversation = deletingConversation
+    if (!conversation) return
     try {
       await superAssistantApi.deleteConversation(conversation.id)
       const next = conversations.filter(item => item.id !== conversation.id)
       setConversations(next)
       if (selectedId === conversation.id) { setSelectedId(next[0]?.id || null); setMessages([]) }
+      setDeletingConversation(null)
       toast({ tone: 'success', title: '会话已删除' })
     } catch (error) { toast({ tone: 'error', title: '删除失败', description: errorText(error) }) }
   }
@@ -209,9 +268,45 @@ export default function SuperAssistantPage() {
     })
   }
 
+  const uploadAttachments = async (fileList: FileList | null) => {
+    const files = fileList ? Array.from(fileList) : []
+    if (!files.length || uploading) return
+    let conversation = selectedConversation
+    if (!conversation) conversation = await createConversation()
+    if (!conversation) return
+    const conversationId = conversation.id
+    setUploading(true)
+    let uploaded = 0
+    try {
+      for (const file of files) {
+        await superAssistantApi.uploadConversationFile(conversationId, file)
+        uploaded += 1
+      }
+      toast({ tone: 'success', title: '附件已上传', description: '仅当前会话可见' })
+    } catch (error) {
+      toast({ tone: 'error', title: '附件上传失败', description: errorText(error) })
+    }
+    if (uploaded > 0 && selectedIdRef.current === conversationId) {
+      try {
+        setConversationFiles(await superAssistantApi.conversationFiles(conversationId))
+      } catch { /* 附件列表在下次进入会话时刷新 */ }
+    }
+    setUploading(false)
+  }
+
+  const removeAttachment = async (fileId: string) => {
+    if (!selectedId) return
+    try {
+      await superAssistantApi.deleteConversationFile(selectedId, fileId)
+      setConversationFiles(current => current.filter(file => file.id !== fileId))
+    } catch (error) {
+      toast({ tone: 'error', title: '移除附件失败', description: errorText(error) })
+    }
+  }
+
   const send = async (value?: string) => {
     const message = (value ?? input).trim()
-    if (!message || running) return
+    if (!message || runningHere) return
     let conversation = selectedConversation
     if (!conversation) conversation = await createConversation()
     if (!conversation) return
@@ -219,7 +314,37 @@ export default function SuperAssistantPage() {
     const now = new Date().toISOString()
     const tempUserId = `user-${Date.now()}`
     const tempAssistantId = `assistant-${Date.now()}`
-    setInput(''); setRunning(true); setStopping(false); setPending(null)
+    const clearPending = () => setPendingByConv(current => {
+      if (!(conversationId in current)) return current
+      const next = { ...current }
+      delete next[conversationId]
+      return next
+    })
+    setInput('')
+    setStopping(false)
+    clearPending()
+    setStreamingIds(current => new Set(current).add(conversationId))
+    const buffer: StreamBuffer = {
+      messageId: tempAssistantId,
+      content: '',
+      steps: [],
+      status: 'streaming',
+      tokenUsage: {},
+    }
+    streamsRef.current.set(conversationId, buffer)
+    // 缓冲始终更新；仅当仍处于该会话时才渲染增量（跨会话隔离）
+    const applyBuffer = () => {
+      if (selectedIdRef.current !== conversationId) return
+      setMessages(current => current.map(item => item.id === buffer.messageId
+        ? {
+            ...item,
+            content: buffer.content,
+            steps: buffer.steps,
+            status: buffer.status,
+            token_usage: buffer.tokenUsage,
+          }
+        : item))
+    }
     setMessages(current => [...current,
       { id: tempUserId, conversation_id: conversationId, role: 'user', content: message, status: 'complete', steps: [], token_usage: {}, created_at: now },
       { id: tempAssistantId, conversation_id: conversationId, role: 'assistant', content: '', status: 'streaming', steps: [], token_usage: {}, created_at: now },
@@ -227,61 +352,99 @@ export default function SuperAssistantPage() {
     try {
       await superAssistantApi.streamChat(conversationId, { message, model_config_id: selectedModelId || null, agent_mode: true }, ({ event, data }) => {
         if (event === 'text_delta') {
-          setMessages(current => current.map(item => item.id === tempAssistantId ? { ...item, content: item.content + String(data.delta || '') } : item))
+          buffer.content += String(data.delta || '')
+          applyBuffer()
         } else if (event === 'tool_start') {
-          const step: ToolStep = { toolName: data.toolName, status: 'running', arguments: data.arguments }
-          setMessages(current => current.map(item => item.id === tempAssistantId ? { ...item, steps: [...item.steps, step] } : item))
+          buffer.steps = [...buffer.steps, { toolName: data.toolName, status: 'running', arguments: data.arguments }]
+          applyBuffer()
         } else if (event === 'tool_confirmation_required') {
-          setPending({ toolRunId: data.toolRunId, toolName: data.toolName, serverName: data.serverName, arguments: data.arguments || {} })
-          setMessages(current => current.map(item => item.id === tempAssistantId
-            ? { ...item, steps: item.steps.map((step, index) => index === item.steps.length - 1 ? { ...step, status: 'awaiting_confirmation' } : step) }
-            : item))
+          setPendingByConv(current => ({
+            ...current,
+            [conversationId]: {
+              toolRunId: data.toolRunId,
+              toolName: data.toolName,
+              serverName: data.serverName,
+              arguments: data.arguments || {},
+            },
+          }))
+          buffer.steps = buffer.steps.map((step, index) => index === buffer.steps.length - 1 ? { ...step, status: 'awaiting_confirmation' } : step)
+          applyBuffer()
         } else if (event === 'tool_result') {
-          setPending(current => current?.toolRunId === data.toolRunId ? null : current)
-          setMessages(current => current.map(item => item.id === tempAssistantId
-            ? { ...item, steps: item.steps.map((step, index) => index === item.steps.length - 1 ? { ...step, status: data.status, preview: data.preview } : step) }
-            : item))
+          setPendingByConv(current => {
+            if (current[conversationId]?.toolRunId !== data.toolRunId) return current
+            const next = { ...current }
+            delete next[conversationId]
+            return next
+          })
+          buffer.steps = buffer.steps.map((step, index) => index === buffer.steps.length - 1 ? { ...step, status: data.status, preview: data.preview } : step)
+          applyBuffer()
         } else if (event === 'message_end') {
-          setMessages(current => current.map(item => item.id === tempAssistantId ? {
-            ...item, content: data.message?.content || item.content, steps: data.message?.steps || item.steps,
-            token_usage: data.message?.tokenUsage || {}, status: 'complete',
-          } : item))
+          buffer.content = data.message?.content || buffer.content
+          buffer.steps = data.message?.steps || buffer.steps
+          buffer.tokenUsage = data.message?.tokenUsage || {}
+          buffer.status = 'complete'
+          applyBuffer()
         } else if (event === 'cancelled') {
-          setMessages(current => current.map(item => item.id === tempAssistantId ? { ...item, status: 'cancelled' } : item))
+          buffer.status = 'cancelled'
+          applyBuffer()
         } else if (event === 'error') {
-          setMessages(current => current.map(item => item.id === tempAssistantId ? { ...item, content: data.message || '生成失败', status: 'error' } : item))
+          buffer.content = data.message || '生成失败'
+          buffer.status = 'error'
+          applyBuffer()
           toast({ tone: 'error', title: '生成失败', description: data.message })
         }
       })
     } catch (error) {
-      setMessages(current => current.map(item => item.id === tempAssistantId ? { ...item, content: errorText(error, '生成失败'), status: 'error' } : item))
+      buffer.content = errorText(error, '生成失败')
+      buffer.status = 'error'
+      applyBuffer()
       toast({ tone: 'error', title: '生成失败', description: errorText(error) })
     } finally {
-      setRunning(false); setStopping(false); setPending(null)
+      streamsRef.current.delete(conversationId)
+      setStreamingIds(current => {
+        const next = new Set(current)
+        next.delete(conversationId)
+        return next
+      })
+      setStopping(false)
+      clearPending()
       try {
-        const [messageRows] = await Promise.all([superAssistantApi.messages(conversationId), refreshConversations()])
-        setMessages(messageRows)
+        if (selectedIdRef.current === conversationId) {
+          const [messageRows] = await Promise.all([superAssistantApi.messages(conversationId), refreshConversations()])
+          setMessages(messageRows)
+        } else {
+          await refreshConversations()
+        }
       } catch { /* optimistic state remains usable */ }
-      window.setTimeout(() => senderRef.current?.focus(), 0)
+      if (selectedIdRef.current === conversationId) window.setTimeout(() => senderRef.current?.focus(), 0)
     }
   }
 
   const stop = async () => {
-    if (!selectedId || stopping) return
+    if (!selectedId || !runningHere || stopping) return
     setStopping(true)
     try { await superAssistantApi.cancel(selectedId) }
     catch (error) { setStopping(false); toast({ tone: 'error', title: '停止失败', description: errorText(error) }) }
   }
 
   const decide = async (decision: 'approve' | 'deny') => {
-    if (!pending) return
+    const pending = pendingHere
+    if (!pending || !selectedId) return
     setDecisionBusy(true)
-    try { await superAssistantApi.decideToolRun(pending.toolRunId, decision); setPending(null) }
+    try {
+      await superAssistantApi.decideToolRun(pending.toolRunId, decision)
+      setPendingByConv(current => {
+        if (current[selectedId]?.toolRunId !== pending.toolRunId) return current
+        const next = { ...current }
+        delete next[selectedId]
+        return next
+      })
+    }
     catch (error) { toast({ tone: 'error', title: '确认失败', description: errorText(error) }) }
     finally { setDecisionBusy(false) }
   }
 
-  const canSend = input.trim().length > 0 && !running && models.length > 0
+  const canSend = input.trim().length > 0 && !runningHere && models.length > 0
   // SenderProps 未显式声明原生透传属性，但库内部会转发到内部 textarea
   const senderNativeProps = { autoFocus: true, 'aria-label': '向超级助手发送消息' }
   const placeholder = loading
@@ -295,6 +458,18 @@ export default function SuperAssistantPage() {
 
   const renderComposer = (prominent = false) => (
     <div className="w-full">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept={ATTACH_ACCEPT}
+        aria-label="选择会话附件文件"
+        className="hidden"
+        onChange={event => {
+          const inputElement = event.currentTarget
+          void uploadAttachments(inputElement.files).finally(() => { inputElement.value = '' })
+        }}
+      />
       <div
         data-testid="super-assistant-composer"
         className={`relative overflow-visible rounded-xl border border-teal-400 bg-white ring-1 ring-teal-100 transition-colors focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-200/80 ${prominent
@@ -316,65 +491,102 @@ export default function SuperAssistantPage() {
               return false
             }}
             onCancel={() => void stop()}
-            loading={running}
+            loading={runningHere}
             placeholder={placeholder}
-            disabled={running || models.length === 0}
+            disabled={runningHere || models.length === 0}
             autoSize={{ minRows: 1, maxRows: 6 }}
             suffix={false}
             className="w-full"
             style={{ border: 'none', boxShadow: 'none', background: 'transparent' }}
           />
         </div>
-        <div className="flex min-h-12 items-center justify-end gap-2 px-2.5 py-2">
-          {running ? (
-            <button type="button" onClick={() => void stop()} disabled={stopping} aria-label="停止生成" title="停止生成"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-text-primary)] text-white transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
-              {stopping ? <Loader2 size={14} className="animate-spin" /> : <Square size={13} fill="currentColor" />}
-            </button>
-          ) : (
-            <button type="button" onClick={() => void send()} disabled={!canSend} aria-label="发送消息" title="发送消息"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white transition-all hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1">
-              <Send size={14} />
-            </button>
-          )}
+        <div className="flex min-h-12 items-center justify-between gap-2 px-2.5 py-2">
           <button
             type="button"
-            onClick={() => setShowMessageHistory(value => !value)}
-            disabled={myMessages.length === 0}
-            title="我发送的消息 · 快速跳转"
-            aria-label="查看我发送的消息"
-            aria-expanded={showMessageHistory}
-            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showMessageHistory
-              ? 'border-teal-300 bg-teal-50 text-teal-700'
-              : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            title="上传会话附件（仅本会话可见）"
+            aria-label="上传会话附件"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-50 hover:text-teal-600 active:scale-[0.98] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
           >
-            <List size={15} />
+            {uploading ? <Loader2 size={16} className="animate-spin" /> : <Paperclip size={16} />}
           </button>
+          <div className="flex shrink-0 items-center gap-2">
+            {runningHere ? (
+              <button type="button" onClick={() => void stop()} disabled={stopping} aria-label="停止生成" title="停止生成"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-text-primary)] text-white transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
+                {stopping ? <Loader2 size={14} className="animate-spin" /> : <Square size={13} fill="currentColor" />}
+              </button>
+            ) : (
+              <button type="button" onClick={() => void send()} disabled={!canSend} aria-label="发送消息" title="发送消息"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white transition-all hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1">
+                <Send size={14} />
+              </button>
+            )}
+            <Popover open={showMessageHistory} onOpenChange={setShowMessageHistory}>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  disabled={myMessages.length === 0}
+                  title="我发送的消息 · 快速跳转"
+                  aria-label="查看我发送的消息"
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showMessageHistory
+                    ? 'border-teal-300 bg-teal-50 text-teal-700'
+                    : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
+                >
+                  <List size={15} />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent
+                side="top"
+                align="end"
+                sideOffset={12}
+                data-testid="super-assistant-message-history"
+                className="w-72 overflow-hidden rounded-lg border-slate-200 p-0"
+              >
+                <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
+                  <span className="text-[11px] font-medium text-slate-600">我发送的消息</span>
+                  <span className="text-[10px] text-slate-400">点击跳转 · 共 {myMessages.length} 条</span>
+                </div>
+                <div className="scrollbar-none max-h-64 overflow-y-auto py-1">
+                  {[...myMessages].reverse().map((message, index) => (
+                    <button
+                      type="button"
+                      key={message.id}
+                      onClick={() => jumpToMessage(message.id)}
+                      title={message.content}
+                      className="flex w-full items-start gap-2 px-3 py-1.5 text-left transition-colors hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none"
+                    >
+                      <span className="mt-0.5 shrink-0 font-mono text-[10px] text-slate-400">#{myMessages.length - index}</span>
+                      <span className="min-w-0 flex-1 truncate text-xs text-slate-600">{message.content}</span>
+                    </button>
+                  ))}
+                </div>
+              </PopoverContent>
+            </Popover>
+          </div>
         </div>
-        {showMessageHistory && (
-          <>
-            <div className="fixed inset-0 z-20" onClick={() => setShowMessageHistory(false)} />
-            <div data-testid="super-assistant-message-history" className="absolute bottom-full right-0 z-30 mb-3 w-72 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
-              <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
-                <span className="text-[11px] font-medium text-slate-600">我发送的消息</span>
-                <span className="text-[10px] text-slate-400">点击跳转 · 共 {myMessages.length} 条</span>
-              </div>
-              <div className="max-h-64 overflow-y-auto py-1">
-                {[...myMessages].reverse().map((message, index) => (
-                  <button
-                    type="button"
-                    key={message.id}
-                    onClick={() => jumpToMessage(message.id)}
-                    title={message.content}
-                    className="flex w-full items-start gap-2 px-3 py-1.5 text-left transition-colors hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none"
-                  >
-                    <span className="mt-0.5 shrink-0 font-mono text-[10px] text-slate-400">#{myMessages.length - index}</span>
-                    <span className="min-w-0 flex-1 truncate text-xs text-slate-600">{message.content}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </>
+        {conversationFiles.length > 0 && (
+          <div data-testid="super-assistant-attachments" className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 px-2.5 py-2">
+            {conversationFiles.map(file => (
+              <span
+                key={file.id}
+                title={`${file.filename} · ${formatFileSize(file.size)} · 仅本会话可见`}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-600"
+              >
+                <Paperclip size={11} className="shrink-0 text-slate-400" />
+                <span className="max-w-40 truncate">{file.filename}</span>
+                <button
+                  type="button"
+                  onClick={() => void removeAttachment(file.id)}
+                  aria-label={`移除附件 ${file.filename}`}
+                  className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:outline-none"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
         )}
       </div>
     </div>
@@ -391,7 +603,7 @@ export default function SuperAssistantPage() {
         onSelect={id => setSelectedId(id)}
         onDelete={id => {
           const conversation = conversations.find(item => item.id === id)
-          if (conversation) return deleteConversation(conversation)
+          if (conversation) setDeletingConversation(conversation)
         }}
         onSetArchived={(id, archived) => void setConversationArchived(id, archived)}
       />
@@ -447,12 +659,22 @@ export default function SuperAssistantPage() {
             )}
           </div>
           {!loading && selectedConversation && <ContextUsage messages={messages} model={selectedModel} />}
-          <label className="sr-only" htmlFor="super-assistant-model">会话模型</label>
-          <select id="super-assistant-model" value={selectedModelId} onChange={event => void changeModel(event.target.value)} disabled={!selectedId || running}
-            className="h-9 w-48 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2 text-xs text-[var(--color-text-secondary)] outline-none transition-colors focus:border-teal-500 focus:ring-2 focus:ring-teal-100 disabled:opacity-60 sm:w-64 xl:w-80">
-            {models.length === 0 && <option value="">无可用模型</option>}
-            {models.map(model => <option key={model.id} value={model.id}>{model.name} · {model.models?.[0]}</option>)}
-          </select>
+          <Select
+            value={selectedModelId}
+            onValueChange={value => void changeModel(value)}
+            disabled={!selectedId || runningHere}
+          >
+            <SelectTrigger aria-label="会话模型" className="h-9 w-48 text-xs sm:w-64 xl:w-80">
+              <SelectValue placeholder={models.length === 0 ? '无可用模型' : '选择模型'} />
+            </SelectTrigger>
+            <SelectContent>
+              {models.map(model => (
+                <SelectItem key={model.id} value={model.id} className="text-xs">
+                  {model.name} · {model.models?.[0]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <button
             type="button"
             onClick={() => setConfigOpen(value => !value)}
@@ -490,7 +712,7 @@ export default function SuperAssistantPage() {
               <div className="h-full overflow-y-auto">
                 <div className="mx-auto w-full max-w-4xl space-y-7 px-4 pb-28 pt-6 sm:px-8">
                   {messages.map(message => <ChatMessage key={message.id} message={message} />)}
-                  {pending && <ConfirmationCard pending={pending} busy={decisionBusy} onDecision={decision => void decide(decision)} />}
+                  {pendingHere && <ConfirmationCard pending={pendingHere} busy={decisionBusy} onDecision={decision => void decide(decision)} />}
                   <div ref={messagesEndRef} />
                 </div>
               </div>
@@ -515,6 +737,17 @@ export default function SuperAssistantPage() {
         refreshSkills={refreshSkills}
         refreshServers={refreshServers}
         conversationId={selectedId}
+      />
+
+      <ConfirmActionDialog
+        open={deletingConversation !== null}
+        title="删除会话"
+        message={deletingConversation
+          ? `确定删除会话「${deletingConversation.title}」？会话内消息与附件将一并删除。`
+          : ''}
+        confirmLabel="删除"
+        onConfirm={() => void deleteConversation()}
+        onCancel={() => setDeletingConversation(null)}
       />
     </div>
   )

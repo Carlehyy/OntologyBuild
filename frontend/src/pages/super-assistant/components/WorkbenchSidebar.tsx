@@ -6,11 +6,19 @@ import {
 } from 'lucide-react'
 
 import type { SuperConversation } from '@/api/superAssistant'
-import { Modal } from '@/components/ui/Modal'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { hasMenuAccess } from '@/config/navigation'
 import { useAuthStore } from '@/stores/authStore'
+import { formatSessionTime } from '@/utils/datetime'
 import {
+  capGroupItems,
   CONVERSATION_GROUP_SECTIONS,
+  CONVERSATION_GROUP_VISIBLE_LIMIT,
   groupConversations,
 } from '../conversationGroups'
 
@@ -36,17 +44,6 @@ const PLACEHOLDER_COPY: Record<PlaceholderFeature, { title: string; body: string
     title: '定时任务',
     body: '定时任务功能即将上线：让超级助手按你设定的计划自动执行任务，当前版本请手动发起对话。',
   },
-}
-
-function formatSessionTime(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '时间未知'
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 }
 
 interface ConversationRowProps {
@@ -80,10 +77,12 @@ function ConversationRow({ item, current, archived, onSelect, onDelete, onSetArc
           {title}
         </span>
       </button>
-      <span className="shrink-0 text-[10px] tabular-nums text-[var(--color-text-tertiary)] group-hover:hidden">
+      {/* 时间戳与 hover 动作按钮都锁定 h-6：两者高度一致，
+          悬停切换时行高不变，列表不抖动 */}
+      <span className="flex h-6 shrink-0 items-center text-[10px] tabular-nums text-[var(--color-text-tertiary)] group-hover:hidden">
         {formatSessionTime(item.updated_at)}
       </span>
-      <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+      <span className="hidden h-6 shrink-0 items-center gap-0.5 group-hover:flex">
         <button
           type="button"
           onClick={() => onSetArchived(item.id, !archived)}
@@ -122,9 +121,31 @@ export default function WorkbenchSidebar({
   const navigate = useNavigate()
   const [placeholder, setPlaceholder] = useState<PlaceholderFeature | null>(null)
   const [archivedOpen, setArchivedOpen] = useState(false)
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
 
   const groups = groupConversations(conversations)
   const activeCount = groups.today.length + groups.yesterday.length + groups.earlier.length
+
+  const toggleGroupExpanded = (key: string) => {
+    setExpandedGroups(current => ({ ...current, [key]: !current[key] }))
+  }
+
+  const renderGroupToggle = (key: string, total: number, hiddenCount: number) => {
+    const expanded = expandedGroups[key] ?? false
+    if (!expanded && hiddenCount === 0) return null
+    if (expanded && total <= CONVERSATION_GROUP_VISIBLE_LIMIT) return null
+    return (
+      <button
+        type="button"
+        data-workbench-group-toggle={key}
+        aria-expanded={expanded}
+        onClick={() => toggleGroupExpanded(key)}
+        className="mt-0.5 flex w-full items-center justify-center rounded-lg px-2 py-1 text-[10px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
+      >
+        {expanded ? '收起' : `展开全部（还有 ${hiddenCount} 条）`}
+      </button>
+    )
+  }
 
   const handleSelect = (id: string) => {
     onSelect(id)
@@ -135,8 +156,8 @@ export default function WorkbenchSidebar({
 
   const content = (
     <>
-      {/* 品牌 */}
-      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--color-border)] px-4">
+      {/* 品牌（h-[4.3125rem] 与右侧会话头部同高，两条分割线水平对齐） */}
+      <div className="flex h-[4.3125rem] shrink-0 items-center gap-3 border-b border-[var(--color-border)] px-4">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ background: 'var(--color-nav-bg)' }}>
           <Network size={18} className="text-white" />
         </div>
@@ -185,7 +206,8 @@ export default function WorkbenchSidebar({
           <span className="text-xs font-medium text-[var(--color-text-secondary)]">历史会话</span>
           <span className="text-[10px] tabular-nums text-[var(--color-text-tertiary)]">共 {activeCount} 个</span>
         </div>
-        <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        {/* 长列表滚动但隐藏滚动条（scrollbar-none 为 index.css 全局工具类） */}
+        <div className="scrollbar-none min-h-0 flex-1 overflow-y-auto px-2 pb-2">
           {activeCount === 0 && groups.archived.length === 0 && (
             <p className="px-3 py-6 text-center text-xs leading-5 text-[var(--color-text-tertiary)]">
               还没有会话，点击上方「新建任务」开始。
@@ -194,13 +216,14 @@ export default function WorkbenchSidebar({
           {CONVERSATION_GROUP_SECTIONS.map(section => {
             const items = groups[section.key]
             if (items.length === 0) return null
+            const { visible, hiddenCount } = capGroupItems(items, expandedGroups[section.key] ?? false)
             return (
               <div key={section.key} data-workbench-group={section.key} className="pt-2">
                 <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-tertiary)]">
                   {section.label}
                 </p>
                 <div className="space-y-0.5">
-                  {items.map(item => (
+                  {visible.map(item => (
                     <ConversationRow
                       key={item.id}
                       item={item}
@@ -212,6 +235,7 @@ export default function WorkbenchSidebar({
                     />
                   ))}
                 </div>
+                {renderGroupToggle(section.key, items.length, hiddenCount)}
               </div>
             )
           })}
@@ -226,21 +250,27 @@ export default function WorkbenchSidebar({
                 <Archive size={11} />
                 归档会话（{groups.archived.length}）
               </button>
-              {archivedOpen && (
-                <div className="space-y-0.5">
-                  {groups.archived.map(item => (
-                    <ConversationRow
-                      key={item.id}
-                      item={item}
-                      current={item.id === selectedId}
-                      archived
-                      onSelect={handleSelect}
-                      onDelete={onDelete}
-                      onSetArchived={onSetArchived}
-                    />
-                  ))}
-                </div>
-              )}
+              {archivedOpen && (() => {
+                const { visible, hiddenCount } = capGroupItems(groups.archived, expandedGroups.archived ?? false)
+                return (
+                  <>
+                    <div className="space-y-0.5">
+                      {visible.map(item => (
+                        <ConversationRow
+                          key={item.id}
+                          item={item}
+                          current={item.id === selectedId}
+                          archived
+                          onSelect={handleSelect}
+                          onDelete={onDelete}
+                          onSetArchived={onSetArchived}
+                        />
+                      ))}
+                    </div>
+                    {renderGroupToggle('archived', groups.archived.length, hiddenCount)}
+                  </>
+                )
+              })()}
             </div>
           )}
         </div>
@@ -278,16 +308,16 @@ export default function WorkbenchSidebar({
         {content}
       </aside>
 
-      <Modal
-        open={placeholder !== null}
-        onClose={() => setPlaceholder(null)}
-        title={placeholder ? PLACEHOLDER_COPY[placeholder].title : undefined}
-        size="sm"
-      >
-        <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
-          {placeholder ? PLACEHOLDER_COPY[placeholder].body : ''}
-        </p>
-      </Modal>
+      <Dialog open={placeholder !== null} onOpenChange={open => { if (!open) setPlaceholder(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{placeholder ? PLACEHOLDER_COPY[placeholder].title : ''}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
+            {placeholder ? PLACEHOLDER_COPY[placeholder].body : ''}
+          </p>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

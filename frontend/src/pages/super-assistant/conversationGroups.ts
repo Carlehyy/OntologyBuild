@@ -15,9 +15,14 @@ export interface ConversationGroups<T extends ConversationGroupItem> {
   archived: T[]
 }
 
+// 后端返回的 ISO 时间为 naive UTC（无时区后缀），直接 new Date 会按本地时区解析，
+// 午夜前后的会话会错组一天；无显式时区时按 UTC 解析。规则与 utils/datetime.ts 一致，
+// 因本模块的运行时依赖禁令在此内联。
+const EXPLICIT_TIMEZONE_RE = /(Z|[+-]\d\d:?\d\d)$/
+
 /** 本地时区的「当日 0 点」时间戳；无效日期返回 null。 */
 function localDayStart(value: string): number | null {
-  const date = new Date(value)
+  const date = new Date(EXPLICIT_TIMEZONE_RE.test(value) ? value : `${value}Z`)
   if (Number.isNaN(date.getTime())) return null
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
 }
@@ -54,3 +59,16 @@ export const CONVERSATION_GROUP_SECTIONS = [
   { key: 'yesterday', label: '昨日对话' },
   { key: 'earlier', label: '历史会话' },
 ] as const
+
+/** 每组默认展示的条数；超出部分经「展开全部」查看，避免长列表挤占侧栏。 */
+export const CONVERSATION_GROUP_VISIBLE_LIMIT = 10
+
+/** 按限量截取组内可见条目；expanded 或未超限时返回全部。 */
+export function capGroupItems<T>(
+  items: readonly T[],
+  expanded: boolean,
+  limit: number = CONVERSATION_GROUP_VISIBLE_LIMIT,
+): { visible: T[]; hiddenCount: number } {
+  if (expanded || items.length <= limit) return { visible: [...items], hiddenCount: 0 }
+  return { visible: items.slice(0, limit), hiddenCount: items.length - limit }
+}

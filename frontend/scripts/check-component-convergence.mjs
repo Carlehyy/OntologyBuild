@@ -81,9 +81,6 @@ const NATIVE_SELECT_ALLOWLIST = new Set([
   'pages/scenes/list/SceneListPage.tsx',
   'pages/scenes/modeling/SceneModelingPage.tsx',
   'pages/settings/UserManagementPanel.tsx',
-  'pages/super-assistant/SuperAssistantPage.tsx',
-  'pages/super-assistant/components/AssistantConfiguration.tsx',
-  'pages/super-assistant/components/AssistantEvolution.tsx',
   'pages/tickets/TicketDetailDrawer.tsx',
   'pages/world-model/PublishServiceDialog.tsx',
 ])
