@@ -579,7 +579,7 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
       >
         <section
           aria-label="助手配置"
-          className={`absolute inset-y-0 right-0 flex w-[min(26rem,100vw)] min-h-0 flex-col overflow-hidden border-l border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none lg:translate-x-0 ${open ? 'translate-x-0' : 'translate-x-full'}`}
+          className={`absolute inset-y-0 right-0 flex w-[min(26rem,100vw)] min-h-0 flex-col overflow-hidden border-l border-[var(--color-border)] bg-white transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none lg:translate-x-0 ${open ? 'translate-x-0' : 'translate-x-full'}`}
         >
           <header className="flex shrink-0 items-start justify-between border-b border-[var(--color-border)] px-4 py-3.5">
             <div className="min-w-0">
@@ -705,7 +705,7 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
             </>
           )}
           </div>
-          <footer className="shrink-0 border-t border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3">
+          <footer className="shrink-0 border-t border-[var(--color-border)] bg-white p-3">
             {tab === 'skills' ? (
               <div className="grid grid-cols-2 gap-2">
                 <button type="button" onClick={() => setCreatingSkill(true)}

@@ -28,7 +28,7 @@ import ConfigurationPanel, { errorText } from './components/AssistantConfigurati
 import ConfirmActionDialog from './components/ConfirmActionDialog'
 import WorkbenchSidebar from './components/WorkbenchSidebar'
 import {
-  ChatMessage, ConfirmationCard, ContextUsage, EmptyState,
+  ChatMessage, ConfirmationCard, ContextUsage,
   type PendingConfirmation,
 } from './components/AssistantConversation'
 import type { ModelConfig } from '@/types/ontology'
@@ -87,6 +87,13 @@ export default function SuperAssistantPage() {
   const selectedIdRef = useRef<string | null>(null)
   selectedIdRef.current = selectedId
   const streamsRef = useRef(new Map<string, StreamBuffer>())
+  // 输入草稿按会话缓存：多会话来回切换时未发送的内容不丢失；
+  // '__new__' 是「尚未落地的新会话」视图（selectedId 为 null）的草稿槽
+  const NEW_DRAFT_KEY = '__new__'
+  const draftsRef = useRef(new Map<string, string>())
+  const inputRef = useRef(input)
+  inputRef.current = input
+  const draftPrevIdRef = useRef<string | null>(null)
 
   const refreshConversations = useCallback(async () => {
     const data = await superAssistantApi.conversations()
@@ -184,6 +191,16 @@ export default function SuperAssistantPage() {
     }
   }, [requestedConversationId, conversations])
 
+  // 选中会话切换时：把当前输入存进上一会话的草稿槽，再恢复目标会话的草稿。
+  // 经 inputRef 读取最新输入，避免闭包拿到过期值。
+  useEffect(() => {
+    const previousId = draftPrevIdRef.current
+    if (previousId === selectedId) return
+    draftsRef.current.set(previousId ?? NEW_DRAFT_KEY, inputRef.current)
+    draftPrevIdRef.current = selectedId
+    setInput(draftsRef.current.get(selectedId ?? NEW_DRAFT_KEY) ?? '')
+  }, [selectedId])
+
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) }, [messages, pendingByConv])
 
   const selectedConversation = conversations.find(item => item.id === selectedId) || null
@@ -199,6 +216,16 @@ export default function SuperAssistantPage() {
       setConversations(current => [item, ...current]); setSelectedId(item.id); setMessages([])
       return item
     } catch (error) { toast({ tone: 'error', title: '新建会话失败', description: errorText(error) }); return null }
+  }
+
+  // 「新建任务」去重：当前已在未落地的全新视图、或选中的会话还是空会话（无消息且未在生成）
+  // 时不再创建新会话，避免空会话堆积；仅把焦点放回输入框。
+  const handleNewConversation = async () => {
+    if (!selectedId || (selectedConversation && messages.length === 0 && !streamingIds.has(selectedConversation.id))) {
+      senderRef.current?.focus()
+      return
+    }
+    await createConversation()
   }
 
   const deleteConversation = async () => {
@@ -321,6 +348,11 @@ export default function SuperAssistantPage() {
       return next
     })
     setInput('')
+    // 草稿同步清空：inputRef 立即置空，随后会话切换的草稿 effect 读到的即为空值，
+    // 刚发送的文本不会被存回任何草稿槽
+    inputRef.current = ''
+    draftsRef.current.set(conversationId, '')
+    draftsRef.current.set(NEW_DRAFT_KEY, '')
     setStopping(false)
     clearPending()
     setStreamingIds(current => new Set(current).add(conversationId))
@@ -476,6 +508,28 @@ export default function SuperAssistantPage() {
           ? 'shadow-[0_18px_50px_rgba(15,118,110,0.12)]'
           : 'shadow-[0_8px_28px_rgba(15,23,42,0.08)]'}`}
       >
+        {conversationFiles.length > 0 && (
+          <div data-testid="super-assistant-attachments" className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 px-2.5 py-2">
+            {conversationFiles.map(file => (
+              <span
+                key={file.id}
+                title={`${file.filename} · ${formatFileSize(file.size)} · 仅本会话可见`}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-600"
+              >
+                <Paperclip size={11} className="shrink-0 text-slate-400" />
+                <span className="max-w-40 truncate">{file.filename}</span>
+                <button
+                  type="button"
+                  onClick={() => void removeAttachment(file.id)}
+                  aria-label={`移除附件 ${file.filename}`}
+                  className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:outline-none"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="px-3 pb-1 pt-2.5">
           <Sender
             ref={senderRef}
@@ -492,7 +546,8 @@ export default function SuperAssistantPage() {
             }}
             onCancel={() => void stop()}
             loading={runningHere}
-            placeholder={placeholder}
+            // 空态主输入框用品牌占位符；原生 placeholder 在聚焦输入后自动消失，不会混入用户文本
+            placeholder={prominent && !loading && !modelLoadFailed && models.length > 0 ? '咨询任何问题，创造任何事物' : placeholder}
             disabled={runningHere || models.length === 0}
             autoSize={{ minRows: 1, maxRows: 6 }}
             suffix={false}
@@ -566,28 +621,6 @@ export default function SuperAssistantPage() {
             </Popover>
           </div>
         </div>
-        {conversationFiles.length > 0 && (
-          <div data-testid="super-assistant-attachments" className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 px-2.5 py-2">
-            {conversationFiles.map(file => (
-              <span
-                key={file.id}
-                title={`${file.filename} · ${formatFileSize(file.size)} · 仅本会话可见`}
-                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-600"
-              >
-                <Paperclip size={11} className="shrink-0 text-slate-400" />
-                <span className="max-w-40 truncate">{file.filename}</span>
-                <button
-                  type="button"
-                  onClick={() => void removeAttachment(file.id)}
-                  aria-label={`移除附件 ${file.filename}`}
-                  className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:outline-none"
-                >
-                  <X size={11} />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   )
@@ -599,7 +632,7 @@ export default function SuperAssistantPage() {
         selectedId={selectedId}
         mobileOpen={sidebarOpen}
         onCloseMobile={() => setSidebarOpen(false)}
-        onCreate={async () => { await createConversation() }}
+        onCreate={() => void handleNewConversation()}
         onSelect={id => setSelectedId(id)}
         onDelete={id => {
           const conversation = conversations.find(item => item.id === id)
@@ -619,7 +652,15 @@ export default function SuperAssistantPage() {
           </button>
           <div className="min-w-0 flex-1">
             {editingTitle ? (
-              <form className="flex max-w-lg items-center gap-1.5" onSubmit={event => { event.preventDefault(); void saveTitle() }}>
+              /* 点击表单外任意处自动取消更改：焦点离开 form（relatedTarget 不在表单内）即退出编辑；
+                 按钮 onMouseDown preventDefault 兼容 Safari——避免点保存/取消时先触发 blur 导致点击丢失 */
+              <form
+                className="flex max-w-lg items-center gap-1.5"
+                onSubmit={event => { event.preventDefault(); void saveTitle() }}
+                onBlur={event => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setEditingTitle(false)
+                }}
+              >
                 <input
                   autoFocus
                   value={titleDraft}
@@ -632,11 +673,13 @@ export default function SuperAssistantPage() {
                   className="h-9 min-w-0 flex-1 rounded-lg border border-teal-300 bg-[var(--color-bg-base)] px-2.5 text-sm font-semibold text-[var(--color-text-primary)] outline-none ring-2 ring-teal-100"
                 />
                 <button type="submit" disabled={savingTitle} aria-label="保存会话名称"
+                  onMouseDown={event => event.preventDefault()}
                   className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-700 text-white transition-colors hover:bg-teal-800 disabled:opacity-50">
                   {savingTitle ? <Loader2 size={14} className="animate-spin" /> : <Check size={15} />}
                 </button>
                 <button type="button" onClick={() => setEditingTitle(false)} aria-label="取消编辑会话名称"
                   title="取消编辑"
+                  onMouseDown={event => event.preventDefault()}
                   className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 transition-colors hover:border-rose-300 hover:bg-rose-100 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300">
                   <X size={14} />
                 </button>
@@ -701,10 +744,9 @@ export default function SuperAssistantPage() {
             ) : !hasMessages ? (
               <div className="flex flex-1 items-center justify-center px-4 sm:px-8">
                 <div className="relative w-full max-w-3xl -translate-y-10 sm:-translate-y-14">
-                  <EmptyState onPromptSelect={text => {
-                    setInput(text)
-                    requestAnimationFrame(() => senderRef.current?.focus())
-                  }} />
+                  <p className="absolute inset-x-0 bottom-full mb-8 text-center text-xl font-semibold tracking-tight text-[var(--color-text-primary)]">
+                    SuperAgent 工作空间2.0
+                  </p>
                   {renderComposer(true)}
                 </div>
               </div>

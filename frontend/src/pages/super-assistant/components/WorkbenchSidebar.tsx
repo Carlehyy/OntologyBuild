@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
-  Archive, ArchiveRestore, Clock, History, LayoutDashboard, LogOut,
-  Network, Plus, Search, Trash2, X,
+  Archive, ArchiveRestore, Brain, Clock, History, LayoutDashboard, LogOut,
+  Network, Plug, Plus, Search, Trash2, X,
 } from 'lucide-react'
 
 import type { SuperConversation } from '@/api/superAssistant'
@@ -33,7 +33,7 @@ interface WorkbenchSidebarProps {
   onSetArchived: (id: string, archived: boolean) => void
 }
 
-type PlaceholderFeature = 'search' | 'tasks'
+type PlaceholderFeature = 'search' | 'tasks' | 'memory' | 'integrations'
 
 const PLACEHOLDER_COPY: Record<PlaceholderFeature, { title: string; body: string }> = {
   search: {
@@ -43,6 +43,14 @@ const PLACEHOLDER_COPY: Record<PlaceholderFeature, { title: string; body: string
   tasks: {
     title: '定时任务',
     body: '定时任务功能即将上线：让超级助手按你设定的计划自动执行任务，当前版本请手动发起对话。',
+  },
+  memory: {
+    title: '记忆宫殿',
+    body: '记忆宫殿功能即将上线：助手的长期记忆与知识沉淀将在这里集中呈现和管理，当前版本由助手在对话中自动维护记忆。',
+  },
+  integrations: {
+    title: '外部集成',
+    body: '外部集成功能即将上线：打通邮箱、GitHub 等外部平台，让助手接入你的日常工作流，当前版本请先在对话中直接使用助手。',
   },
 }
 
@@ -123,6 +131,19 @@ export default function WorkbenchSidebar({
   const [archivedOpen, setArchivedOpen] = useState(false)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
 
+  const isMac = /mac|iphone|ipad/i.test(navigator.userAgent)
+  // ⌘K（macOS）/ Ctrl+K（其它平台）唤起全局搜索
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setPlaceholder('search')
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   const groups = groupConversations(conversations)
   const activeCount = groups.today.length + groups.yesterday.length + groups.earlier.length
 
@@ -188,15 +209,24 @@ export default function WorkbenchSidebar({
       <nav className="shrink-0 space-y-1 px-3 py-3" aria-label="工作台功能">
         <button type="button" onClick={() => setPlaceholder('search')} className={actionItemClass}>
           <Search size={17} className="shrink-0" /> 全局搜索
+          <kbd className="ml-auto rounded border border-[var(--color-border)] px-1 py-0.5 text-[9px] leading-none text-[var(--color-text-tertiary)]">
+            {isMac ? '⌘K' : 'Ctrl K'}
+          </kbd>
         </button>
         <button type="button" onClick={() => setPlaceholder('tasks')} className={actionItemClass}>
           <Clock size={17} className="shrink-0" /> 定时任务
+        </button>
+        <button type="button" onClick={() => setPlaceholder('memory')} className={actionItemClass}>
+          <Brain size={17} className="shrink-0" /> 记忆宫殿
         </button>
         {hasMenuAccess(user, 'overview') && (
           <Link to="/overview" onClick={onCloseMobile} className={actionItemClass} data-workbench-governance>
             <LayoutDashboard size={17} className="shrink-0" /> 本体治理
           </Link>
         )}
+        <button type="button" onClick={() => setPlaceholder('integrations')} className={actionItemClass}>
+          <Plug size={17} className="shrink-0" /> 外部集成
+        </button>
       </nav>
 
       {/* 历史会话分组时间线 */}

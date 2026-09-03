@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Bubble, Prompts, Welcome } from '@ant-design/x'
+import { Bubble } from '@ant-design/x'
 import {
   Bot, Check, ChevronRight, CircleAlert, Copy, Gauge, Loader2, ShieldCheck, User,
 } from 'lucide-react'
@@ -12,57 +12,6 @@ import {
 import type { ModelConfig } from '@/types/ontology'
 import { writeTextToClipboard } from '@/utils/clipboard'
 
-const QUICK_PROMPTS = [
-  { key: 'modeling', label: '帮我把一段业务需求梳理成本体概念' },
-  { key: 'explain', label: '解释一个本体术语的含义与用途' },
-  { key: 'data-channel', label: '分析当前数据通道的配置问题' },
-  { key: 'world-model', label: '给出世界模型推演场景的设计建议' },
-]
-
-export function EmptyState({ onPromptSelect }: { onPromptSelect?: (text: string) => void }) {
-  return (
-    <div className="absolute inset-x-0 bottom-full mb-8 flex flex-col items-center gap-6 px-4 text-center">
-      <Welcome
-        variant="borderless"
-        style={{ flexDirection: 'column', gap: 0 }}
-        icon={(
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-50 text-teal-700 ring-1 ring-teal-100">
-            <Bot size={23} strokeWidth={1.8} />
-          </div>
-        )}
-        title="有什么可以帮你？"
-        styles={{
-          title: {
-            marginTop: 16,
-            fontSize: 20,
-            lineHeight: '28px',
-            fontWeight: 600,
-            letterSpacing: '-0.025em',
-            color: 'var(--color-text-primary)',
-          },
-        }}
-      />
-      <Prompts
-        title="试试这样问"
-        items={QUICK_PROMPTS}
-        wrap
-        onItemClick={info => onPromptSelect?.(String(info.data.label ?? ''))}
-        styles={{
-          root: { width: '100%', maxWidth: 560, textAlign: 'left' },
-          title: { marginBottom: 8 },
-          list: { justifyContent: 'center', rowGap: 8 },
-          item: {
-            borderRadius: 12,
-            border: '1px solid var(--color-border)',
-            background: 'var(--color-bg-elevated)',
-            fontSize: 13,
-            color: 'var(--color-text-secondary)',
-          },
-        }}
-      />
-    </div>
-  )
-}
 function ToolSteps({ steps }: { steps: ToolStep[] }) {
   if (!steps?.length) return null
   return (

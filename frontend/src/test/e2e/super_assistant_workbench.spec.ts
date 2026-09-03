@@ -1,9 +1,11 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 
-// AI 原生工作台（前台）：登录默认落地、五项入口、历史会话分组时间线、归档流转、
+// AI 原生工作台（前台）：登录默认落地、七项入口、历史会话分组时间线、归档流转、
 // 本体治理跳后台并返回。全部接口本地 mock，不触真实后端。
 // 本 spec 另覆盖：分组限量展开、naive UTC 时区显示、行悬停不抖动、
-// 会话附件上传/移除与跨会话隔离、流式生成跨会话隔离、ReUI 模型选择器、删除确认弹窗。
+// 会话附件上传/移除/位于输入框上方与跨会话隔离、流式生成跨会话隔离、ReUI 模型选择器、
+// 删除确认弹窗、新建任务空会话去重、空态品牌文案与占位符、配置面板白底、
+// 重命名 blur 取消、记忆宫殿/外部集成占位、⌘K/Ctrl+K 唤起全局搜索、输入草稿按会话缓存。
 
 const json = (route: Route, data: unknown, status = 200) => route.fulfill({
   status,
@@ -55,9 +57,11 @@ interface MockOptions {
 async function mockApis(page: Page, options: MockOptions = {}) {
   const patchBodies: string[] = []
   const deleteCalls: string[] = []
+  const createCalls: string[] = []
   const fileUploads: string[] = []
   const fileDeletes: string[] = []
   const chatCalls: string[] = []
+  const createdConvs: Array<Record<string, unknown>> = []
   let chatDone = false
   const filesByConv: Record<string, Array<Record<string, unknown>>> = {
     'c-today': [{
@@ -136,13 +140,31 @@ async function mockApis(page: Page, options: MockOptions = {}) {
       deleteCalls.push(conversationMatch[1])
       return route.fulfill({ status: 204 })
     }
-    if (path === '/api/v2/super-assistant/conversations') return json(route, conversationsFixture)
+    if (path === '/api/v2/super-assistant/conversations') {
+      if (request.method() === 'POST') {
+        createCalls.push(request.postData() || '')
+        const row = {
+          id: `c-new-${createCalls.length}`, title: '新会话', model_config_id: 'model-1',
+          status: 'active', created_at: at(0, 12), updated_at: at(0, 12),
+        }
+        createdConvs.unshift(row)
+        return json(route, row, 201)
+      }
+      return json(route, [...createdConvs, ...conversationsFixture])
+    }
     if (/^\/api\/v2\/super-assistant\/conversations\/[^/]+\/messages$/.test(path)) {
       const id = path.split('/')[5]
       if (id === 'c-today' && chatDone) {
         return json(route, [
           { id: 'm-1', conversation_id: 'c-today', role: 'user', content: '你好', status: 'complete', steps: [], token_usage: {}, created_at: at(0, 9) },
           { id: 'm-2', conversation_id: 'c-today', role: 'assistant', content: '你好，我是超级助手', status: 'complete', steps: [], token_usage: {}, created_at: at(0, 9) },
+        ])
+      }
+      // c-earlier 是「有消息的历史会话」：新建任务去重、底部输入框等场景以此为夹具
+      if (id === 'c-earlier') {
+        return json(route, [
+          { id: 'm-e1', conversation_id: 'c-earlier', role: 'user', content: '上周的问题', status: 'complete', steps: [], token_usage: {}, created_at: at(5, 10) },
+          { id: 'm-e2', conversation_id: 'c-earlier', role: 'assistant', content: '上周的答复', status: 'complete', steps: [], token_usage: {}, created_at: at(5, 10) },
         ])
       }
       return json(route, [])
@@ -163,6 +185,7 @@ async function mockApis(page: Page, options: MockOptions = {}) {
   return {
     patchBodies,
     deleteCalls,
+    createCalls,
     fileUploads,
     fileDeletes,
     chatCalls,
@@ -170,15 +193,17 @@ async function mockApis(page: Page, options: MockOptions = {}) {
   }
 }
 
-test('工作台骨架：五项入口齐备，历史会话按今日/昨日/历史分组，归档折叠', async ({ page }) => {
+test('工作台骨架：七项入口齐备，历史会话按今日/昨日/历史分组，归档折叠', async ({ page }) => {
   await seedAuth(page)
   await mockApis(page)
   await page.goto('/#/super-assistant')
 
   await expect(page.getByRole('button', { name: '新建任务' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '全局搜索' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /全局搜索/ })).toBeVisible()
   await expect(page.getByRole('button', { name: '定时任务' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '记忆宫殿' })).toBeVisible()
   await expect(page.getByRole('link', { name: '本体治理' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '外部集成' })).toBeVisible()
   await expect(page.getByRole('button', { name: /退出登录/ })).toBeVisible()
 
   await expect(page.locator('[data-workbench-group="today"] [data-workbench-conversation="c-today"]')).toHaveCount(1)
@@ -323,6 +348,11 @@ test('会话附件：上传/展示/移除，且跨会话不可见', async ({ pag
   await expect(page.getByTestId('super-assistant-attachments')).toBeVisible()
   await expect(page.getByText('需求清单.md')).toBeVisible()
 
+  // 附件 chips 展示在输入框上方
+  const chipsBox = await page.getByTestId('super-assistant-attachments').boundingBox()
+  const inputBox = await page.getByRole('textbox', { name: '向超级助手发送消息' }).boundingBox()
+  expect(chipsBox && inputBox && chipsBox.y + chipsBox.height <= inputBox.y + 1).toBe(true)
+
   // 切到昨日会话：附件区不可见（跨会话隔离）
   await page.locator('[data-workbench-conversation="c-yesterday"] button').first().click()
   await expect(page.getByTestId('super-assistant-attachments')).toHaveCount(0)
@@ -404,4 +434,136 @@ test('删除会话走 ReUI 确认弹窗（非 window.confirm）', async ({ page 
   await page.getByRole('dialog').getByRole('button', { name: '删除', exact: true }).click()
   await expect.poll(() => mocks.deleteCalls).toEqual(['c-earlier'])
   await expect(page.locator('[data-workbench-conversation="c-earlier"]')).toHaveCount(0)
+})
+
+test('新建任务去重：空会话或全新视图下点击不再创建新会话', async ({ page }) => {
+  await seedAuth(page)
+  const mocks = await mockApis(page)
+  await page.goto('/#/super-assistant?conversation=c-today')
+
+  // c-today 是空会话：点击新建任务不创建
+  await expect(page.getByTestId('super-assistant-composer')).toBeVisible()
+  await page.getByRole('button', { name: '新建任务' }).click()
+  await page.waitForTimeout(300)
+  expect(mocks.createCalls).toHaveLength(0)
+
+  // 切到有消息的 c-earlier：点击新建任务创建新会话并选中
+  await page.locator('[data-workbench-conversation="c-earlier"] button').first().click()
+  await expect(page.getByText('上周的答复')).toBeVisible()
+  await page.getByRole('button', { name: '新建任务' }).click()
+  await expect.poll(() => mocks.createCalls.length).toBe(1)
+  await expect(page.locator('[data-workbench-conversation="c-new-1"]')).toHaveCount(1)
+
+  // 新会话仍是空会话：再次点击不再创建
+  await page.getByRole('button', { name: '新建任务' }).click()
+  await page.waitForTimeout(300)
+  expect(mocks.createCalls).toHaveLength(1)
+})
+
+test('空态只保留品牌一句话，输入框占位符不混入用户输入', async ({ page }) => {
+  await seedAuth(page)
+  await mockApis(page)
+  await page.goto('/#/super-assistant?conversation=c-today')
+
+  await expect(page.getByText('SuperAgent 工作空间2.0')).toBeVisible()
+  await expect(page.getByText('有什么可以帮你？')).toHaveCount(0)
+  await expect(page.getByText('试试这样问')).toHaveCount(0)
+
+  const textbox = page.getByRole('textbox', { name: '向超级助手发送消息' })
+  await expect(textbox).toHaveAttribute('placeholder', '咨询任何问题，创造任何事物')
+  await textbox.fill('帮我梳理需求')
+  await expect(textbox).toHaveValue('帮我梳理需求')
+})
+
+test('助手配置面板为白色背景', async ({ page }) => {
+  await seedAuth(page)
+  await mockApis(page)
+  await page.goto('/#/super-assistant?conversation=c-today')
+
+  await page.getByRole('button', { name: '打开助手配置' }).click()
+  const panel = page.locator('section[aria-label="助手配置"]')
+  await expect(panel).toBeVisible()
+  await expect.poll(() => panel.evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgb(255, 255, 255)')
+})
+
+test('重命名会话：点击其它处自动取消，Enter 仍可保存', async ({ page }) => {
+  await seedAuth(page)
+  const mocks = await mockApis(page)
+  await page.goto('/#/super-assistant?conversation=c-today')
+
+  // 点击表单外（聊天输入框）→ 自动取消编辑，不发 PATCH
+  const titleButton = page.locator('section header').getByRole('button', { name: '今日需求梳理' })
+  await titleButton.click()
+  const renameInput = page.getByRole('textbox', { name: '编辑会话名称' })
+  await expect(renameInput).toBeVisible()
+  await renameInput.fill('改名尝试')
+  await page.getByRole('textbox', { name: '向超级助手发送消息' }).click()
+  await expect(renameInput).toHaveCount(0)
+  expect(mocks.patchBodies).toHaveLength(0)
+  await expect(page.locator('section header').getByRole('button', { name: '今日需求梳理' })).toBeVisible()
+
+  // Enter 保存路径不受影响
+  await page.locator('section header').getByRole('button', { name: '今日需求梳理' }).click()
+  await page.getByRole('textbox', { name: '编辑会话名称' }).fill('新名称')
+  await page.getByRole('textbox', { name: '编辑会话名称' }).press('Enter')
+  await expect.poll(() => mocks.patchBodies.length).toBe(1)
+  expect(JSON.parse(mocks.patchBodies[0])).toMatchObject({ title: '新名称' })
+})
+
+test('记忆宫殿与外部集成为如实占位的即将上线弹窗', async ({ page }) => {
+  await seedAuth(page)
+  await mockApis(page)
+  await page.goto('/#/super-assistant')
+
+  await page.getByRole('button', { name: '记忆宫殿' }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.getByRole('dialog').getByRole('heading', { name: '记忆宫殿' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+
+  await page.getByRole('button', { name: '外部集成' }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.getByRole('dialog').getByRole('heading', { name: '外部集成' })).toBeVisible()
+  await expect(page.getByRole('dialog').getByText(/邮箱、GitHub/)).toBeVisible()
+})
+
+test('⌘K / Ctrl+K 唤起全局搜索弹窗', async ({ page }) => {
+  await seedAuth(page)
+  await mockApis(page)
+  await page.goto('/#/super-assistant')
+
+  await page.keyboard.press('Control+k')
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.getByRole('dialog').getByRole('heading', { name: '全局搜索' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+})
+
+test('输入草稿按会话缓存：切换会话不丢内容，发送后清空', async ({ page }) => {
+  await seedAuth(page)
+  const mocks = await mockApis(page)
+  await page.goto('/#/super-assistant?conversation=c-today')
+
+  const textbox = page.getByRole('textbox', { name: '向超级助手发送消息' })
+  await textbox.fill('A 会话的草稿')
+
+  await page.locator('[data-workbench-conversation="c-yesterday"] button').first().click()
+  await expect(textbox).toHaveValue('')
+  await textbox.fill('B 会话的草稿')
+
+  await page.locator('[data-workbench-conversation="c-today"] button').first().click()
+  await expect(textbox).toHaveValue('A 会话的草稿')
+  await page.locator('[data-workbench-conversation="c-yesterday"] button').first().click()
+  await expect(textbox).toHaveValue('B 会话的草稿')
+
+  // A 发送后其草稿清空，且不影响 B 的草稿
+  await page.locator('[data-workbench-conversation="c-today"] button').first().click()
+  await expect(textbox).toHaveValue('A 会话的草稿')
+  await page.getByRole('button', { name: '发送消息' }).click()
+  await expect.poll(mocks.isChatDone).toBe(true)
+  await expect(textbox).toHaveValue('')
+  await page.locator('[data-workbench-conversation="c-yesterday"] button').first().click()
+  await expect(textbox).toHaveValue('B 会话的草稿')
+  await page.locator('[data-workbench-conversation="c-today"] button').first().click()
+  await expect(textbox).toHaveValue('')
 })
