@@ -143,6 +143,10 @@ class Settings(BaseSettings):
     # Super-assistant conversation attachments reuse the steward workspace
     # implementation. Empty root resolves to <uploads_dir>/super-assistant-sessions.
     super_assistant_workspace_root: str = ""
+    # Memory-palace user file library (cross-conversation long-term knowledge)
+    # reuses the same workspace implementation with its own root. Empty root
+    # resolves to <uploads_dir>/super-assistant-palace.
+    super_assistant_palace_workspace_root: str = ""
     steward_browser_cdp_url: str = "http://localhost:9222"
     steward_browser_timeout_seconds: int = 30
     steward_browser_max_captures: int = 300

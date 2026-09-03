@@ -32,8 +32,9 @@ def test_revision_graph_head_is_single_head(tmp_path, monkeypatch):
     heads = ScriptDirectory.from_config(cfg).get_heads()
 
     # 单头门禁：新迁移必须线性追加（当前 head 见 alembic heads 输出）。
+    # 0089 记忆宫殿（超级助手用户级文件库 + 图谱抽取）为当前 head。
     assert len(heads) == 1
-    assert heads == ["0088_privacy_vars"]
+    assert heads == ["0089_super_assistant_palace"]
 
 
 def _create_0067_shape_skills_table(db_path: Path) -> None:

@@ -53,6 +53,7 @@ _SUPER_ASSISTANT_REFLECT_MICRO_DURABLE = "super-assistant-reflect-micro"
 _ASSISTANT_EVAL_AUTOPILOT_DURABLE = "assistant-eval-autopilot"
 _SUPER_ASSISTANT_REFLECT_FULL_DURABLE = "super-assistant-reflect-full"
 _SUPER_ASSISTANT_REFLECT_FOCUSED_DURABLE = "super-assistant-reflect-focused"
+_SUPER_ASSISTANT_PALACE_EXTRACT_DURABLE = "super-assistant-palace-extract"
 
 # 消息处理器：解析后的 payload → 协程；业务异常必须在 handler 内消化，
 # 逃到 ``_process_message`` 的异常一律 nak 重投
@@ -144,12 +145,13 @@ def _handler_registry():
         DATASET_MIGRATE_SUBJECT,
         PIPELINE_EXECUTE_SUBJECT,
         PIPELINE_RUN_SUBJECT,
+        SUPER_ASSISTANT_PALACE_EXTRACT_SUBJECT,
         SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT,
         SUPER_ASSISTANT_REFLECT_FULL_SUBJECT,
         SUPER_ASSISTANT_REFLECT_MICRO_SUBJECT,
     )
     from app.assistant_evaluation import autopilot_tasks
-    from app.super_assistant import reflection_tasks
+    from app.super_assistant import palace_tasks, reflection_tasks
 
     return (
         (PIPELINE_EXECUTE_SUBJECT, _CONSUMER_DURABLE, _execute_pipeline_task_message),
@@ -179,6 +181,11 @@ def _handler_registry():
             ASSISTANT_EVAL_AUTOPILOT_SUBJECT,
             _ASSISTANT_EVAL_AUTOPILOT_DURABLE,
             autopilot_tasks.run_autopilot_cycle_message,
+        ),
+        (
+            SUPER_ASSISTANT_PALACE_EXTRACT_SUBJECT,
+            _SUPER_ASSISTANT_PALACE_EXTRACT_DURABLE,
+            palace_tasks.run_palace_extract_message,
         ),
     )
 

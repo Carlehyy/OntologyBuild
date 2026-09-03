@@ -15,6 +15,7 @@ from app.super_assistant import (
     conversation_service,
     mcp_server_service,
     memory_service,
+    palace_service,
     reflection_service,
     router as assistant_router,
     runtime,
@@ -189,6 +190,19 @@ ROUTE_PARAMETERS = {
         "db",
         "current_user",
     ),
+    "list_palace_files": ("db", "current_user"),
+    "upload_palace_file": ("file", "db", "current_user"),
+    "delete_palace_file": (
+        "file_id",
+        "db",
+        "current_user",
+    ),
+    "rebuild_palace_file": (
+        "file_id",
+        "db",
+        "current_user",
+    ),
+    "palace_graph_view": ("db", "current_user"),
 }
 
 DELEGATES = {
@@ -307,6 +321,14 @@ DELEGATES = {
         "reflection_service",
         "update_reflection_settings",
     ),
+    "list_palace_files": ("palace_service", "list_files"),
+    "upload_palace_file": ("palace_service", "upload_file"),
+    "delete_palace_file": (
+        "palace_service",
+        "delete_palace_file",
+    ),
+    "rebuild_palace_file": ("palace_service", "rebuild_file"),
+    "palace_graph_view": ("palace_service", "graph_overview"),
 }
 
 BODY_TYPES = {
@@ -555,6 +577,7 @@ def test_super_assistant_services_do_not_import_http_router():
         conversation_service,
         mcp_server_service,
         memory_service,
+        palace_service,
         reflection_service,
         skill_service,
     ):
@@ -565,7 +588,8 @@ def test_super_assistant_services_do_not_import_http_router():
 
 def test_super_assistant_router_and_services_stay_bounded():
     limits = {
-        "router.py": 750,
+        # 记忆宫殿新增 /palace/* 5 个端点（3 条路径），router.py 748 → 778
+        "router.py": 820,
         "conversation_service.py": 320,
         "skill_service.py": 380,
         "mcp_server_service.py": 340,
@@ -599,9 +623,11 @@ def test_super_assistant_openapi_matches_pre_extraction_baseline():
     # /memories/distill-report 与 /memories/distill 两个端点；
     # 0080 悬浮助手可见范围配置新增 /widget-config 的 GET/PUT；
     # 会话附件新增 /conversations/{id}/files 的 list/upload/download/preview/delete
-    # 5 个端点（3 条路径）
-    assert len(paths) == 28
-    assert sum(len(item) for item in paths.values()) == 42
+    # 5 个端点（3 条路径）；记忆宫殿（用户级文件库 + 知识图谱）新增
+    # /palace/files 的 list/upload、/palace/files/{id} 的 delete、
+    # /palace/files/{id}/rebuild 与 /palace/graph 的 GET 共 5 个操作（4 条路径）
+    assert len(paths) == 32
+    assert sum(len(item) for item in paths.values()) == 47
     assert hashlib.sha256(payload).hexdigest() == (
-        "7b9f0891306eb0d9bb98cdbd3889afa9fcf2dd7c283137c926bcb444e1a5babf"
+        "ab798049a2700c7414ddfd894f8e0d87d268fe013d3803d51372b9a2e002da26"
     )

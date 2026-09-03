@@ -121,7 +121,8 @@ def test_dispatch_ensures_work_queue_stream_once(fake_nats, monkeypatch):
     (config,), = [fake_nats["add_stream"]]
     assert config.name == PIPELINE_STREAM == "PIPELINE_TASKS"
     # 流已扩容：旧 subject 保持不变，新增 UI 手动运行、数据集导入、
-    # 超级助手三种反思任务与成品→人工迁移任务（扩容只能追加）
+    # 超级助手三种反思任务、成品→人工迁移任务与记忆宫殿图谱抽取
+    # （扩容只能追加，subject 顺序须与 PIPELINE_STREAM_SUBJECTS 一致）
     assert config.subjects == [
         "pipeline.task.execute",
         "task.pipeline.run",
@@ -131,6 +132,7 @@ def test_dispatch_ensures_work_queue_stream_once(fake_nats, monkeypatch):
         "super_assistant.reflect.focused",
         "task.dataset.migrate",
         "assistant_evaluation.autopilot.cycle",
+        "super_assistant.palace.extract",
     ]
     assert config.subjects == list(PIPELINE_STREAM_SUBJECTS)
     assert config.retention == RetentionPolicy.WORK_QUEUE
