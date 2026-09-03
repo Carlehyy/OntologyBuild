@@ -11,11 +11,12 @@ from datetime import datetime, timezone
 from typing import Any, Iterator
 
 from app.data_channel.pipeline_tasks.dispatch import dispatch_super_assistant_reflection
+from app.data_channel.steward.workspace import WorkspaceError
 from app.model_configs.selector import llm_call_kwargs, select_llm_model_config
 from app.settings.object_storage.service import execute_minio_tool
 from app.shared.config import settings
 from app.shared.database import SessionLocal
-from app.super_assistant import memory_service, provider, reflection_service, web_tools
+from app.super_assistant import files_workspace, memory_service, provider, reflection_service, web_tools
 from app.super_assistant.compaction import maybe_compact
 from app.super_assistant.mcp_client import call_tool, decrypt_env, decrypt_headers, namespaced_tool_name
 from app.super_assistant.models import (
@@ -61,6 +62,9 @@ _READ_ONLY_BUILTIN_TOOLS = frozenset({
     "web_fetch",
     "web_search",
     "think",
+    # 会话附件只读读取：写入由 HTTP 上传端点完成，agent 不可写
+    "list_session_files",
+    "read_session_file",
     # todo 清单是本轮 stream_chat 的内存态，读写均无外部副作用
     "todo_write",
     "todo_read",
@@ -96,6 +100,7 @@ def _system_prompt(
     skills: list[SuperAssistantSkill],
     memory_section: str = "",
     agent_mode: bool = False,
+    file_section: str = "",
 ) -> str:
     catalog = "\n".join(
         f"- {skill.name}: {skill.description}"
@@ -123,6 +128,8 @@ def _system_prompt(
         prompt = f"{prompt}\n{always_active_section}\n"
     if memory_section:
         prompt = f"{prompt}\n{memory_section}\n"
+    if file_section:
+        prompt = f"{prompt}\n{file_section}\n"
     return prompt
 
 
@@ -221,6 +228,25 @@ def _builtin_tools(agent_mode: bool = False) -> list[dict[str, Any]]:
                 "type": "object",
                 "properties": {"task": {"type": "string", "description": "子任务描述"}},
                 "required": ["task"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "list_session_files",
+            "description": "列出当前会话的附件（仅本会话可见），返回 artifact_id、文件名、大小和解析字符数。",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+        {
+            "name": "read_session_file",
+            "description": "按 artifact_id 读取当前会话附件的解析文本，支持 offset/max_chars 分页；先 list_session_files 获取 artifact_id。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "artifact_id": {"type": "string", "description": "附件 artifact_id"},
+                    "offset": {"type": "integer", "minimum": 0, "description": "从第几个字符开始读取，默认 0"},
+                    "max_chars": {"type": "integer", "description": "最多返回字符数，默认 40000"},
+                },
+                "required": ["artifact_id"],
                 "additionalProperties": False,
             },
         },
@@ -505,6 +531,42 @@ def _execute_builtin_tool(
     if name == "web_search":
         results = web_tools.web_search(str(arguments.get("query") or "").strip())
         return json.dumps({"results": results}, ensure_ascii=False)
+    if name == "list_session_files":
+        try:
+            rows = files_workspace.session_workspace().list_files(conversation_id)
+        except WorkspaceError as exc:
+            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        return json.dumps([
+            {
+                "id": row.get("id"),
+                "filename": row.get("filename"),
+                "size": row.get("size"),
+                "extractedChars": row.get("extractedChars"),
+                "createdAt": row.get("createdAt"),
+            }
+            for row in rows
+        ], ensure_ascii=False)
+    if name == "read_session_file":
+        artifact_id = str(arguments.get("artifact_id") or "").strip()
+        if not artifact_id:
+            return json.dumps({"error": "artifact_id 不能为空"}, ensure_ascii=False)
+        session = files_workspace.session_workspace()
+        try:
+            row, _ = session.require_file(conversation_id, artifact_id)
+            start = max(0, int(arguments.get("offset") or 0))
+            limit = max(1, int(arguments.get("max_chars") or 40_000))
+            text = session.extracted_text(conversation_id, artifact_id, cap=limit, offset=start)
+        except WorkspaceError as exc:
+            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        next_offset = start + len(text)
+        truncated = next_offset < int(row.get("extractedChars") or 0)
+        return json.dumps({
+            "artifactId": artifact_id,
+            "content": text,
+            "offset": start,
+            "next_offset": next_offset if truncated else None,
+            "truncated": truncated,
+        }, ensure_ascii=False)
     if name == "think":
         return "已记录：" + str(arguments.get("thought") or "")
     if name == "todo_write":
@@ -745,8 +807,13 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
         memory_section = memory_service.build_memory_prompt_section(
             db, owner_id, query_text=user_query,
         )
+        try:
+            file_section = files_workspace.file_context_section(conversation_id, query=user_query)
+        except Exception:  # 附件故障不得阻断聊天
+            logger.warning("会话附件上下文加载失败: %s", conversation_id, exc_info=True)
+            file_section = ""
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _system_prompt(skills, memory_section, agent_mode)}
+            {"role": "system", "content": _system_prompt(skills, memory_section, agent_mode, file_section=file_section)}
         ]
         messages.extend({"role": item.role, "content": item.content} for item in stored_messages if item.role in {"user", "assistant"})
         permission_checker = ToolPermissionChecker.from_settings()

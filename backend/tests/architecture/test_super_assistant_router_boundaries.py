@@ -57,6 +57,36 @@ ROUTE_PARAMETERS = {
         "db",
         "current_user",
     ),
+    "list_conversation_files": (
+        "conversation_id",
+        "db",
+        "current_user",
+    ),
+    "upload_conversation_file": (
+        "conversation_id",
+        "file",
+        "db",
+        "current_user",
+    ),
+    "download_conversation_file": (
+        "conversation_id",
+        "artifact_id",
+        "db",
+        "current_user",
+    ),
+    "preview_conversation_file": (
+        "conversation_id",
+        "artifact_id",
+        "max_chars",
+        "db",
+        "current_user",
+    ),
+    "delete_conversation_file": (
+        "conversation_id",
+        "artifact_id",
+        "db",
+        "current_user",
+    ),
     "decide_tool_run": (
         "tool_run_id",
         "body",
@@ -184,6 +214,26 @@ DELEGATES = {
     ),
     "chat": ("_conversation_service", "chat"),
     "cancel_chat": ("_conversation_service", "cancel_chat"),
+    "list_conversation_files": (
+        "conversation_files",
+        "list_files",
+    ),
+    "upload_conversation_file": (
+        "conversation_files",
+        "upload_file",
+    ),
+    "download_conversation_file": (
+        "conversation_files",
+        "download_file",
+    ),
+    "preview_conversation_file": (
+        "conversation_files",
+        "preview_file",
+    ),
+    "delete_conversation_file": (
+        "conversation_files",
+        "delete_file",
+    ),
     "decide_tool_run": (
         "_conversation_service",
         "decide_tool_run",
@@ -547,9 +597,11 @@ def test_super_assistant_openapi_matches_pre_extraction_baseline():
     # 基线随契约演进而更新：0068 技能治理为 Skill 契约新增
     # always_active/use_count/last_used_at 字段；memory_distill 特性新增
     # /memories/distill-report 与 /memories/distill 两个端点；
-    # 0080 悬浮助手可见范围配置新增 /widget-config 的 GET/PUT
-    assert len(paths) == 25
-    assert sum(len(item) for item in paths.values()) == 37
+    # 0080 悬浮助手可见范围配置新增 /widget-config 的 GET/PUT；
+    # 会话附件新增 /conversations/{id}/files 的 list/upload/download/preview/delete
+    # 5 个端点（3 条路径）
+    assert len(paths) == 28
+    assert sum(len(item) for item in paths.values()) == 42
     assert hashlib.sha256(payload).hexdigest() == (
-        "07133dfc728bdd1fa00b274aa6b669f003735c711338ce24ee50b34e65a6d549"
+        "7b9f0891306eb0d9bb98cdbd3889afa9fcf2dd7c283137c926bcb444e1a5babf"
     )

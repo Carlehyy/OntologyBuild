@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.models import User
 from app.model_configs.models import ModelConfig
+from app.super_assistant import files_workspace
 from app.super_assistant.models import (
     SuperAssistantConversation,
     SuperAssistantMessage,
@@ -139,6 +140,7 @@ def delete_conversation(
     ).delete(synchronize_session=False)
     db.delete(item)
     db.commit()
+    files_workspace.remove_session_files(conversation_id)
     return Response(status_code=204)
 
 

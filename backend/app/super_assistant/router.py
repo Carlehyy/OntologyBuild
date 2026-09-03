@@ -8,22 +8,15 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import (
-    APIRouter,
-    Depends,
-    File,
-    HTTPException,
-    Response,
-    UploadFile,
-    status,
-)
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.models import User
 from app.deps import get_current_user, get_db
 from app.model_configs.models import ModelConfig
+from app.super_assistant import conversation_files
 from app.super_assistant import (
     conversation_service as _conversation_service,
 )
@@ -238,6 +231,33 @@ def cancel_chat(
         current_user,
         conversation_lookup_fn=_conversation,
     )
+
+
+@router.get("/conversations/{conversation_id}/files")
+def list_conversation_files(conversation_id: str, db: Session = Depends(get_db),
+                            current_user: User = Depends(get_current_user)):
+    return conversation_files.list_files(db, current_user, conversation_id)
+
+@router.post("/conversations/{conversation_id}/files", status_code=201)
+async def upload_conversation_file(conversation_id: str, file: UploadFile = File(...),
+                                   db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return conversation_files.upload_file(db, current_user, conversation_id, file)
+
+@router.get("/conversations/{conversation_id}/files/{artifact_id}")
+def download_conversation_file(conversation_id: str, artifact_id: str, db: Session = Depends(get_db),
+                               current_user: User = Depends(get_current_user)):
+    row, path = conversation_files.download_file(db, current_user, conversation_id, artifact_id)
+    return FileResponse(path, filename=row["filename"], media_type=row.get("mimeType"))
+
+@router.get("/conversations/{conversation_id}/files/{artifact_id}/preview")
+def preview_conversation_file(conversation_id: str, artifact_id: str, max_chars: int = Query(60000, le=100000),
+                              db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return conversation_files.preview_file(db, current_user, conversation_id, artifact_id, max_chars)
+
+@router.delete("/conversations/{conversation_id}/files/{artifact_id}", status_code=204)
+def delete_conversation_file(conversation_id: str, artifact_id: str, db: Session = Depends(get_db),
+                             current_user: User = Depends(get_current_user)):
+    conversation_files.delete_file(db, current_user, conversation_id, artifact_id)
 
 
 @router.post("/tool-runs/{tool_run_id}/decision")
