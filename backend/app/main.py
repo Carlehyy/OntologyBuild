@@ -307,6 +307,15 @@ app.include_router(
     tags=["super-assistant"],
     dependencies=assistant_guard,
 )
+# 会话内容全局搜索：独立子路由（super_assistant/router.py 已贴近架构行数上限），
+# 与主路由同前缀同菜单守卫。
+from app.super_assistant import search as super_assistant_search
+app.include_router(
+    super_assistant_search.router,
+    prefix="/api/v2/super-assistant",
+    tags=["super-assistant"],
+    dependencies=assistant_guard,
+)
 # 悬浮助手页面可见范围配置：GET 面向全体登录用户（不受 super_assistant 菜单权限约束），
 # PUT 仅管理员，鉴权在路由级声明，故此处不挂 menu_guard。
 from app.super_assistant import widget_config as super_assistant_widget_config

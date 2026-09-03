@@ -4,10 +4,24 @@ from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic.alias_generators import to_camel
 
 
 class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
+
+class CamelModel(BaseModel):
+    """对外 camelCase JSON 的基座（与 formal_modeling 的 CamelModel 同约定）。
+
+    super_assistant 包不依赖 ontologies 域，这里直接用 pydantic 内置的
+    to_camel alias 生成器，不做跨域 import。
+    """
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+    )
 
 
 class ConversationCreate(BaseModel):
@@ -29,6 +43,27 @@ class ConversationOut(ORMModel):
     status: str
     created_at: datetime
     updated_at: datetime
+
+
+class SearchMessageHit(CamelModel):
+    message_id: str
+    role: str
+    snippet: str
+    created_at: datetime
+
+
+class SearchConversationHit(CamelModel):
+    id: str
+    title: str
+    status: str
+    updated_at: datetime
+    title_matched: bool
+    message_hits: list[SearchMessageHit]
+
+
+class SearchResultOut(CamelModel):
+    query: str
+    conversations: list[SearchConversationHit]
 
 
 class MessageOut(ORMModel):

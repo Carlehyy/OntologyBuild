@@ -12,6 +12,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuItem,
+} from '@/components/ui/sidebar'
 import { hasMenuAccess } from '@/config/navigation'
 import { useAuthStore } from '@/stores/authStore'
 import { formatSessionTime } from '@/utils/datetime'
@@ -31,15 +38,12 @@ interface WorkbenchSidebarProps {
   onSelect: (id: string) => void
   onDelete: (id: string) => void
   onSetArchived: (id: string, archived: boolean) => void
+  onOpenSearch: () => void
 }
 
-type PlaceholderFeature = 'search' | 'tasks' | 'memory' | 'integrations'
+type PlaceholderFeature = 'tasks' | 'memory' | 'integrations'
 
 const PLACEHOLDER_COPY: Record<PlaceholderFeature, { title: string; body: string }> = {
-  search: {
-    title: '全局搜索',
-    body: '全局搜索功能即将上线：跨会话、本体与平台内容的一站式检索正在规划中，当前版本请先在历史会话列表中查找。',
-  },
   tasks: {
     title: '定时任务',
     body: '定时任务功能即将上线：让超级助手按你设定的计划自动执行任务，当前版本请手动发起对话。',
@@ -123,6 +127,7 @@ export default function WorkbenchSidebar({
   onSelect,
   onDelete,
   onSetArchived,
+  onOpenSearch,
 }: WorkbenchSidebarProps) {
   const user = useAuthStore(state => state.user)
   const logout = useAuthStore(state => state.logout)
@@ -137,12 +142,12 @@ export default function WorkbenchSidebar({
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'k') {
         event.preventDefault()
-        setPlaceholder('search')
+        onOpenSearch()
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+  }, [onOpenSearch])
 
   const groups = groupConversations(conversations)
   const activeCount = groups.today.length + groups.yesterday.length + groups.earlier.length
@@ -207,7 +212,7 @@ export default function WorkbenchSidebar({
 
       {/* 功能项 */}
       <nav className="shrink-0 space-y-1 px-3 py-3" aria-label="工作台功能">
-        <button type="button" onClick={() => setPlaceholder('search')} className={actionItemClass}>
+        <button type="button" onClick={onOpenSearch} className={actionItemClass}>
           <Search size={17} className="shrink-0" /> 全局搜索
           <kbd className="ml-auto rounded border border-[var(--color-border)] px-1 py-0.5 text-[9px] leading-none text-[var(--color-text-tertiary)]">
             {isMac ? '⌘K' : 'Ctrl K'}
@@ -229,7 +234,7 @@ export default function WorkbenchSidebar({
         </button>
       </nav>
 
-      {/* 历史会话分组时间线 */}
+      {/* 历史会话分组时间线：shadcn Sidebar 分组原语（Group/GroupLabel/Menu）呈现区块 */}
       <div className="flex min-h-0 flex-1 flex-col border-t border-[var(--color-border)]">
         <div className="flex shrink-0 items-center gap-2 px-4 pb-1 pt-3">
           <History size={13} className="text-[var(--color-text-tertiary)]" />
@@ -237,7 +242,7 @@ export default function WorkbenchSidebar({
           <span className="text-[10px] tabular-nums text-[var(--color-text-tertiary)]">共 {activeCount} 个</span>
         </div>
         {/* 长列表滚动但隐藏滚动条（scrollbar-none 为 index.css 全局工具类） */}
-        <div className="scrollbar-none min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        <div className="scrollbar-none min-h-0 flex-1 overflow-y-auto pb-2">
           {activeCount === 0 && groups.archived.length === 0 && (
             <p className="px-3 py-6 text-center text-xs leading-5 text-[var(--color-text-tertiary)]">
               还没有会话，点击上方「新建任务」开始。
@@ -248,60 +253,64 @@ export default function WorkbenchSidebar({
             if (items.length === 0) return null
             const { visible, hiddenCount } = capGroupItems(items, expandedGroups[section.key] ?? false)
             return (
-              <div key={section.key} data-workbench-group={section.key} className="pt-2">
-                <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-tertiary)]">
-                  {section.label}
-                </p>
-                <div className="space-y-0.5">
-                  {visible.map(item => (
-                    <ConversationRow
-                      key={item.id}
-                      item={item}
-                      current={item.id === selectedId}
-                      archived={false}
-                      onSelect={handleSelect}
-                      onDelete={onDelete}
-                      onSetArchived={onSetArchived}
-                    />
-                  ))}
-                </div>
+              <SidebarGroup key={section.key} data-workbench-group={section.key}>
+                <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {visible.map(item => (
+                      <SidebarMenuItem key={item.id}>
+                        <ConversationRow
+                          item={item}
+                          current={item.id === selectedId}
+                          archived={false}
+                          onSelect={handleSelect}
+                          onDelete={onDelete}
+                          onSetArchived={onSetArchived}
+                        />
+                      </SidebarMenuItem>
+                    ))}
+                  </SidebarMenu>
+                </SidebarGroupContent>
                 {renderGroupToggle(section.key, items.length, hiddenCount)}
-              </div>
+              </SidebarGroup>
             )
           })}
           {groups.archived.length > 0 && (
-            <div className="pt-2" data-workbench-group="archived">
+            <SidebarGroup data-workbench-group="archived">
               <button
                 type="button"
                 onClick={() => setArchivedOpen(value => !value)}
                 aria-expanded={archivedOpen}
-                className="flex w-full items-center gap-1.5 px-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-secondary)] focus-visible:outline-none"
+                className="flex h-8 w-full items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
               >
-                <Archive size={11} />
+                <Archive size={12} />
                 归档会话（{groups.archived.length}）
               </button>
               {archivedOpen && (() => {
                 const { visible, hiddenCount } = capGroupItems(groups.archived, expandedGroups.archived ?? false)
                 return (
                   <>
-                    <div className="space-y-0.5">
-                      {visible.map(item => (
-                        <ConversationRow
-                          key={item.id}
-                          item={item}
-                          current={item.id === selectedId}
-                          archived
-                          onSelect={handleSelect}
-                          onDelete={onDelete}
-                          onSetArchived={onSetArchived}
-                        />
-                      ))}
-                    </div>
+                    <SidebarGroupContent>
+                      <SidebarMenu>
+                        {visible.map(item => (
+                          <SidebarMenuItem key={item.id}>
+                            <ConversationRow
+                              item={item}
+                              current={item.id === selectedId}
+                              archived
+                              onSelect={handleSelect}
+                              onDelete={onDelete}
+                              onSetArchived={onSetArchived}
+                            />
+                          </SidebarMenuItem>
+                        ))}
+                      </SidebarMenu>
+                    </SidebarGroupContent>
                     {renderGroupToggle('archived', groups.archived.length, hiddenCount)}
                   </>
                 )
               })()}
-            </div>
+            </SidebarGroup>
           )}
         </div>
       </div>

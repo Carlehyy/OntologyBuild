@@ -26,6 +26,7 @@ import { pickInitialConversationId } from '@/components/assistant-widget/logic'
 import { useThemeStore } from '@/stores/themeStore'
 import ConfigurationPanel, { errorText } from './components/AssistantConfiguration'
 import ConfirmActionDialog from './components/ConfirmActionDialog'
+import GlobalSearchPalette from './components/GlobalSearchPalette'
 import WorkbenchSidebar from './components/WorkbenchSidebar'
 import {
   ChatMessage, ConfirmationCard, ContextUsage,
@@ -71,6 +72,9 @@ export default function SuperAssistantPage() {
   const [decisionBusy, setDecisionBusy] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [showMessageHistory, setShowMessageHistory] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  // 全局搜索选中消息命中后：先切会话，待消息加载完成再滚动定位
+  const [pendingJumpId, setPendingJumpId] = useState<string | null>(null)
   const [configOpen, setConfigOpen] = useState(false)
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
@@ -294,6 +298,27 @@ export default function SuperAssistantPage() {
       })
     })
   }
+
+  // 全局搜索选中结果：切到目标会话；消息命中时登记待定位消息
+  const handleSearchSelect = (conversationId: string, messageId?: string) => {
+    setSelectedId(conversationId)
+    setSidebarOpen(false)
+    if (messageId) setPendingJumpId(messageId)
+  }
+
+  // 待定位消息在目标会话加载出现后滚动到位
+  useEffect(() => {
+    if (!pendingJumpId) return
+    if (!messages.some(message => message.id === pendingJumpId)) return
+    const timer = window.setTimeout(() => {
+      document.getElementById(`super-assistant-msg-${pendingJumpId}`)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      })
+      setPendingJumpId(null)
+    }, 60)
+    return () => window.clearTimeout(timer)
+  }, [pendingJumpId, messages])
 
   const uploadAttachments = async (fileList: FileList | null) => {
     const files = fileList ? Array.from(fileList) : []
@@ -639,6 +664,7 @@ export default function SuperAssistantPage() {
           if (conversation) setDeletingConversation(conversation)
         }}
         onSetArchived={(id, archived) => void setConversationArchived(id, archived)}
+        onOpenSearch={() => setSearchOpen(true)}
       />
       <section className="flex min-w-0 flex-1 flex-col bg-white">
         <header className="relative z-10 flex h-[4.3125rem] shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 sm:px-4">
@@ -744,7 +770,7 @@ export default function SuperAssistantPage() {
             ) : !hasMessages ? (
               <div className="flex flex-1 items-center justify-center px-4 sm:px-8">
                 <div className="relative w-full max-w-3xl -translate-y-10 sm:-translate-y-14">
-                  <p className="absolute inset-x-0 bottom-full mb-8 text-center text-xl font-semibold tracking-tight text-[var(--color-text-primary)]">
+                  <p className="absolute inset-x-0 bottom-full mb-8 text-center text-3xl font-semibold tracking-tight text-[var(--color-text-primary)] sm:text-4xl">
                     SuperAgent 工作空间2.0
                   </p>
                   {renderComposer(true)}
@@ -779,6 +805,12 @@ export default function SuperAssistantPage() {
         refreshSkills={refreshSkills}
         refreshServers={refreshServers}
         conversationId={selectedId}
+      />
+
+      <GlobalSearchPalette
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+        onSelectConversation={handleSearchSelect}
       />
 
       <ConfirmActionDialog

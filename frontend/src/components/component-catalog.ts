@@ -78,6 +78,18 @@ export const COMPONENT_CATALOG: ComponentCatalogEntry[] = [
     status: 'exception',
     note: 'reUI 无平替的动效能力；新代码默认禁用，确有动效需求须在 PR 说明并经维护者确认。',
   },
+  {
+    scenario: '命令面板 / 全局搜索（⌘K 唤起、服务端或本地检索）',
+    component: "Command 系列（@/components/ui/command）",
+    status: 'vendored',
+    note: 'cmdk 封装（shadcn/reUI 同源）；服务端异步检索必须 shouldFilter={false} 关掉 cmdk 本地过滤。首个消费方：超级助手工作台全局搜索。',
+  },
+  {
+    scenario: '侧栏分组导航（分区块标题 + 菜单项列表）',
+    component: "Sidebar 展示原语（@/components/ui/sidebar）",
+    status: 'vendored',
+    note: 'shadcn Sidebar 的展示子集（Group/Menu/MenuButton 等），不含应用壳折叠逻辑；首个消费方：超级助手工作台历史会话分组。',
+  },
 ]
 
 /** exception 层现存消费方之外新增 import 会被 CI 拦截（scripts/check-component-convergence.mjs）。 */
