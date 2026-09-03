@@ -97,6 +97,20 @@ test('卡片时间标注区分更新时间与创建时间', async ({ page }) => 
   await expect(page.getByTestId('ontology-card').filter({ hasText: '伽马本体' }).getByTestId('ontology-card-time')).toContainText('更新于')
 })
 
+test('领域筛选下拉保持紧凑宽度，不占满筛选条', async ({ page }) => {
+  await mockListPage(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/#/ontologies', { waitUntil: 'domcontentloaded' })
+  await expect(page.getByRole('button', { name: '阿尔法本体', exact: true })).toBeVisible()
+
+  // reUI SelectTrigger 默认 w-full 且 Radix Root 无 DOM 包裹：筛选条内的
+  // 下拉必须显式定宽，否则以整行为基准伸展（回归时在 1440 视口实测 ~1300px）
+  const box = await page.getByRole('combobox', { name: '按所属领域筛选' }).boundingBox()
+  expect(box).not.toBeNull()
+  expect(box!.width).toBeGreaterThanOrEqual(144)
+  expect(box!.width).toBeLessThanOrEqual(220)
+})
+
 test('拖拽卡片改变相对位置并持久化，筛选态禁用拖拽', async ({ page }) => {
   await mockListPage(page)
   await page.setViewportSize({ width: 1440, height: 900 })
