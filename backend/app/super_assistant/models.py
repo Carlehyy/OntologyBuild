@@ -251,6 +251,65 @@ class SuperAssistantMcpServer(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, onupdate=_now)
 
 
+class SuperAssistantPalaceFile(Base):
+    """记忆宫殿的用户级文件库（跨会话长期资产，区别于会话附件）。
+
+    文件本体与解析文本存 palace 工作区（SessionWorkspace、独立根目录，
+    artifact_id 即工作区清单行 id）；本表持有权威状态：图谱抽取状态机
+    pending → building → built/failed 与行内计数。图谱内容在 Neo4j，
+    以 (file_id, sha256) 幂等重建。
+    """
+
+    __tablename__ = "super_assistant_palace_files"
+    __table_args__ = (
+        Index("ix_sa_palace_files_owner_updated", "owner_id", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    owner_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    artifact_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
+    size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    extracted_chars: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # pending=待抽取 building=抽取中 built=已建图 failed=失败（可重建）
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entity_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    relation_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, onupdate=_now)
+
+
+class SuperAssistantPalaceBuild(Base):
+    """一次记忆宫殿图谱抽取执行记录。
+
+    NATS 消费侧的幂等锚点：同一 (file_id, content_hash) 已有成功记录时
+    跳过；running 超过 30 分钟视为进程中断，允许重新领取。
+    """
+
+    __tablename__ = "super_assistant_palace_builds"
+    __table_args__ = (
+        Index("ix_sa_palace_builds_file_created", "file_id", "created_at"),
+        Index("ix_sa_palace_builds_owner_created", "owner_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    owner_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    file_id: Mapped[str] = mapped_column(
+        String, ForeignKey("super_assistant_palace_files.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    entity_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    relation_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class SuperAssistantWidgetConfig(Base):
     """悬浮 AI 助手（迷你超级助手）的页面可见范围配置（平台级单例）。
 

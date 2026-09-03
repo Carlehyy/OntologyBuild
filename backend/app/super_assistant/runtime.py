@@ -16,7 +16,7 @@ from app.model_configs.selector import llm_call_kwargs, select_llm_model_config
 from app.settings.object_storage.service import execute_minio_tool
 from app.shared.config import settings
 from app.shared.database import SessionLocal
-from app.super_assistant import files_workspace, memory_service, provider, reflection_service, web_tools
+from app.super_assistant import files_workspace, memory_service, palace_service, provider, reflection_service, web_tools
 from app.super_assistant.compaction import maybe_compact
 from app.super_assistant.mcp_client import call_tool, decrypt_env, decrypt_headers, namespaced_tool_name
 from app.super_assistant.models import (
@@ -65,6 +65,9 @@ _READ_ONLY_BUILTIN_TOOLS = frozenset({
     # 会话附件只读读取：写入由 HTTP 上传端点完成，agent 不可写
     "list_session_files",
     "read_session_file",
+    # 记忆宫殿知识图谱（用户上传文档沉淀）只读检索：写入同样只走 HTTP 端点
+    "palace_graph_search",
+    "palace_graph_files",
     # todo 清单是本轮 stream_chat 的内存态，读写均无外部副作用
     "todo_write",
     "todo_read",
@@ -101,6 +104,7 @@ def _system_prompt(
     memory_section: str = "",
     agent_mode: bool = False,
     file_section: str = "",
+    palace_section: str = "",
 ) -> str:
     catalog = "\n".join(
         f"- {skill.name}: {skill.description}"
@@ -117,6 +121,7 @@ def _system_prompt(
 6. 使用标准 Markdown 组织回答；不要用 markdown / md 代码围栏包裹整段答复。只有真实代码才使用代码围栏。
 7. 你可以用 memory_search / palace_recall 主动回忆跨会话记忆，用 memory_save 保存重要事实（低风险事实会自动记住，其余需用户审批后生效）。
 8. 当系统提示包含 Memory Palace 时，用 palace_zones / palace_read_zone / palace_recall 导航记忆分区。
+9. 记忆宫殿还包含用户上传文档沉淀的知识图谱（跨会话长期知识）：系统提示可能已注入相关图谱片段，需要更多时用 palace_graph_search 检索、palace_graph_files 查看文件库；回答图谱相关问题时引用来源文件。
 
 可用 Skill 目录：
 {catalog}
@@ -130,6 +135,8 @@ def _system_prompt(
         prompt = f"{prompt}\n{memory_section}\n"
     if file_section:
         prompt = f"{prompt}\n{file_section}\n"
+    if palace_section:
+        prompt = f"{prompt}\n{palace_section}\n"
     return prompt
 
 
@@ -249,6 +256,21 @@ def _builtin_tools(agent_mode: bool = False) -> list[dict[str, Any]]:
                 "required": ["artifact_id"],
                 "additionalProperties": False,
             },
+        },
+        {
+            "name": "palace_graph_search",
+            "description": "检索记忆宫殿知识图谱（用户上传文档沉淀的跨会话知识）：按关键词找实体及其一跳关系，返回实体、关系和来源文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "检索词（人物/组织/概念等）"}},
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "palace_graph_files",
+            "description": "列出记忆宫殿文件库（用户上传的全部文档）及各文件的图谱构建状态；无权限读取其它会话的附件。",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         },
     ]
     if agent_mode:
@@ -567,6 +589,22 @@ def _execute_builtin_tool(
             "next_offset": next_offset if truncated else None,
             "truncated": truncated,
         }, ensure_ascii=False)
+    if name == "palace_graph_search":
+        query = str(arguments.get("query") or "").strip()
+        if not query:
+            return json.dumps({"error": "query 不能为空"}, ensure_ascii=False)
+        try:
+            result = palace_service.search_for_tool(owner_id, query)
+        except Exception as exc:  # Neo4j 故障不得打断对话轮：只读工具快速失败
+            logger.warning("palace_graph_search 执行失败", exc_info=True)
+            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        return json.dumps(result, ensure_ascii=False)
+    if name == "palace_graph_files":
+        rows = palace_service.list_files_for_tool(db, owner_id)
+        return json.dumps({
+            "files": rows,
+            "note": "图谱写入仅由记忆宫殿上传/重建端点执行，此处只读。",
+        }, ensure_ascii=False)
     if name == "think":
         return "已记录：" + str(arguments.get("thought") or "")
     if name == "todo_write":
@@ -812,8 +850,16 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
         except Exception:  # 附件故障不得阻断聊天
             logger.warning("会话附件上下文加载失败: %s", conversation_id, exc_info=True)
             file_section = ""
+        try:
+            palace_section = palace_service.build_prompt_section(db, owner_id, query=user_query)
+        except Exception:  # 记忆宫殿图谱故障不得阻断聊天
+            logger.warning("记忆宫殿图谱上下文加载失败: %s", owner_id, exc_info=True)
+            palace_section = ""
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _system_prompt(skills, memory_section, agent_mode, file_section=file_section)}
+            {"role": "system", "content": _system_prompt(
+                skills, memory_section, agent_mode,
+                file_section=file_section, palace_section=palace_section,
+            )}
         ]
         messages.extend({"role": item.role, "content": item.content} for item in stored_messages if item.role in {"user", "assistant"})
         permission_checker = ToolPermissionChecker.from_settings()

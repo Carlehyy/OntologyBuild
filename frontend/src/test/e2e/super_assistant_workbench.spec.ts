@@ -5,7 +5,7 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 // 本 spec 另覆盖：分组限量展开、naive UTC 时区显示、行悬停不抖动、
 // 会话附件上传/移除/位于输入框上方与跨会话隔离、流式生成跨会话隔离、ReUI 模型选择器、
 // 删除确认弹窗、新建任务空会话去重、空态品牌文案与占位符、配置面板白底、
-// 重命名 blur 取消、记忆宫殿/外部集成占位、⌘K/Ctrl+K 唤起全局搜索、输入草稿按会话缓存、
+// 重命名 blur 取消、记忆宫殿文件库与知识图谱弹窗、外部集成占位、⌘K/Ctrl+K 唤起全局搜索、输入草稿按会话缓存、
 // 全局搜索 Command 面板检索与跳转、历史分组 shadcn Sidebar 原语、空态品牌字号。
 
 const json = (route: Route, data: unknown, status = 200) => route.fulfill({
@@ -36,6 +36,21 @@ const conversationsFixture = [
   { id: 'c-earlier', title: '上周数据摸底', model_config_id: 'model-1', status: 'active', created_at: at(5, 10), updated_at: at(5, 10) },
   { id: 'c-archived', title: '旧会话存档', model_config_id: 'model-1', status: 'archived', created_at: at(2, 8), updated_at: at(2, 8) },
 ]
+
+const palaceGraphFixture = {
+  available: true,
+  nodes: [
+    { id: 'e-1', name: '张三', type: '人物', aliases: [], source_files: ['个人知识库.md'], mention_count: 5 },
+    { id: 'e-2', name: 'ACME', type: '组织', aliases: [], source_files: ['个人知识库.md'], mention_count: 3 },
+    { id: 'e-3', name: '知识图谱', type: '技术', aliases: [], source_files: ['行业研究.pdf'], mention_count: 2 },
+  ],
+  edges: [
+    { source: 'e-1', target: 'e-2', name: '任职', source_files: ['个人知识库.md'] },
+    { source: 'e-2', target: 'e-3', name: '使用', source_files: ['行业研究.pdf'] },
+  ],
+  totals: { entities: 3, relations: 2 },
+  truncated: false,
+}
 
 async function seedAuth(page: Page) {
   await page.addInitScript(() => {
@@ -71,6 +86,20 @@ async function mockApis(page: Page, options: MockOptions = {}) {
       extractedChars: 100, extractError: null, createdAt: at(0, 9),
     }],
   }
+  const palaceFiles: Array<Record<string, unknown>> = [
+    {
+      id: 'pf-1', filename: '个人知识库.md', mimeType: 'text/markdown', size: 2048,
+      sha256: 'pf-1-hash', extractedChars: 1800, status: 'built', error: null,
+      entityCount: 3, relationCount: 2, createdAt: at(0, 8), updatedAt: at(0, 8),
+    },
+    {
+      id: 'pf-2', filename: '行业研究.pdf', mimeType: 'application/pdf', size: 40960,
+      sha256: 'pf-2-hash', extractedChars: 12000, status: 'building', error: null,
+      entityCount: 0, relationCount: 0, createdAt: at(0, 9), updatedAt: at(0, 9),
+    },
+  ]
+  const palaceUploads: string[] = []
+  const palaceDeletes: string[] = []
   await page.route('**/api/**', route => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -111,6 +140,34 @@ async function mockApis(page: Page, options: MockOptions = {}) {
         filesByConv[conversationId] = (filesByConv[conversationId] || []).filter(row => row.id !== artifactId)
         return route.fulfill({ status: 204 })
       }
+    }
+    // 记忆宫殿：文件库 / 图谱 / 上传 / 删除 / 重建
+    if (path === '/api/v2/super-assistant/palace/files') {
+      if (request.method() === 'GET') return json(route, palaceFiles)
+      if (request.method() === 'POST') {
+        const filename = /filename="([^"]+)"/.exec(request.postData() || '')?.[1] || 'palace.bin'
+        palaceUploads.push(filename)
+        palaceFiles.unshift({
+          id: `pf-new-${palaceUploads.length}`, filename, mimeType: 'text/markdown', size: 64,
+          sha256: 'new-hash', extractedChars: 10, status: 'pending', error: null,
+          entityCount: 0, relationCount: 0, createdAt: at(0, 10), updatedAt: at(0, 10),
+        })
+        return json(route, palaceFiles[0], 201)
+      }
+    }
+    const palaceDeleteMatch = path.match(/^\/api\/v2\/super-assistant\/palace\/files\/([^/]+)$/)
+    if (palaceDeleteMatch && request.method() === 'DELETE') {
+      palaceDeletes.push(palaceDeleteMatch[1])
+      const index = palaceFiles.findIndex(row => row.id === palaceDeleteMatch[1])
+      if (index >= 0) palaceFiles.splice(index, 1)
+      return route.fulfill({ status: 204 })
+    }
+    const palaceRebuildMatch = path.match(/^\/api\/v2\/super-assistant\/palace\/files\/([^/]+)\/rebuild$/)
+    if (palaceRebuildMatch && request.method() === 'POST') {
+      return json(route, { dispatched: true })
+    }
+    if (path === '/api/v2/super-assistant/palace/graph' && request.method() === 'GET') {
+      return json(route, palaceGraphFixture)
     }
     // 会话流式对话：可控延迟的 SSE
     const chatMatch = path.match(/^\/api\/v2\/super-assistant\/conversations\/([^/]+)\/chat$/)
@@ -208,6 +265,8 @@ async function mockApis(page: Page, options: MockOptions = {}) {
     fileDeletes,
     chatCalls,
     searchQueries,
+    palaceUploads,
+    palaceDeletes,
     isChatDone: () => chatDone,
   }
 }
@@ -539,17 +598,46 @@ test('重命名会话：点击其它处自动取消，Enter 仍可保存', async
   expect(JSON.parse(mocks.patchBodies[0])).toMatchObject({ title: '新名称' })
 })
 
-test('记忆宫殿与外部集成为如实占位的即将上线弹窗', async ({ page }) => {
+test('记忆宫殿：文件库与知识图谱弹窗（上传/删除联动），外部集成为如实占位', async ({ page }) => {
   await seedAuth(page)
-  await mockApis(page)
+  const mocks = await mockApis(page)
   await page.goto('/#/super-assistant')
 
   await page.getByRole('button', { name: '记忆宫殿' }).click()
-  await expect(page.getByRole('dialog')).toBeVisible()
-  await expect(page.getByRole('dialog').getByRole('heading', { name: '记忆宫殿' })).toBeVisible()
-  await page.keyboard.press('Escape')
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('heading', { name: '记忆宫殿' })).toBeVisible()
 
+  // 文件区：列表 + 状态徽标 + 来源计数
+  const filesSection = dialog.getByTestId('super-assistant-palace-files')
+  await expect(filesSection).toBeVisible()
+  await expect(filesSection.getByText('个人知识库.md')).toBeVisible()
+  await expect(filesSection.getByText('已建图')).toBeVisible()
+  await expect(filesSection.getByText('抽取中')).toBeVisible()
+
+  // 图谱区：实体/关系计数 + ECharts canvas 渲染
+  const graphSection = dialog.getByTestId('super-assistant-palace-graph')
+  await expect(graphSection).toBeVisible()
+  await expect(graphSection.getByText(/3 实体 \/ 2 关系/)).toBeVisible()
+  await expect(graphSection.locator('canvas').first()).toBeVisible()
+
+  // 上传：隐藏 input 接线到 palace 上传端点，列表即时刷新
+  await dialog.locator('input[type="file"]').setInputFiles({
+    name: '新文档.md', mimeType: 'text/markdown', buffer: Buffer.from('# 新文档\n张三 任职 ACME'),
+  })
+  await expect.poll(() => mocks.palaceUploads.length).toBe(1)
+  expect(mocks.palaceUploads[0]).toBe('新文档.md')
+  await expect(filesSection.getByText('新文档.md')).toBeVisible()
+
+  // 删除：行内删除按钮联动 DELETE 端点并从列表消失
+  await filesSection.locator('[data-palace-file="pf-2"]').getByRole('button', { name: '删除 行业研究.pdf' }).click()
+  await expect.poll(() => mocks.palaceDeletes.length).toBe(1)
+  await expect(filesSection.getByText('行业研究.pdf')).toHaveCount(0)
+
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+
+  // 外部集成仍是如实占位的「即将上线」弹窗
   await page.getByRole('button', { name: '外部集成' }).click()
   await expect(page.getByRole('dialog')).toBeVisible()
   await expect(page.getByRole('dialog').getByRole('heading', { name: '外部集成' })).toBeVisible()

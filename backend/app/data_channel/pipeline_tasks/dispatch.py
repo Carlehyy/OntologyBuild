@@ -26,6 +26,7 @@ DATASET_MIGRATE_SUBJECT = "task.dataset.migrate"
 SUPER_ASSISTANT_REFLECT_MICRO_SUBJECT = "super_assistant.reflect.micro"
 SUPER_ASSISTANT_REFLECT_FULL_SUBJECT = "super_assistant.reflect.full"
 SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT = "super_assistant.reflect.focused"
+SUPER_ASSISTANT_PALACE_EXTRACT_SUBJECT = "super_assistant.palace.extract"
 ASSISTANT_EVAL_AUTOPILOT_SUBJECT = "assistant_evaluation.autopilot.cycle"
 # 流的全部订阅主题：扩容只能追加，旧 subject 与旧 durable 保持不变
 PIPELINE_STREAM_SUBJECTS = (
@@ -38,6 +39,8 @@ PIPELINE_STREAM_SUBJECTS = (
     DATASET_MIGRATE_SUBJECT,
     # 只能追加：值守循环（助手评估数据飞轮 M3）
     ASSISTANT_EVAL_AUTOPILOT_SUBJECT,
+    # 只能追加：记忆宫殿图谱抽取（超级助手）
+    SUPER_ASSISTANT_PALACE_EXTRACT_SUBJECT,
 )
 
 # 进程内缓存：每个进程只在首次派发时确保一次 Stream
@@ -177,6 +180,19 @@ def dispatch_super_assistant_reflection(kind: str, payload: dict) -> None:
     if subject is None:
         raise ValueError(f"未知的反思任务类型: {kind!r}")
     dispatch_task(subject, payload)
+
+
+def dispatch_super_assistant_palace_extract(owner_id: str, file_id: str) -> None:
+    """记忆宫殿图谱抽取派发入口。
+
+    payload 约定：owner_id/file_id 必填。消费侧幂等由 palace build 记录
+    （同 (file_id, sha256) 成功即跳过）兜底；无 NATS_URL 时调用方降级为
+    守护线程内联（见 palace_service.request_build）。
+    """
+    dispatch_task(SUPER_ASSISTANT_PALACE_EXTRACT_SUBJECT, {
+        "owner_id": owner_id,
+        "file_id": file_id,
+    })
 
 
 def dispatch_assistant_eval_autopilot(config_id: str) -> None:

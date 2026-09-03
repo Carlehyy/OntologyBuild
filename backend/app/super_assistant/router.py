@@ -22,6 +22,7 @@ from app.super_assistant import (
 )
 from app.super_assistant import mcp_server_service
 from app.super_assistant import memory_service
+from app.super_assistant import palace_service
 from app.super_assistant import reflection_service
 from app.super_assistant import skill_service as _skill_service
 from app.super_assistant.models import (
@@ -259,6 +260,36 @@ def preview_conversation_file(conversation_id: str, artifact_id: str, max_chars:
 def delete_conversation_file(conversation_id: str, artifact_id: str, db: Session = Depends(get_db),
                              current_user: User = Depends(get_current_user)):
     conversation_files.delete_file(db, current_user, conversation_id, artifact_id)
+
+
+# ---------------------------------------------------------------------------
+# 记忆宫殿：用户级文件库 + 知识图谱（跨会话长期知识）
+# ---------------------------------------------------------------------------
+
+@router.get("/palace/files")
+def list_palace_files(db: Session = Depends(get_db),
+                      current_user: User = Depends(get_current_user)):
+    return palace_service.list_files(db, current_user.id)
+
+@router.post("/palace/files", status_code=201)
+async def upload_palace_file(file: UploadFile = File(...),
+                             db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return palace_service.upload_file(db, current_user, file)
+
+@router.delete("/palace/files/{file_id}", status_code=204)
+def delete_palace_file(file_id: str, db: Session = Depends(get_db),
+                       current_user: User = Depends(get_current_user)):
+    palace_service.delete_palace_file(db, current_user.id, file_id)
+
+@router.post("/palace/files/{file_id}/rebuild", status_code=202)
+def rebuild_palace_file(file_id: str, db: Session = Depends(get_db),
+                        current_user: User = Depends(get_current_user)):
+    return palace_service.rebuild_file(db, current_user.id, file_id)
+
+@router.get("/palace/graph")
+def palace_graph_view(db: Session = Depends(get_db),
+                      current_user: User = Depends(get_current_user)):
+    return palace_service.graph_overview(db, current_user.id)
 
 
 @router.post("/tool-runs/{tool_run_id}/decision")

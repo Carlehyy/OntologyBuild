@@ -1,0 +1,144 @@
+/**
+ * 记忆宫殿知识图谱的 ECharts option 组装（纯函数，单测见 test/unit/superAssistant/）。
+ *
+ * 颜色与动效一律取 platform echartsTheme；图类型写法对齐 ontology-model 的
+ * networkGraphOption 先例（graph series + 邻接高亮 + hideOverlap），差异是
+ * 记忆图谱无预计算坐标，采用力导向布局（layout:'force'，仓库首例）。
+ */
+import type { EChartsOption } from 'echarts'
+
+import {
+  baseChartOption,
+  CHART_SERIES_PALETTE,
+  CHART_TEXT,
+  CHART_TOOLTIP_BG,
+  CHART_TOOLTIP_BORDER,
+} from '../../../lib/echartsTheme.ts'
+import type { PalaceGraph } from '../../../api/superAssistant'
+
+const KNOWN_TYPES = [
+  '人物', '组织', '机构', '地点', '时间', '概念', '技术', '产品', '项目', '事件', '其他',
+]
+
+const categoryIndexOf = (type: string): number => {
+  const index = KNOWN_TYPES.indexOf(type)
+  return index >= 0 ? index : KNOWN_TYPES.indexOf('其他')
+}
+
+export function palaceGraphCategories(): { name: string }[] {
+  return KNOWN_TYPES.map(name => ({ name }))
+}
+
+export function palaceGraphOption(graph: PalaceGraph): EChartsOption {
+  const base = baseChartOption()
+  const nodeData = graph.nodes.map(node => ({
+    id: node.id,
+    name: node.name,
+    category: categoryIndexOf(node.type),
+    value: node.mention_count,
+    symbolSize: Math.min(46, 14 + Math.sqrt(Math.max(1, node.mention_count)) * 6),
+    nodeType: node.type,
+    nodeSources: (node.source_files || []).slice(0, 4).join('、'),
+  }))
+  const idSet = new Set(graph.nodes.map(node => node.id))
+  const linkData = graph.edges
+    .filter(edge => idSet.has(edge.source) && idSet.has(edge.target))
+    .map(edge => ({
+      source: edge.source,
+      target: edge.target,
+      lineStyle: { width: 1.4, opacity: 0.55, curveness: 0.12 },
+      edgeLabel: edge.name,
+      edgeSources: (edge.source_files || []).slice(0, 4).join('、'),
+      label: {
+        show: false,
+        formatter: edge.name,
+        fontSize: 9,
+        color: CHART_TEXT,
+        backgroundColor: CHART_TOOLTIP_BG,
+        borderColor: CHART_TOOLTIP_BORDER,
+        borderWidth: 0.8,
+        borderRadius: 999,
+        padding: [2, 5] as [number, number],
+      },
+      emphasis: { label: { show: true } },
+    }))
+
+  const option = {
+    ...base,
+    aria: {
+      enabled: true,
+      description: '记忆宫殿知识图谱：节点为用户文档中抽取的实体，连线为实体间关系',
+    },
+    legend: {
+      show: nodeData.length > 0,
+      type: 'scroll',
+      orient: 'horizontal',
+      top: 0,
+      left: 'center',
+      textStyle: { color: CHART_TEXT, fontSize: 10 },
+      data: KNOWN_TYPES.map(name => ({ name })),
+    },
+    tooltip: {
+      ...(base.tooltip ?? {}),
+      trigger: 'item',
+      formatter: (params: { dataType?: string; data?: Record<string, unknown> }) => {
+        const data = params.data || {}
+        if (params.dataType === 'edge') {
+          return `${data.edgeLabel || ''}${data.edgeSources ? `<br/>来源：${data.edgeSources}` : ''}`
+        }
+        const sources = data.nodeSources ? `<br/>来源：${data.nodeSources}` : ''
+        return `${data.name || ''}（${data.nodeType || '其他'}）${sources}`
+      },
+    },
+    color: CHART_SERIES_PALETTE,
+    series: [
+      {
+        type: 'graph',
+        layout: 'force',
+        force: {
+          repulsion: 130,
+          gravity: 0.08,
+          edgeLength: [40, 110],
+          layoutAnimation: true,
+        },
+        roam: true,
+        draggable: true,
+        categories: palaceGraphCategories(),
+        data: nodeData,
+        links: linkData,
+        emphasis: {
+          focus: 'adjacency',
+          itemStyle: {
+            borderColor: CHART_SERIES_PALETTE[0],
+            borderWidth: 2.2,
+            shadowBlur: 16,
+            shadowColor: 'rgba(5,150,105,0.3)',
+          },
+        },
+        blur: {
+          itemStyle: { opacity: 0.15 },
+          lineStyle: { opacity: 0.08 },
+          label: { opacity: 0.15 },
+        },
+        scaleLimit: { min: 0.2, max: 4 },
+        symbol: 'circle',
+        edgeSymbol: ['none', 'arrow'],
+        edgeSymbolSize: 6,
+        label: {
+          show: true,
+          position: 'right',
+          color: CHART_TEXT,
+          fontSize: 10,
+        },
+        labelLayout: { hideOverlap: true },
+        top: 28,
+        left: 8,
+        right: 8,
+        bottom: 8,
+      },
+    ],
+  }
+  // graph series 的自定义负载字段超出内置类型面，这里集中收口一次断言
+  // （与 networkGraphOption.ts 同一口径）。
+  return option as unknown as EChartsOption
+}

@@ -28,6 +28,7 @@ import {
   CONVERSATION_GROUP_VISIBLE_LIMIT,
   groupConversations,
 } from '../conversationGroups'
+import MemoryPalaceDialog from './MemoryPalaceDialog'
 
 interface WorkbenchSidebarProps {
   conversations: SuperConversation[]
@@ -41,16 +42,12 @@ interface WorkbenchSidebarProps {
   onOpenSearch: () => void
 }
 
-type PlaceholderFeature = 'tasks' | 'memory' | 'integrations'
+type PlaceholderFeature = 'tasks' | 'integrations'
 
 const PLACEHOLDER_COPY: Record<PlaceholderFeature, { title: string; body: string }> = {
   tasks: {
     title: '定时任务',
     body: '定时任务功能即将上线：让超级助手按你设定的计划自动执行任务，当前版本请手动发起对话。',
-  },
-  memory: {
-    title: '记忆宫殿',
-    body: '记忆宫殿功能即将上线：助手的长期记忆与知识沉淀将在这里集中呈现和管理，当前版本由助手在对话中自动维护记忆。',
   },
   integrations: {
     title: '外部集成',
@@ -133,6 +130,7 @@ export default function WorkbenchSidebar({
   const logout = useAuthStore(state => state.logout)
   const navigate = useNavigate()
   const [placeholder, setPlaceholder] = useState<PlaceholderFeature | null>(null)
+  const [palaceOpen, setPalaceOpen] = useState(false)
   const [archivedOpen, setArchivedOpen] = useState(false)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
 
@@ -221,7 +219,7 @@ export default function WorkbenchSidebar({
         <button type="button" onClick={() => setPlaceholder('tasks')} className={actionItemClass}>
           <Clock size={17} className="shrink-0" /> 定时任务
         </button>
-        <button type="button" onClick={() => setPlaceholder('memory')} className={actionItemClass}>
+        <button type="button" onClick={() => setPalaceOpen(true)} className={actionItemClass} data-workbench-palace>
           <Brain size={17} className="shrink-0" /> 记忆宫殿
         </button>
         {hasMenuAccess(user, 'overview') && (
@@ -357,6 +355,8 @@ export default function WorkbenchSidebar({
           </p>
         </DialogContent>
       </Dialog>
+
+      <MemoryPalaceDialog open={palaceOpen} onOpenChange={setPalaceOpen} />
     </>
   )
 }

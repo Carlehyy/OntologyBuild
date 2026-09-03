@@ -60,6 +60,47 @@ export interface SuperSearchResult {
   conversations: SuperSearchConversationHit[]
 }
 
+/** 记忆宫殿文件（用户级长期资产）：图谱抽取状态机 pending→building→built/failed */
+export interface PalaceFile {
+  id: string
+  filename: string
+  mimeType: string
+  size: number
+  sha256: string
+  extractedChars: number
+  status: 'pending' | 'building' | 'built' | 'failed' | string
+  error: string | null
+  entityCount: number
+  relationCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PalaceGraphNode {
+  id: string
+  name: string
+  type: string
+  aliases: string[]
+  source_files: string[]
+  mention_count: number
+}
+
+export interface PalaceGraphEdge {
+  source: string
+  target: string
+  name: string
+  source_files: string[]
+}
+
+/** 记忆宫殿图谱视图：available=false 表示 Neo4j 暂不可用（非 5xx） */
+export interface PalaceGraph {
+  available: boolean
+  nodes: PalaceGraphNode[]
+  edges: PalaceGraphEdge[]
+  totals: { entities: number; relations: number }
+  truncated: boolean
+}
+
 export interface SkillFile {
   path: string
   size: number
@@ -273,6 +314,17 @@ export const superAssistantApi = {
     apiClientV2.delete(`/super-assistant/conversations/${id}/files/${fileId}`),
   searchConversations: (q: string, limit = 20) =>
     apiClientV2.get<SuperSearchResult>('/super-assistant/search/conversations', { params: { q, limit } }),
+  palaceFiles: () => apiClientV2.get<PalaceFile[]>('/super-assistant/palace/files'),
+  uploadPalaceFile: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return apiClientV2.post<PalaceFile>('/super-assistant/palace/files', form)
+  },
+  deletePalaceFile: (fileId: string) =>
+    apiClientV2.delete(`/super-assistant/palace/files/${fileId}`),
+  rebuildPalaceFile: (fileId: string) =>
+    apiClientV2.post<{ dispatched: boolean }>(`/super-assistant/palace/files/${fileId}/rebuild`),
+  palaceGraph: () => apiClientV2.get<PalaceGraph>('/super-assistant/palace/graph'),
   streamChat,
   cancel: (id: string) => apiClientV2.post(`/super-assistant/conversations/${id}/cancel`),
   decideToolRun: (id: string, decision: 'approve' | 'deny') =>
