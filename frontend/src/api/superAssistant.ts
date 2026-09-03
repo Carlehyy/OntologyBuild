@@ -38,6 +38,28 @@ export interface SuperConversationFile {
   createdAt: string
 }
 
+/** 全局搜索命中：会话标题或消息内容（camelCase 响应，与附件接口同风格） */
+export interface SuperSearchMessageHit {
+  messageId: string
+  role: string
+  snippet: string
+  createdAt: string
+}
+
+export interface SuperSearchConversationHit {
+  id: string
+  title: string
+  status: string
+  updatedAt: string
+  titleMatched: boolean
+  messageHits: SuperSearchMessageHit[]
+}
+
+export interface SuperSearchResult {
+  query: string
+  conversations: SuperSearchConversationHit[]
+}
+
 export interface SkillFile {
   path: string
   size: number
@@ -249,6 +271,8 @@ export const superAssistantApi = {
   },
   deleteConversationFile: (id: string, fileId: string) =>
     apiClientV2.delete(`/super-assistant/conversations/${id}/files/${fileId}`),
+  searchConversations: (q: string, limit = 20) =>
+    apiClientV2.get<SuperSearchResult>('/super-assistant/search/conversations', { params: { q, limit } }),
   streamChat,
   cancel: (id: string) => apiClientV2.post(`/super-assistant/conversations/${id}/cancel`),
   decideToolRun: (id: string, decision: 'approve' | 'deny') =>

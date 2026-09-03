@@ -5,7 +5,8 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 // 本 spec 另覆盖：分组限量展开、naive UTC 时区显示、行悬停不抖动、
 // 会话附件上传/移除/位于输入框上方与跨会话隔离、流式生成跨会话隔离、ReUI 模型选择器、
 // 删除确认弹窗、新建任务空会话去重、空态品牌文案与占位符、配置面板白底、
-// 重命名 blur 取消、记忆宫殿/外部集成占位、⌘K/Ctrl+K 唤起全局搜索、输入草稿按会话缓存。
+// 重命名 blur 取消、记忆宫殿/外部集成占位、⌘K/Ctrl+K 唤起全局搜索、输入草稿按会话缓存、
+// 全局搜索 Command 面板检索与跳转、历史分组 shadcn Sidebar 原语、空态品牌字号。
 
 const json = (route: Route, data: unknown, status = 200) => route.fulfill({
   status,
@@ -61,6 +62,7 @@ async function mockApis(page: Page, options: MockOptions = {}) {
   const fileUploads: string[] = []
   const fileDeletes: string[] = []
   const chatCalls: string[] = []
+  const searchQueries: string[] = []
   const createdConvs: Array<Record<string, unknown>> = []
   let chatDone = false
   const filesByConv: Record<string, Array<Record<string, unknown>>> = {
@@ -171,6 +173,22 @@ async function mockApis(page: Page, options: MockOptions = {}) {
     }
     if (path === '/api/v2/super-assistant/skills') return json(route, [])
     if (path === '/api/v2/super-assistant/mcp-servers') return json(route, [])
+    // 全局搜索：会话标题 + 消息内容（查询词含「需求」时命中 c-today 的标题与一条消息）
+    if (path === '/api/v2/super-assistant/search/conversations') {
+      const q = new URL(request.url()).searchParams.get('q') || ''
+      searchQueries.push(q)
+      return json(route, {
+        query: q,
+        conversations: q.includes('需求') ? [{
+          id: 'c-today', title: '今日需求梳理', status: 'active', updatedAt: at(0, 9),
+          titleMatched: true,
+          messageHits: [{
+            messageId: 'm-1', role: 'user',
+            snippet: '……这是需求梳理的上下文片段……', createdAt: at(0, 9),
+          }],
+        }] : [],
+      })
+    }
     if (path === '/api/v2/inbox/summary') {
       return json(route, { openAlertCount: 0, actionableCount: 0, unreadCount: 0, resolvedCount: 0 })
     }
@@ -189,6 +207,7 @@ async function mockApis(page: Page, options: MockOptions = {}) {
     fileUploads,
     fileDeletes,
     chatCalls,
+    searchQueries,
     isChatDone: () => chatDone,
   }
 }
@@ -209,6 +228,10 @@ test('工作台骨架：七项入口齐备，历史会话按今日/昨日/历史
   await expect(page.locator('[data-workbench-group="today"] [data-workbench-conversation="c-today"]')).toHaveCount(1)
   await expect(page.locator('[data-workbench-group="yesterday"] [data-workbench-conversation="c-yesterday"]')).toHaveCount(1)
   await expect(page.locator('[data-workbench-group="earlier"] [data-workbench-conversation="c-earlier"]')).toHaveCount(1)
+  // 历史分组采用 shadcn Sidebar 展示原语（组标签 + 菜单列表）
+  await expect(page.locator('[data-workbench-group="today"] [data-slot="sidebar-group-label"]')).toHaveText('今日对话')
+  await expect(page.locator('[data-workbench-group="today"] ul[data-slot="sidebar-menu"]')).toHaveCount(1)
+  await expect(page.locator('[data-workbench-group="yesterday"] [data-slot="sidebar-group-label"]')).toHaveText('昨日对话')
   // 归档区默认折叠：标题含计数，条目不可见
   await expect(page.getByRole('button', { name: /归档会话（1）/ })).toBeVisible()
   await expect(page.locator('[data-workbench-group="archived"] [data-workbench-conversation="c-archived"]')).toHaveCount(0)
@@ -258,14 +281,16 @@ test('本体治理跳转后台，后台经右下角悬浮助手返回工作台',
   await expect(page.getByRole('button', { name: '新建任务' })).toBeVisible()
 })
 
-test('全局搜索与定时任务为如实占位的即将上线弹窗', async ({ page }) => {
+test('定时任务为如实占位的即将上线弹窗，全局搜索打开真实检索面板', async ({ page }) => {
   await seedAuth(page)
   await mockApis(page)
   await page.goto('/#/super-assistant')
 
+  // 全局搜索已是真实功能：打开 ReUI Command 检索面板
   await page.getByRole('button', { name: '全局搜索' }).click()
-  await expect(page.getByText(/即将上线/).first()).toBeVisible()
+  await expect(page.getByPlaceholder('搜索会话标题与消息内容…')).toBeVisible()
   await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
 
   await page.getByRole('button', { name: '定时任务' }).click()
   await expect(page.getByText(/即将上线/).first()).toBeVisible()
@@ -465,9 +490,13 @@ test('空态只保留品牌一句话，输入框占位符不混入用户输入',
   await mockApis(page)
   await page.goto('/#/super-assistant?conversation=c-today')
 
-  await expect(page.getByText('SuperAgent 工作空间2.0')).toBeVisible()
+  const hero = page.getByText('SuperAgent 工作空间2.0')
+  await expect(hero).toBeVisible()
   await expect(page.getByText('有什么可以帮你？')).toHaveCount(0)
   await expect(page.getByText('试试这样问')).toHaveCount(0)
+  // 品牌一句话是页面视觉主角：字号不小于 text-3xl（30px）
+  const heroFontSize = await hero.evaluate(el => parseFloat(getComputedStyle(el).fontSize))
+  expect(heroFontSize).toBeGreaterThanOrEqual(30)
 
   const textbox = page.getByRole('textbox', { name: '向超级助手发送消息' })
   await expect(textbox).toHaveAttribute('placeholder', '咨询任何问题，创造任何事物')
@@ -527,16 +556,46 @@ test('记忆宫殿与外部集成为如实占位的即将上线弹窗', async ({
   await expect(page.getByRole('dialog').getByText(/邮箱、GitHub/)).toBeVisible()
 })
 
-test('⌘K / Ctrl+K 唤起全局搜索弹窗', async ({ page }) => {
+test('⌘K / Ctrl+K 唤起全局搜索面板', async ({ page }) => {
   await seedAuth(page)
   await mockApis(page)
   await page.goto('/#/super-assistant')
 
   await page.keyboard.press('Control+k')
   await expect(page.getByRole('dialog')).toBeVisible()
-  await expect(page.getByRole('dialog').getByRole('heading', { name: '全局搜索' })).toBeVisible()
+  await expect(page.getByPlaceholder('搜索会话标题与消息内容…')).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
+})
+
+test('全局搜索：检索会话标题与消息内容，命中消息可跳转会话', async ({ page }) => {
+  await seedAuth(page)
+  const mocks = await mockApis(page)
+  await page.goto('/#/super-assistant')
+
+  await page.getByRole('button', { name: '全局搜索' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toBeVisible()
+
+  // 输入关键词（防抖 300ms 后发出检索请求）
+  await page.getByPlaceholder('搜索会话标题与消息内容…').fill('需求')
+  await expect.poll(() => mocks.searchQueries.length).toBeGreaterThan(0)
+  await expect.poll(() => mocks.searchQueries.at(-1)).toBe('需求')
+
+  // 标题命中与消息命中分组展示，关键词高亮
+  await expect(page.getByTestId('global-search-title-hit')).toHaveCount(1)
+  await expect(dialog.locator('mark').first()).toHaveText('需求')
+  await expect(page.getByTestId('global-search-message-hit')).toHaveCount(1)
+
+  // 选中消息命中：面板关闭并切到该会话
+  await page.getByTestId('global-search-message-hit').click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(page.locator('[data-workbench-conversation="c-today"]')).toHaveClass(/bg-teal-50/)
+
+  // 无结果文案
+  await page.keyboard.press('Control+k')
+  await page.getByPlaceholder('搜索会话标题与消息内容…').fill('不存在的词')
+  await expect(page.getByText('没有匹配的会话或消息')).toBeVisible()
 })
 
 test('输入草稿按会话缓存：切换会话不丢内容，发送后清空', async ({ page }) => {
