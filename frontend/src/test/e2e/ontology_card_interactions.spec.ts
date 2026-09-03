@@ -105,10 +105,15 @@ test('领域筛选下拉保持紧凑宽度，不占满筛选条', async ({ page 
 
   // reUI SelectTrigger 默认 w-full 且 Radix Root 无 DOM 包裹：筛选条内的
   // 下拉必须显式定宽，否则以整行为基准伸展（回归时在 1440 视口实测 ~1300px）
-  const box = await page.getByRole('combobox', { name: '按所属领域筛选' }).boundingBox()
+  const filter = page.getByRole('combobox', { name: '按所属领域筛选' })
+  const box = await filter.boundingBox()
   expect(box).not.toBeNull()
   expect(box!.width).toBeGreaterThanOrEqual(144)
   expect(box!.width).toBeLessThanOrEqual(220)
+
+  // 与旁边搜索框同款白底（而非 bg-background 画布灰）
+  const background = await filter.evaluate(el => getComputedStyle(el).backgroundColor)
+  expect(background).toBe('rgb(255, 255, 255)')
 })
 
 test('拖拽卡片改变相对位置并持久化，筛选态禁用拖拽', async ({ page }) => {

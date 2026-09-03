@@ -626,7 +626,11 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
           value={domainFilter || '__all__'}
           onValueChange={value => setDomainFilter(value === '__all__' ? '' : value)}
         >
-          <SelectTrigger aria-label="按所属领域筛选" className="h-9 w-44 rounded-lg">
+          {/* 样式对齐旁边搜索输入框：白底/slate 描边/teal 聚焦（覆盖 vendored bg-background 画布灰） */}
+          <SelectTrigger
+            aria-label="按所属领域筛选"
+            className="h-9 w-44 rounded-lg border-slate-200 bg-white text-slate-700 focus:border-teal-400 focus:ring-teal-500/20"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
