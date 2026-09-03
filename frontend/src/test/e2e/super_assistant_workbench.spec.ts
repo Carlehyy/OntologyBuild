@@ -125,17 +125,19 @@ test('归档流转：会话移入归档区且 PATCH 携带 status', async ({ pag
   await expect(page.locator('[data-workbench-group="today"] [data-workbench-conversation="c-today"]')).toHaveCount(1)
 })
 
-test('本体治理跳转后台，后台侧栏可返回 AI 工作台', async ({ page }) => {
+test('本体治理跳转后台，后台经右下角悬浮助手返回工作台', async ({ page }) => {
   await seedAuth(page)
   await mockApis(page)
   await page.goto('/#/super-assistant')
 
   await page.getByRole('link', { name: '本体治理' }).click()
   await page.waitForURL('**/#/overview')
-  await expect(page.getByRole('link', { name: 'AI 工作台' })).toBeVisible()
+  // 后台导航不提供 AI 工作台入口，回前台走右下角悬浮助手
+  await expect(page.getByRole('link', { name: 'AI 工作台' })).toHaveCount(0)
 
-  await page.getByRole('link', { name: 'AI 工作台' }).click()
-  await page.waitForURL('**/#/super-assistant')
+  await page.getByTestId('assistant-widget-fab').click()
+  await page.getByTestId('assistant-widget-open-full').click()
+  await page.waitForURL(/#\/super-assistant/)
   await expect(page.getByRole('button', { name: '新建任务' })).toBeVisible()
 })
 

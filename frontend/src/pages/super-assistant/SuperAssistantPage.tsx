@@ -295,46 +295,46 @@ export default function SuperAssistantPage() {
 
   const renderComposer = (prominent = false) => (
     <div className="w-full">
-      <div data-testid="super-assistant-composer" className={`flex items-end gap-2 rounded-2xl border bg-[var(--color-bg-elevated)] p-2 transition-all focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-100 ${prominent
-        ? 'border-slate-200 shadow-[0_18px_50px_rgba(15,118,110,0.12)]'
-        : 'border-[var(--color-border)] shadow-[0_8px_28px_rgba(15,23,42,0.08)]'}`}>
-        <Sender
-          ref={senderRef}
-          {...senderNativeProps}
-          value={input}
-          onChange={value => setInput(value)}
-          onSubmit={value => { if (canSend) void send(value) }}
-          onKeyDown={event => {
-            // 自行处理 Enter 提交（保留平台语义）；输入法组合期间的 Enter 不触发发送
-            if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent.isComposing) return
-            event.preventDefault()
-            if (canSend) void send()
-            return false
-          }}
-          onCancel={() => void stop()}
-          loading={running}
-          placeholder={placeholder}
-          disabled={running || models.length === 0}
-          autoSize={{ minRows: 1, maxRows: 6 }}
-          suffix={false}
-          className="min-w-0 flex-1"
-          style={{ border: 'none', boxShadow: 'none', background: 'transparent' }}
-          styles={{
-            // antd textarea 自带 5px 纵向内边距（行高 22px），content 上下 6px 时
-            // 单行总高恰为 44px（h-11），与右侧按钮一致，保证历史浮层间距不变
-            content: { paddingBlock: 6 },
-          }}
-        />
-        <div className="relative flex shrink-0 items-center gap-2">
+      <div
+        data-testid="super-assistant-composer"
+        className={`relative overflow-visible rounded-xl border border-teal-400 bg-white ring-1 ring-teal-100 transition-colors focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-200/80 ${prominent
+          ? 'shadow-[0_18px_50px_rgba(15,118,110,0.12)]'
+          : 'shadow-[0_8px_28px_rgba(15,23,42,0.08)]'}`}
+      >
+        <div className="px-3 pb-1 pt-2.5">
+          <Sender
+            ref={senderRef}
+            {...senderNativeProps}
+            value={input}
+            onChange={value => setInput(value)}
+            onSubmit={value => { if (canSend) void send(value) }}
+            onKeyDown={event => {
+              // 自行处理 Enter 提交（保留平台语义）；输入法组合期间的 Enter 不触发发送
+              if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent.isComposing) return
+              event.preventDefault()
+              if (canSend) void send()
+              return false
+            }}
+            onCancel={() => void stop()}
+            loading={running}
+            placeholder={placeholder}
+            disabled={running || models.length === 0}
+            autoSize={{ minRows: 1, maxRows: 6 }}
+            suffix={false}
+            className="w-full"
+            style={{ border: 'none', boxShadow: 'none', background: 'transparent' }}
+          />
+        </div>
+        <div className="flex min-h-12 items-center justify-end gap-2 px-2.5 py-2">
           {running ? (
             <button type="button" onClick={() => void stop()} disabled={stopping} aria-label="停止生成" title="停止生成"
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--color-text-primary)] text-white transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
-              {stopping ? <Loader2 size={15} className="animate-spin" /> : <Square size={14} fill="currentColor" />}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-text-primary)] text-white transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50">
+              {stopping ? <Loader2 size={14} className="animate-spin" /> : <Square size={13} fill="currentColor" />}
             </button>
           ) : (
             <button type="button" onClick={() => void send()} disabled={!canSend} aria-label="发送消息" title="发送消息"
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white transition-colors hover:bg-teal-800 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40">
-              <Send size={16} />
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white transition-all hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1">
+              <Send size={14} />
             </button>
           )}
           <button
@@ -344,44 +344,44 @@ export default function SuperAssistantPage() {
             title="我发送的消息 · 快速跳转"
             aria-label="查看我发送的消息"
             aria-expanded={showMessageHistory}
-            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${showMessageHistory
+            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showMessageHistory
               ? 'border-teal-300 bg-teal-50 text-teal-700'
-              : 'border-[var(--color-border)] text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
+              : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
           >
-            <List size={16} />
+            <List size={15} />
           </button>
-          {showMessageHistory && (
-            <>
-              <div className="fixed inset-0 z-20" onClick={() => setShowMessageHistory(false)} />
-              <div data-testid="super-assistant-message-history" className="absolute bottom-full right-0 z-30 mb-5 w-72 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_16px_40px_rgba(15,23,42,0.16)]">
-                <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2.5">
-                  <span className="text-[11px] font-medium text-[var(--color-text-secondary)]">我发送的消息</span>
-                  <span className="text-[10px] text-[var(--color-text-tertiary)]">点击跳转 · 共 {myMessages.length} 条</span>
-                </div>
-                <div className="max-h-64 overflow-y-auto py-1">
-                  {[...myMessages].reverse().map((message, index) => (
-                    <button
-                      type="button"
-                      key={message.id}
-                      onClick={() => jumpToMessage(message.id)}
-                      title={message.content}
-                      className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-bg-hover)] focus-visible:bg-[var(--color-bg-hover)] focus-visible:outline-none"
-                    >
-                      <span className="mt-0.5 shrink-0 font-mono text-[10px] text-[var(--color-text-tertiary)]">#{myMessages.length - index}</span>
-                      <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-secondary)]">{message.content}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
         </div>
+        {showMessageHistory && (
+          <>
+            <div className="fixed inset-0 z-20" onClick={() => setShowMessageHistory(false)} />
+            <div data-testid="super-assistant-message-history" className="absolute bottom-full right-0 z-30 mb-3 w-72 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+              <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
+                <span className="text-[11px] font-medium text-slate-600">我发送的消息</span>
+                <span className="text-[10px] text-slate-400">点击跳转 · 共 {myMessages.length} 条</span>
+              </div>
+              <div className="max-h-64 overflow-y-auto py-1">
+                {[...myMessages].reverse().map((message, index) => (
+                  <button
+                    type="button"
+                    key={message.id}
+                    onClick={() => jumpToMessage(message.id)}
+                    title={message.content}
+                    className="flex w-full items-start gap-2 px-3 py-1.5 text-left transition-colors hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none"
+                  >
+                    <span className="mt-0.5 shrink-0 font-mono text-[10px] text-slate-400">#{myMessages.length - index}</span>
+                    <span className="min-w-0 flex-1 truncate text-xs text-slate-600">{message.content}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
 
   return (
-    <div className="relative flex h-full min-h-0 overflow-hidden bg-[var(--color-bg-base)]">
+    <div className="relative flex h-full min-h-0 overflow-hidden bg-white">
       <WorkbenchSidebar
         conversations={conversations}
         selectedId={selectedId}
@@ -395,7 +395,7 @@ export default function SuperAssistantPage() {
         }}
         onSetArchived={(id, archived) => void setConversationArchived(id, archived)}
       />
-      <section className="flex min-w-0 flex-1 flex-col bg-[var(--color-bg-elevated)]">
+      <section className="flex min-w-0 flex-1 flex-col bg-white">
         <header className="relative z-10 flex h-[4.3125rem] shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 sm:px-4">
           <button
             type="button"
@@ -498,7 +498,7 @@ export default function SuperAssistantPage() {
           </main>
 
           {hasMessages && (
-            <footer className="shrink-0 bg-[var(--color-bg-elevated)] px-4 pb-8 pt-2 sm:px-8 sm:pb-10">
+            <footer className="shrink-0 px-4 pb-8 pt-2 sm:px-8 sm:pb-10">
               <div className="mx-auto max-w-4xl">
                 {renderComposer()}
               </div>

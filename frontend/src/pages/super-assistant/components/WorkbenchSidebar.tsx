@@ -274,7 +274,7 @@ export default function WorkbenchSidebar({
           className="fixed inset-0 z-40 bg-black/30 md:hidden"
         />
       )}
-      <aside className={`${mobileOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-transform duration-300 md:static md:z-auto md:translate-x-0`}>
+      <aside className={`${mobileOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col border-r border-[var(--color-border)] bg-white transition-transform duration-300 md:static md:z-auto md:translate-x-0`}>
         {content}
       </aside>
 
