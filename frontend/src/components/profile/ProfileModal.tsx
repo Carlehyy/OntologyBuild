@@ -469,7 +469,7 @@ export default function ProfileModal({ open, onClose }: { open: boolean; onClose
           <div role="tabpanel" id="profile-panel-env" aria-labelledby="profile-tab-env">
             <section aria-label="私有环境变量">
               <p className="text-xs text-[var(--color-text-tertiary)]">
-                仅本人可见，值加密存储；本期仅保存配置，暂不注入任何执行链路（最多 {ENV_VAR_MAX_ITEMS} 条）
+                仅本人可见，值加密存储。可在接口代理的「URL / 请求头 / 请求体」中以 {'{{env:变量名}}'} 占位符引用，调用时平台以你的身份解析替换（最多 {ENV_VAR_MAX_ITEMS} 条）
               </p>
               <div className="mt-3 space-y-2">
                 {envLoading ? (

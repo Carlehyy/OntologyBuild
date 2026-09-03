@@ -186,30 +186,30 @@ def _build_kwargs(
     iface: dict,
     overrides: RequestOverrides,
 ) -> tuple[dict, dict]:
-    from .privacy_ref import PRIVACY_REF_RE, resolve_privacy_refs
+    from .personal_ref import PERSONAL_REF_RE, resolve_personal_refs
 
     actor = overrides.actor
     orig_url = iface.get("url") or ""
     orig_headers = iface.get("headers", [])
     orig_body = iface.get("body_content", "") or ""
 
-    # Track which values carried a privacy placeholder so the audit snapshot
-    # can mask them as *** after resolution.  Redaction by regex would miss the
-    # plaintext (the placeholder is already gone), so we record up front.
-    url_has_ref = bool(PRIVACY_REF_RE.search(orig_url))
+    # Track which values carried a personal-variable placeholder so the audit
+    # snapshot can mask them as *** after resolution.  Redaction by regex would
+    # miss the plaintext (the placeholder is already gone), so we record up front.
+    url_has_ref = bool(PERSONAL_REF_RE.search(orig_url))
     header_has_ref: set[str] = set()  # lowercased header names
     for item in orig_headers:
-        if isinstance(item, dict) and PRIVACY_REF_RE.search(item.get("value", "") or ""):
+        if isinstance(item, dict) and PERSONAL_REF_RE.search(item.get("value", "") or ""):
             header_has_ref.add((item.get("key") or "").lower())
-    body_has_ref = bool(PRIVACY_REF_RE.search(orig_body))
+    body_has_ref = bool(PERSONAL_REF_RE.search(orig_body))
 
     if actor is not None:
-        resolved_url_raw = resolve_privacy_refs(orig_url, actor)
+        resolved_url_raw = resolve_personal_refs(orig_url, actor)
         resolved_headers = [
-            {**item, "value": resolve_privacy_refs(item.get("value", ""), actor)}
+            {**item, "value": resolve_personal_refs(item.get("value", ""), actor)}
             for item in orig_headers
         ]
-        resolved_body = resolve_privacy_refs(orig_body, actor)
+        resolved_body = resolve_personal_refs(orig_body, actor)
     else:
         resolved_url_raw = orig_url
         resolved_headers = orig_headers
@@ -294,7 +294,8 @@ def _build_kwargs(
 
     kwargs["headers"] = headers or None
 
-    # 审计快照不得记录隐私变量明文。原始值含 {{privacy:}} 的字段，解析后
+    # 审计快照不得记录个人变量（{{privacy:}}/{{env:}}）明文。原始值含占位符的
+    # 字段，解析后
     # 明文已进入 kwargs 发往上游；snapshot 里直接整体置 ***，不再靠正则在明文
     # 里找占位符（占位符解析后已消失，正则必然漏）。
     _MASKED = "***"
@@ -477,16 +478,16 @@ def _save_run(
     if not interface_id:
         return
     if snapshot is None:
-        from .privacy_ref import redact_privacy_refs
+        from .personal_ref import redact_personal_refs
 
         raw_headers_fallback = {
-            item.get("key", ""): redact_privacy_refs(item.get("value", ""))
+            item.get("key", ""): redact_personal_refs(item.get("value", ""))
             for item in iface.get("headers", [])
             if item.get("key")
         }
         snapshot = {
             "method": iface.get("method"),
-            "url": redact_privacy_refs(iface.get("url") or ""),
+            "url": redact_personal_refs(iface.get("url") or ""),
             "query_params": [
                 {
                     "key": item.get("key", ""),
@@ -497,7 +498,7 @@ def _save_run(
             "headers": _snapshot_headers(raw_headers_fallback),
             "body_type": iface.get("body_type"),
             "body_content": _snapshot_body(
-                redact_privacy_refs(iface.get("body_content", ""))
+                redact_personal_refs(iface.get("body_content", ""))
             ),
             "source": overrides.source,
             "proxy_key_name": overrides.proxy_key_name,
