@@ -25,10 +25,10 @@ interface Props {
 
 const methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
 const methodTone: Record<string, string> = {
-  GET: 'text-blue-600 bg-blue-50', POST: 'text-emerald-700 bg-emerald-50',
-  PUT: 'text-amber-700 bg-amber-50', PATCH: 'text-violet-700 bg-violet-50',
-  DELETE: 'text-red-600 bg-red-50', HEAD: 'text-slate-600 bg-slate-100',
-  OPTIONS: 'text-cyan-700 bg-cyan-50',
+  GET: 'text-[var(--color-info)] bg-[var(--color-info-bg)]', POST: 'text-brand-ink bg-brand-soft',
+  PUT: 'text-[var(--color-warning)] bg-[var(--color-warning-bg)]', PATCH: 'text-brand-ink bg-brand-soft',
+  DELETE: 'text-[var(--color-danger)] bg-[var(--color-danger-bg)]', HEAD: 'text-muted-foreground bg-muted',
+  OPTIONS: 'text-[var(--color-info)] bg-[var(--color-info-bg)]',
 }
 
 type PendingNavigation =
@@ -371,7 +371,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
                   setDropTarget({ group, index: 0 })
                 }}
                 onDrop={event => { event.preventDefault(); void moveInterface(group, 0) }}
-                className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide transition-colors ${dropTarget?.group === group && dropTarget.index === 0 ? 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200' : 'text-[var(--color-text-tertiary)]'}`}
+                className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide transition-colors ${dropTarget?.group === group && dropTarget.index === 0 ? 'bg-brand-soft text-brand-ink ring-1 ring-inset ring-brand-line' : 'text-[var(--color-text-tertiary)]'}`}
               >
                 <Folder size={12} />{group || '默认分组'}<span className="ml-auto font-normal">{items.length}</span>
               </div>
@@ -397,10 +397,10 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
                     }}
                     className={`group relative flex min-h-10 w-full items-center rounded-md pr-1 transition-all ${draggingId === item.id ? 'opacity-45' : ''} ${selectedId === item.id ? 'bg-[var(--color-nav-light)]' : 'hover:bg-[var(--color-bg-hover)]'}`}
                   >
-                    {dropTarget?.group === group && dropTarget.index === index && <span className="pointer-events-none absolute inset-x-1 top-0 h-0.5 rounded-full bg-emerald-500" />}
-                    {dropTarget?.group === group && dropTarget.index === index + 1 && <span className="pointer-events-none absolute inset-x-1 bottom-0 h-0.5 rounded-full bg-emerald-500" />}
+                    {dropTarget?.group === group && dropTarget.index === index && <span className="pointer-events-none absolute inset-x-1 top-0 h-0.5 rounded-full bg-brand" />}
+                    {dropTarget?.group === group && dropTarget.index === index + 1 && <span className="pointer-events-none absolute inset-x-1 bottom-0 h-0.5 rounded-full bg-brand" />}
                     <span className="flex h-8 w-5 shrink-0 cursor-grab items-center justify-center text-[var(--color-text-tertiary)] active:cursor-grabbing" title="拖拽调整顺序或移动分组"><GripVertical size={12} /></span>
-                    <button type="button" onClick={() => select(item)} className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500">
+                    <button type="button" onClick={() => select(item)} className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
                       <span className={`w-12 shrink-0 rounded px-1.5 py-0.5 text-center text-[10px] font-bold ${methodTone[item.method] || methodTone.HEAD}`}>{item.method}</span>
                       <span className={`min-w-0 flex-1 truncate text-xs ${selectedId === item.id ? 'font-semibold text-[var(--color-nav-bg)]' : 'text-[var(--color-text-primary)]'}`}>{item.name}</span>
                       {item.http_enabled && <PublicationBadge title="已发布 HTTP 接口" />}
@@ -411,7 +411,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
                       onClick={() => setPublicationTarget(item)}
                       aria-label={`${item.name}：${item.http_enabled ? '查看 HTTP 发布配置' : '发布 HTTP 接口'}`}
                       title={item.http_enabled ? '查看 HTTP 调用方式' : '发布为带鉴权的 HTTP 接口'}
-                      className={`flex h-7 shrink-0 items-center gap-1 rounded px-2 text-[9px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${item.http_enabled ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'border border-dashed border-slate-300 bg-white/70 text-slate-500 hover:border-emerald-300 hover:text-emerald-700'}`}
+                      className={`flex h-7 shrink-0 items-center gap-1 rounded px-2 text-[9px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${item.http_enabled ? 'bg-brand-mist text-brand-ink hover:bg-brand-mist' : 'border border-dashed border-border bg-card text-muted-foreground hover:border-brand-line hover:text-brand-ink'}`}
                     >
                       <Share2 size={11} />{item.http_enabled ? 'HTTP 设置' : 'HTTP 发布'}
                     </button>
@@ -421,18 +421,18 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
             </div>
           ))}
         </div>
-        <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-[var(--color-border)] bg-white/60 px-3 py-[1.125rem]">
+        <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-[var(--color-border)] bg-card px-3 py-[1.125rem]">
           <Button variant="outline" size="sm" onClick={() => setProxyKeys(true)}><KeyRound size={13} />HTTP 调用方</Button>
           <Button variant="outline" size="sm" onClick={() => setSystemData(true)}><Database size={13} />系统数据</Button>
         </div>
       </aside>
 
-      <div onPointerDown={startResize} role="separator" aria-orientation="vertical" aria-label="调整接口清单宽度" className="group flex cursor-col-resize items-center justify-center"><span className="flex h-12 w-3 items-center justify-center rounded-full border border-transparent text-[var(--color-text-tertiary)] transition-colors group-hover:border-teal-200 group-hover:bg-teal-50 group-hover:text-teal-600"><GripVertical size={12} /></span></div>
+      <div onPointerDown={startResize} role="separator" aria-orientation="vertical" aria-label="调整接口清单宽度" className="group flex cursor-col-resize items-center justify-center"><span className="flex h-12 w-3 items-center justify-center rounded-full border border-transparent text-[var(--color-text-tertiary)] transition-colors group-hover:border-brand-line group-hover:bg-brand-soft group-hover:text-brand-ink"><GripVertical size={12} /></span></div>
 
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-sm">
         <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-4 py-3">
           <div className="flex min-w-[430px] flex-[1_1_430px] items-center gap-2">
-            <input value={draft.name} onChange={event => patchDraft('name', event.target.value)} className="h-8 min-w-[180px] max-w-md flex-1 rounded-md border border-[var(--color-border)] bg-white px-3 text-sm font-semibold outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] hover:border-[var(--color-border-hover)] focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" placeholder="接口名称" />
+            <input value={draft.name} onChange={event => patchDraft('name', event.target.value)} className="h-8 min-w-[180px] max-w-md flex-1 rounded-md border border-[var(--color-border)] bg-card px-3 text-sm font-semibold outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] hover:border-[var(--color-border-hover)] focus:border-ring focus:ring-2 focus:ring-ring" placeholder="接口名称" />
             <Select value={draft.group_name || '__default__'} onValueChange={changeGroup}>
               <SelectTrigger className="h-8 w-40 shrink-0 rounded-md text-xs" title="选择或新增分类" aria-label="选择或新增分类">
                 <SelectValue />
@@ -444,20 +444,20 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
               </SelectContent>
             </Select>
             <Button size="sm" loading={saving} onClick={save}><Check size={14} />{draft.id ? '保存配置' : '保存接口'}</Button>
-            {isDirty && <span className="shrink-0 rounded bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-700">未保存</span>}
+            {isDirty && <span className="shrink-0 rounded bg-[var(--color-warning-bg)] px-2 py-1 text-[10px] font-medium text-[var(--color-warning)]">未保存</span>}
           </div>
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
             {draft.id && <Button variant="ghost" size="icon-sm" title="复制为新接口" onClick={() => { setSelectedId(null); setBaseline(emptyHubInterface()); setDraft({ ...structuredClone(draft), id: null, name: `${draft.name} 副本`, mcp_enabled: false, open_enabled: false, http_enabled: false, proxy_slug: '', proxy_query_keys: [], proxy_header_keys: [], proxy_body_enabled: false, proxy_body_keys: [] }); setResult(null); setResultFingerprint(''); setSelectedFiles([]) }}><Copy size={14} /></Button>}
             {draft.id && <Button variant="ghost" size="icon-sm" title="删除接口" className="text-[var(--color-danger)]" onClick={() => setDeleteOpen(true)}><Trash2 size={14} /></Button>}
-            {draft.id && <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => setPublicationTarget(structuredClone(baseline))}><Share2 size={14} />HTTP 发布</Button>}
-            {draft.id && draft.http_enabled && <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" loading={publicationCopying} onClick={copyPublishedExample} aria-label={'复制“' + draft.name + '”的 HTTP 调用示例'}>{publicationCopied ? <Check size={14} /> : <Copy size={14} />}{publicationCopied ? '已复制' : '复制 HTTP 示例'}<span className="sr-only" aria-live="polite">{publicationCopied ? 'HTTP 调用示例复制成功' : ''}</span></Button>}
+            {draft.id && <Button variant="outline" size="sm" className="border-brand-line text-brand-ink hover:bg-brand-soft" onClick={() => setPublicationTarget(structuredClone(baseline))}><Share2 size={14} />HTTP 发布</Button>}
+            {draft.id && draft.http_enabled && <Button variant="outline" size="sm" className="border-brand-line text-brand-ink hover:bg-brand-soft" loading={publicationCopying} onClick={copyPublishedExample} aria-label={'复制“' + draft.name + '”的 HTTP 调用示例'}>{publicationCopied ? <Check size={14} /> : <Copy size={14} />}{publicationCopied ? '已复制' : '复制 HTTP 示例'}<span className="sr-only" aria-live="polite">{publicationCopied ? 'HTTP 调用示例复制成功' : ''}</span></Button>}
             {/* 桥接接口由平台进程内分发，外部 cURL 无法触达，不提供调试示例 */}
-            {!draft.url.trim().startsWith('mcp-bridge://') && <Button variant="outline" size="sm" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => void showCallExample()}><FileCode2 size={14} />上游调试 cURL</Button>}
+            {!draft.url.trim().startsWith('mcp-bridge://') && <Button variant="outline" size="sm" className="border-brand-line text-brand-ink hover:bg-brand-soft" onClick={() => void showCallExample()}><FileCode2 size={14} />上游调试 cURL</Button>}
           </div>
         </div>
 
         <div className="shrink-0 p-4 pb-3">
-          <div className={`flex overflow-hidden rounded-md border bg-[var(--color-bg-base)] focus-within:border-[var(--color-nav-bg)] ${urlError ? 'border-red-300' : 'border-[var(--color-border)]'}`}>
+          <div className={`flex overflow-hidden rounded-md border bg-[var(--color-bg-base)] focus-within:border-[var(--color-nav-bg)] ${urlError ? 'border-[color-mix(in_srgb,var(--color-danger)_40%,transparent)]' : 'border-[var(--color-border)]'}`}>
             <Select value={draft.method} onValueChange={value => patchDraft('method', value)}>
               <SelectTrigger aria-label="请求方法" className="h-10 w-28 shrink-0 rounded-none border-0 border-r border-border bg-transparent px-3 text-xs font-bold shadow-none focus:border-ring focus:ring-0">
                 <SelectValue />
@@ -467,12 +467,12 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
               </SelectContent>
             </Select>
             <input value={draft.url} aria-invalid={Boolean(urlError)} aria-describedby={urlError ? 'api-hub-url-error' : undefined} onChange={event => patchDraft('url', event.target.value)} className="h-10 min-w-0 flex-1 bg-transparent px-3 font-mono text-xs outline-none" placeholder="https://example.com/api/resource" />
-            <button onClick={run} disabled={running} className={`relative m-1 flex min-w-[84px] items-center justify-center gap-1.5 overflow-hidden rounded bg-emerald-600 px-4 text-xs font-semibold text-white shadow-sm transition-all duration-200 hover:-translate-y-px hover:bg-emerald-700 active:translate-y-0 active:scale-[0.98] disabled:cursor-wait disabled:opacity-90 ${running ? 'ring-4 ring-emerald-100' : ''}`}>
+            <button onClick={run} disabled={running} className={`relative m-1 flex min-w-[84px] items-center justify-center gap-1.5 overflow-hidden rounded bg-brand px-4 text-xs font-semibold text-[var(--color-text-inverse)] shadow-sm transition-all duration-200 hover:-translate-y-px hover:bg-brand-deep active:translate-y-0 active:scale-[0.98] disabled:cursor-wait disabled:opacity-90 ${running ? 'ring-4 ring-brand-mist' : ''}`}>
               {running ? <><LoaderCircle size={14} className="animate-spin" />调用中…</> : <><Play size={13} />调用</>}
-              {running && <span className="absolute inset-0 animate-pulse bg-white/10" />}
+              {running && <span className="absolute inset-0 animate-pulse bg-card/10" />}
             </button>
           </div>
-          {urlError && <p id="api-hub-url-error" role="alert" className="mt-2 text-[11px] text-red-600">{urlError}</p>}
+          {urlError && <p id="api-hub-url-error" role="alert" className="mt-2 text-[11px] text-[var(--color-danger)]">{urlError}</p>}
         </div>
 
         <div className="flex shrink-0 items-center border-b border-[var(--color-border)] px-4">
@@ -508,10 +508,10 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
             </div>
           </DialogHeader>
           <div className="space-y-3">
-          <div className="rounded-lg border border-emerald-100 bg-emerald-50/70 px-3 py-2.5 text-xs leading-5 text-slate-600">分类会先保留在本次编辑会话中，保存当前接口后正式生效。</div>
-          <label htmlFor="api-hub-new-group" className="block text-xs font-semibold text-slate-700">分类名称</label>
-          <input id="api-hub-new-group" autoFocus autoComplete="off" value={newGroupName} onChange={event => { setNewGroupName(event.target.value); if (newGroupError) setNewGroupError('') }} onKeyDown={event => { if (event.key === 'Enter') addNewGroup() }} className={`h-10 w-full rounded-lg border bg-white px-3 text-sm outline-none transition-colors focus:ring-2 ${newGroupError ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : 'border-[var(--color-border)] focus:border-emerald-500 focus:ring-emerald-100'}`} placeholder="例如：用户中心 / 订单服务" />
-          {newGroupError && <div role="alert" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{newGroupError}</div>}
+          <div className="rounded-lg border border-brand-line bg-brand-soft px-3 py-2.5 text-xs leading-5 text-muted-foreground">分类会先保留在本次编辑会话中，保存当前接口后正式生效。</div>
+          <label htmlFor="api-hub-new-group" className="block text-xs font-semibold text-foreground">分类名称</label>
+          <input id="api-hub-new-group" autoFocus autoComplete="off" value={newGroupName} onChange={event => { setNewGroupName(event.target.value); if (newGroupError) setNewGroupError('') }} onKeyDown={event => { if (event.key === 'Enter') addNewGroup() }} className={`h-10 w-full rounded-lg border bg-card px-3 text-sm outline-none transition-colors focus:ring-2 ${newGroupError ? 'border-[color-mix(in_srgb,var(--color-danger)_40%,transparent)] focus:border-destructive focus:ring-[var(--color-danger-bg)]' : 'border-[var(--color-border)] focus:border-ring focus:ring-ring'}`} placeholder="例如：用户中心 / 订单服务" />
+          {newGroupError && <div role="alert" className="rounded-md bg-[var(--color-danger-bg)] px-3 py-2 text-xs text-[var(--color-danger)]">{newGroupError}</div>}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={closeNewGroup}>取消</Button>
@@ -530,10 +530,10 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
             </div>
           </DialogHeader>
         <div className="space-y-3.5">
-          <div className="rounded-r-lg border-l-[3px] border-teal-600 bg-teal-50/80 px-3.5 py-2.5 text-xs leading-5 text-slate-600">
+          <div className="rounded-r-lg border-l-[3px] border-brand bg-brand-soft/80 px-3.5 py-2.5 text-xs leading-5 text-muted-foreground">
             此命令直连真实上游地址，仅用于管理员调试；对外系统请使用“HTTP 发布”生成的调用包。CMD / PowerShell / bash 通用。
           </div>
-          <pre aria-label="cURL 命令" className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-[10px] border border-slate-200 bg-slate-50 px-4 py-3.5 font-mono text-[12.5px] leading-[1.7] text-slate-700">{callExample}</pre>
+          <pre aria-label="cURL 命令" className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-[10px] border border-border bg-muted px-4 py-3.5 font-mono text-[12.5px] leading-[1.7] text-foreground">{callExample}</pre>
           <span className="sr-only" role="status" aria-live="polite">
             {callExampleCopyState === 'copied' ? 'cURL 命令已复制' : callExampleCopyState === 'failed' ? '复制失败，请重试' : ''}
           </span>
@@ -541,7 +541,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           <DialogFooter className="justify-center">
             <Button variant="outline" className="min-w-24" onClick={() => setCallExampleDraft(null)}>关闭</Button>
             <Button
-              className={`min-w-24 shadow-sm ${callExampleCopyState === 'failed' ? 'bg-red-600 hover:bg-red-700' : ''}`}
+              className={`min-w-24 shadow-sm ${callExampleCopyState === 'failed' ? 'bg-[var(--color-danger)] hover:bg-[var(--color-danger-hover)]' : ''}`}
               onClick={() => void copyCallExample()}
             >
               {callExampleCopyState === 'copied' ? <Check size={14} /> : <Copy size={14} />}
@@ -562,7 +562,7 @@ function EmptyList({ onCreate }: { onCreate: () => void }) {
 }
 
 function PublicationBadge({ title }: { title: string }) {
-  return <span title={title} className="shrink-0 rounded bg-sky-50 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-sky-700">HTTP</span>
+  return <span title={title} className="shrink-0 rounded bg-[var(--color-info-bg)] px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-[var(--color-info)]">HTTP</span>
 }
 
 function PersonalVarPanel({ privacyVars, envVars }: { privacyVars: PrivacyVar[]; envVars: UserEnvVar[] }) {
@@ -626,7 +626,7 @@ function PersonalVarPanel({ privacyVars, envVars }: { privacyVars: PrivacyVar[];
       {section('隐私变量', 'privacy', privacyVars, <ShieldCheck size={14} />, '当前没有可用的隐私变量。请在「个人资料 → 隐私变量」中创建并通过上报脚本上报值。')}
       {section('环境变量', 'env', envVars, <Braces size={14} />, '当前没有环境变量。请在「个人资料 → 环境变量」中添加。')}
       {copyError && (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-700">
+        <div className="rounded-md border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-3 py-2 text-[11px] leading-5 text-[var(--color-warning)]">
           剪贴板写入失败，请手动复制：<code className="font-mono">{copyError}</code>
         </div>
       )}
@@ -681,37 +681,37 @@ function BodyEditor({
       ) : draft.body_type === 'multipart' ? (
         <div className="grid gap-3 lg:grid-cols-[minmax(240px,0.9fr)_minmax(360px,1.4fr)]">
           <label className="block">
-            <span className="mb-1.5 block text-[11px] font-semibold text-slate-700">文本字段</span>
-            <textarea value={draft.body_content} onChange={event => patchDraft('body_content', event.target.value)} className="h-32 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" placeholder={'description=说明\ncategory=document'} />
-            <span className="mt-1 block text-[10px] leading-4 text-slate-400">每行一个 key=value，调用时与文件一起组成 multipart/form-data。</span>
+            <span className="mb-1.5 block text-[11px] font-semibold text-foreground">文本字段</span>
+            <textarea value={draft.body_content} onChange={event => patchDraft('body_content', event.target.value)} className="h-32 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs outline-none focus:border-ring focus:ring-2 focus:ring-ring" placeholder={'description=说明\ncategory=document'} />
+            <span className="mt-1 block text-[10px] leading-4 text-[var(--color-text-tertiary)]">每行一个 key=value，调用时与文件一起组成 multipart/form-data。</span>
           </label>
           <div>
             <div className="mb-1.5 flex items-center justify-between gap-3">
-              <span className="text-[11px] font-semibold text-slate-700">文件字段</span>
-              <button type="button" onClick={() => { patchDraft('file_fields', [...draft.file_fields, { key: draft.file_fields.length ? `file${draft.file_fields.length + 1}` : 'file', accept: '', multiple: false }]); setSelectedFiles(current => [...current, []]) }} className="flex items-center gap-1 text-[11px] font-medium text-emerald-700 hover:text-emerald-800"><Plus size={12} />添加文件字段</button>
+              <span className="text-[11px] font-semibold text-foreground">文件字段</span>
+              <button type="button" onClick={() => { patchDraft('file_fields', [...draft.file_fields, { key: draft.file_fields.length ? `file${draft.file_fields.length + 1}` : 'file', accept: '', multiple: false }]); setSelectedFiles(current => [...current, []]) }} className="flex items-center gap-1 text-[11px] font-medium text-brand-ink hover:text-brand-ink"><Plus size={12} />添加文件字段</button>
             </div>
             <div className="space-y-2">
               {draft.file_fields.length ? draft.file_fields.map((field, index) => {
                 const files = selectedFiles[index] || []
                 return (
-                  <div key={index} className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">
+                  <div key={index} className="rounded-lg border border-border bg-muted p-2.5">
                     <div className="flex flex-wrap items-center gap-2">
-                      <input aria-label={`第 ${index + 1} 个文件字段名`} value={field.key} onChange={event => updateFileField(index, { key: event.target.value })} className="h-8 min-w-[110px] flex-1 rounded-md border border-slate-200 bg-white px-2.5 font-mono text-xs outline-none focus:border-emerald-500" placeholder="字段名，例如 file" />
-                      <input aria-label={`${field.key || `第 ${index + 1} 个字段`}允许的文件类型`} value={field.accept} onChange={event => updateFileField(index, { accept: event.target.value })} className="h-8 min-w-[150px] flex-[1.3] rounded-md border border-slate-200 bg-white px-2.5 font-mono text-[11px] outline-none focus:border-emerald-500" placeholder=".pdf,image/*（可选）" />
-                      <label className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-emerald-200 bg-white px-2.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50 focus-within:ring-2 focus-within:ring-emerald-200">
+                      <input aria-label={`第 ${index + 1} 个文件字段名`} value={field.key} onChange={event => updateFileField(index, { key: event.target.value })} className="h-8 min-w-[110px] flex-1 rounded-md border border-border bg-card px-2.5 font-mono text-xs outline-none focus:border-ring" placeholder="字段名，例如 file" />
+                      <input aria-label={`${field.key || `第 ${index + 1} 个字段`}允许的文件类型`} value={field.accept} onChange={event => updateFileField(index, { accept: event.target.value })} className="h-8 min-w-[150px] flex-[1.3] rounded-md border border-border bg-card px-2.5 font-mono text-[11px] outline-none focus:border-ring" placeholder=".pdf,image/*（可选）" />
+                      <label className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-brand-line bg-card px-2.5 text-[11px] font-medium text-brand-ink hover:bg-brand-soft focus-within:ring-2 focus-within:ring-ring">
                         <FileUp size={13} />选择文件
                         <input type="file" accept={field.accept || undefined} multiple={field.multiple} className="sr-only" onChange={event => { chooseFiles(index, event.target.files); event.currentTarget.value = '' }} />
                       </label>
-                      <button type="button" onClick={() => removeFileField(index)} aria-label={`删除文件字段 ${field.key || index + 1}`} className="text-slate-400 hover:text-red-600"><X size={14} /></button>
+                      <button type="button" onClick={() => removeFileField(index)} aria-label={`删除文件字段 ${field.key || index + 1}`} className="text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)]"><X size={14} /></button>
                     </div>
                     <div className="mt-2 flex min-h-6 flex-wrap items-center gap-2">
-                      <label className="flex cursor-pointer items-center gap-1.5 text-[10px] text-slate-500"><input type="checkbox" checked={field.multiple} onChange={event => { updateFileField(index, { multiple: event.target.checked }); if (!event.target.checked) setSelectedFiles(current => current.map((items, itemIndex) => itemIndex === index ? items.slice(0, 1) : items)) }} className="accent-emerald-600" />允许多文件</label>
-                      {files.length ? files.map(file => <span key={`${file.name}-${file.lastModified}`} title={file.name} className="max-w-[210px] truncate rounded bg-emerald-50 px-2 py-1 text-[10px] text-emerald-800">{file.name} · {formatFileSize(file.size)}</span>) : <span className="text-[10px] text-slate-400">本次调用尚未选择文件</span>}
-                      {files.length > 0 && <button type="button" onClick={() => chooseFiles(index, null)} className="ml-auto text-[10px] font-medium text-slate-500 hover:text-red-600">清空</button>}
+                      <label className="flex cursor-pointer items-center gap-1.5 text-[10px] text-muted-foreground"><input type="checkbox" checked={field.multiple} onChange={event => { updateFileField(index, { multiple: event.target.checked }); if (!event.target.checked) setSelectedFiles(current => current.map((items, itemIndex) => itemIndex === index ? items.slice(0, 1) : items)) }} className="accent-[var(--color-nav-bg)]" />允许多文件</label>
+                      {files.length ? files.map(file => <span key={`${file.name}-${file.lastModified}`} title={file.name} className="max-w-[210px] truncate rounded bg-brand-soft px-2 py-1 text-[10px] text-brand-ink">{file.name} · {formatFileSize(file.size)}</span>) : <span className="text-[10px] text-[var(--color-text-tertiary)]">本次调用尚未选择文件</span>}
+                      {files.length > 0 && <button type="button" onClick={() => chooseFiles(index, null)} className="ml-auto text-[10px] font-medium text-muted-foreground hover:text-[var(--color-danger)]">清空</button>}
                     </div>
                   </div>
                 )
-              }) : <button type="button" onClick={() => { patchDraft('file_fields', [{ key: 'file', accept: '', multiple: false }]); setSelectedFiles([[]]) }} className="flex h-32 w-full flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 text-slate-500 transition-colors hover:border-emerald-300 hover:bg-emerald-50/50 hover:text-emerald-700"><FileUp size={20} /><span className="mt-2 text-xs font-medium">添加文件上传字段</span><span className="mt-1 text-[10px]">文件只用于本次调用，不会保存到接口配置</span></button>}
+              }) : <button type="button" onClick={() => { patchDraft('file_fields', [{ key: 'file', accept: '', multiple: false }]); setSelectedFiles([[]]) }} className="flex h-32 w-full flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted text-muted-foreground transition-colors hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink"><FileUp size={20} /><span className="mt-2 text-xs font-medium">添加文件上传字段</span><span className="mt-1 text-[10px]">文件只用于本次调用，不会保存到接口配置</span></button>}
             </div>
           </div>
         </div>
@@ -760,25 +760,25 @@ function ResponsePanel({ result, stale, loading }: { result: RunResult | null; s
       <div className="flex h-10 shrink-0 items-center gap-3 border-b border-[var(--color-border)] px-4">
         <span className="text-xs font-semibold text-[var(--color-text-primary)]">响应</span>
         {loading ? (
-          <span className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-700"><LoaderCircle size={12} className="animate-spin" />请求处理中</span>
+          <span className="flex items-center gap-1.5 text-[11px] font-medium text-brand-ink"><LoaderCircle size={12} className="animate-spin" />请求处理中</span>
         ) : result && (
           <>
-            <span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${stale ? 'bg-slate-100 text-slate-500' : result.status_code && result.status_code < 400 ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'}`}>{result.status_code ?? 'ERR'}</span>
+            <span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${stale ? 'bg-muted text-muted-foreground' : result.status_code && result.status_code < 400 ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'}`}>{result.status_code ?? 'ERR'}</span>
             <span className="text-[11px] text-[var(--color-text-tertiary)]">{result.elapsed_ms ?? '—'} ms</span>
-            {response.isJson && <span className="rounded bg-emerald-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-emerald-700">JSON</span>}
-            {stale && <span className="text-[11px] font-medium text-amber-700">请求已修改，此结果已过期</span>}
+            {response.isJson && <span className="rounded bg-brand-soft px-1.5 py-0.5 font-mono text-[10px] font-semibold text-brand-ink">JSON</span>}
+            {stale && <span className="text-[11px] font-medium text-[var(--color-warning)]">请求已修改，此结果已过期</span>}
             {result.relogin && <span className="text-[11px] text-[var(--color-warning)]">已自动重登</span>}
           </>
         )}
         {result && !loading && (
           <div className="ml-auto flex items-center gap-2">
-            {result.download && <button type="button" onClick={downloadResponse} title={`下载 ${result.download.filename}`} className="flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-semibold text-emerald-700 transition-colors hover:bg-emerald-100"><Download size={12} />下载文件</button>}
+            {result.download && <button type="button" onClick={downloadResponse} title={`下载 ${result.download.filename}`} className="flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-brand-line bg-brand-soft px-2.5 text-[11px] font-semibold text-brand-ink transition-colors hover:bg-brand-mist"><Download size={12} />下载文件</button>}
             <button
               type="button"
               onClick={() => void copyResponse()}
               disabled={!copyText}
               title="复制响应内容"
-              className={`flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium transition-all duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 ${copyStatus === 'copied' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : copyStatus === 'failed' ? 'border-red-200 bg-red-50 text-red-600' : 'border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700'}`}
+              className={`flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium transition-all duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 ${copyStatus === 'copied' ? 'border-brand-line bg-brand-soft text-brand-ink' : copyStatus === 'failed' ? 'border-[color-mix(in_srgb,var(--color-danger)_30%,transparent)] bg-[var(--color-danger-bg)] text-[var(--color-danger)]' : 'border-[var(--color-border)] bg-card text-[var(--color-text-secondary)] hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink'}`}
             >
               {copyStatus === 'copied' ? <Check size={12} /> : <Copy size={12} />}
               {copyStatus === 'copied' ? '已复制' : copyStatus === 'failed' ? '复制失败' : '复制'}
@@ -788,11 +788,11 @@ function ResponsePanel({ result, stale, loading }: { result: RunResult | null; s
       </div>
 
       {loading ? (
-        <div className="flex flex-1 flex-col items-center justify-center px-8 text-center"><div className="relative mb-5 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50"><span className="absolute inset-0 animate-ping rounded-full bg-emerald-100 opacity-70" /><LoaderCircle size={22} className="relative animate-spin text-emerald-600" /></div><div className="text-sm font-semibold text-slate-700">正在调用接口</div><div className="mt-1.5 text-xs text-slate-500">正在连接目标服务并等待响应…</div><div className="mt-5 w-full max-w-sm space-y-2"><span className="block h-2 animate-pulse rounded bg-slate-200" /><span className="block h-2 w-4/5 animate-pulse rounded bg-slate-100" /><span className="block h-2 w-3/5 animate-pulse rounded bg-slate-100" /></div></div>
+        <div className="flex flex-1 flex-col items-center justify-center px-8 text-center"><div className="relative mb-5 flex h-12 w-12 items-center justify-center rounded-full bg-brand-soft"><span className="absolute inset-0 animate-ping rounded-full bg-brand-mist opacity-70" /><LoaderCircle size={22} className="relative animate-spin text-brand-ink" /></div><div className="text-sm font-semibold text-foreground">正在调用接口</div><div className="mt-1.5 text-xs text-muted-foreground">正在连接目标服务并等待响应…</div><div className="mt-5 w-full max-w-sm space-y-2"><span className="block h-2 animate-pulse rounded bg-[var(--color-bg-active)]" /><span className="block h-2 w-4/5 animate-pulse rounded bg-muted" /><span className="block h-2 w-3/5 animate-pulse rounded bg-muted" /></div></div>
       ) : !result ? (
         <div className="flex flex-1 items-center justify-center text-xs text-[var(--color-text-tertiary)]"><Send size={18} className="mr-2 opacity-50" />点击“调用”查看响应</div>
       ) : (
-        <div className={`min-h-0 flex-1 animate-fade-in overflow-auto bg-slate-50/60 ${stale ? 'opacity-60' : ''}`}>
+        <div className={`min-h-0 flex-1 animate-fade-in overflow-auto bg-muted ${stale ? 'opacity-60' : ''}`}>
           {result.error && <div className="m-4 mb-3 rounded-md bg-[var(--color-danger-bg)] px-3 py-2 text-xs text-[var(--color-danger)]">{result.error}</div>}
           {response.isJson ? <JsonResponse value={response.text} /> : <pre className="whitespace-pre-wrap break-words p-4 font-mono text-xs leading-6 text-[var(--color-text-primary)]">{response.text || '(空响应体)'}</pre>}
         </div>
@@ -805,8 +805,8 @@ function JsonResponse({ value }: { value: string }) {
   return (
     <div className="min-w-max py-3 font-mono text-xs leading-6">
       {value.split('\n').map((line, index) => (
-        <div key={index} className="grid grid-cols-[3rem_minmax(0,1fr)] hover:bg-emerald-50/60">
-          <span className="select-none border-r border-slate-200 pr-3 text-right text-[10px] text-slate-400">{index + 1}</span>
+        <div key={index} className="grid grid-cols-[3rem_minmax(0,1fr)] hover:bg-brand-soft">
+          <span className="select-none border-r border-border pr-3 text-right text-[10px] text-[var(--color-text-tertiary)]">{index + 1}</span>
           <code className="whitespace-pre px-4">{highlightJsonLine(line)}</code>
         </div>
       ))}
@@ -824,14 +824,14 @@ function highlightJsonLine(line: string) {
     if (index > lastIndex) parts.push(line.slice(lastIndex, index))
     const token = match[0]
     const tone = match[1]
-      ? 'text-emerald-700'
+      ? 'text-brand-ink'
       : match[2]
-        ? 'text-sky-700'
+        ? 'text-[var(--color-info)]'
         : match[3]
-          ? 'font-semibold text-violet-700'
+          ? 'font-semibold text-brand-ink'
           : match[4]
-            ? 'italic text-slate-500'
-            : 'text-amber-700'
+            ? 'italic text-muted-foreground'
+            : 'text-[var(--color-warning)]'
     parts.push(<span key={`${index}-${token}`} className={tone}>{token}</span>)
     lastIndex = index + token.length
   }
