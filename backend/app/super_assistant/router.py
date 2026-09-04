@@ -298,6 +298,13 @@ def preview_palace_file(file_id: str, max_chars: int = Query(60000, le=200000),
                         db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return palace_service.preview_file(db, current_user.id, file_id, max_chars)
 
+@router.get("/palace/files/{file_id}/raw")
+def raw_palace_file(file_id: str, db: Session = Depends(get_db),
+                    current_user: User = Depends(get_current_user)):
+    """原始字节内联读取（中栏图片预览等）；属主校验在 service 层。"""
+    path, media_type, filename = palace_service.raw_file(db, current_user.id, file_id)
+    return FileResponse(path, media_type=media_type, filename=filename, content_disposition_type="inline")
+
 @router.delete("/palace/files/{file_id}", status_code=204)
 def delete_palace_file(file_id: str, db: Session = Depends(get_db),
                        current_user: User = Depends(get_current_user)):

@@ -484,6 +484,10 @@ def request_build(file_row: SuperAssistantPalaceFile) -> dict:
 # 在线编辑只放开纯文本类（md/txt），其余类型走替换上传
 _EDITABLE_EXTENSIONS = ("md", "txt")
 
+# 图片只入库+预览（中栏原图查看），不参与图谱抽取：文件行直接定格 built，
+# 不派发抽取任务。将来接入 VLM 视觉抽取时以模型配置 purpose tag 扩展。
+_IMAGE_EXTENSIONS = ("png", "jpg", "jpeg", "gif", "webp")
+
 
 class PalaceContentUpdate(BaseModel):
     content: str = Field(max_length=5_000_000)
@@ -497,6 +501,10 @@ def _is_editable(filename: str | None) -> bool:
     return _extension_of(filename) in _EDITABLE_EXTENSIONS
 
 
+def _is_image(filename: str | None) -> bool:
+    return _extension_of(filename) in _IMAGE_EXTENSIONS
+
+
 def _allowed_extensions() -> set[str]:
     return {
         item.strip().lower()
@@ -505,24 +513,38 @@ def _allowed_extensions() -> set[str]:
     }
 
 
+def _palace_allowed_extensions() -> set[str]:
+    """记忆宫殿白名单 = 文档白名单 ∪ 图片（图片仅存储与预览）。"""
+    return _allowed_extensions() | set(_IMAGE_EXTENSIONS)
+
+
 def _validate_upload_extension(filename: str | None) -> None:
     extension = _extension_of(filename)
-    if extension not in _allowed_extensions():
+    if extension not in _palace_allowed_extensions():
         raise HTTPException(
             400,
             (
                 f"不支持的文件类型 .{extension}"
-                f"（允许: {settings.allowed_upload_extensions}）"
+                f"（允许: {settings.allowed_upload_extensions}"
+                f",{','.join(_IMAGE_EXTENSIONS)}）"
             ),
         )
 
 
-def _check_quotas(db: Session, owner_id: str, *, extra_bytes: int = 0, extra_files: int = 0) -> None:
+def _check_quotas(
+    db: Session,
+    owner_id: str,
+    *,
+    extra_bytes: int = 0,
+    extra_files: int = 0,
+    reserves_build: bool = True,
+) -> None:
     """上传/替换/在线编辑/重建/批量入口的统一配额闸，超限抛 429。
 
     extra_files/extra_bytes 是本次操作将新增的文件数与字节数（批量导入逐条
-    调用，DB 计数随提交实时增长）。每个调用方都会触发新的抽取，在途与
-    每小时配额按本次 +1 预留；PUT 内容未变的幂等路径不经过本闸。
+    调用，DB 计数随提交实时增长）。reserves_build 表示该文件将触发抽取，
+    在途与每小时配额按本次 +1 预留；图片只入库不抽取，不占用这两项。
+    PUT 内容未变的幂等路径不经过本闸。
     """
     max_files = int(settings.super_assistant_palace_max_files_per_user)
     if extra_files > 0:
@@ -543,6 +565,8 @@ def _check_quotas(db: Session, owner_id: str, *, extra_bytes: int = 0, extra_fil
         max_total_mb = int(settings.super_assistant_palace_max_total_mb)
         if total + extra_bytes > max_total_mb * 1024 * 1024:
             raise HTTPException(429, f"记忆宫殿存储已达上限（{max_total_mb} MB）")
+    if not reserves_build:
+        return
     max_in_flight = int(settings.super_assistant_palace_max_in_flight)
     in_flight = (
         db.query(SuperAssistantPalaceFile)
@@ -571,6 +595,7 @@ def _file_dict(row: SuperAssistantPalaceFile) -> dict:
     return {
         "id": row.id,
         "filename": row.filename,
+        "path": row.folder_path,
         "mimeType": row.mime_type,
         "size": row.size,
         "sha256": row.sha256,
@@ -580,6 +605,7 @@ def _file_dict(row: SuperAssistantPalaceFile) -> dict:
         "entityCount": row.entity_count,
         "relationCount": row.relation_count,
         "editable": _is_editable(row.filename),
+        "isImage": _is_image(row.filename),
         "createdAt": row.created_at,
         "updatedAt": row.updated_at,
     }
@@ -610,21 +636,28 @@ def _discard_artifact(workspace: SessionWorkspace, dir_id: str, artifact_id: str
         logger.warning("记忆宫殿配额回滚删除工作区文件失败（artifact=%s）", artifact_id)
 
 
-def _create_file_row(db: Session, owner_id: str, artifact: dict, *, fallback_name: str) -> SuperAssistantPalaceFile:
+def _create_file_row(
+    db: Session, owner_id: str, artifact: dict, *, fallback_name: str, folder_path: str = "",
+) -> SuperAssistantPalaceFile:
+    filename = str(artifact.get("filename") or fallback_name)
+    image = _is_image(filename)
     row = SuperAssistantPalaceFile(
         owner_id=owner_id,
-        filename=str(artifact.get("filename") or fallback_name),
+        filename=filename,
+        folder_path=folder_path[:500],
         artifact_id=str(artifact.get("id")),
         mime_type=str(artifact.get("mimeType") or "application/octet-stream"),
         size=int(artifact.get("size") or 0),
         sha256=str(artifact.get("sha256") or ""),
         extracted_chars=int(artifact.get("extractedChars") or 0),
-        status="pending",
+        # 图片不参与抽取：直接定格 built，不派发任务
+        status="built" if image else "pending",
     )
     db.add(row)
     db.commit()
     db.refresh(row)
-    request_build(row)
+    if not image:
+        request_build(row)
     return row
 
 
@@ -633,6 +666,7 @@ def upload_file(db: Session, current_user: User, upload: UploadFile) -> dict:
     owner_id = current_user.id
     dir_id = palace_workspace.user_dir_id(owner_id)
     workspace = palace_workspace.user_workspace(owner_id)
+    image = _is_image(upload.filename)
     try:
         artifact = workspace.save_stream(
             dir_id,
@@ -640,11 +674,16 @@ def upload_file(db: Session, current_user: User, upload: UploadFile) -> dict:
             upload.file,
             source="palace-upload",
             mime_type=upload.content_type,
+            extract=not image,
         )
     except WorkspaceError as exc:
         raise HTTPException(422, str(exc)) from exc
     try:
-        _check_quotas(db, owner_id, extra_bytes=int(artifact.get("size") or 0), extra_files=1)
+        _check_quotas(
+            db, owner_id,
+            extra_bytes=int(artifact.get("size") or 0), extra_files=1,
+            reserves_build=not image,
+        )
     except HTTPException:
         _discard_artifact(workspace, dir_id, str(artifact.get("id")))
         raise
@@ -662,15 +701,18 @@ def _replace_artifact_and_rebuild(
     source: str,
     mime_type: str | None,
 ) -> None:
-    """workspace 侧删旧存新 + DB 行重置为 pending + 投递抽取。"""
+    """workspace 侧删旧存新 + DB 行重置 + 派发抽取；图片定格 built 不派发。"""
     # 先卡大小再删旧 artifact，避免落盘失败把文件行留在坏状态
     if len(data) > int(settings.max_upload_mb) * 1024 * 1024:
         raise HTTPException(422, f"文件超过大小限制 {settings.max_upload_mb}MB")
     workspace = palace_workspace.user_workspace(row.owner_id)
     dir_id = palace_workspace.user_dir_id(row.owner_id)
+    image = _is_image(filename)
     try:
         workspace.delete_file(dir_id, row.artifact_id)
-        artifact = workspace.save_bytes(dir_id, filename, data, source=source, mime_type=mime_type)
+        artifact = workspace.save_bytes(
+            dir_id, filename, data, source=source, mime_type=mime_type, extract=not image,
+        )
     except WorkspaceError as exc:
         raise HTTPException(422, str(exc)) from exc
     row.filename = str(artifact.get("filename") or filename)
@@ -679,11 +721,18 @@ def _replace_artifact_and_rebuild(
     row.size = int(artifact.get("size") or 0)
     row.sha256 = str(artifact.get("sha256") or "")
     row.extracted_chars = int(artifact.get("extractedChars") or 0)
-    row.status = "pending"
-    row.error = None
+    if image:
+        row.status = "built"
+        row.error = None
+        row.entity_count = 0
+        row.relation_count = 0
+    else:
+        row.status = "pending"
+        row.error = None
     db.commit()
     db.refresh(row)
-    request_build(row)
+    if not image:
+        request_build(row)
 
 
 def update_file_content(db: Session, owner_id: str, file_id: str, content: str) -> dict:
@@ -716,11 +765,13 @@ def _read_capped(stream, *, max_bytes: int) -> bytes:
 
 
 def replace_file(db: Session, owner_id: str, file_id: str, upload: UploadFile) -> dict:
-    """替换上传（任意白名单类型）：保留文件行身份，重置抽取状态。"""
+    """替换上传（任意白名单类型）：保留文件行身份与目录，重置抽取状态。"""
     row = _owned_file(db, owner_id, file_id)
     _validate_upload_extension(upload.filename)
     data = _read_capped(upload.file, max_bytes=int(settings.max_upload_mb) * 1024 * 1024)
-    _check_quotas(db, owner_id, extra_bytes=len(data) - row.size)
+    _check_quotas(
+        db, owner_id, extra_bytes=len(data) - row.size, reserves_build=not _is_image(upload.filename),
+    )
     _replace_artifact_and_rebuild(
         db, row, data,
         filename=upload.filename or row.filename,
@@ -728,6 +779,18 @@ def replace_file(db: Session, owner_id: str, file_id: str, upload: UploadFile) -
         mime_type=upload.content_type,
     )
     return _file_dict(row)
+
+
+def raw_file(db: Session, owner_id: str, file_id: str) -> tuple[Path, str, str]:
+    """原始字节读取（中栏图片预览）：返回（工作区路径, mime, 文件名）。"""
+    row = _owned_file(db, owner_id, file_id)
+    try:
+        _, path = palace_workspace.user_workspace(owner_id).require_file(
+            palace_workspace.user_dir_id(owner_id), row.artifact_id,
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return path, row.mime_type or "application/octet-stream", row.filename
 
 
 def preview_file(db: Session, owner_id: str, file_id: str, max_chars: int) -> dict:
@@ -791,18 +854,21 @@ def _decode_zip_names(infos: list[zipfile.ZipInfo]) -> list[str]:
 
 
 def batch_import_files(db: Session, current_user: User, archive: UploadFile) -> dict:
-    """ZIP 批量导入：逐条走与 upload 相同的落盘+DB+投递流程，受配额约束。"""
+    """ZIP 批量导入：以压缩包名（去扩展名）为顶层目录，保留包内相对层级；
+    逐条走与 upload 相同的落盘+DB+投递流程，受配额约束。"""
     if _extension_of(archive.filename) != "zip":
         raise HTTPException(400, "仅支持 .zip 压缩包")
     owner_id = current_user.id
     dir_id = palace_workspace.user_dir_id(owner_id)
     workspace = palace_workspace.user_workspace(owner_id)
+    root_folder = (Path(archive.filename or "").stem or "").strip()[:200] or "导入文件"
     try:
         zf = zipfile.ZipFile(archive.file)
     except (zipfile.BadZipFile, OSError) as exc:
         raise HTTPException(400, "压缩包解析失败，请确认上传的是有效的 .zip 文件") from exc
     max_entry_bytes = int(settings.max_upload_mb) * 1024 * 1024
     max_batch_files = int(settings.super_assistant_palace_batch_max_files)
+    allowed = _palace_allowed_extensions()
     created: list[dict] = []
     skipped: list[dict] = []
     accepted = 0
@@ -816,46 +882,61 @@ def batch_import_files(db: Session, current_user: User, archive: UploadFile) -> 
         for name, info in zip(decoded, infos):
             info_by_name.setdefault(name, info)
         for name in _batch_candidates(decoded):
-            display = Path(name).name or name
+            parts = name.split("/")
+            display = parts[-1]
+            # 展示用相对路径（不含压缩包根），跳过原因能定位到具体条目
+            entry_display = "/".join(parts)
+            folder_path = "/".join([root_folder, *parts[:-1]])
             if quota_reason is not None:  # 配额超限后剩余条目全部跳过
-                skipped.append({"filename": display, "reason": quota_reason})
+                skipped.append({"filename": entry_display, "reason": quota_reason})
                 continue
             extension = _extension_of(display)
-            if extension not in _allowed_extensions():
+            if extension not in allowed:
                 skipped.append({
-                    "filename": display,
-                    "reason": f"不支持的类型 .{extension}（允许: {settings.allowed_upload_extensions}）",
+                    "filename": entry_display,
+                    "reason": f"不支持的类型 .{extension}（允许: {settings.allowed_upload_extensions}"
+                              f",{','.join(_IMAGE_EXTENSIONS)}）",
                 })
                 continue
             if accepted >= max_batch_files:
-                skipped.append({"filename": display, "reason": f"超出单次导入数量上限（{max_batch_files}）"})
+                skipped.append({"filename": entry_display, "reason": f"超出单次导入数量上限（{max_batch_files}）"})
+                continue
+            if len(folder_path) > 500:
+                skipped.append({"filename": entry_display, "reason": "条目路径过长"})
                 continue
             info = info_by_name.get(name)
             if info is None:  # 理论不可达：candidates 全部来自 decoded
                 continue
+            image = extension in _IMAGE_EXTENSIONS
             try:
-                _check_quotas(db, owner_id, extra_bytes=int(info.file_size), extra_files=1)
+                _check_quotas(
+                    db, owner_id, extra_bytes=int(info.file_size), extra_files=1,
+                    reserves_build=not image,
+                )
             except HTTPException as exc:
                 quota_reason = str(exc.detail)
-                skipped.append({"filename": display, "reason": quota_reason})
+                skipped.append({"filename": entry_display, "reason": quota_reason})
                 continue
             try:
                 # 按流读取并设上限，阻断声明尺寸造假的 zip 炸弹
                 data = _read_capped(zf.open(info), max_bytes=max_entry_bytes)
             except HTTPException:
-                skipped.append({"filename": display, "reason": f"超过大小限制（{settings.max_upload_mb}MB）"})
+                skipped.append({"filename": entry_display, "reason": f"超过大小限制（{settings.max_upload_mb}MB）"})
                 continue
             except (RuntimeError, OSError, zipfile.BadZipFile) as exc:
-                skipped.append({"filename": display, "reason": f"条目读取失败：{exc}"})
+                skipped.append({"filename": entry_display, "reason": f"条目读取失败：{exc}"})
                 continue
             try:
                 artifact = workspace.save_bytes(
                     dir_id, display, data, source="palace-batch", mime_type=None,
+                    extract=not image,
                 )
             except WorkspaceError as exc:
-                skipped.append({"filename": display, "reason": str(exc)})
+                skipped.append({"filename": entry_display, "reason": str(exc)})
                 continue
-            created.append(_file_dict(_create_file_row(db, owner_id, artifact, fallback_name=display)))
+            created.append(_file_dict(_create_file_row(
+                db, owner_id, artifact, fallback_name=display, folder_path=folder_path,
+            )))
             accepted += 1
     return {"created": created, "skipped": skipped}
 
@@ -879,6 +960,8 @@ def delete_palace_file(db: Session, owner_id: str, file_id: str) -> None:
 
 def rebuild_file(db: Session, owner_id: str, file_id: str) -> dict:
     row = _owned_file(db, owner_id, file_id)
+    if _is_image(row.filename):
+        raise HTTPException(400, "图片文件不参与图谱抽取，无需重建")
     if row.status in {"pending", "building"}:
         raise HTTPException(409, "该文件正在抽取队列中，请稍候")
     _check_quotas(db, owner_id)

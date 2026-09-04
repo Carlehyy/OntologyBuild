@@ -682,9 +682,10 @@ def test_super_assistant_openapi_matches_pre_extraction_baseline():
     # 记忆宫殿（用户级文件库 + 知识图谱）新增 /palace/files 的 list/upload、
     # /palace/files/{id} 的 delete、/palace/files/{id}/rebuild 与
     # /palace/graph 的 GET 共 5 个操作（4 条路径）；第二批新增 ZIP 批量导入、
-    # 内容更新(PUT)/替换/预览、图谱检索与聚类合并 6 个操作（6 条路径）
-    assert len(paths) == 39
-    assert sum(len(item) for item in paths.values()) == 54
+    # 内容更新(PUT)/替换/预览、图谱检索与聚类合并 6 个操作（6 条路径）；
+    # 三栏重构新增 /palace/files/{id}/raw 原始字节内联读取（图片预览）
+    assert len(paths) == 40
+    assert sum(len(item) for item in paths.values()) == 55
     assert hashlib.sha256(payload).hexdigest() == (
-        "3edcc469b71a743dd8aa2621aa4471286a79598dcc2656ca31d573156af33dc6"
+        "eec8e36d5ed979bdf23703f5ac284a36355a442b66d1fe1283e8d9d8fafcaf68"
     )

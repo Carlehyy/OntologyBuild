@@ -273,6 +273,7 @@ def owner_graph(owner_id: str, *, node_limit: int = 300) -> dict[str, Any]:
             RETURN n.merge_key AS id, n.name AS name, n.type AS type,
                    coalesce(n.aliases, []) AS aliases,
                    coalesce(n.source_files, []) AS source_files,
+                   coalesce(n.file_ids, []) AS file_ids,
                    coalesce(n.mention_count, 0) AS mention_count,
                    coalesce(n.match_count, 0) AS match_count
             """,
@@ -294,7 +295,8 @@ def owner_graph(owner_id: str, *, node_limit: int = 300) -> dict[str, Any]:
                 MATCH (s:{_NODE_LABEL} {{owner_id: $owner_id}})-[r:{_REL_TYPE}]->(t:{_NODE_LABEL})
                 WHERE s.merge_key IN $ids AND t.merge_key IN $ids
                 RETURN s.merge_key AS source, t.merge_key AS target,
-                       r.name AS name, coalesce(r.source_files, []) AS source_files
+                       r.name AS name, coalesce(r.source_files, []) AS source_files,
+                       coalesce(r.file_ids, []) AS file_ids
                 LIMIT $edge_limit
                 """,
                 {"owner_id": owner_id, "ids": ids, "edge_limit": int(node_limit) * 4},
@@ -303,6 +305,9 @@ def owner_graph(owner_id: str, *, node_limit: int = 300) -> dict[str, Any]:
         service.close()
     for node in nodes:
         node["source_files"] = _dedupe_str_list(node.get("source_files"))
+        node["file_ids"] = _dedupe_str_list(node.get("file_ids"))
+    for edge in edges:
+        edge["file_ids"] = _dedupe_str_list(edge.get("file_ids"))
     return {
         "nodes": nodes,
         "edges": edges,
@@ -336,6 +341,7 @@ def search(
             RETURN n.merge_key AS id, n.name AS name, n.type AS type,
                    coalesce(n.aliases, []) AS aliases,
                    coalesce(n.source_files, []) AS source_files,
+                   coalesce(n.file_ids, []) AS file_ids,
                    coalesce(n.match_count, 0) AS match_count
             """,
             {"owner_id": owner_id, "limit": int(max_scan)},
@@ -344,6 +350,7 @@ def search(
         service.close()
     for row in rows:
         row["source_files"] = _dedupe_str_list(row.get("source_files"))
+        row["file_ids"] = _dedupe_str_list(row.get("file_ids"))
 
     def score(row: dict[str, Any]) -> int:
         name = str(row.get("name") or "").casefold()
@@ -379,7 +386,8 @@ def search(
             WHERE s.merge_key IN $ids
             RETURN DISTINCT s.merge_key AS source, t.merge_key AS target,
                             s.name AS source_name, t.name AS target_name,
-                            r.name AS name, coalesce(r.source_files, []) AS source_files
+                            r.name AS name, coalesce(r.source_files, []) AS source_files,
+                            coalesce(r.file_ids, []) AS file_ids
             LIMIT 40
             """,
             {"owner_id": owner_id, "ids": anchor_ids},
@@ -388,6 +396,7 @@ def search(
         service.close()
     for relation in relations:
         relation["source_files"] = _dedupe_str_list(relation.get("source_files"))
+        relation["file_ids"] = _dedupe_str_list(relation.get("file_ids"))
     neighbor_ids = list(dict.fromkeys(
         [item["source"] for item in relations] + [item["target"] for item in relations]
     ))
