@@ -418,7 +418,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
 
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
-      <DialogContent className="flex h-[min(88dvh,880px)] w-[min(96vw,80rem)] flex-col overflow-hidden">
+      <DialogContent className="flex h-[min(88dvh,880px)] w-[min(96vw,88rem)] flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Brain size={16} className="text-teal-700" /> 记忆宫殿
@@ -433,7 +433,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
           上传的文档沉淀为跨会话长期知识：自动抽取实体关系构建图谱，选中文件可阅读编辑，图谱与文档双向联动。
         </p>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto lg:grid-cols-[248px_minmax(0,1fr)_384px] lg:overflow-hidden">
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto lg:grid-cols-[248px_minmax(0,1fr)_clamp(400px,32vw,500px)] lg:overflow-hidden">
           {/* 左：文件树 */}
           <aside
             aria-label="记忆宫殿文件库"
