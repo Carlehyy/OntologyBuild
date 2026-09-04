@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { motion, useReducedMotion } from 'motion/react'
 import {
   AlertCircle, AlertTriangle, ArrowRight, Boxes, CheckCircle2, ChevronLeft,
@@ -13,7 +14,7 @@ import curatedApi from '@/api/v2/curated'
 import datasetsApi from '@/api/v2/datasets'
 import { AnimatedNumber } from '@/components/motion-ui/animated-number'
 import { SPRING_LAYOUT } from '@/components/motion-ui/ease'
-import { Modal } from '@/components/ui/Modal'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/Button'
 import {
   appliedDatasetVersionId, appliedLinkVersionId, datasetReviewState,
@@ -263,7 +264,16 @@ function DatasetPreviewDialog({ dataset, onClose }: { dataset: MappingDataset; o
         </div>
 
         <footer className="dmo-preview-footer">
-          <label>每页<select value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }} aria-label="数据预览每页显示条数">{PREVIEW_PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select>行</label>
+          <label className="flex items-center gap-1">每页
+            <Select value={String(pageSize)} onValueChange={value => { setPageSize(Number(value)); setPage(1) }}>
+              <SelectTrigger className="h-7 w-20 rounded-md px-2 text-xs" aria-label="数据预览每页显示条数">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PREVIEW_PAGE_SIZES.map(size => <SelectItem key={size} value={String(size)}>{size}</SelectItem>)}
+              </SelectContent>
+            </Select>行
+          </label>
           <span className="dmo-preview-range">{rangeStart === 0 ? `0 / ${totalRows.toLocaleString()}` : `${rangeStart}–${rangeEnd} / ${totalRows.toLocaleString()}`} 行</span>
           <div className="dmo-preview-pagination">
             <button type="button" onClick={() => setPage(current => Math.max(1, current - 1))} disabled={page <= 1 || previewQuery.isFetching} aria-label="上一页"><ChevronLeft size={14} /></button>
@@ -800,7 +810,7 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
         <button
           type="button"
           onClick={() => void data.refetch()}
-          className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
+          className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-card px-3 py-1.5 text-xs font-medium text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-danger)]"
         >
           重新加载
         </button>
@@ -1007,14 +1017,17 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
         />
       )}
       {previewDataset && <DatasetPreviewDialog key={previewDataset.id} dataset={previewDataset} onClose={() => setPreviewDataset(null)} />}
-      <Modal
-        open={reconcileTarget !== null}
-        onClose={() => setReconcileTarget(null)}
-        title="确认重新灌入数据"
-        size="sm"
-        backdropClassName="dmo-reconcile-backdrop"
-        footer={(
-          <>
+      <Dialog open={reconcileTarget !== null} onOpenChange={next => { if (!next) setReconcileTarget(null) }}>
+        <DialogContent className="w-[min(92vw,26rem)]">
+          <DialogHeader>
+            <div className="min-w-0 pt-0.5">
+              <DialogTitle>确认重新灌入数据</DialogTitle>
+            </div>
+          </DialogHeader>
+          <p className="dmo-reconcile-confirm-text">
+            将从绑定数据集的最新已批准版本读取数据，重写「{reconcileTarget?.name}」的对象与关系实例；灌入后按当前发布结构触发哨兵评估。已存在的实例会被新版本数据覆盖更新。
+          </p>
+          <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setReconcileTarget(null)}>取消</Button>
             <Button
               type="button"
@@ -1024,13 +1037,9 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
                 if (target?.mappingId) void reconcileApprovedData(target.mappingId)
               }}
             >确认灌入</Button>
-          </>
-        )}
-      >
-        <p className="dmo-reconcile-confirm-text">
-          将从绑定数据集的最新已批准版本读取数据，重写「{reconcileTarget?.name}」的对象与关系实例；灌入后按当前发布结构触发哨兵评估。已存在的实例会被新版本数据覆盖更新。
-        </p>
-      </Modal>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }

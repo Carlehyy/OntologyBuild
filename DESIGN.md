@@ -69,6 +69,10 @@ success `--color-success #2d8a4e` · warning `#c9861a` · danger
 状态表达优先「浅底 + 深字」组合，而非大面积实色。
 代码/命令展示块统一用深色面板 `--color-code-bg` / `--color-code-fg`
 （明暗两态近同的近黑底），替代页域私设的 `bg-slate-950` 类色板。
+类型编码色（图例、类型徽章、结构图节点等分类数据可视化）使用
+`viz-*` 分类色组（violet/fuchsia/rose/orange/indigo/cyan 及各自 -soft
+浅底），取值与 §5 图表序列同源、`:root`/`.dark` 成对维护；禁止在页面
+直接使用 Tailwind 默认色板表达类型编码。
 
 ### 2.4 使用规则
 

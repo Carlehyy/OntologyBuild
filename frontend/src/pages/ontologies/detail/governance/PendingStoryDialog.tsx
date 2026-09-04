@@ -42,7 +42,7 @@ export default function PendingStoryDialog({
     <Dialog open={Boolean(target)} onOpenChange={open => { if (!open) onClose() }}>
       <DialogContent className="max-h-[92vh] w-[min(94vw,46rem)] overflow-y-auto">
         <DialogHeader>
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--color-info-bg)] text-[var(--color-info)]">
             <HandMetal size={19} />
           </span>
           <div>
@@ -87,7 +87,7 @@ export default function PendingStoryDialog({
                 loading={busy}
                 disabled={!canDecide}
                 title={canDecide ? undefined : '仅管理员可执行审批'}
-                className="shadow-sm shadow-emerald-900/10"
+                className="shadow-sm"
               >
                 批准并执行
               </Button>

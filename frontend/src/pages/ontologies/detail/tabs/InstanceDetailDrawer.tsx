@@ -89,33 +89,33 @@ export default function InstanceDetailDrawer({
         </SheetHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-          <section aria-label="基本信息" className="rounded-xl border border-slate-100 bg-slate-50/60 px-4 py-3">
+          <section aria-label="基本信息" className="rounded-xl border border-border bg-muted px-4 py-3">
             <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-y-2 text-xs">
-              <dt className="text-slate-400">外部 ID</dt>
-              <dd className="truncate font-mono text-[11px] text-slate-600" title={row.externalId || undefined}>
+              <dt className="text-[var(--color-text-tertiary)]">外部 ID</dt>
+              <dd className="truncate font-mono text-[11px] text-muted-foreground" title={row.externalId || undefined}>
                 {row.externalId || '—'}
               </dd>
-              <dt className="text-slate-400">来源</dt>
+              <dt className="text-[var(--color-text-tertiary)]">来源</dt>
               <dd><SourceChip source={row.source} /></dd>
-              <dt className="text-slate-400">创建时间</dt>
-              <dd className="tabular-nums text-slate-600">{formatInstanceDateTime(row.createdAt)}</dd>
-              <dt className="text-slate-400">更新时间</dt>
-              <dd className="tabular-nums text-slate-600">{formatInstanceDateTime(row.updatedAt)}</dd>
+              <dt className="text-[var(--color-text-tertiary)]">创建时间</dt>
+              <dd className="tabular-nums text-muted-foreground">{formatInstanceDateTime(row.createdAt)}</dd>
+              <dt className="text-[var(--color-text-tertiary)]">更新时间</dt>
+              <dd className="tabular-nums text-muted-foreground">{formatInstanceDateTime(row.updatedAt)}</dd>
             </dl>
           </section>
 
           <section aria-label="属性值" className="mt-4">
-            <h3 className="text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-400">属性值</h3>
-            <dl className="mt-2 divide-y divide-slate-100 rounded-xl border border-slate-100">
+            <h3 className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-tertiary)]">属性值</h3>
+            <dl className="mt-2 divide-y border-border rounded-xl border border-border">
               {columns.map(column => (
                 <div
                   key={`${column.computed ? 'computed' : 'stored'}:${column.name}`}
                   className="px-4 py-2.5"
                 >
-                  <dt className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                  <dt className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]">
                     <span>{column.label}</span>
                     {column.computed && (
-                      <span className="rounded bg-violet-50 px-1 py-0.5 text-[9px] text-violet-600">派生</span>
+                      <span className="rounded bg-viz-violet-soft px-1 py-0.5 text-[9px] text-viz-violet">派生</span>
                     )}
                   </dt>
                   <dd className="mt-0.5 overflow-x-auto text-xs">
@@ -132,46 +132,46 @@ export default function InstanceDetailDrawer({
           </section>
 
           <section aria-label="事实历史" className="mt-5">
-            <h3 className="text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-400">
+            <h3 className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-tertiary)]">
               事实历史
-              <span className="ml-1.5 font-normal normal-case tracking-normal text-slate-300">属性级变更,时间倒序</span>
+              <span className="ml-1.5 font-normal normal-case tracking-normal text-[var(--color-text-tertiary)]">属性级变更,时间倒序</span>
             </h3>
             {factsQuery.isLoading ? (
-              <p className="flex items-center gap-2 py-4 text-xs text-slate-400">
-                <Loader2 size={13} className="animate-spin text-teal-600" /> 正在加载事实历史…
+              <p className="flex items-center gap-2 py-4 text-xs text-[var(--color-text-tertiary)]">
+                <Loader2 size={13} className="animate-spin text-brand-ink" /> 正在加载事实历史…
               </p>
             ) : factsQuery.isError ? (
-              <p className="flex items-center gap-2 py-4 text-xs text-red-600" role="alert">
+              <p className="flex items-center gap-2 py-4 text-xs text-[var(--color-danger)]" role="alert">
                 <AlertCircle size={13} /> 事实历史加载失败
                 <button
                   type="button"
                   onClick={() => void factsQuery.refetch()}
-                  className="inline-flex items-center gap-1 font-medium text-teal-700 hover:underline"
+                  className="inline-flex items-center gap-1 font-medium text-brand-ink hover:underline"
                 >
                   <RefreshCw size={11} /> 重试
                 </button>
               </p>
             ) : !facts.length ? (
-              <p className="py-4 text-xs text-slate-400">暂无事实记录</p>
+              <p className="py-4 text-xs text-[var(--color-text-tertiary)]">暂无事实记录</p>
             ) : (
               <>
                 <ul className="mt-2 space-y-2.5" data-testid="instance-facts-list">
                   {facts.map(fact => (
-                    <li key={fact.id} className="rounded-lg border border-slate-100 bg-slate-50/60 px-2.5 py-2">
+                    <li key={fact.id} className="rounded-lg border border-border bg-muted px-2.5 py-2">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 ring-1 ring-slate-200">
+                        <span className="rounded bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground ring-1 ring-[var(--color-border-hover)]">
                           {instanceFactKindLabel(fact.kind)}
                         </span>
-                        <time className="text-[10px] tabular-nums text-slate-400">
+                        <time className="text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
                           {fact.recordedAt ? formatInstanceDateTime(fact.recordedAt) : '—'}
                         </time>
                       </div>
-                      <p className="mt-1.5 break-all text-xs leading-5 text-slate-700">
-                        <span className="font-mono text-[11px] text-slate-500">{fact.propertyName}</span>
+                      <p className="mt-1.5 break-all text-xs leading-5 text-foreground">
+                        <span className="font-mono text-[11px] text-muted-foreground">{fact.propertyName}</span>
                         {' → '}
                         {fact.present === false ? '—（已删除）' : factValueText(fact.value)}
                       </p>
-                      <p className="mt-1 text-[10px] text-slate-400">来源:{instanceSourceLabel(fact.source)}</p>
+                      <p className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">来源:{instanceSourceLabel(fact.source)}</p>
                     </li>
                   ))}
                 </ul>
@@ -181,7 +181,7 @@ export default function InstanceDetailDrawer({
                     data-testid="instance-facts-load-more"
                     onClick={() => void factsQuery.fetchNextPage()}
                     disabled={factsQuery.isFetchingNextPage}
-                    className="mt-3 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-wait disabled:opacity-60"
+                    className="mt-3 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-card text-xs font-medium text-muted-foreground transition hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink disabled:cursor-wait disabled:opacity-60"
                   >
                     {factsQuery.isFetchingNextPage
                       ? <Loader2 size={12} className="animate-spin" />

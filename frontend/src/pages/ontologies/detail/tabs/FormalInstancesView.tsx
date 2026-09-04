@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Link as RouterLink, useSearchParams } from 'react-router-dom'
 import {
   AlertCircle,
@@ -17,7 +18,7 @@ import {
   X,
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
-import { ConfirmModal } from '@/components/ui/Modal'
+import { ConfirmDialog } from '../../ConfirmDialog'
 import { useToast } from '@/components/ui/Toast'
 import { useAuthStore } from '@/stores/authStore'
 import type {
@@ -360,8 +361,8 @@ export default function FormalInstancesView({
 
   if (catalogQuery.isLoading) {
     return (
-      <div className="flex h-full min-h-[420px] items-center justify-center gap-2 text-sm text-slate-400">
-        <Loader2 size={18} className="animate-spin text-teal-600" />
+      <div className="flex h-full min-h-[420px] items-center justify-center gap-2 text-sm text-[var(--color-text-tertiary)]">
+        <Loader2 size={18} className="animate-spin text-brand-ink" />
         正在读取当前发布版本的实例目录…
       </div>
     )
@@ -371,7 +372,7 @@ export default function FormalInstancesView({
     // 尚未发布不是故障:给出旅程引导(建模→映射→发布),而不是永远失败的重试。
     if (errorCode(catalogQuery.error) === 'current_release_missing') {
       return (
-        <div className="h-full min-h-[420px] bg-white">
+        <div className="h-full min-h-[420px] bg-card">
           <EmptyData
             icon={<Boxes size={28} />}
             title="当前本体还没有发布版本"
@@ -380,7 +381,7 @@ export default function FormalInstancesView({
               <button
                 type="button"
                 onClick={onOpenVersions}
-                className="inline-flex h-8 items-center rounded-lg bg-teal-600 px-3 text-xs font-medium text-white transition hover:bg-teal-700"
+                className="inline-flex h-8 items-center rounded-lg bg-brand px-3 text-xs font-medium text-[var(--color-text-inverse)] transition hover:bg-brand-deep"
               >
                 查看版本演进
               </button>
@@ -392,13 +393,13 @@ export default function FormalInstancesView({
     return (
       <div className="flex h-full min-h-[420px] items-center justify-center p-8">
         <div className="max-w-md text-center">
-          <AlertCircle size={30} className="mx-auto text-red-400" />
-          <p className="mt-3 text-sm font-medium text-slate-800">实例目录加载失败</p>
-          <p className="mt-1 text-xs leading-5 text-slate-500">{errorMessage(catalogQuery.error)}</p>
+          <AlertCircle size={30} className="mx-auto text-[var(--color-danger)]" />
+          <p className="mt-3 text-sm font-medium text-foreground">实例目录加载失败</p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">{errorMessage(catalogQuery.error)}</p>
           <button
             type="button"
             onClick={() => void catalogQuery.refetch()}
-            className="mt-4 inline-flex h-8 items-center gap-1.5 rounded-lg bg-teal-600 px-3 text-xs font-medium text-white hover:bg-teal-700"
+            className="mt-4 inline-flex h-8 items-center gap-1.5 rounded-lg bg-brand px-3 text-xs font-medium text-[var(--color-text-inverse)] hover:bg-brand-deep"
           >
             <RefreshCw size={12} /> 重试
           </button>
@@ -408,7 +409,7 @@ export default function FormalInstancesView({
   }
 
   return (
-    <div className="min-h-full bg-white">
+    <div className="min-h-full bg-card">
       <div className="mx-auto flex min-h-full max-w-[1600px] flex-col gap-5 p-5">
         {/* ① 数据概览：KPI + 类型分布/来源构成/近7天活动（复用已加载数据） */}
         {catalog && (
@@ -426,15 +427,15 @@ export default function FormalInstancesView({
             目录与表格同行（目录撑满行高、竖向分割线贯通到底）。移动端正文顺序即堆叠顺序。 */}
         <div
           ref={browserRef}
-          className="grid shrink-0 grid-cols-1 rounded-xl border border-slate-200 md:grid-cols-[minmax(230px,280px)_minmax(0,1fr)] md:grid-rows-[auto_minmax(0,1fr)]"
+          className="grid shrink-0 grid-cols-1 rounded-xl border border-border md:grid-cols-[minmax(230px,280px)_minmax(0,1fr)] md:grid-rows-[auto_minmax(0,1fr)]"
         >
-      <div className="flex items-center rounded-t-xl border-b border-slate-200 bg-slate-50/70 px-4 py-3.5 md:col-start-1 md:row-start-1 md:rounded-tr-none md:border-r">
+      <div className="flex items-center rounded-t-xl border-b border-border bg-muted px-4 py-3.5 md:col-start-1 md:row-start-1 md:rounded-tr-none md:border-r">
         <div className="flex w-full items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-            <Database size={15} className="text-teal-600" />
+          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Database size={15} className="text-brand-ink" />
             实体模型目录
           </div>
-          <span className="rounded-md border border-teal-100 bg-teal-50 px-1.5 py-0.5 text-[10px] font-medium text-teal-700">
+          <span className="rounded-md border border-brand-line bg-brand-soft px-1.5 py-0.5 text-[10px] font-medium text-brand-ink">
             已发布
           </span>
         </div>
@@ -442,7 +443,7 @@ export default function FormalInstancesView({
 
       <nav
         aria-label="实例类型目录"
-        className="max-h-64 overflow-y-auto border-b border-slate-200 bg-slate-50/70 p-2.5 md:col-start-1 md:row-start-2 md:max-h-none md:rounded-bl-xl md:border-b-0 md:border-r"
+        className="max-h-64 overflow-y-auto border-b border-border bg-muted p-2.5 md:col-start-1 md:row-start-2 md:max-h-none md:rounded-bl-xl md:border-b-0 md:border-r"
       >
           <TreeSection
             title="对象实体"
@@ -483,26 +484,26 @@ export default function FormalInstancesView({
           </TreeSection>
 
           {!catalog?.objectTypes.length && !catalog?.linkTypes.length && (
-            <p className="px-3 py-8 text-center text-xs text-slate-400">暂无实体模型</p>
+            <p className="px-3 py-8 text-center text-xs text-[var(--color-text-tertiary)]">暂无实体模型</p>
           )}
       </nav>
 
-      <header data-testid="instance-data-header" className="border-b border-slate-200 bg-white px-5 py-3.5 md:col-start-2 md:row-start-1 md:rounded-tr-xl">
+      <header data-testid="instance-data-header" className="border-b border-border bg-card px-5 py-3.5 md:col-start-2 md:row-start-1 md:rounded-tr-xl">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-base font-semibold tracking-[-0.02em] text-slate-950">
+                <h2 className="text-base font-semibold tracking-[-0.02em] text-foreground">
                   {selectedType ? typeLabel(selectedType) : '实例数据'}
                 </h2>
                 {selectedType && (
-                  <span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-[10px] text-slate-500">
+                  <span className="rounded-md bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
                     {selectedType.name}
                   </span>
                 )}
                 <span className={`rounded-md px-2 py-0.5 text-[10px] font-medium ${
                   selection?.kind === 'link'
-                    ? 'bg-violet-50 text-violet-700'
-                    : 'bg-blue-50 text-blue-700'
+                    ? 'bg-viz-violet-soft text-viz-violet'
+                    : 'bg-[var(--color-info-bg)] text-[var(--color-info)]'
                 }`}>
                   {selection?.kind === 'link' ? '关系数据集' : '对象数据集'}
                 </span>
@@ -521,18 +522,18 @@ export default function FormalInstancesView({
                 applySearch()
               }}
             >
-              <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 focus-within:border-teal-400 focus-within:ring-2 focus-within:ring-teal-100">
-                <Search size={12} className="shrink-0 text-slate-400" />
+              <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-card px-3 focus-within:border-brand focus-within:ring-2 focus-within:ring-ring">
+                <Search size={12} className="shrink-0 text-[var(--color-text-tertiary)]" />
                 <input
                   value={draftKeyword}
                   onChange={event => setDraftKeyword(event.target.value)}
                   placeholder={selection?.kind === 'link' ? '搜索关系端点或属性值' : '搜索外部 ID 或属性值'}
-                  className="min-w-0 flex-1 bg-transparent text-xs text-slate-700 outline-none placeholder:text-slate-400"
+                  className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-[var(--color-text-tertiary)]"
                 />
               </label>
               <button
                 type="submit"
-                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-teal-600 px-3 text-xs font-medium text-white hover:bg-teal-700"
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-brand px-3 text-xs font-medium text-[var(--color-text-inverse)] hover:bg-brand-deep"
               >
                 <Search size={12} /> 查询
               </button>
@@ -540,7 +541,7 @@ export default function FormalInstancesView({
                 <button
                   type="button"
                   onClick={clearSearch}
-                  className="h-8 shrink-0 rounded-lg px-2.5 text-xs text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                  className="h-8 shrink-0 rounded-lg px-2.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
                 >
                   清除
                 </button>
@@ -549,7 +550,7 @@ export default function FormalInstancesView({
           </div>
           {hasActiveFilters && (
             <div className="mt-2.5 flex flex-wrap items-center gap-1.5" data-testid="active-filters">
-              <span className="text-[11px] text-slate-400">当前过滤</span>
+              <span className="text-[11px] text-[var(--color-text-tertiary)]">当前过滤</span>
               {sourceFilter !== null && (
                 <FilterChip
                   label={`来源 = ${instanceSourceLabel(sourceFilter)}`}
@@ -568,7 +569,7 @@ export default function FormalInstancesView({
               <button
                 type="button"
                 onClick={clearAllFilters}
-                className="rounded-full px-2 py-0.5 text-[11px] text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                className="rounded-full px-2 py-0.5 text-[11px] text-[var(--color-text-tertiary)] transition hover:bg-muted hover:text-muted-foreground"
               >
                 全部清除
               </button>
@@ -587,8 +588,8 @@ export default function FormalInstancesView({
             role="status"
             className={`mx-5 mt-3 flex shrink-0 items-start gap-3 rounded-xl border px-4 py-3 ${
               legacyProjection.canAdopt
-                ? 'border-amber-200 bg-amber-50 text-amber-900'
-                : 'border-blue-200 bg-blue-50 text-blue-900'
+                ? 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] text-[var(--color-warning)]'
+                : 'border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] text-[var(--color-info)]'
             }`}
           >
             <AlertCircle size={18} className="mt-0.5 shrink-0" />
@@ -608,7 +609,7 @@ export default function FormalInstancesView({
                 </p>
               )}
               {adoptMutation.isError && (
-                <p role="alert" className="mt-2 text-[11px] font-medium text-red-700">
+                <p role="alert" className="mt-2 text-[11px] font-medium text-[var(--color-danger)]">
                   {errorMessage(adoptMutation.error)}
                 </p>
               )}
@@ -619,14 +620,14 @@ export default function FormalInstancesView({
                 data-testid="adopt-legacy-projection"
                 onClick={() => setShowAdoptConfirm(true)}
                 disabled={adoptMutation.isPending}
-                className="inline-flex h-8 shrink-0 items-center rounded-lg bg-amber-600 px-3 text-[11px] font-medium text-white transition hover:bg-amber-700 disabled:cursor-wait disabled:opacity-60"
+                className="inline-flex h-8 shrink-0 items-center rounded-lg bg-[var(--color-warning)] px-3 text-[11px] font-medium text-[var(--color-text-inverse)] transition hover:bg-[var(--color-warning)] disabled:cursor-wait disabled:opacity-60"
               >
                 {adoptMutation.isPending ? '正在修复…' : `安全归属到 ${catalog?.release.version}`}
               </button>
             ) : legacyProjection.recommendedAction === 'publish_draft' ? (
               <a
                 href={`#/ontologies/${ontologyId}?tab=data-mapping`}
-                className="inline-flex h-8 shrink-0 items-center rounded-lg border border-blue-200 bg-white px-3 text-[11px] font-medium text-blue-700 transition hover:bg-blue-100"
+                className="inline-flex h-8 shrink-0 items-center rounded-lg border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-card px-3 text-[11px] font-medium text-[var(--color-info)] transition hover:bg-[var(--color-info-bg)]"
               >
                 查看数据映射
               </a>
@@ -635,7 +636,7 @@ export default function FormalInstancesView({
         )}
 
         {dataQuery.isError && (
-          <div className="m-4 flex shrink-0 items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          <div className="m-4 flex shrink-0 items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-3 py-2 text-xs text-[var(--color-danger)]">
             <AlertCircle size={14} />
             <span className="flex-1">{errorMessage(dataQuery.error)}</span>
             <button type="button" onClick={() => void dataQuery.refetch()} className="font-medium hover:underline">重试</button>
@@ -646,11 +647,11 @@ export default function FormalInstancesView({
           <div
             ref={tableScrollRef}
             onScroll={updateScrollHints}
-            className="overflow-x-auto bg-white"
+            className="overflow-x-auto bg-card"
           >
             {dataQuery.isLoading ? (
-              <div className="flex h-full min-h-64 items-center justify-center gap-2 text-xs text-slate-400">
-                <Loader2 size={16} className="animate-spin text-teal-600" /> 正在加载实例数据…
+              <div className="flex h-full min-h-64 items-center justify-center gap-2 text-xs text-[var(--color-text-tertiary)]">
+                <Loader2 size={16} className="animate-spin text-brand-ink" /> 正在加载实例数据…
               </div>
             ) : !selectedType ? (
               <EmptyData
@@ -660,7 +661,7 @@ export default function FormalInstancesView({
                 action={(
                   <a
                     href={`#/ontologies/${ontologyId}?tab=design`}
-                    className="inline-flex h-8 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700"
+                    className="inline-flex h-8 items-center rounded-lg border border-border bg-card px-3 text-xs font-medium text-muted-foreground transition hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink"
                   >
                     查看本体结构
                   </a>
@@ -675,14 +676,14 @@ export default function FormalInstancesView({
                   <button
                     type="button"
                     onClick={clearSearch}
-                    className="inline-flex h-8 items-center rounded-lg bg-teal-600 px-3 text-xs font-medium text-white transition hover:bg-teal-700"
+                    className="inline-flex h-8 items-center rounded-lg bg-brand px-3 text-xs font-medium text-[var(--color-text-inverse)] transition hover:bg-brand-deep"
                   >
                     清除查询条件
                   </button>
                 ) : (
                   <a
                     href={`#/ontologies/${ontologyId}?tab=data-mapping`}
-                    className="inline-flex h-8 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700"
+                    className="inline-flex h-8 items-center rounded-lg border border-border bg-card px-3 text-xs font-medium text-muted-foreground transition hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink"
                   >
                     前往数据映射
                   </a>
@@ -717,39 +718,37 @@ export default function FormalInstancesView({
           )}
         </div>
 
-        <footer className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 rounded-b-xl border-t border-slate-200 bg-slate-50/70 px-5 py-1.5 md:rounded-bl-none md:rounded-br-xl">
-          <div className="flex items-center gap-3 whitespace-nowrap text-xs text-slate-400">
+        <footer className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 rounded-b-xl border-t border-border bg-muted px-5 py-1.5 md:rounded-bl-none md:rounded-br-xl">
+          <div className="flex items-center gap-3 whitespace-nowrap text-xs text-[var(--color-text-tertiary)]">
             <span className="tabular-nums">{total ? `显示 ${rangeStart}–${rangeEnd} / ${total} 条` : '暂无记录'}</span>
-            <span className="hidden text-slate-300 lg:inline">
+            <span className="hidden text-[var(--color-text-tertiary)] lg:inline">
               {scrollHint.right || scrollHint.left
                 ? `共 ${totalColumns} 列，可横向滚动查看`
                 : '完整字段值可在表格内横向、纵向滚动查看'}
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <label className="mr-2 flex h-8 items-center gap-2 whitespace-nowrap text-xs text-slate-500">
+            <div className="mr-2 flex h-8 items-center gap-2 whitespace-nowrap text-xs text-muted-foreground">
               每页
-              <select
-                value={pageSize}
-                onChange={event => {
-                  setPageSize(Number(event.target.value))
-                  setPage(1)
-                }}
-                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
-              >
-                {[20, 50, 100].map(size => <option key={size} value={size}>{size} 条</option>)}
-              </select>
-            </label>
+              <Select value={String(pageSize)} onValueChange={value => { setPageSize(Number(value)); setPage(1) }}>
+                <SelectTrigger className="h-8 w-24 rounded-lg bg-card px-2 text-xs" aria-label="每页显示条数">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[20, 50, 100].map(size => <SelectItem key={size} value={String(size)}>{size} 条</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
             <button
               type="button"
               disabled={page <= 1 || dataQuery.isFetching}
               onClick={() => setPage(current => current - 1)}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-35"
               aria-label="上一页"
             >
               <ChevronLeft size={14} />
             </button>
-            <span className="flex min-w-16 items-center justify-center gap-1 text-xs tabular-nums text-slate-500">
+            <span className="flex min-w-16 items-center justify-center gap-1 text-xs tabular-nums text-muted-foreground">
               <input
                 data-testid="page-jump"
                 value={pageDraft}
@@ -763,7 +762,7 @@ export default function FormalInstancesView({
                 onBlur={commitPageJump}
                 inputMode="numeric"
                 aria-label="跳转至指定页"
-                className="h-7 w-10 rounded-md border border-slate-200 bg-white text-center text-xs text-slate-700 outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
+                className="h-7 w-10 rounded-md border border-border bg-card text-center text-xs text-foreground outline-none focus:border-brand focus:ring-2 focus:ring-ring"
               />
               / {pages}
             </span>
@@ -771,7 +770,7 @@ export default function FormalInstancesView({
               type="button"
               disabled={page >= pages || dataQuery.isFetching}
               onClick={() => setPage(current => current + 1)}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-35"
               aria-label="下一页"
             >
               <ChevronRight size={14} />
@@ -792,7 +791,7 @@ export default function FormalInstancesView({
           />
         )}
       </div>
-      <ConfirmModal
+      <ConfirmDialog
         open={showAdoptConfirm}
         onClose={() => setShowAdoptConfirm(false)}
         onConfirm={() => void adoptMutation.mutate()}
@@ -807,13 +806,13 @@ export default function FormalInstancesView({
 
 function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 text-[11px] text-teal-700">
+    <span className="inline-flex items-center gap-1 rounded-full border border-brand-line bg-brand-soft px-2 py-0.5 text-[11px] text-brand-ink">
       {label}
       <button
         type="button"
         onClick={onRemove}
         aria-label={`移除过滤 ${label}`}
-        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full transition hover:bg-teal-100"
+        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full transition hover:bg-brand-soft"
       >
         <X size={10} />
       </button>
@@ -837,14 +836,14 @@ function TreeSection({
   const objectTone = tone === 'object'
   return (
     <section
-      className="mb-3 rounded-xl border border-dashed border-slate-300 p-2 last:mb-0"
+      className="mb-3 rounded-xl border border-dashed border-border p-2 last:mb-0"
       data-catalog-kind={tone}
     >
       <div className={`flex min-h-8 items-center gap-1.5 rounded-md px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${
-        objectTone ? 'bg-sky-50/80 text-sky-700' : 'bg-violet-50/80 text-violet-700'
+        objectTone ? 'bg-[var(--color-info-bg)] text-[var(--color-info)]' : 'bg-viz-violet-soft text-viz-violet'
       }`}>
         <span className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded ${
-          objectTone ? 'bg-sky-100 text-sky-600' : 'bg-violet-100 text-violet-600'
+          objectTone ? 'bg-[var(--color-info-bg)] text-[var(--color-info)]' : 'bg-viz-violet-soft text-viz-violet'
         }`}>
           {icon}
         </span>
@@ -853,7 +852,7 @@ function TreeSection({
           data-testid={`catalog-${tone}-count`}
           title="类型数量"
           className={`ml-auto inline-flex h-5 min-w-6 items-center justify-center self-center rounded px-1.5 tabular-nums ${
-            objectTone ? 'bg-sky-100 text-sky-700' : 'bg-violet-100 text-violet-700'
+            objectTone ? 'bg-[var(--color-info-bg)] text-[var(--color-info)]' : 'bg-viz-violet-soft text-viz-violet'
           }`}
         >{count} 类</span>
       </div>
@@ -883,31 +882,31 @@ function TypeTreeButton({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`group flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${
+      className={`group flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
         active
           ? objectTone
-            ? 'border-sky-200 bg-sky-50/70 text-sky-900'
-            : 'border-violet-200 bg-violet-50/70 text-violet-900'
+            ? 'border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] text-[var(--color-info)]'
+            : 'border-viz-violet-soft bg-viz-violet-soft text-viz-violet'
           : objectTone
-            ? 'border-transparent text-slate-600 hover:bg-sky-50/60 hover:text-sky-900'
-            : 'border-transparent text-slate-600 hover:bg-violet-50/60 hover:text-violet-900'
+            ? 'border-transparent text-muted-foreground hover:bg-[var(--color-info-bg)] hover:text-[var(--color-info)]'
+            : 'border-transparent text-muted-foreground hover:bg-viz-violet-soft hover:text-viz-violet'
       }`}
     >
       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
         objectTone
-          ? active ? 'bg-sky-500' : 'bg-sky-300 group-hover:bg-sky-400'
-          : active ? 'bg-violet-500' : 'bg-violet-300 group-hover:bg-violet-400'
+          ? active ? 'bg-[var(--color-info)]' : 'bg-[var(--color-info-bg)] group-hover:bg-[var(--color-info-bg)]'
+          : active ? 'bg-viz-violet' : 'bg-viz-violet group-hover:bg-viz-violet'
       }`} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-xs font-medium" title={label}>{label}</span>
-        <span className="mt-0.5 block truncate font-mono text-[10px] text-slate-400" title={code}>{code}</span>
+        <span className="mt-0.5 block truncate font-mono text-[10px] text-[var(--color-text-tertiary)]" title={code}>{code}</span>
       </span>
       <span
         title="实例数量"
         className={`inline-flex h-5 min-w-6 shrink-0 items-center justify-center self-center rounded-md px-1.5 text-[10px] tabular-nums ${
           objectTone
-            ? active ? 'bg-sky-100 text-sky-700' : 'bg-sky-50 text-sky-600'
-            : active ? 'bg-violet-100 text-violet-700' : 'bg-violet-50 text-violet-600'
+            ? active ? 'bg-[var(--color-info-bg)] text-[var(--color-info)]' : 'bg-[var(--color-info-bg)] text-[var(--color-info)]'
+            : active ? 'bg-viz-violet-soft text-viz-violet' : 'bg-viz-violet-soft text-viz-violet'
         }`}
       >
         {count}
@@ -963,10 +962,10 @@ function DatasetAssociationPopover({ datasets }: { datasets: AssociatedDataset[]
         onClick={() => setOpen(current => !current)}
         aria-expanded={open}
         aria-haspopup="dialog"
-        className={`inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${
+        className={`inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
           open
-            ? 'border-teal-200 bg-teal-50 text-teal-700'
-            : 'border-slate-200 bg-white text-slate-600 hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700'
+            ? 'border-brand-line bg-brand-soft text-brand-ink'
+            : 'border-border bg-card text-muted-foreground hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink'
         }`}
       >
         <Database size={12} />
@@ -977,35 +976,35 @@ function DatasetAssociationPopover({ datasets }: { datasets: AssociatedDataset[]
         <div
           role="dialog"
           aria-label="关联数据集"
-          className="absolute left-0 top-full z-50 mt-2 w-[340px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg shadow-slate-200/70"
+          className="absolute left-0 top-full z-50 mt-2 w-[340px] overflow-hidden rounded-xl border border-border bg-card shadow-lg"
         >
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div>
-              <p className="text-xs font-semibold text-slate-800">关联数据集</p>
-              <p className="mt-0.5 text-[10px] text-slate-400">基于当前发布版本的数据映射</p>
+              <p className="text-xs font-semibold text-foreground">关联数据集</p>
+              <p className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">基于当前发布版本的数据映射</p>
             </div>
-            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] tabular-nums text-slate-500">
+            <span className="rounded-md bg-muted px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground">
               {datasets.length} 个
             </span>
           </div>
           <div className="max-h-72 overflow-y-auto">
             {datasets.length ? (
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y border-border">
                 {datasets.map(dataset => (
-                  <div key={dataset.id} className="flex items-start gap-3 px-4 py-3 transition hover:bg-slate-50">
+                  <div key={dataset.id} className="flex items-start gap-3 px-4 py-3 transition hover:bg-muted">
                     <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-                      dataset.available ? 'bg-teal-50 text-teal-600' : 'bg-amber-50 text-amber-600'
+                      dataset.available ? 'bg-brand-soft text-brand-ink' : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'
                     }`}>
                       <Database size={15} />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-xs font-medium text-slate-700" title={dataset.name}>
+                      <span className="block truncate text-xs font-medium text-foreground" title={dataset.name}>
                         {dataset.name}
                       </span>
-                      <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-400">
+                      <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-[var(--color-text-tertiary)]">
                         <span>{dataset.kind ? DATASET_KIND_LABEL[dataset.kind] || dataset.kind : '历史数据集'}</span>
                         {dataset.roles.map(role => (
-                          <span key={role} className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{role}</span>
+                          <span key={role} className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground">{role}</span>
                         ))}
                       </span>
                     </span>
@@ -1015,7 +1014,7 @@ function DatasetAssociationPopover({ datasets }: { datasets: AssociatedDataset[]
                         onClick={() => setOpen(false)}
                         aria-label={`在数据资产湖中查看${dataset.name}`}
                         title={`在数据资产湖中查看“${dataset.name}”`}
-                        className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 active:scale-[0.96]"
+                        className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-[var(--color-text-tertiary)] transition hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96]"
                       >
                         <ArrowUpRight size={14} />
                       </RouterLink>
@@ -1025,9 +1024,9 @@ function DatasetAssociationPopover({ datasets }: { datasets: AssociatedDataset[]
               </div>
             ) : (
               <div className="px-6 py-10 text-center">
-                <Database size={22} className="mx-auto text-slate-300" />
-                <p className="mt-2 text-xs font-medium text-slate-500">尚未关联数据集</p>
-                <p className="mt-1 text-[10px] text-slate-400">可在“数据映射”中查看当前配置</p>
+                <Database size={22} className="mx-auto text-[var(--color-text-tertiary)]" />
+                <p className="mt-2 text-xs font-medium text-muted-foreground">尚未关联数据集</p>
+                <p className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">可在“数据映射”中查看当前配置</p>
               </div>
             )}
           </div>
@@ -1056,7 +1055,7 @@ function InstanceTable({
 }) {
   return (
     <table className="w-max min-w-full border-separate border-spacing-0 text-left text-xs">
-      <thead className="sticky top-0 z-20 bg-slate-50/95 text-slate-500 backdrop-blur">
+      <thead className="sticky top-0 z-20 bg-muted text-muted-foreground backdrop-blur">
         <tr>
           {kind === 'link' && (
             <>
@@ -1080,23 +1079,23 @@ function InstanceTable({
               sticky={kind === 'object' && index === 0}
             >
               <div className="flex min-w-40 items-center gap-1.5">
-                <span className="font-medium text-slate-600">{column.label}</span>
+                <span className="font-medium text-muted-foreground">{column.label}</span>
                 {column.primary && (
-                  <span className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1 py-0.5 text-[9px] font-semibold text-amber-700" title="主键字段">
+                  <span className="inline-flex items-center gap-0.5 rounded bg-[var(--color-warning-bg)] px-1 py-0.5 text-[9px] font-semibold text-[var(--color-warning)]" title="主键字段">
                     <KeyRound size={8} /> PK
                   </span>
                 )}
                 {!column.primary && column.required && (
-                  <span className="rounded bg-red-50 px-1 py-0.5 text-[9px] font-semibold text-red-600" title="非空字段">非空</span>
+                  <span className="rounded bg-[var(--color-danger-bg)] px-1 py-0.5 text-[9px] font-semibold text-[var(--color-danger)]" title="非空字段">非空</span>
                 )}
                 {column.computed && (
-                  <span className="rounded bg-violet-50 px-1 py-0.5 text-[9px] text-violet-600">派生</span>
+                  <span className="rounded bg-viz-violet-soft px-1 py-0.5 text-[9px] text-viz-violet">派生</span>
                 )}
                 {column.runtime && (
-                  <span className="rounded bg-slate-200 px-1 py-0.5 text-[9px] text-slate-500">运行字段</span>
+                  <span className="rounded bg-[var(--color-bg-active)] px-1 py-0.5 text-[9px] text-muted-foreground">运行字段</span>
                 )}
               </div>
-              <div className="mt-1 flex items-center gap-1.5 font-mono text-[10px] font-normal text-slate-400">
+              <div className="mt-1 flex items-center gap-1.5 font-mono text-[10px] font-normal text-[var(--color-text-tertiary)]">
                 <span>{column.name}</span>
                 {column.type && <span>· {column.type}</span>}
               </div>
@@ -1138,14 +1137,14 @@ function EndpointHeader({ label, side }: { label: string; side: 'source' | 'targ
       <div className="flex items-center gap-2">
         <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${
           source
-            ? 'border-sky-200 bg-sky-50 text-sky-800'
-            : 'border-violet-200 bg-violet-50 text-violet-800'
+            ? 'border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] text-[var(--color-info)]'
+            : 'border-viz-violet-soft bg-viz-violet-soft text-viz-violet'
         }`}>
           {source ? '源端' : '目标端'}
         </span>
-        <span className="font-medium text-slate-700">{label}</span>
+        <span className="font-medium text-foreground">{label}</span>
       </div>
-      <div className="mt-1 text-[10px] font-normal text-slate-400">对象业务标识，点击可定位实例</div>
+      <div className="mt-1 text-[10px] font-normal text-[var(--color-text-tertiary)]">对象业务标识，点击可定位实例</div>
     </div>
   )
 }
@@ -1158,8 +1157,8 @@ function HeaderCell({
   sticky?: boolean
 }) {
   return (
-    <th scope="col" className={`border-b border-r border-slate-200 px-4 py-2.5 align-top font-medium ${
-      sticky ? 'sticky left-0 z-30 min-w-60 bg-slate-50/95' : 'min-w-48'
+    <th scope="col" className={`border-b border-r border-border px-4 py-2.5 align-top font-medium ${
+      sticky ? 'sticky left-0 z-30 min-w-60 bg-muted' : 'min-w-48'
     }`}>
       {children}
     </th>
@@ -1180,13 +1179,13 @@ function SystemHeaderCell({
   return (
     <HeaderCell>
       <div className="flex min-w-40 items-center gap-1.5">
-        <span className="font-medium text-slate-600">{label}</span>
+        <span className="font-medium text-muted-foreground">{label}</span>
         <span
-          className="rounded bg-teal-50 px-1 py-0.5 text-[9px] font-semibold text-teal-700"
+          className="rounded bg-brand-soft px-1 py-0.5 text-[9px] font-semibold text-brand-ink"
           title="平台自动记录的系统字段"
         >系统</span>
       </div>
-      <div className="mt-1 flex items-center gap-1.5 font-mono text-[10px] font-normal text-slate-400">
+      <div className="mt-1 flex items-center gap-1.5 font-mono text-[10px] font-normal text-[var(--color-text-tertiary)]">
         <span>{name}</span>
         <span>· {type}</span>
       </div>
@@ -1205,7 +1204,7 @@ function ObjectDataRow({
 }) {
   return (
     <tr
-      className="group cursor-pointer align-top hover:bg-teal-50/30"
+      className="group cursor-pointer align-top hover:bg-brand-soft"
       onClick={() => onOpen(row)}
       onKeyDown={event => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -1227,10 +1226,10 @@ function ObjectDataRow({
         </DataCell>
       ))}
       <DataCell narrow>
-        {row.source ? <SourceChip source={row.source} /> : <span className="text-slate-300">—</span>}
+        {row.source ? <SourceChip source={row.source} /> : <span className="text-[var(--color-text-tertiary)]">—</span>}
       </DataCell>
-      <DataCell><span className="whitespace-nowrap text-slate-500">{formatInstanceDateTime(row.createdAt)}</span></DataCell>
-      <DataCell><span className="whitespace-nowrap text-slate-500">{formatInstanceDateTime(row.updatedAt)}</span></DataCell>
+      <DataCell><span className="whitespace-nowrap text-muted-foreground">{formatInstanceDateTime(row.createdAt)}</span></DataCell>
+      <DataCell><span className="whitespace-nowrap text-muted-foreground">{formatInstanceDateTime(row.updatedAt)}</span></DataCell>
     </tr>
   )
 }
@@ -1249,7 +1248,7 @@ function LinkDataRow({
   onJumpEndpoint: (endpoint: EndpointSummary) => void
 }) {
   return (
-    <tr className="group align-top hover:bg-teal-50/30">
+    <tr className="group align-top hover:bg-brand-soft">
       <DataCell sticky>
         <EndpointCell
           endpoint={row.sourceObject}
@@ -1268,7 +1267,7 @@ function LinkDataRow({
         <DataCell key={`${column.name}:${index}`}><FullValue type={column.type} value={row.properties?.[column.name]} /></DataCell>
       ))}
       <DataCell>
-        <span className="whitespace-nowrap text-slate-500">
+        <span className="whitespace-nowrap text-muted-foreground">
           {row.createdAt ? formatInstanceDateTime(row.createdAt) : '—'}
         </span>
       </DataCell>
@@ -1286,8 +1285,8 @@ function DataCell({
   narrow?: boolean
 }) {
   return (
-    <td className={`max-w-[32rem] border-b border-r border-slate-100 px-4 py-3 align-top leading-5 text-slate-600 ${
-      sticky ? 'sticky left-0 z-10 min-w-60 bg-white group-hover:bg-[#f5fcfa]' : narrow ? 'min-w-24' : 'min-w-48'
+    <td className={`max-w-[32rem] border-b border-r border-border px-4 py-3 align-top leading-5 text-muted-foreground ${
+      sticky ? 'sticky left-0 z-10 min-w-60 bg-card group-hover:bg-[#f5fcfa]' : narrow ? 'min-w-24' : 'min-w-48'
     }`}>
       {children}
     </td>
@@ -1306,7 +1305,7 @@ function EndpointCell({
   if (!endpoint) {
     return (
       <div className="min-w-56 max-w-96">
-        <div className="font-medium text-slate-800">端点实例不可用</div>
+        <div className="font-medium text-foreground">端点实例不可用</div>
       </div>
     )
   }
@@ -1316,10 +1315,10 @@ function EndpointCell({
         type="button"
         onClick={() => onJump?.(endpoint)}
         title={typeName ? `在「${typeName}」中定位该实例` : '定位该实例'}
-        className="group/endpoint -mx-1 inline-flex max-w-full items-center gap-1 rounded px-1 font-medium text-slate-800 transition hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+        className="group/endpoint -mx-1 inline-flex max-w-full items-center gap-1 rounded px-1 font-medium text-foreground transition hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span className="truncate underline-offset-2 group-hover/endpoint:underline">{endpoint.label}</span>
-        <ArrowUpRight size={12} className="shrink-0 text-slate-300 transition group-hover/endpoint:text-teal-600" />
+        <ArrowUpRight size={12} className="shrink-0 text-[var(--color-text-tertiary)] transition group-hover/endpoint:text-brand-ink" />
       </button>
     </div>
   )
@@ -1339,11 +1338,11 @@ function EmptyData({
   return (
     <div className="flex h-full min-h-64 items-center justify-center p-8 text-center">
       <div>
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-300">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-muted text-[var(--color-text-tertiary)]">
           {icon}
         </div>
-        <p className="mt-3 text-sm font-medium text-slate-600">{title}</p>
-        {note && <p className="mx-auto mt-1 max-w-md text-xs leading-5 text-slate-400">{note}</p>}
+        <p className="mt-3 text-sm font-medium text-muted-foreground">{title}</p>
+        {note && <p className="mx-auto mt-1 max-w-md text-xs leading-5 text-[var(--color-text-tertiary)]">{note}</p>}
         {action && <div className="mt-4 flex items-center justify-center gap-2">{action}</div>}
       </div>
     </div>

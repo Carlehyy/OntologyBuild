@@ -20,25 +20,25 @@ const fmtVal = (v: unknown) => {
 /** 批准/拒绝弹窗共享的决策目标摘要卡,保证两个决策入口信息密度对等。 */
 function DecisionTargetCard({ log }: { log: PendingLog }) {
   return (
-    <dl className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3 text-sm">
+    <dl className="grid gap-3 rounded-xl border border-border bg-muted px-4 py-3 text-sm">
       <div className="grid gap-1 sm:grid-cols-[5rem_minmax(0,1fr)] sm:gap-3">
-        <dt className="font-medium text-slate-500">动作</dt>
-        <dd className="break-words font-medium text-slate-900">
+        <dt className="font-medium text-muted-foreground">动作</dt>
+        <dd className="break-words font-medium text-foreground">
           {log.actionName || log.actionId}
         </dd>
       </div>
       <div className="grid gap-1 sm:grid-cols-[5rem_minmax(0,1fr)] sm:gap-3">
-        <dt className="font-medium text-slate-500">目标摘要</dt>
-        <dd className="min-w-0 space-y-1 text-slate-700">
+        <dt className="font-medium text-muted-foreground">目标摘要</dt>
+        <dd className="min-w-0 space-y-1 text-foreground">
           <p className="break-words text-sm">
             {readableTargetSummary(log)}
           </p>
           {log.objectInstanceId && (
-            <p className="break-all font-mono text-xs text-slate-500">
+            <p className="break-all font-mono text-xs text-muted-foreground">
               实例 {log.objectInstanceId}
             </p>
           )}
-          <p className="break-words text-xs leading-5 text-slate-500">
+          <p className="break-words text-xs leading-5 text-muted-foreground">
             {Object.entries(log.parameters || {}).slice(0, 3)
               .map(([key, value]) => `${key}=${fmtVal(value)}`).join('，') || '无参数'}
           </p>
@@ -72,7 +72,7 @@ export function RejectDialog({
     <Dialog open={Boolean(target)} onOpenChange={open => { if (!open && !busy) onClose() }}>
       <DialogContent>
         <DialogHeader>
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--color-danger-bg)] text-[var(--color-danger)]">
             <XCircle size={19} />
           </span>
           <div>
@@ -87,7 +87,7 @@ export function RejectDialog({
             <DecisionTargetCard log={target} />
             <div>
               <label htmlFor="governance-reject-reason"
-                className="mb-1.5 block text-sm font-medium text-slate-800">
+                className="mb-1.5 block text-sm font-medium text-foreground">
                 拒绝原因
               </label>
               <textarea
@@ -100,18 +100,18 @@ export function RejectDialog({
                 aria-describedby={`governance-reject-reason-help${error ? ' governance-reject-error' : ''}`}
                 aria-invalid={Boolean(error)}
                 placeholder="例如：当前风险信息不足，请补充证据后重新提交"
-                className={`min-h-24 w-full resize-y rounded-lg border bg-white px-3 py-2.5 text-sm leading-6 text-slate-900 outline-none transition focus:ring-2 disabled:cursor-wait disabled:bg-slate-50 ${
+                className={`min-h-24 w-full resize-y rounded-lg border bg-card px-3 py-2.5 text-sm leading-6 text-foreground outline-none transition focus:ring-2 disabled:cursor-wait disabled:bg-muted ${
                   error
-                    ? 'border-red-300 focus:border-red-400 focus:ring-red-100'
-                    : 'border-slate-300 focus:border-teal-500 focus:ring-teal-100'
+                    ? 'border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] focus:border-[var(--color-danger)] focus:ring-[var(--color-danger)]'
+                    : 'border-border focus:border-brand focus:ring-ring'
                 }`}
               />
-              <p id="governance-reject-reason-help" className="mt-1.5 text-xs leading-5 text-slate-500">
+              <p id="governance-reject-reason-help" className="mt-1.5 text-xs leading-5 text-muted-foreground">
                 可留空；填写后会与拒绝结果一起记录到决策事实，便于后续追溯。
               </p>
               {error && (
                 <p id="governance-reject-error" role="alert"
-                  className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
+                  className="mt-2 rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-3 py-2 text-xs leading-5 text-[var(--color-danger)]">
                   拒绝提交失败：{error}。请核对待办状态后重试。
                 </p>
               )}
@@ -127,7 +127,7 @@ export function RejectDialog({
             variant="danger"
             onClick={() => onConfirm(reason.trim() || undefined)}
             loading={busy}
-            className="shadow-sm shadow-red-900/10"
+            className="shadow-sm"
           >
             确认拒绝
           </Button>
@@ -154,7 +154,7 @@ export function ApproveDialog({
     <Dialog open={Boolean(target)} onOpenChange={open => { if (!open && !busy) onClose() }}>
       <DialogContent>
         <DialogHeader>
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-600">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand-ink">
             <CheckCircle2 size={19} />
           </span>
           <div>
@@ -169,7 +169,7 @@ export function ApproveDialog({
             <DecisionTargetCard log={target} />
             {error && (
               <p role="alert"
-                className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
+                className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-3 py-2 text-xs leading-5 text-[var(--color-danger)]">
                 批准提交失败：{error}。请核对待办状态后重试。
               </p>
             )}
@@ -184,7 +184,7 @@ export function ApproveDialog({
             variant="success"
             onClick={onConfirm}
             loading={busy}
-            className="shadow-sm shadow-emerald-900/10"
+            className="shadow-sm"
           >
             批准并执行
           </Button>

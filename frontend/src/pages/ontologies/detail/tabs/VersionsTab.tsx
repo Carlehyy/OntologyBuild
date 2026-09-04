@@ -10,7 +10,8 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { LoadingState } from '@/components/ui/LoadingState'
-import { ConfirmModal, Modal } from '@/components/ui/Modal'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { ConfirmDialog } from '../../ConfirmDialog'
 import TrialActionPlanReview, {
   redactTrialText,
   sanitizeTrialValue,
@@ -54,37 +55,37 @@ function stageOf(node: VersionNode, currentReleaseId?: string): VersionStage {
 
 const STAGE_META: Record<VersionStage, { label: string; badge: 'success' | 'warning' | 'danger' | 'default'; dot: string; card: string; bar: string }> = {
   current: {
-    label: '当前发布', badge: 'success', dot: 'bg-teal-500 ring-teal-100',
-    card: 'border-teal-200 bg-teal-50/55 hover:border-teal-300',
-    bar: 'border-l-teal-500',
+    label: '当前发布', badge: 'success', dot: 'bg-brand ring-ring',
+    card: 'border-brand-line bg-brand-soft hover:border-brand-line',
+    bar: 'border-l-brand',
   },
   release: {
-    label: '历史发布', badge: 'default', dot: 'bg-slate-400 ring-slate-100',
-    card: 'border-slate-200 bg-white hover:border-slate-300',
-    bar: 'border-l-slate-300',
+    label: '历史发布', badge: 'default', dot: 'bg-accent ring-[var(--color-border-hover)]',
+    card: 'border-border bg-card hover:border-border',
+    bar: 'border-l-border',
   },
   draft: {
-    label: '草稿态', badge: 'warning', dot: 'bg-sky-500 ring-sky-100',
-    card: 'border-sky-200 bg-sky-50/45 hover:border-sky-300',
-    bar: 'border-l-sky-400',
+    label: '草稿态', badge: 'warning', dot: 'bg-[var(--color-info)] ring-[var(--color-info)]',
+    card: 'border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] hover:border-[color-mix(in_srgb,var(--color-info)_35%,transparent)]',
+    bar: 'border-l-[var(--color-info)]',
   },
   trial: {
-    label: '试跑态', badge: 'warning', dot: 'bg-amber-500 ring-amber-100',
-    card: 'border-amber-200 bg-amber-50/45 hover:border-amber-300',
-    bar: 'border-l-amber-400',
+    label: '试跑态', badge: 'warning', dot: 'bg-[var(--color-warning)] ring-[var(--color-warning)]',
+    card: 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] hover:border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)]',
+    bar: 'border-l-[var(--color-warning)]',
   },
   archived: {
-    label: '已发布的分支', badge: 'default', dot: 'bg-violet-400 ring-violet-100',
-    card: 'border-violet-100 bg-violet-50/30 hover:border-violet-200',
-    bar: 'border-l-violet-400',
+    label: '已发布的分支', badge: 'default', dot: 'bg-viz-violet ring-viz-violet',
+    card: 'border-viz-violet-soft bg-viz-violet-soft hover:border-viz-violet-soft',
+    bar: 'border-l-viz-violet',
   },
 }
 
 const VERSION_ACTION_BUTTON = {
-  editor: 'border-violet-200 bg-violet-50 text-violet-700 shadow-sm hover:border-violet-300 hover:bg-violet-100 focus-visible:ring-2 focus-visible:ring-violet-500',
-  mapping: 'border-sky-200 bg-sky-50 text-sky-700 shadow-sm hover:border-sky-300 hover:bg-sky-100 focus-visible:ring-2 focus-visible:ring-sky-500',
-  trial: 'border-amber-700 bg-amber-700 text-white shadow-sm hover:border-amber-800 hover:bg-amber-800 focus-visible:ring-2 focus-visible:ring-amber-500',
-  release: 'border-teal-700 bg-teal-700 text-white shadow-sm hover:border-teal-800 hover:bg-teal-800 focus-visible:ring-2 focus-visible:ring-teal-500',
+  editor: 'border-viz-violet-soft bg-viz-violet-soft text-viz-violet shadow-sm hover:border-viz-violet-soft hover:bg-viz-violet-soft focus-visible:ring-2 focus-visible:ring-viz-violet',
+  mapping: 'border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] text-[var(--color-info)] shadow-sm hover:border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] hover:bg-[var(--color-info-bg)] focus-visible:ring-2 focus-visible:ring-[var(--color-info)]',
+  trial: 'border-[var(--color-warning)] bg-[var(--color-warning)] text-[var(--color-text-inverse)] shadow-sm hover:border-[var(--color-warning)] hover:bg-[var(--color-warning)] focus-visible:ring-2 focus-visible:ring-[var(--color-warning)]',
+  release: 'border-brand bg-brand-deep text-[var(--color-text-inverse)] shadow-sm hover:border-brand hover:bg-brand-deep focus-visible:ring-2 focus-visible:ring-ring',
 } as const
 
 function StageBadge({ stage, label }: { stage: VersionStage; label?: string }) {
@@ -412,7 +413,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
 
   if (treeQuery.isLoading) return <LoadingState />
   if (treeQuery.isError) return (
-    <Card className="space-y-3 border-red-200 bg-red-50 p-4 text-sm text-red-800">
+    <Card className="space-y-3 border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] p-4 text-sm text-[var(--color-danger)]">
       <p>版本树加载失败：{errorText(treeQuery.error)}</p>
       <Button variant="outline" size="sm" onClick={() => treeQuery.refetch()}>重新加载</Button>
     </Card>
@@ -443,7 +444,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
       && node.base_release_id !== parentNode.id
     ) ? parentNode.version_number : null
     const historicalRelease = stage === 'release'
-    const menuItemClass = 'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent'
+    const menuItemClass = 'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent'
 
     return (
       <div key={node.id} role="treeitem" aria-level={depth + 1} aria-current={stage === 'current' ? 'true' : undefined}>
@@ -456,21 +457,21 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
             <button
               type="button"
               onClick={() => openVersion(node)}
-              className="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+              className="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               aria-label={`打开 ${node.version_number} ${stageText}`}
             >
               <div className="flex min-w-0 items-center gap-2">
                 {node.node_kind === 'release'
-                  ? <GitCommitHorizontal size={16} className={`shrink-0 ${stage === 'current' ? 'text-teal-700' : 'text-slate-500'}`} />
-                  : <GitBranch size={16} className={`shrink-0 ${trial ? 'text-amber-600' : 'text-sky-600'}`} />}
-                <span className="shrink-0 font-mono text-base font-semibold tabular-nums text-slate-800">{node.version_number}</span>
+                  ? <GitCommitHorizontal size={16} className={`shrink-0 ${stage === 'current' ? 'text-brand-ink' : 'text-muted-foreground'}`} />
+                  : <GitBranch size={16} className={`shrink-0 ${trial ? 'text-[var(--color-warning)]' : 'text-[var(--color-info)]'}`} />}
+                <span className="shrink-0 font-mono text-base font-semibold tabular-nums text-foreground">{node.version_number}</span>
                 <span className="shrink-0" title={promotedTooltip || undefined}>
                   <StageBadge stage={stage} label={stageText} />
                   {promotedTooltip && promotedToVersion && <span className="sr-only">（已发布为 {promotedToVersion}）</span>}
                 </span>
                 {node.version_label && (
                   <span
-                    className="inline-flex min-w-0 shrink items-center gap-1 text-[11px] font-normal italic text-slate-400"
+                    className="inline-flex min-w-0 shrink items-center gap-1 text-[11px] font-normal italic text-[var(--color-text-tertiary)]"
                     title={`自定义分支标签：${node.version_label}`}
                   >
                     <Bookmark size={11} className="shrink-0" aria-hidden="true" />
@@ -479,7 +480,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                 )}
                 {recoveryFromVersion && (
                   <span
-                    className="inline-flex shrink-0 items-center gap-1 text-slate-400"
+                    className="inline-flex shrink-0 items-center gap-1 text-[var(--color-text-tertiary)]"
                     title={`从历史发布 ${recoveryFromVersion} 创建的恢复草稿，验证与试跑均以当前发布为基线`}
                   >
                     <History size={12} aria-hidden="true" />
@@ -527,7 +528,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
               <div className="relative">
                 <button
                   type="button"
-                  className="flex h-8 w-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/80 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   aria-label={`${node.version_number} 更多操作`}
                   aria-haspopup="true"
                   aria-expanded={openMenuId === node.id}
@@ -540,7 +541,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                 {openMenuId === node.id && (
                   <div
                     id={`version-actions-${node.id}`}
-                    className="absolute right-0 top-9 z-30 min-w-36 rounded-lg border border-slate-200 bg-white p-1 shadow-lg shadow-slate-200/70"
+                    className="absolute right-0 top-9 z-30 min-w-36 rounded-lg border border-border bg-card p-1 shadow-lg"
                   >
                     <button type="button" className={menuItemClass} onClick={() => {
                       setOpenMenuId(null)
@@ -571,7 +572,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
         </article>
 
         {children.length > 0 && (
-          <div role="group" className="ml-3 space-y-2.5 border-l border-slate-200 pl-6 pt-2.5">
+          <div role="group" className="ml-3 space-y-2.5 border-l border-border pl-6 pt-2.5">
             {children.map(child => renderNode(child, depth + 1))}
           </div>
         )}
@@ -582,15 +583,15 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 pb-1">
       <Card className="shrink-0 overflow-hidden p-0">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
           <div>
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
               <GitCommitHorizontal size={16} /> 版本如何从草稿到正式运行
             </h3>
-            <p className="mt-0.5 text-xs text-slate-500">每次新建版本都会复制一份完整快照，互不干扰。</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">每次新建版本都会复制一份完整快照，互不干扰。</p>
           </div>
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 rounded-full bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-700">
+            <div className="flex items-center gap-2 rounded-full bg-brand-soft px-3 py-1.5 text-xs font-medium text-brand-ink">
               <ShieldCheck size={14} /> 当前正式运行：{treeQuery.data?.current_release_version}
             </div>
             <button
@@ -598,7 +599,7 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
               onClick={toggleGuide}
               aria-expanded={guideExpanded}
               data-testid="versions-guide-toggle"
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-500 transition hover:border-slate-300 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+              className="inline-flex items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition hover:border-border hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {guideExpanded ? <>收起说明 <ChevronDown size={13} className="rotate-180" /></> : <>展开说明 <ChevronDown size={13} /></>}
             </button>
@@ -607,19 +608,19 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
 
         {guideExpanded && (
           <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-stretch px-4 py-3" aria-label="版本状态递进关系">
-            <div className="rounded-xl border border-sky-100 bg-sky-50/70 p-3">
-              <div className="flex items-center gap-2 text-sm font-semibold text-sky-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-sky-600 text-[11px] text-white">1</span>草稿态</div>
-              <p className="mt-1.5 text-xs leading-5 text-sky-700">自由编辑结构与映射，不产生任何运行数据。</p>
+            <div className="rounded-xl border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] p-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-[var(--color-info)]"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-info)] text-[11px] text-[var(--color-text-inverse)]">1</span>草稿态</div>
+              <p className="mt-1.5 text-xs leading-5 text-[var(--color-info)]">自由编辑结构与映射，不产生任何运行数据。</p>
             </div>
-            <div className="flex w-9 items-center justify-center text-slate-300"><ArrowRight size={18} /></div>
-            <div className="rounded-xl border border-amber-100 bg-amber-50/70 p-3">
-              <div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-[11px] text-white">2</span>试跑态</div>
-              <p className="mt-1.5 text-xs leading-5 text-amber-700">用真实数据在隔离环境验证，不影响正式运行；全部通过后才允许发布。</p>
+            <div className="flex w-9 items-center justify-center text-[var(--color-text-tertiary)]"><ArrowRight size={18} /></div>
+            <div className="rounded-xl border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] p-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-[var(--color-warning)]"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-warning)] text-[11px] text-[var(--color-text-inverse)]">2</span>试跑态</div>
+              <p className="mt-1.5 text-xs leading-5 text-[var(--color-warning)]">用真实数据在隔离环境验证，不影响正式运行；全部通过后才允许发布。</p>
             </div>
-            <div className="flex w-9 items-center justify-center text-slate-300"><ArrowRight size={18} /></div>
-            <div className="rounded-xl border border-teal-100 bg-teal-50/70 p-3">
-              <div className="flex items-center gap-2 text-sm font-semibold text-teal-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-teal-600 text-[11px] text-white"><Check size={12} /></span>发布态</div>
-              <p className="mt-1.5 text-xs leading-5 text-teal-700">验证通过后发布。全平台只按最新发布运行，发布后内容只读。</p>
+            <div className="flex w-9 items-center justify-center text-[var(--color-text-tertiary)]"><ArrowRight size={18} /></div>
+            <div className="rounded-xl border border-brand-line bg-brand-soft p-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-brand-ink"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-brand text-[11px] text-[var(--color-text-inverse)]"><Check size={12} /></span>发布态</div>
+              <p className="mt-1.5 text-xs leading-5 text-brand-ink">验证通过后发布。全平台只按最新发布运行，发布后内容只读。</p>
             </div>
           </div>
         )}
@@ -627,18 +628,18 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
 
       {notice && (
         <div role="status" aria-live="polite" className={`shrink-0 rounded-lg border px-3 py-2 text-sm ${notice.tone === 'good'
-          ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-          : 'border-red-200 bg-red-50 text-red-800'}`}>
+          ? 'border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] text-[var(--color-success)]'
+          : 'border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] text-[var(--color-danger)]'}`}>
           {notice.text}
         </div>
       )}
 
       {gateIssues.length > 0 && (
-        <div role="alert" className="shrink-0 rounded-xl border border-red-200 bg-red-50/80 px-4 py-3 text-sm text-red-900">
+        <div role="alert" className="shrink-0 rounded-xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-4 py-3 text-sm text-[var(--color-danger)]">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <p className="font-semibold">草稿尚未满足转为试跑态的硬性条件</p>
-              <div className="scrollbar-thin mt-1 max-h-24 space-y-1 overflow-y-auto pr-2 text-xs leading-5 text-red-800">
+              <div className="scrollbar-thin mt-1 max-h-24 space-y-1 overflow-y-auto pr-2 text-xs leading-5 text-[var(--color-danger)]">
                 {gateIssues.map((item, index) => <p key={`${item.kind || ''}-${item.field || ''}-${index}`}>• {item.message}</p>)}
               </div>
             </div>
@@ -667,78 +668,96 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
         </div>
       )}
 
-      <section ref={treeScrollRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-slate-50/60 p-4" aria-label="本体版本树">
+      <section ref={treeScrollRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-xl border border-border bg-muted p-4" aria-label="本体版本树">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold text-slate-700">版本树</p>
-            <p className="mt-0.5 text-xs text-slate-400">共 {nodes.length} 个版本 · 发布版在左侧主干，分支缩进挂在所属版本下</p>
+            <p className="text-sm font-semibold text-foreground">版本树</p>
+            <p className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">共 {nodes.length} 个版本 · 发布版在左侧主干，分支缩进挂在所属版本下</p>
           </div>
-          <span className="rounded-md bg-teal-50 px-2.5 py-1 font-mono text-xs font-semibold text-teal-700">
+          <span className="rounded-md bg-brand-soft px-2.5 py-1 font-mono text-xs font-semibold text-brand-ink">
             当前 {treeQuery.data?.current_release_version}
           </span>
         </div>
-        <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500" aria-label="版本状态图例">
-          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-teal-500" />当前发布</span>
-          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-slate-400" />历史发布</span>
-          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-sky-500" />草稿态</span>
-          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-amber-500" />试跑态</span>
-          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-violet-400" />已发布的分支</span>
+        <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground" aria-label="版本状态图例">
+          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-brand" />当前发布</span>
+          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-accent" />历史发布</span>
+          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-[var(--color-info)]" />草稿态</span>
+          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-[var(--color-warning)]" />试跑态</span>
+          <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-viz-violet" />已发布的分支</span>
         </div>
         {roots.rootNodes.length > 0 ? (
-          <div role="tree" className="ml-2 space-y-2.5 border-l border-slate-200 pl-6" data-testid="version-tree">
+          <div role="tree" className="ml-2 space-y-2.5 border-l border-border pl-6" data-testid="version-tree">
             {roots.rootNodes.map(node => renderNode(node))}
           </div>
         ) : (
-          <p className="rounded-lg bg-white px-4 py-8 text-center text-sm text-slate-400">暂无版本节点</p>
+          <p className="rounded-lg bg-card px-4 py-8 text-center text-sm text-[var(--color-text-tertiary)]">暂无版本节点</p>
         )}
       </section>
 
       {source && (
-        <Modal
-          open
-          onClose={() => setSource(null)}
-          title={source.node_kind === 'release' && source.id !== currentReleaseId
-            ? `从 ${source.version_number} 创建恢复草稿`
-            : `从 ${source.version_number} 创建完整分支`}
-          size="sm"
-          footer={<>
-            <Button variant="ghost" onClick={() => setSource(null)}>取消</Button>
-            <Button loading={createDraft.isPending} onClick={() => createDraft.mutate()}>
-              {source.node_kind === 'release' && source.id !== currentReleaseId ? '创建恢复草稿' : '创建分支'}
-            </Button>
-          </>}>
+        <Dialog open onOpenChange={next => { if (!next) setSource(null) }}>
+          <DialogContent className="w-[min(92vw,26rem)]">
+            <DialogHeader>
+              <div className="min-w-0 pt-0.5">
+                <DialogTitle>{source.node_kind === 'release' && source.id !== currentReleaseId
+                  ? `从 ${source.version_number} 创建恢复草稿`
+                  : `从 ${source.version_number} 创建完整分支`}</DialogTitle>
+              </div>
+            </DialogHeader>
           <div className="space-y-3">
             {source.node_kind === 'release' && source.id !== currentReleaseId ? (
               <div className="space-y-2">
-                <p className="text-sm leading-6 text-gray-600">
+                <p className="text-sm leading-6 text-muted-foreground">
                   系统会完整复制 {source.version_number} 的结构、动作、函数、哨兵和映射，但把当前发布
                   {treeQuery.data?.current_release_version ? ` ${treeQuery.data.current_release_version}` : ''} 作为验证基线。
                 </p>
-                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                <p className="rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-3 py-2 text-xs leading-5 text-[var(--color-warning)]">
                   这是安全恢复路径：创建草稿不会改变正式环境；必须先用当前数据完成隔离试跑，再经过发布前检查和人工确认。
                 </p>
               </div>
             ) : (
-              <p className="text-sm leading-6 text-gray-600">
+              <p className="text-sm leading-6 text-muted-foreground">
                 新版本固定为草稿态，并一次性复制对象实体、实体关系、执行动作、激活函数、哨兵、对象映射、关系映射及画布布局，不依赖祖先拼装。
               </p>
             )}
             <input value={label} onChange={event => setLabel(event.target.value)} placeholder="分支标签（可选）" className="w-full rounded-lg border px-3 py-2 text-sm" />
             <textarea value={description} onChange={event => setDescription(event.target.value)} placeholder="本次变化目标（可选）" className="h-20 w-full resize-none rounded-lg border px-3 py-2 text-sm" />
-            {createDraft.isError && <p className="text-sm text-red-600">{errorText(createDraft.error)}</p>}
+            {createDraft.isError && <p className="text-sm text-[var(--color-danger)]">{errorText(createDraft.error)}</p>}
           </div>
-        </Modal>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setSource(null)}>取消</Button>
+            <Button loading={createDraft.isPending} onClick={() => createDraft.mutate()}>
+              {source.node_kind === 'release' && source.id !== currentReleaseId ? '创建恢复草稿' : '创建分支'}
+            </Button>
+          </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       {trialDetail && (
-        <Modal
-          open
-          onClose={() => setTrialDetail(null)}
-          title="隔离试跑结果"
-          description="先审查试跑将产生的动作计划，再决定是否进入发布。"
-          size="3xl"
-          panelClassName="h-[min(88dvh,860px)]"
-          footer={<>
+        <Dialog open onOpenChange={next => { if (!next) setTrialDetail(null) }}>
+          <DialogContent className="flex h-[min(88dvh,860px)] w-[min(92vw,64rem)] flex-col">
+            <DialogHeader>
+              <div className="min-w-0 pt-0.5">
+                <DialogTitle>隔离试跑结果</DialogTitle>
+                <DialogDescription>先审查试跑将产生的动作计划，再决定是否进入发布。</DialogDescription>
+              </div>
+            </DialogHeader>
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto text-sm">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {Object.entries(trialDetail.result?.counts || {}).map(([key, value]) => (
+                <div key={key} className="rounded-lg border bg-muted p-3"><b className="block text-lg">{String(value)}</b><span className="text-xs text-muted-foreground">{key}</span></div>
+              ))}
+            </div>
+            <TrialActionPlanReview result={trialDetail.result} />
+            {(trialDetail.result?.errors || []).length > 0 && <div className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] p-3 text-[var(--color-danger)]">
+              {(trialDetail.result?.errors || []).map((item, index) => <p key={index}>• {redactTrialText(item.message)}</p>)}
+            </div>}
+            {(trialDetail.result?.warnings || []).length > 0 && <div className="rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] p-3 text-[var(--color-warning)]">
+              {(trialDetail.result?.warnings || []).map((item, index) => <p key={index}>• {redactTrialText(item.message)}</p>)}
+            </div>}
+          </div>
+          <DialogFooter>
             <Button variant="ghost" onClick={() => setTrialDetail(null)}>关闭</Button>
             {trialDetail.status === 'passed' && (
               <Button onClick={() => {
@@ -746,22 +765,9 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                 if (node) openVersion(node)
               }}>打开试跑图谱</Button>
             )}
-          </>}>
-          <div className="space-y-4 text-sm">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {Object.entries(trialDetail.result?.counts || {}).map(([key, value]) => (
-                <div key={key} className="rounded-lg border bg-gray-50 p-3"><b className="block text-lg">{String(value)}</b><span className="text-xs text-gray-500">{key}</span></div>
-              ))}
-            </div>
-            <TrialActionPlanReview result={trialDetail.result} />
-            {(trialDetail.result?.errors || []).length > 0 && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-800">
-              {(trialDetail.result?.errors || []).map((item, index) => <p key={index}>• {redactTrialText(item.message)}</p>)}
-            </div>}
-            {(trialDetail.result?.warnings || []).length > 0 && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
-              {(trialDetail.result?.warnings || []).map((item, index) => <p key={index}>• {redactTrialText(item.message)}</p>)}
-            </div>}
-          </div>
-        </Modal>
+          </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       {promotion && (
@@ -779,15 +785,217 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
           const repairable = readiness?.repairStrategy === 'create_draft'
 
           return (
-            <Modal
-              open
-              onClose={() => setPromotion(null)}
-              title={`发布前检查 · ${promotion.node.version_number}`}
-              size="xl"
-              headerIcon={blocked
-                ? <CircleAlert size={20} className="text-red-600" />
-                : <ShieldCheck size={20} className="text-emerald-600" />}
-              footer={<>
+            <Dialog open onOpenChange={next => { if (!next) setPromotion(null) }}>
+              <DialogContent className="flex max-h-[min(88dvh,900px)] w-[min(92vw,56rem)] flex-col">
+                <DialogHeader>
+                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${blocked ? 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]' : 'bg-[var(--color-success-bg)] text-[var(--color-success)]'}`}>
+                    {blocked ? <CircleAlert size={20} /> : <ShieldCheck size={20} />}
+                  </div>
+                  <div className="min-w-0 pt-0.5">
+                    <DialogTitle>{`发布前检查 · ${promotion.node.version_number}`}</DialogTitle>
+                  </div>
+                </DialogHeader>
+              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto text-sm">
+                {blocked ? (
+                  <div data-testid="release-readiness-blocked" role="alert" className="rounded-xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] p-4 text-[var(--color-danger)]">
+                    <div className="flex items-start gap-3">
+                      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--color-danger-bg)] text-[var(--color-danger)]">
+                        <LockKeyhole size={17} />
+                      </span>
+                      <div className="min-w-0">
+                        <h3 className="font-semibold">当前版本暂时不能发布</h3>
+                        <p className="mt-1 leading-6 text-[var(--color-danger)]">
+                          {hasRuntimeConflicts
+                            ? `发现 ${runtimeConflicts!.totalCount} 项当前运行态与试跑候选值冲突。`
+                            : mappingIssues.length > 0
+                            ? `发现 ${groups.filter(group => group.issues.some(issue => MAPPING_CODES.has(issue.code))).length} 个本体元素存在 ${mappingIssues.length} 项映射问题${propertyIssues.length > 0 ? `，其中 ${propertyIssues.length} 个存储属性尚未映射` : ''}。`
+                            : `仍有 ${readiness?.blockingCount || issues.length || 1} 项发布条件未满足。`}
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-[var(--color-danger)]">
+                          {hasRuntimeConflicts
+                            ? '这些值来自动作、人工或其他非数据湖运行态。系统不会自动选择保留或覆盖，请先结合业务事实处理冲突后重新试跑。'
+                            : repairable
+                            ? `${promotion.node.version_number} 已完成试跑并被冻结，系统会从它创建一个完整草稿分支；补齐后需重新试跑。`
+                            : '当前发布基线已经变化，请先基于最新发布版合并本分支改动，再重新试跑。'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div data-testid="release-readiness-ready" role="status" className="flex items-start gap-3 rounded-xl border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] p-4 text-[var(--color-success)]">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--color-success-bg)] text-[var(--color-success)]"><Check size={17} /></span>
+                    <div><h3 className="font-semibold">发布条件已满足</h3><p className="mt-1 text-xs leading-5 text-[var(--color-success)]">精确试跑、数据版本和映射完整性均已通过检查，可以确认发布。</p></div>
+                  </div>
+                )}
+
+                {hasRuntimeConflicts && (
+                  <section
+                    aria-labelledby="runtime-state-conflicts-heading"
+                    data-testid="runtime-state-conflicts"
+                    className="rounded-xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] p-4"
+                  >
+                    <div className="mb-3 flex items-start justify-between gap-3">
+                      <div>
+                        <h3 id="runtime-state-conflicts-heading" className="font-semibold text-[var(--color-danger)]">
+                          当前运行态值 vs 试跑候选值
+                        </h3>
+                        <p className="mt-1 text-xs leading-5 text-[var(--color-danger)]">
+                          以下正式属性或关系的最新事实不来自数据湖或无法验证来源。发布已默认阻断，本页面不提供自动覆盖操作。
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-[var(--color-danger-bg)] px-2.5 py-1 text-xs font-semibold text-[var(--color-danger)]">
+                        {runtimeConflicts!.totalCount} 项
+                      </span>
+                    </div>
+                    <div className="scrollbar-thin max-h-72 space-y-3 overflow-y-auto pr-1">
+                      {runtimeConflicts!.items.map(conflict => (
+                        <article
+                          key={conflict.factId || [
+                            conflict.resourceKind,
+                            conflict.objectId || conflict.linkId,
+                            conflict.property,
+                          ].join(':')}
+                          data-testid="runtime-state-conflict-item"
+                          className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-card p-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <code className="text-xs font-semibold text-foreground">
+                              {conflict.resourceKind === 'link'
+                                ? `链接 ${conflict.linkId} · ${conflict.linkTypeId || '未知类型'}`
+                                : conflict.resourceKind === 'object'
+                                  ? `对象 ${conflict.objectId} · ${conflict.objectTypeId || '未知类型'}`
+                                : `${conflict.objectId} · ${conflict.property}`}
+                            </code>
+                            <span className="text-[11px] text-muted-foreground">
+                              来源：{redactTrialText(conflict.source)}
+                            </span>
+                          </div>
+                          <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_1fr] sm:items-stretch">
+                            <div className="min-w-0 rounded-md border border-border bg-muted p-2.5">
+                              <span className="block text-[11px] font-medium text-muted-foreground">
+                                {conflict.resourceKind === 'link'
+                                  ? '当前正式关系'
+                                  : conflict.resourceKind === 'object'
+                                    ? '当前正式对象'
+                                    : '当前运行态值'}
+                              </span>
+                              <code className="mt-1 block break-all whitespace-pre-wrap text-xs text-foreground">
+                                {conflict.resourceKind === 'objectProperty'
+                                  && conflict.currentPresent === false
+                                  ? '（当前不存在此属性）'
+                                  : runtimeValueText(
+                                    conflict.current,
+                                    conflict.resourceKind === 'link'
+                                      ? 'link'
+                                      : conflict.resourceKind === 'object'
+                                        ? 'object'
+                                        : conflict.property || '',
+                                  )}
+                              </code>
+                            </div>
+                            <ArrowRight size={16} className="self-center justify-self-center text-[var(--color-danger)]" />
+                            <div className="min-w-0 rounded-md border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] p-2.5">
+                              <span className="block text-[11px] font-medium text-[var(--color-danger)]">
+                                {conflict.resourceKind === 'link'
+                                  ? '试跑候选关系'
+                                  : conflict.resourceKind === 'object'
+                                    ? '试跑候选对象'
+                                    : '试跑候选值'}
+                              </span>
+                              <code className="mt-1 block break-all whitespace-pre-wrap text-xs text-[var(--color-danger)]">
+                                {conflict.resourceKind === 'link' || conflict.resourceKind === 'object'
+                                  ? runtimeValueText(conflict.candidate, conflict.resourceKind)
+                                  : conflict.candidatePresent
+                                  ? runtimeValueText(conflict.candidate, conflict.property || '')
+                                  : conflict.candidateObjectPresent
+                                    ? '（候选将删除此属性）'
+                                    : '（候选将删除此对象）'}
+                              </code>
+                            </div>
+                          </div>
+                          <p className="mt-2 break-all text-[10px] text-[var(--color-text-tertiary)]">
+                            Fact ID：{conflict.factId || '无可验证 Fact（未知来源）'}
+                          </p>
+                        </article>
+                      ))}
+                    </div>
+                    {runtimeConflicts!.truncated && (
+                      <p className="mt-3 text-xs text-[var(--color-danger)]">
+                        当前仅展示前 {runtimeConflicts!.itemLimit} 项，共 {runtimeConflicts!.totalCount} 项；全部冲突仍会阻断发布。
+                      </p>
+                    )}
+                  </section>
+                )}
+
+                {blocked && groups.length > 0 && (
+                  <section aria-labelledby="release-blockers-heading">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <h3 id="release-blockers-heading" className="font-semibold text-foreground">需要处理的问题</h3>
+                      <span className="text-xs text-muted-foreground">{issues.length} 项 · 按本体元素归组</span>
+                    </div>
+                    <div className="scrollbar-thin max-h-64 space-y-2 overflow-y-auto pr-1">
+                      {groups.map(group => (
+                        <details key={group.key} data-testid="release-readiness-group" className="group rounded-lg border border-border bg-card open:border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] open:bg-[var(--color-danger-bg)]">
+                          <summary className="flex min-h-12 cursor-pointer list-none items-center gap-3 px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                            <CircleAlert size={16} className="shrink-0 text-[var(--color-danger)]" />
+                            <span className="min-w-0 flex-1"><b className="block truncate text-foreground">{group.title}</b><span className="text-xs text-muted-foreground">{group.subtitle}</span></span>
+                            <span className="rounded-full bg-[var(--color-danger-bg)] px-2 py-0.5 text-xs font-medium text-[var(--color-danger)]">{group.issues.length} 项</span>
+                            <ChevronDown size={16} className="text-[var(--color-text-tertiary)] transition-transform group-open:rotate-180" />
+                          </summary>
+                          <div className="border-t border-border px-3 py-3">
+                            {group.fields.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5" aria-label={`${group.title} 未映射属性`}>
+                                {group.fields.map(field => <code key={field} className="rounded-md border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-card px-2 py-1 text-xs text-[var(--color-danger)]">{field}</code>)}
+                              </div>
+                            )}
+                            {group.issues.filter(issue => !PROPERTY_MAPPING_CODES.has(issue.code)).map((issue, index) => (
+                              <p key={`${issue.code}-${index}`} className="text-xs leading-5 text-foreground">{issue.message}</p>
+                            ))}
+                          </div>
+                        </details>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {promotion.impact.semanticOverview && (
+                  <SemanticReadinessSection overview={promotion.impact.semanticOverview} />
+                )}
+
+                <section aria-labelledby="release-impact-heading">
+                  <h3 id="release-impact-heading" className="mb-2 font-semibold text-foreground">结构影响</h3>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="rounded-lg border border-border bg-muted p-3"><b className="text-lg text-[var(--color-success)]">+{promotion.impact.total.added}</b><p className="text-xs text-muted-foreground">新增</p></div>
+                    <div className="rounded-lg border border-border bg-muted p-3"><b className="text-lg text-[var(--color-warning)]">~{promotion.impact.total.modified}</b><p className="text-xs text-muted-foreground">修改</p></div>
+                    <div className="rounded-lg border border-border bg-muted p-3"><b className="text-lg text-[var(--color-danger)]">-{promotion.impact.total.deleted}</b><p className="text-xs text-muted-foreground">删除</p></div>
+                  </div>
+                  <div className="mt-3">
+                    {promotion.impact.breakingCount === 0
+                      ? <p className="rounded-lg bg-[var(--color-success-bg)] px-3 py-2 text-[var(--color-success)]">未发现结构性破坏。</p>
+                      : <div className="scrollbar-thin max-h-40 space-y-2 overflow-auto">{promotion.impact.breaking.map((item, index) => (
+                        <div key={index} className="flex gap-2 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] p-3 text-[var(--color-warning)]"><AlertTriangle size={16} className="mt-0.5 shrink-0" />{item.message}</div>
+                      ))}</div>}
+                  </div>
+                  {(promotion.impact.worldModelImpact?.length ?? 0) > 0 && (
+                    <div className="mt-3">
+                      <div className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] p-3 text-[var(--color-danger)]">
+                        <p className="flex items-center gap-2 text-sm font-medium">
+                          <AlertTriangle size={16} className="shrink-0" />
+                          本次删除将使 {promotion.impact.worldModelImpact!.length} 个已发布推演服务失效
+                        </p>
+                        <p className="mt-1 text-xs text-[var(--color-danger)]">
+                          {promotion.impact.worldModelImpact!.map(item => item.name).join('、')}：这些世界模型服务声明的适用对象类型在本版本中被删除，发布后本体助手将无法再调用它们，需服务维护者重新发布。
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </section>
+
+                {!blocked && <p className="text-xs text-muted-foreground">确认后，只有本次试跑验证过的那份内容会被发布；之后任何改动都需要重新验证。</p>}
+                {createRepairDraft.isError && <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] p-3 text-[var(--color-danger)]">创建修复分支失败：{errorText(createRepairDraft.error)}</p>}
+                {promote.isError && <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] p-3 text-[var(--color-danger)]">{concisePromotionError(promote.error)}</p>}
+              </div>
+              <DialogFooter>
                 <Button variant="ghost" onClick={() => setPromotion(null)}>取消</Button>
                 {blocked ? (
                   <>
@@ -803,214 +1011,14 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
                     <Rocket size={14} /> 确认发布
                   </Button>
                 )}
-              </>}
-            >
-              <div className="space-y-5 text-sm">
-                {blocked ? (
-                  <div data-testid="release-readiness-blocked" role="alert" className="rounded-xl border border-red-200 bg-red-50/80 p-4 text-red-950">
-                    <div className="flex items-start gap-3">
-                      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-700">
-                        <LockKeyhole size={17} />
-                      </span>
-                      <div className="min-w-0">
-                        <h3 className="font-semibold">当前版本暂时不能发布</h3>
-                        <p className="mt-1 leading-6 text-red-800">
-                          {hasRuntimeConflicts
-                            ? `发现 ${runtimeConflicts!.totalCount} 项当前运行态与试跑候选值冲突。`
-                            : mappingIssues.length > 0
-                            ? `发现 ${groups.filter(group => group.issues.some(issue => MAPPING_CODES.has(issue.code))).length} 个本体元素存在 ${mappingIssues.length} 项映射问题${propertyIssues.length > 0 ? `，其中 ${propertyIssues.length} 个存储属性尚未映射` : ''}。`
-                            : `仍有 ${readiness?.blockingCount || issues.length || 1} 项发布条件未满足。`}
-                        </p>
-                        <p className="mt-1 text-xs leading-5 text-red-700">
-                          {hasRuntimeConflicts
-                            ? '这些值来自动作、人工或其他非数据湖运行态。系统不会自动选择保留或覆盖，请先结合业务事实处理冲突后重新试跑。'
-                            : repairable
-                            ? `${promotion.node.version_number} 已完成试跑并被冻结，系统会从它创建一个完整草稿分支；补齐后需重新试跑。`
-                            : '当前发布基线已经变化，请先基于最新发布版合并本分支改动，再重新试跑。'}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div data-testid="release-readiness-ready" role="status" className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 text-emerald-900">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700"><Check size={17} /></span>
-                    <div><h3 className="font-semibold">发布条件已满足</h3><p className="mt-1 text-xs leading-5 text-emerald-700">精确试跑、数据版本和映射完整性均已通过检查，可以确认发布。</p></div>
-                  </div>
-                )}
-
-                {hasRuntimeConflicts && (
-                  <section
-                    aria-labelledby="runtime-state-conflicts-heading"
-                    data-testid="runtime-state-conflicts"
-                    className="rounded-xl border border-red-200 bg-red-50/40 p-4"
-                  >
-                    <div className="mb-3 flex items-start justify-between gap-3">
-                      <div>
-                        <h3 id="runtime-state-conflicts-heading" className="font-semibold text-red-950">
-                          当前运行态值 vs 试跑候选值
-                        </h3>
-                        <p className="mt-1 text-xs leading-5 text-red-700">
-                          以下正式属性或关系的最新事实不来自数据湖或无法验证来源。发布已默认阻断，本页面不提供自动覆盖操作。
-                        </p>
-                      </div>
-                      <span className="shrink-0 rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">
-                        {runtimeConflicts!.totalCount} 项
-                      </span>
-                    </div>
-                    <div className="scrollbar-thin max-h-72 space-y-3 overflow-y-auto pr-1">
-                      {runtimeConflicts!.items.map(conflict => (
-                        <article
-                          key={conflict.factId || [
-                            conflict.resourceKind,
-                            conflict.objectId || conflict.linkId,
-                            conflict.property,
-                          ].join(':')}
-                          data-testid="runtime-state-conflict-item"
-                          className="rounded-lg border border-red-100 bg-white p-3"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <code className="text-xs font-semibold text-slate-800">
-                              {conflict.resourceKind === 'link'
-                                ? `链接 ${conflict.linkId} · ${conflict.linkTypeId || '未知类型'}`
-                                : conflict.resourceKind === 'object'
-                                  ? `对象 ${conflict.objectId} · ${conflict.objectTypeId || '未知类型'}`
-                                : `${conflict.objectId} · ${conflict.property}`}
-                            </code>
-                            <span className="text-[11px] text-slate-500">
-                              来源：{redactTrialText(conflict.source)}
-                            </span>
-                          </div>
-                          <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_1fr] sm:items-stretch">
-                            <div className="min-w-0 rounded-md border border-slate-200 bg-slate-50 p-2.5">
-                              <span className="block text-[11px] font-medium text-slate-500">
-                                {conflict.resourceKind === 'link'
-                                  ? '当前正式关系'
-                                  : conflict.resourceKind === 'object'
-                                    ? '当前正式对象'
-                                    : '当前运行态值'}
-                              </span>
-                              <code className="mt-1 block break-all whitespace-pre-wrap text-xs text-slate-800">
-                                {conflict.resourceKind === 'objectProperty'
-                                  && conflict.currentPresent === false
-                                  ? '（当前不存在此属性）'
-                                  : runtimeValueText(
-                                    conflict.current,
-                                    conflict.resourceKind === 'link'
-                                      ? 'link'
-                                      : conflict.resourceKind === 'object'
-                                        ? 'object'
-                                        : conflict.property || '',
-                                  )}
-                              </code>
-                            </div>
-                            <ArrowRight size={16} className="self-center justify-self-center text-red-400" />
-                            <div className="min-w-0 rounded-md border border-red-200 bg-red-50 p-2.5">
-                              <span className="block text-[11px] font-medium text-red-600">
-                                {conflict.resourceKind === 'link'
-                                  ? '试跑候选关系'
-                                  : conflict.resourceKind === 'object'
-                                    ? '试跑候选对象'
-                                    : '试跑候选值'}
-                              </span>
-                              <code className="mt-1 block break-all whitespace-pre-wrap text-xs text-red-900">
-                                {conflict.resourceKind === 'link' || conflict.resourceKind === 'object'
-                                  ? runtimeValueText(conflict.candidate, conflict.resourceKind)
-                                  : conflict.candidatePresent
-                                  ? runtimeValueText(conflict.candidate, conflict.property || '')
-                                  : conflict.candidateObjectPresent
-                                    ? '（候选将删除此属性）'
-                                    : '（候选将删除此对象）'}
-                              </code>
-                            </div>
-                          </div>
-                          <p className="mt-2 break-all text-[10px] text-slate-400">
-                            Fact ID：{conflict.factId || '无可验证 Fact（未知来源）'}
-                          </p>
-                        </article>
-                      ))}
-                    </div>
-                    {runtimeConflicts!.truncated && (
-                      <p className="mt-3 text-xs text-red-700">
-                        当前仅展示前 {runtimeConflicts!.itemLimit} 项，共 {runtimeConflicts!.totalCount} 项；全部冲突仍会阻断发布。
-                      </p>
-                    )}
-                  </section>
-                )}
-
-                {blocked && groups.length > 0 && (
-                  <section aria-labelledby="release-blockers-heading">
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <h3 id="release-blockers-heading" className="font-semibold text-slate-800">需要处理的问题</h3>
-                      <span className="text-xs text-slate-500">{issues.length} 项 · 按本体元素归组</span>
-                    </div>
-                    <div className="scrollbar-thin max-h-64 space-y-2 overflow-y-auto pr-1">
-                      {groups.map(group => (
-                        <details key={group.key} data-testid="release-readiness-group" className="group rounded-lg border border-slate-200 bg-white open:border-red-200 open:bg-red-50/30">
-                          <summary className="flex min-h-12 cursor-pointer list-none items-center gap-3 px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 [&::-webkit-details-marker]:hidden">
-                            <CircleAlert size={16} className="shrink-0 text-red-500" />
-                            <span className="min-w-0 flex-1"><b className="block truncate text-slate-800">{group.title}</b><span className="text-xs text-slate-500">{group.subtitle}</span></span>
-                            <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">{group.issues.length} 项</span>
-                            <ChevronDown size={16} className="text-slate-400 transition-transform group-open:rotate-180" />
-                          </summary>
-                          <div className="border-t border-slate-100 px-3 py-3">
-                            {group.fields.length > 0 && (
-                              <div className="flex flex-wrap gap-1.5" aria-label={`${group.title} 未映射属性`}>
-                                {group.fields.map(field => <code key={field} className="rounded-md border border-red-100 bg-white px-2 py-1 text-xs text-red-700">{field}</code>)}
-                              </div>
-                            )}
-                            {group.issues.filter(issue => !PROPERTY_MAPPING_CODES.has(issue.code)).map((issue, index) => (
-                              <p key={`${issue.code}-${index}`} className="text-xs leading-5 text-slate-700">{issue.message}</p>
-                            ))}
-                          </div>
-                        </details>
-                      ))}
-                    </div>
-                  </section>
-                )}
-
-                {promotion.impact.semanticOverview && (
-                  <SemanticReadinessSection overview={promotion.impact.semanticOverview} />
-                )}
-
-                <section aria-labelledby="release-impact-heading">
-                  <h3 id="release-impact-heading" className="mb-2 font-semibold text-slate-800">结构影响</h3>
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3"><b className="text-lg text-emerald-700">+{promotion.impact.total.added}</b><p className="text-xs text-slate-500">新增</p></div>
-                    <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3"><b className="text-lg text-amber-700">~{promotion.impact.total.modified}</b><p className="text-xs text-slate-500">修改</p></div>
-                    <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3"><b className="text-lg text-red-700">-{promotion.impact.total.deleted}</b><p className="text-xs text-slate-500">删除</p></div>
-                  </div>
-                  <div className="mt-3">
-                    {promotion.impact.breakingCount === 0
-                      ? <p className="rounded-lg bg-emerald-50 px-3 py-2 text-emerald-800">未发现结构性破坏。</p>
-                      : <div className="scrollbar-thin max-h-40 space-y-2 overflow-auto">{promotion.impact.breaking.map((item, index) => (
-                        <div key={index} className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900"><AlertTriangle size={16} className="mt-0.5 shrink-0" />{item.message}</div>
-                      ))}</div>}
-                  </div>
-                  {(promotion.impact.worldModelImpact?.length ?? 0) > 0 && (
-                    <div className="mt-3">
-                      <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-800">
-                        <p className="flex items-center gap-2 text-sm font-medium">
-                          <AlertTriangle size={16} className="shrink-0" />
-                          本次删除将使 {promotion.impact.worldModelImpact!.length} 个已发布推演服务失效
-                        </p>
-                        <p className="mt-1 text-xs text-red-700">
-                          {promotion.impact.worldModelImpact!.map(item => item.name).join('、')}：这些世界模型服务声明的适用对象类型在本版本中被删除，发布后本体助手将无法再调用它们，需服务维护者重新发布。
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </section>
-
-                {!blocked && <p className="text-xs text-slate-500">确认后，只有本次试跑验证过的那份内容会被发布；之后任何改动都需要重新验证。</p>}
-                {createRepairDraft.isError && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">创建修复分支失败：{errorText(createRepairDraft.error)}</p>}
-                {promote.isError && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">{concisePromotionError(promote.error)}</p>}
-              </div>
-            </Modal>
+              </DialogFooter>
+              </DialogContent>
+            </Dialog>
           )
         })()
       )}
 
-      <ConfirmModal
+      <ConfirmDialog
         open={Boolean(deleteTarget)}
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => deleteTarget && deleteVersion.mutate(deleteTarget)}

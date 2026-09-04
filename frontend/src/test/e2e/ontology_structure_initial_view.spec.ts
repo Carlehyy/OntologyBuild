@@ -424,8 +424,8 @@ test('拖拽节点后自动保存提示按 3→2→1 倒计时并复位', async 
 
   const status = page.getByTestId('structure-save-status')
   await expect(status).toContainText('3 秒后自动保存')
-  // 倒计时阶段使用琥珀色强调
-  expect(await status.evaluate(element => getComputedStyle(element).color)).toBe('rgb(217, 119, 6)')
+  // 倒计时阶段使用琥珀色强调（--color-warning 语义令牌）
+  expect(await status.evaluate(element => getComputedStyle(element).color)).toBe('rgb(201, 134, 26)')
   await expect(status).toContainText('2 秒后自动保存', { timeout: 2500 })
   await expect(status).toContainText('1 秒后自动保存', { timeout: 2500 })
   // 布局接口响应被 mock 挂起：「正在保存布局」会稳定停留，消除慢 CI 上
@@ -433,8 +433,8 @@ test('拖拽节点后自动保存提示按 3→2→1 倒计时并复位', async 
   await expect(status).toContainText('正在保存布局', { timeout: 3000 })
   releaseLayout()
   await expect(status).toContainText('布局已保存', { timeout: 3000 })
-  // 成功阶段使用绿色强调
-  expect(await status.evaluate(element => getComputedStyle(element).color)).toBe('rgb(5, 150, 105)')
+  // 成功阶段使用绿色强调（--color-success 语义令牌）
+  expect(await status.evaluate(element => getComputedStyle(element).color)).toBe('rgb(45, 138, 78)')
   // 成功提示短暂停留后回到空闲文案，不留存「布局已保存」
   await expect(status).toContainText('拖动后自动保存布局', { timeout: 6000 })
 

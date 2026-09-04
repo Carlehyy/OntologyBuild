@@ -4,8 +4,8 @@
 import type { EChartsOption, SeriesOption } from 'echarts'
 import {
   baseChartOption, categoryAxisBase, valueAxisBase,
-  CHART_PALETTE, CHART_TEAL, CHART_TEXT, CHART_TEXT_STRONG,
-} from './chartTheme.ts'
+  CHART_SERIES_PALETTE, CHART_TEAL, CHART_TEXT, CHART_TEXT_STRONG,
+} from '../../../../lib/echartsTheme.ts'
 import { instanceSourceLabel } from './instanceValueDisplay.ts'
 import type { ReleaseSummary } from './instanceBrowserTypes.ts'
 
@@ -105,7 +105,7 @@ export function buildTypeBarOption(types: {
         name: item.name,
         typeId: item.id,
         kind: item.kind,
-        itemStyle: { color: item.color || CHART_PALETTE[index % CHART_PALETTE.length] },
+        itemStyle: { color: item.color || CHART_SERIES_PALETTE[index % CHART_SERIES_PALETTE.length] },
       })),
     }],
     tooltip: { ...baseChartOption().tooltip, formatter: (params: any) => `${params.name}：${formatNumber(params.value)} 条` },
@@ -129,7 +129,7 @@ export function buildSourceDonutOption(entries: StatsSourceEntry[]): EChartsOpti
         // name 用来源原始 key，点击事件据此精确过滤；展示标签另由图例区渲染。
         name: entry.source,
         sourceLabel: instanceSourceLabel(entry.source),
-        itemStyle: { color: CHART_PALETTE[index % CHART_PALETTE.length] },
+        itemStyle: { color: CHART_SERIES_PALETTE[index % CHART_SERIES_PALETTE.length] },
       })),
     }],
     tooltip: {
@@ -245,7 +245,7 @@ export function buildCategoryBarOption(field: InstanceStatsField): EChartsOption
         name: row.name,
         filterValue: row.filterValue,
         itemStyle: {
-          color: row.other ? '#CBD5E1' : CHART_PALETTE[index % CHART_PALETTE.length],
+          color: row.other ? '#CBD5E1' : CHART_SERIES_PALETTE[index % CHART_SERIES_PALETTE.length],
           opacity: row.other ? 0.7 : 1,
         },
       })),

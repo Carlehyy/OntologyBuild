@@ -68,7 +68,7 @@ export default function InstanceTypeProfileSection({
       className="anim-fade-in-up flex flex-col gap-4"
     >
       {/* 类型名片 */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-slate-200 bg-white px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-border bg-card px-4 py-3">
         <span
           className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-lg"
           style={{ backgroundColor: `${color}1A`, color }}
@@ -76,20 +76,20 @@ export default function InstanceTypeProfileSection({
           {typeNode?.icon || <Hash size={16} />}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-slate-800" title={typeNode?.description || undefined}>
+          <p className="text-sm font-semibold text-foreground" title={typeNode?.description || undefined}>
             {typeNode ? typeLabel(typeNode) : '数据画像'}
-            <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-normal text-slate-500">
+            <span className="ml-2 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] font-normal text-muted-foreground">
               {typeNode?.name}
             </span>
           </p>
         </div>
         {stats && (
-          <span className="text-xs text-slate-500">
-            共 <span className="font-semibold tabular-nums text-slate-800">{formatNumber(stats.total)}</span> 条
+          <span className="text-xs text-muted-foreground">
+            共 <span className="font-semibold tabular-nums text-foreground">{formatNumber(stats.total)}</span> 条
           </span>
         )}
         {stats?.truncated && (
-          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-600"
+          <span className="rounded bg-[var(--color-warning-bg)] px-1.5 py-0.5 text-[10px] text-[var(--color-warning)]"
             title="数据量较大，分布统计基于前 20000 条采样">
             分布基于 2 万条采样
           </span>
@@ -98,7 +98,7 @@ export default function InstanceTypeProfileSection({
           <span className="flex flex-wrap items-center gap-1">
             {stats.bySource.map(entry => (
               <span key={entry.source}
-                className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] tabular-nums text-slate-500">
+                className="rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
                 {instanceSourceLabel(entry.source)} {formatNumber(entry.count)}
               </span>
             ))}
@@ -107,13 +107,13 @@ export default function InstanceTypeProfileSection({
       </div>
 
       {statsQuery.isLoading && (
-        <div className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white py-10 text-xs text-slate-400">
-          <Loader2 size={14} className="animate-spin text-teal-600" /> 正在分析该类型的数据画像…
+        <div className="flex items-center justify-center gap-2 rounded-xl border border-border bg-card py-10 text-xs text-[var(--color-text-tertiary)]">
+          <Loader2 size={14} className="animate-spin text-brand-ink" /> 正在分析该类型的数据画像…
         </div>
       )}
 
       {statsFailed && (
-        <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
+        <div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-4 py-3 text-xs text-[var(--color-danger)]">
           <AlertCircle size={14} />
           <span className="flex-1">数据画像加载失败</span>
           <button type="button" onClick={() => void statsQuery.refetch()} className="font-medium hover:underline">重试</button>
@@ -137,7 +137,7 @@ export default function InstanceTypeProfileSection({
           </InstanceChartCard>
 
           {categoryFields.length === 0 && numberFields.length === 0 && dateFields.length === 0 && (
-            <div className="flex items-center justify-center rounded-xl border border-dashed border-slate-200 bg-white text-xs text-slate-400">
+            <div className="flex items-center justify-center rounded-xl border border-dashed border-border bg-card text-xs text-[var(--color-text-tertiary)]">
               该类型暂无可画像的字段取值
             </div>
           )}
@@ -167,7 +167,7 @@ export default function InstanceTypeProfileSection({
                 }}
               />
               {(activeFilters[field.name]?.length ?? 0) > 0 && (
-                <p className="mt-1 text-[11px] text-teal-600">
+                <p className="mt-1 text-[11px] text-brand-ink">
                   已过滤：{activeFilters[field.name].map(formatFilterValue).join('、')}（再次点击条形可取消）
                 </p>
               )}
@@ -189,9 +189,9 @@ export default function InstanceTypeProfileSection({
                   ['平均', field.avg],
                   ['最大', field.max],
                 ] as const).map(([label, value]) => (
-                  <div key={label} className="rounded-lg bg-slate-50 px-2 py-1.5">
-                    <p className="text-[10px] text-slate-400">{label}</p>
-                    <p className="text-sm font-semibold tabular-nums text-slate-800">
+                  <div key={label} className="rounded-lg bg-muted px-2 py-1.5">
+                    <p className="text-[10px] text-[var(--color-text-tertiary)]">{label}</p>
+                    <p className="text-sm font-semibold tabular-nums text-foreground">
                       {typeof value === 'number' ? formatNumber(value) : '—'}
                     </p>
                   </div>
@@ -212,16 +212,16 @@ export default function InstanceTypeProfileSection({
             <div
               key={field.name}
               data-testid={`profile-field-${field.name}`}
-              className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 transition hover:border-teal-200"
+              className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 transition hover:border-brand-line"
             >
-              <CalendarRange size={16} className="shrink-0 text-teal-600" />
+              <CalendarRange size={16} className="shrink-0 text-brand-ink" />
               <div className="min-w-0">
-                <p className="text-[13px] font-semibold text-slate-800">{field.label} · 时间范围</p>
-                <p className="mt-0.5 text-xs tabular-nums text-slate-500">
-                  {String(field.min)} <span className="text-slate-300">→</span> {String(field.max)}
+                <p className="text-[13px] font-semibold text-foreground">{field.label} · 时间范围</p>
+                <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
+                  {String(field.min)} <span className="text-[var(--color-text-tertiary)]">→</span> {String(field.max)}
                 </p>
               </div>
-              <span className="ml-auto text-[11px] text-slate-400">
+              <span className="ml-auto text-[11px] text-[var(--color-text-tertiary)]">
                 覆盖率 {Math.round(field.coverage * 100)}%
               </span>
             </div>

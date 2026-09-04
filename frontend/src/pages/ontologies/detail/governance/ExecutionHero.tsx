@@ -39,16 +39,16 @@ function StatCell({ icon: Icon, iconCls, label, value, detail, spark, onClick }:
     <button
       type="button"
       onClick={onClick}
-      className="group relative rounded-xl border bg-white px-4 py-3 text-left transition hover:border-teal-200 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+      className="group relative rounded-xl border bg-card px-4 py-3 text-left transition hover:border-brand-line hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span className="flex items-center justify-between gap-2">
-        <span className="text-xs text-gray-400">{label}</span>
+        <span className="text-xs text-[var(--color-text-tertiary)]">{label}</span>
         <Icon size={13} className={`${iconCls} opacity-70 transition group-hover:opacity-100`} />
       </span>
-      <span className="mt-0.5 block text-xl font-semibold tabular-nums text-gray-800">{value}</span>
-      <span className="mt-0.5 block truncate text-[11px] text-gray-400" title={detail}>{detail}</span>
+      <span className="mt-0.5 block text-xl font-semibold tabular-nums text-foreground">{value}</span>
+      <span className="mt-0.5 block truncate text-[11px] text-[var(--color-text-tertiary)]" title={detail}>{detail}</span>
       <span className="mt-1.5 block" title={spark.hint}>
-        <span className="mb-0.5 block text-[9px] text-gray-300">近 7 日</span>
+        <span className="mb-0.5 block text-[9px] text-[var(--color-text-tertiary)]">近 7 日</span>
         <ReactECharts option={sparkOption} style={{ width: '100%', height: 30 }} opts={{ renderer: 'canvas' }} />
       </span>
     </button>
@@ -63,15 +63,15 @@ function DailyRuntimeTrend({ days, isRefreshing }: { days: RuntimeDay[]; isRefre
   return (
     <div data-testid="governance-daily-spark" className="relative flex h-full flex-col">
       {isRefreshing && (
-        <span className="absolute -top-1 right-0 z-10 inline-flex items-center gap-1 text-[10px] text-teal-600">
+        <span className="absolute -top-1 right-0 z-10 inline-flex items-center gap-1 text-[10px] text-brand-ink">
           <Loader2 size={10} className="animate-spin" /> 同步中
         </span>
       )}
-      <p className="text-[11px] text-gray-400">近 7 日运行趋势</p>
+      <p className="text-[11px] text-[var(--color-text-tertiary)]">近 7 日运行趋势</p>
       <div className="relative mt-1 flex-1">
         <RuntimeTrendChart days={days} rangeLabel="近 7 日" />
         {totalEvents === 0 && (
-          <span className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 text-center text-[11px] text-gray-300">
+          <span className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 text-center text-[11px] text-[var(--color-text-tertiary)]">
             近 7 日暂无哨兵命中或动作执行记录
           </span>
         )}
@@ -101,7 +101,7 @@ export function KpiOverviewGrid({
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(430px,2fr)]">
       <div data-testid="governance-kpi-strip" className="grid grid-cols-2 content-start gap-4">
-        <StatCell icon={HandMetal} iconCls="text-blue-500" label="待审批"
+        <StatCell icon={HandMetal} iconCls="text-[var(--color-info)]" label="待审批"
           value={String(kpis.pendingCount)}
           detail={kpis.pendingCount > 0 ? '需要人工裁决 · 点击直达' : '全部已处理'}
           spark={{
@@ -109,7 +109,7 @@ export function KpiOverviewGrid({
             hint: '近 7 日每日人工决策处理量(批准+拒绝)',
           }}
           onClick={() => (kpis.pendingCount > 0 ? onOpenFirstPending() : onNavigate('board'))} />
-        <StatCell icon={ScrollText} iconCls="text-indigo-500" label="决策批准率"
+        <StatCell icon={ScrollText} iconCls="text-viz-indigo" label="决策批准率"
           value={kpis.approvalRate !== null ? pct(kpis.approvalRate) : '—'}
           detail={kpis.decisionsTotal > 0
             ? `累计 ${kpis.decisionsTotal} 次(批准 ${kpis.decisionsApproved} · 拒绝 ${kpis.decisionsRejected})`
@@ -119,7 +119,7 @@ export function KpiOverviewGrid({
             hint: '近 7 日每日批准率(当日无决策则断点)',
           }}
           onClick={() => onNavigate('board')} />
-        <StatCell icon={ShieldAlert} iconCls="text-rose-500" label="哨兵在线"
+        <StatCell icon={ShieldAlert} iconCls="text-viz-rose" label="哨兵在线"
           value={kpis.sentinelsTotal > 0 ? `${kpis.sentinelsOnline}/${kpis.sentinelsTotal}` : '—'}
           detail={kpis.sentinelsTotal === 0
             ? '尚未配置哨兵'
@@ -131,7 +131,7 @@ export function KpiOverviewGrid({
             hint: '近 7 日每日哨兵命中次数',
           }}
           onClick={() => onNavigate('board')} />
-        <StatCell icon={Rocket} iconCls="text-amber-500" label="自治动作"
+        <StatCell icon={Rocket} iconCls="text-[var(--color-warning)]" label="自治动作"
           value={kpis.actionsTotal > 0 ? String(kpis.actionsTotal) : '—'}
           detail={kpis.actionsTotal === 0
             ? '尚未配置动作'
@@ -142,7 +142,7 @@ export function KpiOverviewGrid({
           }}
           onClick={() => onNavigate('board')} />
       </div>
-      <div className="rounded-xl border bg-white p-4">
+      <div className="rounded-xl border bg-card p-4">
         <DailyRuntimeTrend days={runtimeDays} isRefreshing={isRefreshing} />
       </div>
     </div>

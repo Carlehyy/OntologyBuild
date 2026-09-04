@@ -5,7 +5,8 @@ import { domainApi, ontologyApi } from '@/api/ontologies'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { LoadingState } from '@/components/ui/LoadingState'
-import { ConfirmModal, Modal } from '@/components/ui/Modal'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { ConfirmDialog } from '../ConfirmDialog'
 import { useToast } from '@/components/ui/Toast'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ICON_OPTIONS, OntologyAvatar } from '@/components/OntologyAvatar'
@@ -125,31 +126,21 @@ function OntologyFormModal({
   }
 
   return (
-    <Modal
-      open={open}
-      onClose={() => !saving && onClose()}
-      title={title}
-      description={initial
-        ? '更新本体的名称、领域与说明，不会影响已经维护的结构和版本。'
-        : '填写基本信息后即可使用，后续可在详情页维护结构与版本。'}
-      headerIcon={initial
-        ? <Pencil size={18} className="text-teal-600" />
-        : <Plus size={19} className="text-teal-600" />}
-      size="lg"
-      footer={(
-        <>
-          <Button variant="ghost" onClick={onClose} disabled={saving}>取消</Button>
-          <Button
-            onClick={submit}
-            loading={saving}
-            disabled={!name.trim() || !selectedDomain}
-            className="bg-teal-600 text-white hover:bg-teal-700 active:bg-teal-800 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
-          >
-            {submitText}
-          </Button>
-        </>
-      )}
-    >
+    <Dialog open={open} onOpenChange={next => { if (!next && !saving) onClose() }}>
+      <DialogContent className="w-[min(92vw,32rem)]">
+        <DialogHeader>
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand-ink">
+            {initial ? <Pencil size={18} /> : <Plus size={19} />}
+          </div>
+          <div className="min-w-0 pt-0.5">
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>
+              {initial
+                ? '更新本体的名称、领域与说明，不会影响已经维护的结构和版本。'
+                : '填写基本信息后即可使用，后续可在详情页维护结构与版本。'}
+            </DialogDescription>
+          </div>
+        </DialogHeader>
       <div className="space-y-5">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input
@@ -160,25 +151,26 @@ function OntologyFormModal({
             value={name}
             onChange={event => setName(event.target.value)}
             placeholder="例如：供应链知识本体"
-            className="selection:bg-teal-200 selection:text-teal-950 focus:border-teal-500 focus:ring-teal-500/30"
+            className="selection:bg-brand-mist selection:text-brand-ink focus:border-brand focus:ring-ring"
           />
           <div>
             <label className="mb-1.5 block text-sm font-medium text-[var(--color-text-primary)]">
               所属领域<span className="ml-0.5 text-[var(--color-danger)]">*</span>
             </label>
             {availableDomains.length > 0 ? (
-              <select
-                value={selectedDomain}
-                onChange={event => setDomain(event.target.value)}
-                className="h-9 w-full rounded-md border border-[var(--color-border)] bg-white px-3 text-sm text-[var(--color-text-primary)] focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30"
-              >
-                {availableDomains.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}
-              </select>
+              <Select value={selectedDomain} onValueChange={setDomain}>
+                <SelectTrigger className="h-9 w-full rounded-md bg-card px-3 text-sm" aria-label="所属领域">
+                  <SelectValue placeholder="请选择领域" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableDomains.map(item => <SelectItem key={item.id} value={item.name}>{item.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
             ) : (
               <button
                 type="button"
                 onClick={onManageDomains}
-                className="flex h-9 w-full items-center justify-between rounded-md border border-dashed border-amber-300 bg-amber-50 px-3 text-sm text-amber-700"
+                className="flex h-9 w-full items-center justify-between rounded-md border border-dashed border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-3 text-sm text-[var(--color-warning)]"
               >
                 暂无可用领域 <span className="font-medium">前往设置</span>
               </button>
@@ -194,7 +186,7 @@ function OntologyFormModal({
             maxLength={500}
             rows={3}
             placeholder="简要说明本体覆盖的业务范围和用途"
-            className="w-full resize-none rounded-md border border-[var(--color-border)] bg-white px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] selection:bg-teal-200 selection:text-teal-950 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30"
+            className="w-full resize-none rounded-md border border-[var(--color-border)] bg-card px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] selection:bg-brand-mist selection:text-brand-ink focus:border-brand focus:outline-none focus:ring-1 focus:ring-ring"
           />
           <p className="mt-1 text-right text-[11px] text-[var(--color-text-tertiary)]">{description.length}/500</p>
         </div>
@@ -215,8 +207,8 @@ function OntologyFormModal({
                   aria-pressed={selected}
                   className={`flex aspect-square items-center justify-center rounded-xl border transition-all ${
                     selected
-                      ? 'border-teal-500 bg-teal-50 text-teal-700 shadow-sm ring-2 ring-teal-100'
-                      : 'border-slate-200 bg-white text-slate-500 hover:border-teal-300 hover:bg-slate-50'
+                      ? 'border-brand bg-brand-soft text-brand-ink shadow-sm ring-2 ring-ring'
+                      : 'border-border bg-card text-muted-foreground hover:border-brand-line hover:bg-muted'
                   }`}
                 >
                   <Icon size={20} strokeWidth={1.8} />
@@ -228,13 +220,20 @@ function OntologyFormModal({
         </fieldset>
 
         {error && (
-          <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-100 bg-red-50/70 px-3.5 py-3 text-sm text-red-700">
+          <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-3.5 py-3 text-sm text-[var(--color-danger)]">
             <AlertCircle size={16} className="mt-0.5 shrink-0" />
             <span className="leading-5">{error}</span>
           </div>
         )}
       </div>
-    </Modal>
+      <DialogFooter>
+        <Button variant="ghost" onClick={onClose} disabled={saving}>取消</Button>
+        <Button onClick={submit} loading={saving} disabled={!name.trim() || !selectedDomain}>
+          {submitText}
+        </Button>
+      </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -248,17 +247,17 @@ function CreateOntologyCard({
   importing: boolean
 }) {
   return (
-    <article className="group flex min-h-[256px] flex-col items-center justify-center rounded-2xl border border-dashed border-teal-300 bg-gradient-to-br from-teal-50/80 via-white to-cyan-50/60 p-6 text-center transition-all hover:border-teal-500 hover:shadow-lg">
-      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-teal-600 text-white shadow-md shadow-teal-600/20 transition-transform group-hover:scale-105">
+    <article className="group flex min-h-[256px] flex-col items-center justify-center rounded-2xl border border-dashed border-brand-line bg-gradient-to-br from-brand-soft via-white to-viz-cyan-soft p-6 text-center transition-all hover:border-brand hover:shadow-lg">
+      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-brand text-[var(--color-text-inverse)] shadow-md transition-transform group-hover:scale-105">
         <Plus size={25} />
       </div>
-      <h3 className="text-base font-semibold text-slate-800">新建本体</h3>
-      <p className="mt-2 max-w-[210px] text-xs leading-5 text-slate-500">快速创建本体模型</p>
+      <h3 className="text-base font-semibold text-foreground">新建本体</h3>
+      <p className="mt-2 max-w-[210px] text-xs leading-5 text-muted-foreground">快速创建本体模型</p>
       <div className="mt-5 flex items-center justify-center gap-2">
         <button
           type="button"
           onClick={onCreate}
-          className="rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm transition-colors hover:border-teal-300 hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+          className="rounded-lg border border-brand-line bg-card px-3 py-1.5 text-xs font-medium text-brand-ink shadow-sm transition-colors hover:border-brand-line hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           立即创建
         </button>
@@ -266,7 +265,7 @@ function CreateOntologyCard({
           type="button"
           disabled={importing}
           onClick={onImport}
-          className="rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm transition-colors hover:border-teal-300 hover:bg-teal-50 disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+          className="rounded-lg border border-brand-line bg-card px-3 py-1.5 text-xs font-medium text-brand-ink shadow-sm transition-colors hover:border-brand-line hover:bg-brand-soft disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           aria-busy={importing}
         >
           {importing ? '正在导入' : '本地导入'}
@@ -342,11 +341,11 @@ function OntologyCard({
       onDragEnd={() => onCardDragEnd?.()}
       data-testid="ontology-card"
       data-ontology-id={item.id}
-      className={`group flex min-h-[256px] flex-col overflow-hidden rounded-2xl border bg-white transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-200 hover:shadow-lg ${
+      className={`group flex min-h-[256px] flex-col overflow-hidden rounded-2xl border bg-card transition-all duration-200 hover:-translate-y-0.5 hover:border-brand-line hover:shadow-lg ${
         draggable ? 'cursor-grab active:cursor-grabbing' : ''
       } ${dragging ? 'opacity-40' : ''} ${
-        dropPlace ? 'outline-2 -outline-offset-2 outline-teal-400' : ''
-      } border-slate-200`}
+        dropPlace ? 'outline-2 -outline-offset-2 outline-brand' : ''
+      } border-border`}
     >
       <div className="flex flex-col p-4 pb-2.5">
         <div className="flex min-h-11 items-start gap-3 overflow-hidden">
@@ -356,22 +355,22 @@ function OntologyCard({
               <button
                 type="button"
                 onClick={onDetail}
-                className="min-w-0 flex-1 truncate text-left text-[15px] font-semibold leading-5 text-slate-800 transition-colors hover:text-teal-700"
+                className="min-w-0 flex-1 truncate text-left text-[15px] font-semibold leading-5 text-foreground transition-colors hover:text-brand-ink"
                 title={item.name}
               >
                 {item.name}
               </button>
             </div>
             <div className="mt-1 flex min-w-0 items-center gap-1.5">
-              <span className="inline-flex min-w-0 max-w-full truncate rounded-md border border-teal-100 bg-teal-50 px-2 py-0.5 text-[11px] font-medium leading-4 text-teal-700">
+              <span className="inline-flex min-w-0 max-w-full truncate rounded-md border border-brand-line bg-brand-soft px-2 py-0.5 text-[11px] font-medium leading-4 text-brand-ink">
                 {item.domain || '未设置领域'}
               </span>
               {releaseVersion ? (
-                <span className="inline-flex shrink-0 rounded-md border border-violet-100 bg-violet-50 px-2 py-0.5 font-mono text-[11px] font-medium leading-4 text-violet-600">
+                <span className="inline-flex shrink-0 rounded-md border border-viz-violet-soft bg-viz-violet-soft px-2 py-0.5 font-mono text-[11px] font-medium leading-4 text-viz-violet">
                   {releaseVersion}
                 </span>
               ) : (
-                <span className="inline-flex shrink-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium leading-4 text-slate-500">
+                <span className="inline-flex shrink-0 rounded-md border border-border bg-muted px-2 py-0.5 text-[11px] font-medium leading-4 text-muted-foreground">
                   未发布
                 </span>
               )}
@@ -382,7 +381,7 @@ function OntologyCard({
         <button
           type="button"
           onClick={onDetail}
-          className="mt-4 min-h-[44px] w-full cursor-pointer text-left text-sm leading-[22px] text-slate-500 transition-colors hover:text-teal-700"
+          className="mt-4 min-h-[44px] w-full cursor-pointer text-left text-sm leading-[22px] text-muted-foreground transition-colors hover:text-brand-ink"
           style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
           title={item.description || '暂无描述'}
         >
@@ -396,28 +395,28 @@ function OntologyCard({
             { label: '执行动作', value: item.action_count ?? 0 },
             { label: '哨兵引擎', value: item.sentinel_count ?? 0 },
           ].map(metric => (
-            <div key={metric.label} className="min-w-0 rounded-xl bg-slate-50 px-0.5 py-2.5 text-center">
-              <p className="whitespace-nowrap text-[11px] font-medium text-slate-400">{metric.label}</p>
-              <p className="mt-0.5 text-lg font-semibold tabular-nums text-slate-800">{metric.value}</p>
+            <div key={metric.label} className="min-w-0 rounded-xl bg-muted px-0.5 py-2.5 text-center">
+              <p className="whitespace-nowrap text-[11px] font-medium text-[var(--color-text-tertiary)]">{metric.label}</p>
+              <p className="mt-0.5 text-lg font-semibold tabular-nums text-foreground">{metric.value}</p>
             </div>
           ))}
         </div>
       </div>
 
-      <footer className="mt-auto flex min-h-11 items-center gap-0.5 border-t border-slate-100 px-4 py-1.5">
+      <footer className="mt-auto flex min-h-11 items-center gap-0.5 border-t border-border px-4 py-1.5">
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={onDetail}
             aria-label={`查看本体 ${item.name} 详情`}
-            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
+            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-muted px-1.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-brand-soft hover:text-brand-ink"
           >
             <Eye size={12} /> 查看
           </button>
           <button
             type="button"
             onClick={onEdit}
-            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
+            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-muted px-1.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-brand-soft hover:text-brand-ink"
           >
             <Pencil size={12} /> 编辑
           </button>
@@ -427,7 +426,7 @@ function OntologyCard({
               onClick={onChat}
               disabled={!chatAvailable}
               aria-label={chatAvailable ? `使用${item.name}进入本体助手对话` : `${item.name}尚未发布，暂不可对话`}
-              className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700 disabled:pointer-events-none disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-slate-100"
+              className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-muted px-1.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-brand-soft hover:text-brand-ink disabled:pointer-events-none disabled:cursor-not-allowed disabled:text-[var(--color-text-tertiary)] hover:bg-muted"
             >
               <MessageCircle size={12} /> 对话
             </button>
@@ -436,7 +435,7 @@ function OntologyCard({
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           <span
             data-testid="ontology-card-time"
-            className="hidden shrink-0 whitespace-nowrap text-[11px] tabular-nums text-slate-400 min-[1400px]:inline"
+            className="hidden shrink-0 whitespace-nowrap text-[11px] tabular-nums text-[var(--color-text-tertiary)] min-[1400px]:inline"
             title={timeTitle}
           >
             {timeText}
@@ -444,7 +443,7 @@ function OntologyCard({
           <button
             type="button"
             onClick={onDelete}
-            className="shrink-0 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
+            className="shrink-0 rounded-lg p-1.5 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-danger-bg)] hover:text-[var(--color-danger)]"
             title="删除本体"
             aria-label={`删除本体 ${item.name}`}
           >
@@ -600,21 +599,21 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
 
   return (
     <div className="min-h-full">
-      <section className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50" aria-label="本体筛选">
+      <section className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-sm/50" aria-label="本体筛选">
         <div className="relative w-full sm:w-72">
-          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
           <input
             value={nameFilter}
             onChange={event => setNameFilter(event.target.value)}
             placeholder="搜索本体名称或描述"
             aria-label="按本体名称或描述筛选"
-            className="h-9 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-8 text-sm text-slate-700 placeholder:text-slate-400 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+            className="h-9 w-full rounded-lg border border-border bg-card pl-8 pr-8 text-sm text-foreground placeholder:text-[var(--color-text-tertiary)] focus:border-brand focus:outline-none focus:ring-2 focus:ring-ring"
           />
           {nameFilter && (
             <button
               type="button"
               onClick={() => setNameFilter('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)] hover:text-muted-foreground"
               aria-label="清除名称筛选"
             >
               <X size={13} />
@@ -629,7 +628,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
           {/* 样式对齐旁边搜索输入框：白底/slate 描边/teal 聚焦（覆盖 vendored bg-background 画布灰） */}
           <SelectTrigger
             aria-label="按所属领域筛选"
-            className="h-9 w-44 rounded-lg border-slate-200 bg-white text-slate-700 focus:border-teal-400 focus:ring-teal-500/20"
+            className="h-9 w-44 rounded-lg border-border bg-card text-foreground focus:border-brand focus:ring-ring"
           >
             <SelectValue />
           </SelectTrigger>
@@ -642,12 +641,12 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
           <button
             type="button"
             onClick={() => { setNameFilter(''); setDomainFilter('') }}
-            className="inline-flex h-9 items-center gap-1 rounded-lg px-2.5 text-xs text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+            className="inline-flex h-9 items-center gap-1 rounded-lg px-2.5 text-xs text-[var(--color-text-tertiary)] hover:bg-muted hover:text-muted-foreground"
           >
             <X size={13} /> 清除筛选
           </button>
         )}
-        <span className="ml-auto hidden text-xs tabular-nums text-slate-400 sm:inline" aria-live="polite">
+        <span className="ml-auto hidden text-xs tabular-nums text-[var(--color-text-tertiary)] sm:inline" aria-live="polite">
           {nameFilter || domainFilter
             ? `共 ${filteredItems.length} / ${allItems.length} 个本体`
             : `共 ${allItems.length} 个本体`}
@@ -655,7 +654,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
         <button
           type="button"
           onClick={openCreate}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--color-nav-bg)] px-4 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--color-nav-bg)] px-4 text-sm font-medium text-[var(--color-text-inverse)] shadow-sm transition-all duration-200 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           <Plus size={15} /> 立即创建
         </button>
@@ -680,25 +679,25 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
         />
 
         {isLoading ? (
-          <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-slate-200 bg-white sm:col-span-1 lg:col-span-2 xl:col-span-3">
+          <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-border bg-card sm:col-span-1 lg:col-span-2 xl:col-span-3">
             <LoadingState message="加载本体列表..." />
           </div>
         ) : isError ? (
-          <div className="flex min-h-[300px] flex-col items-center justify-center gap-3 rounded-2xl border border-red-100 bg-red-50 px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3" role="alert">
-            <p className="text-sm text-red-600">本体列表加载失败，请检查网络连接后重试。</p>
+          <div className="flex min-h-[300px] flex-col items-center justify-center gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3" role="alert">
+            <p className="text-sm text-[var(--color-danger)]">本体列表加载失败，请检查网络连接后重试。</p>
             <button
               type="button"
               onClick={() => void refetch()}
-              className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+              className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-card px-3 py-1.5 text-xs font-medium text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-danger)]"
             >
               重新加载
             </button>
           </div>
         ) : filteredItems.length === 0 ? (
-          <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3">
-            <Network size={28} className="text-slate-300" />
-            <p className="mt-3 text-sm font-medium text-slate-500">{nameFilter || domainFilter ? '没有符合条件的本体' : '还没有创建本体'}</p>
-            <p className="mt-1 text-xs text-slate-400">{nameFilter || domainFilter ? '请调整名称或领域筛选条件' : '点击左侧卡片创建第一个本体'}</p>
+          <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-border bg-card px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3">
+            <Network size={28} className="text-[var(--color-text-tertiary)]" />
+            <p className="mt-3 text-sm font-medium text-muted-foreground">{nameFilter || domainFilter ? '没有符合条件的本体' : '还没有创建本体'}</p>
+            <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">{nameFilter || domainFilter ? '请调整名称或领域筛选条件' : '点击左侧卡片创建第一个本体'}</p>
           </div>
         ) : (
           filteredItems.map(item => (
@@ -749,7 +748,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
         />
       )}
 
-      <ConfirmModal
+      <ConfirmDialog
         open={!!deleteTarget}
         onClose={() => { if (!deleteMutation.isPending) setDeleteTarget(null) }}
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}

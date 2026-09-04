@@ -93,6 +93,21 @@
   --color-code-bg: #0d1420;
   --color-code-fg: #dbe4f0;
 
+  /* ── 类型编码色（viz，分类数据可视化：图例、类型徽章、结构图节点）──
+     与 §5 图表序列同源取值；明暗同值，成对维护以便未来分档。 */
+  --color-viz-violet: #8b5cf6;
+  --color-viz-violet-soft: rgba(139, 92, 246, 0.12);
+  --color-viz-fuchsia: #d946ef;
+  --color-viz-fuchsia-soft: rgba(217, 70, 239, 0.12);
+  --color-viz-rose: #f43f5e;
+  --color-viz-rose-soft: rgba(244, 63, 94, 0.10);
+  --color-viz-orange: #f97316;
+  --color-viz-orange-soft: rgba(249, 115, 22, 0.12);
+  --color-viz-indigo: #6366f1;
+  --color-viz-indigo-soft: rgba(99, 102, 241, 0.12);
+  --color-viz-cyan: #14b8a6;
+  --color-viz-cyan-soft: rgba(20, 184, 166, 0.12);
+
   /* ── 圆角 ── */
   --radius-sm: 4px;
   --radius-md: 8px;
@@ -219,6 +234,20 @@
   /* ── 代码块面（深色档） ── */
   --color-code-bg: #0a0f18;
   --color-code-fg: #c9d4e3;
+
+  /* ── 类型编码色（viz，深色档同值） ── */
+  --color-viz-violet: #8b5cf6;
+  --color-viz-violet-soft: rgba(139, 92, 246, 0.18);
+  --color-viz-fuchsia: #d946ef;
+  --color-viz-fuchsia-soft: rgba(217, 70, 239, 0.18);
+  --color-viz-rose: #f43f5e;
+  --color-viz-rose-soft: rgba(244, 63, 94, 0.16);
+  --color-viz-orange: #f97316;
+  --color-viz-orange-soft: rgba(249, 115, 22, 0.18);
+  --color-viz-indigo: #6366f1;
+  --color-viz-indigo-soft: rgba(99, 102, 241, 0.18);
+  --color-viz-cyan: #14b8a6;
+  --color-viz-cyan-soft: rgba(20, 184, 166, 0.18);
 
   /* ── 阴影 ── */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);

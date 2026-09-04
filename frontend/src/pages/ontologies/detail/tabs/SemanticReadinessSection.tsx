@@ -12,10 +12,10 @@ import {
 function CountRow({ label, rows }: { label: string; rows: SemanticCountRow[] }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-      <span className="w-14 shrink-0 text-xs text-slate-500">{label}</span>
+      <span className="w-14 shrink-0 text-xs text-muted-foreground">{label}</span>
       {rows.map(row => (
-        <span key={row.key} className="text-xs text-slate-600">
-          {row.label} <b className="font-semibold tabular-nums text-slate-800">{row.count}</b>
+        <span key={row.key} className="text-xs text-muted-foreground">
+          {row.label} <b className="font-semibold tabular-nums text-foreground">{row.count}</b>
         </span>
       ))}
     </div>
@@ -33,33 +33,33 @@ export default function SemanticReadinessSection({ overview }: { overview: Ontol
   return (
     <section aria-labelledby="semantic-readiness-heading" data-testid="semantic-readiness-section">
       <div className="mb-2 flex items-center justify-between gap-3">
-        <h3 id="semantic-readiness-heading" className="font-semibold text-slate-800">业务语义</h3>
+        <h3 id="semantic-readiness-heading" className="font-semibold text-foreground">业务语义</h3>
         <span
           data-testid="semantic-consistency-badge"
           className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${consistency.tone === 'consistent'
-            ? 'bg-emerald-100 text-emerald-700'
-            : 'bg-amber-100 text-amber-800'}`}
+            ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]'
+            : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'}`}
         >
           {consistency.tone === 'consistent' ? <Check size={12} /> : <AlertTriangle size={12} />}
           {consistency.text}
         </span>
       </div>
-      <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+      <div className="space-y-2 rounded-lg border border-border bg-muted p-3">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-          <FileText size={13} className="shrink-0 text-slate-400" aria-hidden="true" />
-          <span className="text-slate-500">需求文档</span>
+          <FileText size={13} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+          <span className="text-muted-foreground">需求文档</span>
           <span
             data-testid="semantic-document-state"
             className={documentState.tone === 'stale'
-              ? 'font-medium text-amber-700'
+              ? 'font-medium text-[var(--color-warning)]'
               : documentState.tone === 'ok'
-                ? 'text-slate-700'
-                : 'text-slate-400'}
+                ? 'text-foreground'
+                : 'text-[var(--color-text-tertiary)]'}
           >
             {documentState.text}
           </span>
           {!normalized.hasSemanticLayer && (
-            <span className="text-slate-400">（该版本尚未沉淀业务语义层）</span>
+            <span className="text-[var(--color-text-tertiary)]">（该版本尚未沉淀业务语义层）</span>
           )}
         </div>
         <CountRow label="画布模型" rows={canvasCountRows(normalized)} />
@@ -69,7 +69,7 @@ export default function SemanticReadinessSection({ overview }: { overview: Ontol
             {consistency.details.map(item => (
               <code
                 key={item.code}
-                className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-800"
+                className="rounded-md border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-2 py-0.5 text-[11px] text-[var(--color-warning)]"
               >
                 {item.label} ×{item.count}
               </code>

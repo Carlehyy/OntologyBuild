@@ -21,17 +21,17 @@ export default function InstanceChartCard({
   return (
     <div
       data-testid={testId}
-      className="rounded-xl border border-slate-200 bg-white p-4 transition hover:border-teal-200"
+      className="rounded-xl border border-border bg-card p-4 transition hover:border-brand-line"
     >
       <div className="mb-2 flex items-center gap-1.5">
-        <p className="text-[13px] font-semibold text-slate-800">{title}</p>
+        <p className="text-[13px] font-semibold text-foreground">{title}</p>
         {info && (
           <Popover>
             <PopoverTrigger asChild>
               <button
                 type="button"
                 aria-label={`${title}说明`}
-                className="inline-flex h-4 w-4 items-center justify-center rounded-full text-slate-300 transition hover:text-teal-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                className="inline-flex h-4 w-4 items-center justify-center rounded-full text-[var(--color-text-tertiary)] transition hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <Info size={13} />
               </button>
@@ -41,7 +41,7 @@ export default function InstanceChartCard({
             </PopoverContent>
           </Popover>
         )}
-        {sub && <span className="text-[11px] text-slate-400">{sub}</span>}
+        {sub && <span className="text-[11px] text-[var(--color-text-tertiary)]">{sub}</span>}
       </div>
       <div className={bodyClassName}>{children}</div>
     </div>

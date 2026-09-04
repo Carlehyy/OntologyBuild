@@ -20,28 +20,28 @@ export default function InstanceSummaryBar({
   return (
     <div
       data-testid="instance-summary-bar"
-      className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-slate-100 bg-slate-50/50 px-5 py-2 text-xs text-slate-500"
+      className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-border bg-muted px-5 py-2 text-xs text-muted-foreground"
     >
       <span>
-        对象实例 <span className="font-semibold tabular-nums text-slate-800">{objectTotal}</span>
+        对象实例 <span className="font-semibold tabular-nums text-foreground">{objectTotal}</span>
       </span>
       <span>
-        关系实例 <span className="font-semibold tabular-nums text-slate-800">{linkTotal}</span>
+        关系实例 <span className="font-semibold tabular-nums text-foreground">{linkTotal}</span>
       </span>
       {sourceEntries.length > 0 && (
         <span className="flex flex-wrap items-center gap-1.5">
-          <span className="text-slate-400">来源</span>
+          <span className="text-[var(--color-text-tertiary)]">来源</span>
           {sourceEntries.map(([source, count]) => (
             <span
               key={source}
-              className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] tabular-nums text-slate-500"
+              className="rounded border border-border bg-card px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground"
             >
               {instanceSourceLabel(source)} {count}
             </span>
           ))}
         </span>
       )}
-      <span className="ml-auto text-[10px] text-slate-400">当前发布 {catalog.release.version} 的当前态投影</span>
+      <span className="ml-auto text-[10px] text-[var(--color-text-tertiary)]">当前发布 {catalog.release.version} 的当前态投影</span>
     </div>
   )
 }

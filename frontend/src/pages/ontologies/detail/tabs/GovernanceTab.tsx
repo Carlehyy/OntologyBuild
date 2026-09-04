@@ -108,9 +108,9 @@ function SectionHead({ icon: Icon, iconCls, title, sub, badge, extra }: {
   return (
     <div className="mb-3 flex flex-wrap items-center gap-2">
       <Icon size={16} className={iconCls} />
-      <p className="whitespace-nowrap text-[15px] font-semibold text-gray-800">{title}</p>
+      <p className="whitespace-nowrap text-[15px] font-semibold text-foreground">{title}</p>
       {badge}
-      <span className="text-xs text-gray-400">{sub}</span>
+      <span className="text-xs text-[var(--color-text-tertiary)]">{sub}</span>
       {extra && <div className="ml-auto">{extra}</div>}
     </div>
   )
@@ -458,7 +458,7 @@ export default function GovernanceTab({
 
   if (!currentReleaseId) {
     return (
-      <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+      <div className="rounded-xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] p-4 text-sm text-[var(--color-danger)]">
         当前本体没有有效的发布指针。为避免混入草稿数据，治理推演已停止加载。
       </div>
     )
@@ -466,7 +466,7 @@ export default function GovernanceTab({
 
   if (isInitialLoading) {
     return (
-      <div className="flex items-center justify-center gap-2 py-16 text-sm text-gray-500">
+      <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
         <Loader2 size={16} className="animate-spin" /> 正在加载当前发布版治理数据…
       </div>
     )
@@ -474,11 +474,11 @@ export default function GovernanceTab({
 
   if (failedQuery) {
     return (
-      <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+      <div className="rounded-xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] p-4 text-sm text-[var(--color-danger)]">
         <p className="font-medium">当前发布版治理数据加载失败</p>
         <p className="mt-1 text-xs">{errorMessage(failedQuery.error)}。页面已停止展示，避免把失败误判为“暂无数据”。</p>
         <button type="button" onClick={reloadReleaseContext}
-          className="mt-3 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs hover:bg-red-100">
+          className="mt-3 rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-card px-3 py-1.5 text-xs hover:bg-[var(--color-danger-bg)]">
           重新加载
         </button>
       </div>
@@ -487,12 +487,12 @@ export default function GovernanceTab({
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs text-teal-700">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-brand-line bg-brand-soft px-3 py-2 text-xs text-brand-ink">
         <span className="inline-flex items-center gap-2">
           <CheckCircle2 size={13} />
           数据范围已锁定到最新发布版 <span className="font-mono font-semibold">{currentReleaseVersion}</span>
         </span>
-        <span className="hidden h-3 w-px bg-teal-200 sm:block" aria-hidden="true" />
+        <span className="hidden h-3 w-px bg-brand-mist sm:block" aria-hidden="true" />
         <span
           className="inline-flex items-center gap-1.5 font-medium"
           data-testid="governance-background-refresh-status"
@@ -510,16 +510,16 @@ export default function GovernanceTab({
             : isRefreshing ? '正在刷新治理结果' : '自动同步已结束 · 可手动刷新'}
         </span>
         {backgroundRefreshActive && isPageVisible && (
-          <span className="text-teal-600/70">每 12 秒刷新，最多 2 分钟</span>
+          <span className="text-brand-ink">每 12 秒刷新，最多 2 分钟</span>
         )}
-        <span className="text-teal-600/80" data-testid="governance-last-refreshed">
+        <span className="text-brand-ink" data-testid="governance-last-refreshed">
           最近刷新：{lastRefreshText}
         </span>
         <button
           type="button"
           onClick={() => void refreshNow()}
           disabled={manualRefreshPending}
-          className="ml-auto inline-flex items-center gap-1 rounded-md border border-teal-300 bg-white/80 px-2 py-1 font-medium text-teal-700 transition hover:bg-white disabled:cursor-wait disabled:opacity-60"
+          className="ml-auto inline-flex items-center gap-1 rounded-md border border-brand-line bg-card px-2 py-1 font-medium text-brand-ink transition hover:bg-card disabled:cursor-wait disabled:opacity-60"
           aria-label="立即刷新治理结果"
           title="立即刷新，并重新开始最多 2 分钟的自动同步"
         >
@@ -530,7 +530,7 @@ export default function GovernanceTab({
       {msg && (
         <div role={msg.ok ? 'status' : 'alert'} aria-live={msg.ok ? 'polite' : 'assertive'}
           className={`rounded-lg border px-3 py-2 text-xs ${
-          msg.ok ? 'border-green-200 bg-green-50 text-green-700' : 'border-red-200 bg-red-50 text-red-600'
+          msg.ok ? 'border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] text-[var(--color-danger)]'
         }`}>{msg.text}</div>
       )}
 
@@ -560,16 +560,16 @@ export default function GovernanceTab({
       />
 
       {/* ② 治理工作台:待审批 / 自治等级 / 哨兵以动作为行一表汇总 */}
-      <div ref={boardRef} className="rounded-xl border bg-white p-5">
-        <SectionHead icon={LayoutGrid} iconCls="text-teal-600" title="治理工作台"
+      <div ref={boardRef} className="rounded-xl border bg-card p-5">
+        <SectionHead icon={LayoutGrid} iconCls="text-brand-ink" title="治理工作台"
           badge={pending.length > 0 && (
-            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+            <span className="rounded-full bg-[var(--color-warning-bg)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-warning)]">
               {pending.length} 项待裁决
             </span>
           )}
           sub="待审批 · 自治等级 · 哨兵以动作为中心一表汇总 · 点击待审批条目看前因后果"
           extra={<button onClick={onOpenVersions}
-            className="inline-flex items-center gap-1 text-xs text-teal-600 hover:underline">
+            className="inline-flex items-center gap-1 text-xs text-brand-ink hover:underline">
             在版本草稿中调整</button>} />
         <OperationsBoard
           rows={boardRows}
@@ -580,8 +580,8 @@ export default function GovernanceTab({
       </div>
 
       {/* ③ 事实流:全宽审计底(原样不动) */}
-      <div className="rounded-xl border bg-white p-5">
-        <SectionHead icon={ScrollText} iconCls="text-indigo-500" title="事实流"
+      <div className="rounded-xl border bg-card p-5">
+        <SectionHead icon={ScrollText} iconCls="text-viz-indigo" title="事实流"
           sub="追加不修改 · 每个变化都有出处与因果 · 最近 50 条" />
         <FactStream facts={facts} kindFilter={kindFilter} onKindFilterChange={setKindFilter} />
       </div>

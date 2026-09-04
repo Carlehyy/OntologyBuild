@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { motion, useReducedMotion } from 'motion/react'
 import {
   Activity, CheckCircle2, ChevronRight, CircleAlert, Database,
@@ -286,7 +287,7 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           <button
             type="button"
             onClick={() => void overviewQuery.refetch()}
-            className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
+            className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-card px-3 py-1.5 text-xs font-medium text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-danger)]"
           >
             重新加载
           </button>
@@ -456,16 +457,19 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             title="运行汇总"
             sub={(
               <span className="runtime-dimension">
-                <select
-                  className="runtime-dimension-select"
+                <Select
                   value={runtimeDimension}
-                  aria-label="运行汇总时间维度"
-                  onChange={event => setRuntimeDimension(event.target.value as RuntimeDimension)}
+                  onValueChange={value => setRuntimeDimension(value as RuntimeDimension)}
                 >
-                  {RUNTIME_DIMENSION_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
+                  <SelectTrigger className="h-8 w-32 rounded-lg bg-card px-2.5 text-xs" aria-label="运行汇总时间维度">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {RUNTIME_DIMENSION_OPTIONS.map(option => (
+                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 {runtimeDimension === 'custom' && (
                   <span className="runtime-custom-range">
                     <input

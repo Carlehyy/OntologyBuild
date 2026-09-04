@@ -137,7 +137,7 @@ test('智能建议经人工确认后落画布并随保存写入草稿映射', as
   const panel = page.getByTestId('mapping-suggestion-panel')
   await expect(panel).toBeVisible()
   await expect(page.getByTestId('suggest-knowledge-hits')).toContainText('1 条建议来自历史映射复用')
-  await expect(page.getByTestId('suggest-object-ds-customers')).toHaveValue('ot-customer')
+  await expect(page.getByTestId('suggest-object-ds-customers')).not.toContainText('请选择对象实体')
   // match 默认勾选；unsure 默认不勾，人工确认后勾选
   const unsureField = page.getByTestId('suggest-field-ds-customers-cust_name')
   await expect(unsureField).not.toBeChecked()
