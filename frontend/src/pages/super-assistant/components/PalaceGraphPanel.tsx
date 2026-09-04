@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactECharts from 'echarts-for-react'
 import { AlertCircle, Brain, Crosshair, Loader2, RefreshCw, Search, X } from 'lucide-react'
 
@@ -62,7 +62,23 @@ export default function PalaceGraphPanel({
     return () => window.clearTimeout(timer)
   }, [filterInput])
 
-  const baseGraph = graph ?? EMPTY_GRAPH
+  // 稳定化：文件库轮询（4s）会让 graph 引用每轮刷新，但内容往往没变；
+  // 引用一变 option 就重算、力导向布局整个重跑（节点满屏乱飞）。
+  // 这里按内容签名（节点 id/提及数 + 边端点/关系名）判断，未变则沿用旧引用。
+  const graphSignature = useMemo(
+    () => JSON.stringify(graph ? {
+      n: graph.nodes.map(node => [node.id, node.mention_count]),
+      e: graph.edges.map(edge => [edge.source, edge.target, edge.name]),
+    } : null),
+    [graph],
+  )
+  const signatureRef = useRef<string | null>(null)
+  const baseGraphRef = useRef<PalaceGraph>(EMPTY_GRAPH)
+  if (graphSignature !== signatureRef.current) {
+    signatureRef.current = graphSignature
+    baseGraphRef.current = graph ?? EMPTY_GRAPH
+  }
+  const baseGraph = baseGraphRef.current
   const view = useMemo(() => filterPalaceGraph(baseGraph, filterKeyword), [baseGraph, filterKeyword])
   const selectedNode: PalaceGraphNode | null = useMemo(
     () => graph?.nodes.find(node => node.id === selectedId) ?? null,
@@ -243,7 +259,7 @@ export default function PalaceGraphPanel({
         </div>
       ) : (
         <>
-          {/* 画布撑满面板剩余高度；详情卡出现时画布让位但不滚动，详情卡内部滚动 */}
+          {/* 画布恒定占满面板；节点详情卡为容器内悬浮覆盖，不改变画布尺寸（避免重排抖动） */}
           <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--color-border)]">
             <ReactECharts
               option={option}
@@ -256,13 +272,12 @@ export default function PalaceGraphPanel({
                 点击图谱中的节点，可查看实体详情、一跳邻居并定位来源文档
               </p>
             )}
-          </div>
 
-          {selectedNode ? (
-            <div
-              data-testid="palace-node-detail"
-              className="mt-3 max-h-[46%] shrink-0 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3"
-            >
+            {selectedNode && (
+              <div
+                data-testid="palace-node-detail"
+                className="absolute inset-x-3 bottom-3 z-10 max-h-[62%] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 shadow-lg"
+              >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-[var(--color-text-primary)]" data-palace-node-name={selectedNode.id}>
@@ -341,8 +356,9 @@ export default function PalaceGraphPanel({
                   </span>
                 )}
               </div>
-            </div>
-          ) : null}
+              </div>
+            )}
+          </div>
         </>
       )}
     </section>
