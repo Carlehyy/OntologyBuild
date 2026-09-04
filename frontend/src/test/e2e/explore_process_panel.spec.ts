@@ -161,24 +161,28 @@ test.describe('业务探索流程模型面板', () => {
     await page.getByTestId('business-flow-button').click()
     await expect(diagramPane).toBeVisible()
     await page.getByRole('button', { name: '流程图', exact: true }).click()
-    const flowSelect = diagramPane.locator('select')
-    await expect(flowSelect.locator('option')).toContainText([
+    const flowSelect = diagramPane.getByRole('combobox')
+    await flowSelect.click()
+    // Radix Select 的选项挂在 body portal 下
+    await expect(page.getByRole('option')).toContainText([
       '默认场景或流程（第一个）', '紧急采购', '采购到付款',
     ])
-    await flowSelect.selectOption({ label: '采购到付款' })
+    await page.getByRole('option', { name: '采购到付款' }).click()
     await expect.poll(() => flowTargets.at(-1)).toBe('采购到付款')
 
     await page.getByRole('button', { name: '时序图', exact: true }).click()
-    const sequenceSelect = diagramPane.locator('select')
-    await expect(sequenceSelect.locator('option')).toContainText([
+    const sequenceSelect = diagramPane.getByRole('combobox')
+    await sequenceSelect.click()
+    await expect(page.getByRole('option')).toContainText([
       '默认场景或流程（第一个）', '紧急采购', '采购到付款',
     ])
-    await sequenceSelect.selectOption({ label: '采购到付款' })
+    await page.getByRole('option', { name: '采购到付款' }).click()
     await expect.poll(() => flowTargets.at(-1)).toBe('采购到付款')
 
     // 状态图仍为对象口径，不混入流程名
     await page.getByRole('button', { name: '状态图', exact: true }).click()
-    const stateSelect = diagramPane.locator('select')
-    await expect(stateSelect.locator('option')).toContainText(['自动选择对象', '采购订单'])
+    const stateSelect = diagramPane.getByRole('combobox')
+    await stateSelect.click()
+    await expect(page.getByRole('option')).toContainText(['自动选择对象', '采购订单'])
   })
 })

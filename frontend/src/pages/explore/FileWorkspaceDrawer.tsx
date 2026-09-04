@@ -262,14 +262,14 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
   return (
     <div
       data-testid="workspace-dialog-backdrop"
-      className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/30 px-4 pt-[7vh] backdrop-blur-[1px]"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-accent px-4 pt-[7vh] backdrop-blur-[1px]"
     >
       <section
         data-testid="workspace-drawer"
         role="dialog"
         aria-modal="true"
         aria-labelledby="workspace-dialog-title"
-        className="flex h-[78vh] min-h-[520px] w-[1120px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-white/60 bg-[var(--color-bg-elevated)] shadow-[0_24px_80px_rgba(15,23,42,0.22)]"
+        className="flex h-[78vh] min-h-[520px] w-[1120px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-border bg-[var(--color-bg-elevated)] shadow-[0_24px_80px_rgba(15,23,42,0.22)]"
       >
         <header className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-3.5">
           <div>
@@ -279,17 +279,17 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
             </p>
           </div>
           <button aria-label="关闭文件清单" onClick={onClose}
-            className="rounded-md p-1.5 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
+            className="rounded-md p-1.5 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <X size={17} />
           </button>
         </header>
 
         <div className="flex min-h-0 flex-1">
-          <aside className="flex w-72 shrink-0 flex-col border-r border-[var(--color-border)] bg-slate-50/55">
+          <aside className="flex w-72 shrink-0 flex-col border-r border-[var(--color-border)] bg-muted">
             <div className="px-3 pb-2 pt-3">
               <button
                 onClick={beginCreate}
-                className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-teal-300 bg-white px-3 py-2 text-xs font-medium text-teal-700 transition-colors hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-brand-line bg-card px-3 py-2 text-xs font-medium text-brand-ink transition-colors hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <FilePlus2 size={14} /> 新建文本文件
               </button>
@@ -304,7 +304,7 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                   title="展开全部"
                   disabled={allDirectoryPaths.size === 0}
                   onClick={() => setCollapsedDirs(new Set())}
-                  className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--color-text-tertiary)] transition-colors hover:bg-white hover:text-teal-700 active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--color-text-tertiary)] transition-colors hover:bg-card hover:text-brand-ink active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <UnfoldVertical size={13} />
                 </button>
@@ -314,7 +314,7 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                   title="折叠全部"
                   disabled={allDirectoryPaths.size === 0}
                   onClick={() => setCollapsedDirs(new Set(allDirectoryPaths))}
-                  className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--color-text-tertiary)] transition-colors hover:bg-white hover:text-teal-700 active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--color-text-tertiary)] transition-colors hover:bg-card hover:text-brand-ink active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <FoldVertical size={13} />
                 </button>
@@ -337,11 +337,11 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                     if (next.has(row.path)) next.delete(row.path); else next.add(row.path)
                     return next
                   })}
-                  className="flex h-8 w-full items-center gap-1.5 rounded-md pr-2 text-left text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-white"
+                  className="flex h-8 w-full items-center gap-1.5 rounded-md pr-2 text-left text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-card"
                   style={{ paddingLeft: `${8 + row.depth * 16}px` }}
                 >
                   {collapsedDirs.has(row.path) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-                  {collapsedDirs.has(row.path) ? <Folder size={14} className="text-amber-500" /> : <FolderOpen size={14} className="text-amber-500" />}
+                  {collapsedDirs.has(row.path) ? <Folder size={14} className="text-[var(--color-warning)]" /> : <FolderOpen size={14} className="text-[var(--color-warning)]" />}
                   <span className="min-w-0 flex-1 truncate">{row.name}</span>
                   <span
                     aria-hidden="true"
@@ -357,15 +357,15 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                   onClick={() => void openFile(row.file)}
                   title={row.file.relativePath || row.file.filename}
                   className={`flex min-h-9 w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left transition-colors ${activeId === row.file.id
-                    ? 'bg-teal-50 text-teal-800'
-                    : 'text-[var(--color-text-secondary)] hover:bg-white'}`}
+                    ? 'bg-brand-soft text-brand-ink'
+                    : 'text-[var(--color-text-secondary)] hover:bg-card'}`}
                   style={{ paddingLeft: `${25 + row.depth * 16}px` }}
                 >
                   {loadingId === row.file.id
-                    ? <Loader2 size={14} className="shrink-0 animate-spin text-teal-600" />
+                    ? <Loader2 size={14} className="shrink-0 animate-spin text-brand-ink" />
                     : row.file.editable
-                      ? <FileCode2 size={14} className="shrink-0 text-teal-600" />
-                      : <File size={14} className="shrink-0 text-slate-500" />}
+                      ? <FileCode2 size={14} className="shrink-0 text-brand-ink" />
+                      : <File size={14} className="shrink-0 text-muted-foreground" />}
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-xs font-medium">{row.name}</span>
                     <span className="mt-0.5 block text-[9px] text-[var(--color-text-tertiary)]">
@@ -387,12 +387,12 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                 <div className="flex min-h-0 flex-1 flex-col p-5">
                   <label className="mb-1.5 text-[11px] font-medium text-[var(--color-text-secondary)]">会话内相对路径</label>
                   <input value={newPath} onChange={event => setNewPath(event.target.value)}
-                    className="mb-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 py-2 text-xs outline-none transition-colors focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+                    className="mb-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 py-2 text-xs outline-none transition-colors focus:border-brand focus:ring-2 focus:ring-ring" />
                   <textarea value={draft} onChange={event => setDraft(event.target.value)} placeholder="输入文件内容…"
-                    className="scrollbar-thin min-h-0 flex-1 resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-4 font-mono text-xs leading-5 outline-none transition-colors focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+                    className="scrollbar-thin min-h-0 flex-1 resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-4 font-mono text-xs leading-5 outline-none transition-colors focus:border-brand focus:ring-2 focus:ring-ring" />
                   <div className="mt-3 flex justify-end">
                     <button onClick={() => void create()} disabled={!newPath.trim() || saving}
-                      className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-teal-600 px-3 text-xs font-medium text-white transition-colors hover:bg-teal-700 disabled:opacity-40">
+                      className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-brand px-3 text-xs font-medium text-[var(--color-text-inverse)] transition-colors hover:bg-brand-deep disabled:opacity-40">
                       {saving ? <Loader2 size={13} className="animate-spin" /> : <FilePlus2 size={13} />}创建文件
                     </button>
                   </div>
@@ -412,26 +412,26 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                       <div className="mr-1 flex items-center gap-1">
                         {viewMode === 'edit' && (
                           <button onClick={() => void save()} disabled={saving || draft === editor.content}
-                            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-teal-600 px-3 text-xs font-medium text-white transition-[background-color,box-shadow,transform] duration-200 hover:bg-teal-700 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-2">
+                            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand px-3 text-xs font-medium text-[var(--color-text-inverse)] transition-[background-color,box-shadow,transform] duration-200 hover:bg-brand-deep active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                             {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}保存
                           </button>
                         )}
                         <button onClick={() => void copy()} title="复制文件内容" aria-label={copied ? '已复制' : '复制文件内容'}
-                          className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-[background-color,border-color,color,transform] duration-200 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-2 ${copied
-                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                            : 'border-[var(--color-border)] bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700'}`}>
+                          className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-[background-color,border-color,color,transform] duration-200 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${copied
+                            ? 'border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] text-[var(--color-success)]'
+                            : 'border-[var(--color-border)] bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink'}`}>
                           {copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}
                         </button>
                         <div data-testid="workspace-view-mode-switch" className="relative grid grid-cols-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-0.5">
                           <span
                             data-testid="workspace-view-mode-indicator"
-                            className={`pointer-events-none absolute left-0.5 top-0.5 h-[calc(100%-4px)] w-[calc(50%-2px)] rounded-md bg-teal-600 shadow-sm transition-transform duration-300 ease-out ${viewMode === 'edit' ? 'translate-x-full' : 'translate-x-0'}`}
+                            className={`pointer-events-none absolute left-0.5 top-0.5 h-[calc(100%-4px)] w-[calc(50%-2px)] rounded-md bg-brand shadow-sm transition-transform duration-300 ease-out ${viewMode === 'edit' ? 'translate-x-full' : 'translate-x-0'}`}
                           />
                           <button
                             type="button"
                             aria-pressed={viewMode === 'preview'}
                             onClick={() => setViewMode('preview')}
-                            className={`relative z-10 inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors duration-200 ${viewMode === 'preview' ? 'text-white' : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]'}`}
+                            className={`relative z-10 inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors duration-200 ${viewMode === 'preview' ? 'text-[var(--color-text-inverse)]' : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]'}`}
                           >
                             <Eye size={12} />预览
                           </button>
@@ -439,7 +439,7 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                             type="button"
                             aria-pressed={viewMode === 'edit'}
                             onClick={() => setViewMode('edit')}
-                            className={`relative z-10 inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors duration-200 ${viewMode === 'edit' ? 'text-white' : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]'}`}
+                            className={`relative z-10 inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors duration-200 ${viewMode === 'edit' ? 'text-[var(--color-text-inverse)]' : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]'}`}
                           >
                             <Pencil size={12} />编辑
                           </button>
@@ -452,12 +452,12 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                     </button>
                     {confirmId === activeFile.id ? (
                       <>
-                        <button onClick={() => void remove(activeFile)} className="h-8 rounded-md bg-rose-600 px-2.5 text-xs font-medium text-white hover:bg-rose-700">确认删除</button>
+                        <button onClick={() => void remove(activeFile)} className="h-8 rounded-md bg-viz-rose px-2.5 text-xs font-medium text-[var(--color-text-inverse)] hover:bg-viz-rose">确认删除</button>
                         <button onClick={() => setConfirmId('')} className="h-8 rounded-md px-2 text-xs text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)]">取消</button>
                       </>
                     ) : (
                       <button onClick={() => setConfirmId(activeFile.id)} title="删除文件"
-                        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50/80 px-2.5 text-xs font-medium text-rose-600 transition-colors hover:border-rose-300 hover:bg-rose-100 active:bg-rose-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300">
+                        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-viz-rose-soft bg-viz-rose-soft px-2.5 text-xs font-medium text-viz-rose transition-colors hover:border-viz-rose-soft hover:bg-viz-rose-soft active:bg-viz-rose-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-viz-rose">
                         <Trash2 size={13} />删除
                       </button>
                     )}
@@ -465,7 +465,7 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                 </div>
 
                 <div className={`scrollbar-thin min-h-0 flex-1 ${htmlPreview && viewMode === 'preview'
-                  ? 'overflow-hidden bg-white p-0'
+                  ? 'overflow-hidden bg-card p-0'
                   : 'overflow-auto p-5'}`}>
                   {loadingId === activeFile.id && !preview ? (
                     <div className="flex h-full items-center justify-center gap-2 text-xs text-[var(--color-text-tertiary)]">
@@ -474,7 +474,7 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                   ) : viewMode === 'edit' && editor ? (
                     <textarea value={draft} onChange={event => setDraft(event.target.value)}
                       aria-label="文件内容编辑器"
-                      className="scrollbar-thin h-full min-h-[320px] w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-4 font-mono text-xs leading-5 outline-none transition-colors focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+                      className="scrollbar-thin h-full min-h-[320px] w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-4 font-mono text-xs leading-5 outline-none transition-colors focus:border-brand focus:ring-2 focus:ring-ring" />
                   ) : preview?.content && htmlPreview ? (
                     <iframe
                       data-testid="html-file-preview"
@@ -482,17 +482,17 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                       srcDoc={preview.content}
                       sandbox="allow-scripts"
                       referrerPolicy="no-referrer"
-                      className="h-full min-h-[320px] w-full border-0 bg-white"
+                      className="h-full min-h-[320px] w-full border-0 bg-card"
                     />
                   ) : preview?.content ? (
                     <div className="mx-auto max-w-4xl">
                       {!preview.editable && (
-                        <div className="mb-3 rounded-md bg-slate-50 px-3 py-2 text-[10px] text-[var(--color-text-tertiary)]">
+                        <div className="mb-3 rounded-md bg-muted px-3 py-2 text-[10px] text-[var(--color-text-tertiary)]">
                           当前展示从原文件确定性抽取的只读内容，原样式请下载文件查看。
                         </div>
                       )}
                       {preview.truncated && (
-                        <div className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-[10px] text-amber-700">文件较大，当前仅展示已抽取的部分内容。</div>
+                        <div className="mb-3 rounded-md bg-[var(--color-warning-bg)] px-3 py-2 text-[10px] text-[var(--color-warning)]">文件较大，当前仅展示已抽取的部分内容。</div>
                       )}
                       {markdownPreview ? <Md text={preview.content} /> : (
                         <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-6 text-[var(--color-text-secondary)]">{preview.content}</pre>
@@ -500,7 +500,7 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
                     </div>
                   ) : (
                     <div className="flex h-full flex-col items-center justify-center text-center text-xs leading-5 text-[var(--color-text-tertiary)]">
-                      <File size={26} className="mb-2 text-slate-300" />
+                      <File size={26} className="mb-2 text-[var(--color-text-tertiary)]" />
                       该文件暂无可预览的文本内容。<br />可使用右上角「下载」查看原文件。
                     </div>
                   )}
@@ -508,11 +508,11 @@ export default function FileWorkspaceDrawer({ sessionId, files, onFilesChange, o
               </>
             ) : (
               <div className="flex h-full flex-col items-center justify-center text-center text-xs leading-5 text-[var(--color-text-tertiary)]">
-                <FileCode2 size={28} className="mb-2 text-slate-300" />
+                <FileCode2 size={28} className="mb-2 text-[var(--color-text-tertiary)]" />
                 从左侧文件树选择文件。<br />可预览常见文档，文本类文件支持直接编辑。
               </div>
             )}
-            {error && <div className="border-t border-rose-100 bg-rose-50 px-5 py-2 text-[11px] text-rose-700">{error}</div>}
+            {error && <div className="border-t border-viz-rose-soft bg-viz-rose-soft px-5 py-2 text-[11px] text-viz-rose">{error}</div>}
           </main>
         </div>
       </section>

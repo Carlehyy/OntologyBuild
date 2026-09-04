@@ -22,12 +22,12 @@ export default function Md({ text }: { text: string }) {
       if (String(className || '').includes('language-mermaid')) {
         return <MermaidBlock chart={String(children).trim()} />
       }
-      return <code className={`px-1 py-0.5 rounded bg-black/[0.05] text-[12px] font-mono ${className || ''}`} {...p}>{children}</code>
+      return <code className={`px-1 py-0.5 rounded bg-[var(--color-bg-overlay)] text-[12px] font-mono ${className || ''}`} {...p}>{children}</code>
     },
     pre: ({ children, ...p }) => {
       // mermaid 代码块由 MermaidBlock 接管，去掉 pre 包裹
       if (Children.toArray(children).some(isMermaidEl)) return <>{children}</>
-      return <pre className="p-3 my-2 rounded-lg bg-black/[0.04] text-[12px] font-mono overflow-x-auto" {...p}>{children}</pre>
+      return <pre className="p-3 my-2 rounded-lg bg-[var(--color-bg-overlay)] text-[12px] font-mono overflow-x-auto" {...p}>{children}</pre>
     },
     table: p => (
       <div className="overflow-x-auto my-2 rounded-lg border border-[var(--color-border)]">

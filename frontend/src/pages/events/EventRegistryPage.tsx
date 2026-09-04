@@ -343,10 +343,10 @@ export default function EventRegistryPage() {
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索事件标题、编号、上报人..."
               className="w-full rounded-lg border border-border bg-card py-2 pl-9 pr-3 text-sm text-foreground outline-none transition focus:border-[var(--color-success)] focus:ring-2 focus:ring-[var(--color-success)] placeholder:text-[var(--color-text-tertiary)]" />
           </div>
-          <Select value={severity} onChange={setSeverity} options={[
+          <Select value={severity} onChange={setSeverity} ariaLabel="按严重程度筛选" options={[
             { v: '', l: '全部级别' }, { v: 'critical', l: '严重' }, { v: 'high', l: '高级' }, { v: 'medium', l: '中级' }, { v: 'low', l: '低级' }, { v: 'info', l: '信息' },
           ]} />
-          <Select value={sourceType} onChange={setSourceType} options={[
+          <Select value={sourceType} onChange={setSourceType} ariaLabel="按来源类型筛选" options={[
             { v: '', l: '全部来源' }, { v: 'platform', l: '平台录入' }, { v: 'api', l: 'API 上报' }, { v: 'system', l: '系统生成' },
           ]} />
           <div className="ml-auto flex items-center gap-1">

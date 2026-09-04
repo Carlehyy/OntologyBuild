@@ -293,7 +293,7 @@ test.describe('业务探索图表与图片交互', () => {
     await expect(region).toHaveCSS('background-image', 'none')
     await expect(shell).toHaveCSS('background-image', 'none')
     await expect(scenario).toHaveCSS('background-image', 'none')
-    await expect(shell).toHaveCSS('border-color', 'rgb(20, 184, 166)')
+    await expect(shell).toHaveCSS('border-color', 'rgb(5, 150, 105)')
   })
 
   test('模型分组默认展开且可折叠，切换会话后回到对象模型总览', async ({ page }) => {
@@ -386,7 +386,7 @@ test.describe('业务探索图表与图片交互', () => {
     await uploadsDirectory.click()
     await page.getByRole('button', { name: /reference\.pdf/ }).click()
     await expect(page.getByRole('button', { name: '复制文件内容' })).toBeHidden()
-    await expect(page.getByTitle('删除文件')).toHaveClass(/bg-rose-50\/80/)
+    await expect(page.getByTitle('删除文件')).toHaveClass(/bg-viz-rose-soft/)
   })
 
   test('文件清单只能通过右上角关闭按钮关闭', async ({ page }) => {

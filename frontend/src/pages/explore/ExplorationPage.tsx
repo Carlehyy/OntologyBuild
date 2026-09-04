@@ -6,6 +6,7 @@
  * 定位：服务指定本体草稿版本的集中配置，不再承担从零创建本体。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Suspense } from 'react'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
@@ -98,7 +99,7 @@ function StepTrace({ steps, running }: { steps: BxStep[]; running?: boolean }) {
           <div className="flex items-start gap-2.5">
             <div className={`mt-px w-5 h-5 rounded-md flex items-center justify-center shrink-0 ${s.error
               ? 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'
-              : 'bg-teal-50 text-teal-600'}`}>
+              : 'bg-brand-soft text-brand-ink'}`}>
               {s.tool === 'web_search' ? <Globe2 size={11} /> : <Wrench size={11} />}
             </div>
             <div className="min-w-0 text-xs leading-5">
@@ -117,7 +118,7 @@ function StepTrace({ steps, running }: { steps: BxStep[]; running?: boolean }) {
                   target="_blank"
                   rel="noreferrer"
                   title={result.snippet || result.title}
-                  className="group/source flex min-w-0 items-center gap-1.5 rounded px-1.5 py-1 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-teal-50 hover:text-teal-700"
+                  className="group/source flex min-w-0 items-center gap-1.5 rounded px-1.5 py-1 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-brand-soft hover:text-brand-ink"
                 >
                   <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-tertiary)]">[{index + 1}]</span>
                   <span className="min-w-0 flex-1 truncate">{result.title}</span>
@@ -140,8 +141,8 @@ function StepTrace({ steps, running }: { steps: BxStep[]; running?: boolean }) {
       ))}
       {running && (
         <div className="flex items-center gap-2.5">
-          <div className="w-5 h-5 rounded-md bg-teal-50 flex items-center justify-center shrink-0">
-            <Loader2 size={11} className="animate-spin text-teal-600" />
+          <div className="w-5 h-5 rounded-md bg-brand-soft flex items-center justify-center shrink-0">
+            <Loader2 size={11} className="animate-spin text-brand-ink" />
           </div>
           <span className="text-xs text-[var(--color-text-tertiary)]">
             {steps.length === 0 ? '正在理解业务，规划澄清问题…' : '正在把确认的信息沉淀进画布…'}
@@ -163,17 +164,17 @@ function QuickReplies({ questions, disabled, onAnswer, onCustom }: {
   return (
     <div className="mb-2 space-y-1.5">
       {questions.map(q => (
-        <div key={q.id} className="flex items-start gap-2 rounded-lg border border-amber-200/80 bg-amber-50/50 px-2.5 py-1.5">
-          <CircleHelp size={13} className="mt-[3px] shrink-0 text-amber-500" />
+        <div key={q.id} className="flex items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-2.5 py-1.5">
+          <CircleHelp size={13} className="mt-[3px] shrink-0 text-[var(--color-warning)]" />
           <div className="min-w-0 flex-1">
-            <span className="text-xs text-amber-900/90 leading-5">{q.question}</span>
+            <span className="text-xs text-[var(--color-warning)] leading-5">{q.question}</span>
             <span className="ml-2 inline-flex flex-wrap gap-1 align-middle">
               {(q.options || []).slice(0, 4).map(opt => (
                 <button
                   key={opt}
                   disabled={disabled}
                   onClick={() => onAnswer(`「${q.question}」我的答复：${opt}`)}
-                  className="px-2 py-0.5 rounded-md text-[11px] border border-amber-300 bg-white text-amber-800 hover:bg-amber-100 disabled:opacity-40"
+                  className="px-2 py-0.5 rounded-md text-[11px] border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-card text-[var(--color-warning)] hover:bg-[var(--color-warning-bg)] disabled:opacity-40"
                 >
                   {opt}
                 </button>
@@ -181,7 +182,7 @@ function QuickReplies({ questions, disabled, onAnswer, onCustom }: {
               <button
                 disabled={disabled}
                 onClick={() => onCustom(`「${q.question}」我的答复：`)}
-                className="px-2 py-0.5 rounded-md text-[11px] border border-dashed border-amber-300 text-amber-700 hover:bg-amber-100 disabled:opacity-40"
+                className="px-2 py-0.5 rounded-md text-[11px] border border-dashed border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] text-[var(--color-warning)] hover:bg-[var(--color-warning-bg)] disabled:opacity-40"
               >
                 自定义…
               </button>
@@ -713,7 +714,7 @@ export default function ExplorationPage() {
       >
       {/* 配置工作区：业务场景 / 本体模型 / 数据映射 / 需求文档 */}
       <aside className={`${panelClass} workspace-topology-surface flex flex-col`}>
-        <div className="flex h-14 shrink-0 items-center gap-1 border-b border-[var(--color-border)] bg-white px-3" aria-label="切换工作区视图">
+        <div className="flex h-14 shrink-0 items-center gap-1 border-b border-[var(--color-border)] bg-card px-3" aria-label="切换工作区视图">
           {EXPLORE_VIEWS.map(item => {
             const active = view === item.id
             const Icon = VIEW_ICONS[item.id]
@@ -724,8 +725,8 @@ export default function ExplorationPage() {
                 aria-pressed={active}
                 data-testid={`explore-view-${item.id}`}
                 onClick={() => updateParams({ view: item.id === 'canvas' ? null : item.id })}
-                className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${active
-                  ? 'border-teal-300 bg-teal-50 text-teal-700'
+                className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active
+                  ? 'border-brand-line bg-brand-soft text-brand-ink'
                   : 'border-transparent text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
               >
                 <Icon size={13} />
@@ -734,7 +735,7 @@ export default function ExplorationPage() {
                   <span
                     data-testid="explore-model-drift-badge"
                     title="本体模型与业务语义存在漂移"
-                    className="inline-flex min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-semibold leading-4 text-white"
+                    className="inline-flex min-w-4 items-center justify-center rounded-full bg-[var(--color-warning)] px-1 text-[9px] font-semibold leading-4 text-[var(--color-text-inverse)]"
                   >
                     {semanticIssueCount > 99 ? '99+' : semanticIssueCount}
                   </span>
@@ -757,7 +758,7 @@ export default function ExplorationPage() {
             workbenchOntologyId ? (
               <div className="flex h-full min-h-0 flex-col">
                 {workbenchVersionId && (
-                  <div className="shrink-0 border-b border-[var(--color-border)] bg-white px-3 py-2">
+                  <div className="shrink-0 border-b border-[var(--color-border)] bg-card px-3 py-2">
                     <div className="flex items-start gap-2">
                       <div className="min-w-0 flex-1">
                         <ConsistencyPanel
@@ -773,7 +774,7 @@ export default function ExplorationPage() {
                           data-testid="explore-trial-entry"
                           onClick={() => setPreflightOpen(true)}
                           title="权威预检通过后把草稿转为试跑态（快照冻结，真实数据仅写入隔离空间）"
-                          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-amber-700 bg-amber-700 px-3 text-xs font-medium text-white transition-colors hover:border-amber-800 hover:bg-amber-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-warning)] bg-[var(--color-warning)] px-3 text-xs font-medium text-[var(--color-text-inverse)] transition-colors hover:border-[var(--color-warning)] hover:bg-[var(--color-warning)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-warning)]"
                         >
                           <FlaskConical size={13} /> 转为试跑态
                         </button>
@@ -848,10 +849,10 @@ export default function ExplorationPage() {
 
       {/* 探索对话 */}
       <section className={`${panelClass} workspace-topology-surface flex flex-col`}>
-        <header className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-white px-4">
+        <header className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-card px-4">
           <div className="flex w-full min-w-0 items-center justify-between gap-2">
             <div className="flex min-w-0 flex-1 items-center gap-2">
-              <div className="flex shrink-0 h-8 w-8 items-center justify-center rounded-md bg-teal-50 text-teal-600">
+              <div className="flex shrink-0 h-8 w-8 items-center justify-center rounded-md bg-brand-soft text-brand-ink">
                 <Compass size={18} />
               </div>
               <div className="min-w-0">
@@ -866,7 +867,7 @@ export default function ExplorationPage() {
                   title="本会话绑定本体版本：草稿落地写入该版本，经试跑验证后发布生效"
                   className="inline-flex h-8 max-w-56 shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2.5 text-xs font-medium text-[var(--color-text-secondary)]"
                 >
-                  <GitBranch size={13} className="shrink-0 text-teal-600" />
+                  <GitBranch size={13} className="shrink-0 text-brand-ink" />
                   <span className="truncate">{boundOntology?.name || '…'}</span>
                   {boundVersionNumber && (
                     <span className="shrink-0 font-mono text-[11px] text-[var(--color-text-tertiary)]">{boundVersionNumber}</span>
@@ -875,27 +876,30 @@ export default function ExplorationPage() {
               )}
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <select
-                value={modelId}
-                onChange={e => setModelId(e.target.value)}
-                className="h-8 cursor-pointer rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2 text-xs outline-none transition-colors focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
-                title="对话模型"
+              <Select
+                value={modelId || '__none__'}
+                onValueChange={value => setModelId(value === '__none__' ? '' : value)}
               >
-                <option value="">默认模型</option>
-                {llmModels.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
+                <SelectTrigger className="h-8 w-fit min-w-28 cursor-pointer rounded-md bg-card px-2 text-xs" aria-label="对话模型" title="对话模型">
+                  <SelectValue placeholder="默认模型" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">默认模型</SelectItem>
+                  {llmModels.map(m => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
               <button
                 onClick={() => setWorkspaceOpen(true)}
                 disabled={!sid}
                 data-testid="workspace-files-button"
                 title="查看会话文件"
                 aria-label="查看会话文件"
-                className="group relative inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-2 text-[11px] font-medium text-sky-700 transition-colors hover:border-sky-300 hover:bg-sky-100 hover:text-sky-800 active:scale-[0.98] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                className="group relative inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] px-2 text-[11px] font-medium text-[var(--color-info)] transition-colors hover:border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] hover:bg-[var(--color-info-bg)] hover:text-[var(--color-info)] active:scale-[0.98] disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-info)]"
               >
                 <Files size={15} />
                 <span>会话文件</span>
                 {attachments.length > 0 && (
-                  <span className="absolute -right-1.5 -top-1.5 flex min-w-4 items-center justify-center rounded-full bg-teal-600 px-1 text-[9px] font-semibold leading-4 text-white">
+                  <span className="absolute -right-1.5 -top-1.5 flex min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[9px] font-semibold leading-4 text-[var(--color-text-inverse)]">
                     {attachments.length > 99 ? '99+' : attachments.length}
                   </span>
                 )}
@@ -908,9 +912,9 @@ export default function ExplorationPage() {
                   aria-label="查看历史会话"
                   aria-expanded={showSessionHistory}
                   data-testid="session-history-button"
-                  className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${showSessionHistory
-                    ? 'border-violet-300 bg-violet-100 text-violet-800'
-                    : 'border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300 hover:bg-violet-100 hover:text-violet-800'}`}
+                  className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-viz-violet ${showSessionHistory
+                    ? 'border-viz-violet-soft bg-viz-violet-soft text-viz-violet'
+                    : 'border-viz-violet-soft bg-viz-violet-soft text-viz-violet hover:border-viz-violet-soft hover:bg-viz-violet-soft hover:text-viz-violet'}`}
                 >
                   <History size={15} />
                   <span>历史会话</span>
@@ -921,14 +925,14 @@ export default function ExplorationPage() {
                     <div className="absolute right-0 top-full z-30 mt-[14px] w-[380px] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[0_18px_52px_rgba(15,23,42,0.16)] animate-slide-up">
                       <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-2.5">
                         <span className="shrink-0 text-sm font-semibold text-[var(--color-text-primary)]">历史会话</span>
-                        <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-teal-700">
-                          <span className="h-1.5 w-1.5 rounded-full bg-teal-500" />
+                        <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-brand-ink">
+                          <span className="h-1.5 w-1.5 rounded-full bg-brand" />
                           共 <span className="font-semibold tabular-nums">{sessions.length}</span> 个
                         </span>
                         <button
                           type="button"
                           onClick={() => void newSession()}
-                          className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg bg-teal-600 px-3 text-xs font-medium text-white transition-all hover:bg-teal-700 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                          className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg bg-brand px-3 text-xs font-medium text-[var(--color-text-inverse)] transition-all hover:bg-brand-deep active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           <Plus size={13} /> 新建
                         </button>
@@ -946,7 +950,7 @@ export default function ExplorationPage() {
                           <div
                             key={session.id}
                             className={`group flex items-center gap-2.5 px-4 py-2 transition-colors ${session.id === sid
-                              ? 'bg-teal-50/70'
+                              ? 'bg-brand-soft'
                               : 'hover:bg-[var(--color-bg-hover)]'}`}
                           >
                             <button
@@ -955,26 +959,26 @@ export default function ExplorationPage() {
                               className="flex min-w-0 flex-1 items-center gap-3 text-left focus-visible:outline-none"
                             >
                               <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${session.id === sid
-                                ? 'bg-teal-100 text-teal-700'
-                                : 'bg-slate-100 text-slate-500'}`}>
+                                ? 'bg-brand-soft text-brand-ink'
+                                : 'bg-muted text-muted-foreground'}`}>
                                 <Compass size={16} />
                               </span>
                               <div className="min-w-0 flex-1">
-                                <p className={`truncate text-sm font-medium ${session.id === sid ? 'text-teal-900' : 'text-[var(--color-text-primary)]'}`} title={session.title}>
+                                <p className={`truncate text-sm font-medium ${session.id === sid ? 'text-brand-ink' : 'text-[var(--color-text-primary)]'}`} title={session.title}>
                                   {session.title}
                                 </p>
                                 <p className="mt-0.5 text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
                                   {new Date(session.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
                                 </p>
                               </div>
-                              {session.id === sid && <span className="rounded-md bg-white/80 px-2 py-1 text-[10px] font-medium text-teal-700">当前</span>}
+                              {session.id === sid && <span className="rounded-md bg-card px-2 py-1 text-[10px] font-medium text-brand-ink">当前</span>}
                             </button>
                             <button
                               type="button"
                               onClick={() => setDeleteSessionTarget(session)}
                               title={`删除会话 ${session.title}`}
                               aria-label={`删除会话 ${session.title}`}
-                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 opacity-0 transition-all hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
+                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] opacity-0 transition-all hover:bg-[var(--color-danger-bg)] hover:text-[var(--color-danger)] group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-danger)]"
                             >
                               <Trash2 size={14} />
                             </button>
@@ -1003,8 +1007,8 @@ export default function ExplorationPage() {
         >
           {timeline.length === 0 && (
             <div className="h-full flex flex-col items-center justify-center gap-4">
-              <div className="w-12 h-12 rounded-2xl bg-teal-50 flex items-center justify-center">
-                <Compass size={22} className="text-teal-600" />
+              <div className="w-12 h-12 rounded-2xl bg-brand-soft flex items-center justify-center">
+                <Compass size={22} className="text-brand-ink" />
               </div>
               <div className="text-center">
                 <div className="text-sm font-medium text-[var(--color-text-primary)]">从描述你的业务开始</div>
@@ -1017,7 +1021,7 @@ export default function ExplorationPage() {
                   <button
                     key={s}
                     onClick={() => void send(s)}
-                    className="text-left text-xs px-3.5 py-2.5 rounded-lg border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-teal-400 hover:text-teal-700 transition-colors"
+                    className="text-left text-xs px-3.5 py-2.5 rounded-lg border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-brand hover:text-brand-ink transition-colors"
                   >
                     {s}
                   </button>
@@ -1034,12 +1038,12 @@ export default function ExplorationPage() {
                 const name = uploading ? item.up.name : item.att.filename
                 return (
                   <div key={item.key} className="flex gap-3 flex-row-reverse">
-                    <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 bg-[var(--color-nav-bg)] text-white">
+                    <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 bg-[var(--color-nav-bg)] text-[var(--color-text-inverse)]">
                       <Paperclip size={14} />
                     </div>
                     <div className={`group flex items-center gap-2.5 rounded-xl border bg-card px-3 py-2 max-w-[85%] ${
                       uploading ? 'border-dashed border-[var(--color-border)]' : 'border-[var(--color-border)]'}`}>
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-600">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand-ink">
                         {uploading ? <Loader2 size={15} className="animate-spin" /> : <FileText size={16} />}
                       </span>
                       <div className="min-w-0 text-left">
@@ -1059,7 +1063,7 @@ export default function ExplorationPage() {
                           <button
                             onClick={() => void downloadAttachment(item.att)}
                             title="下载文件"
-                            className="p-1 rounded text-[var(--color-text-tertiary)] hover:text-teal-600 hover:bg-[var(--color-bg-hover)]"
+                            className="p-1 rounded text-[var(--color-text-tertiary)] hover:text-brand-ink hover:bg-[var(--color-bg-hover)]"
                           >
                             <Download size={13} />
                           </button>
@@ -1084,7 +1088,7 @@ export default function ExplorationPage() {
                   className={`flex scroll-mt-4 gap-3 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}
                 >
                   <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${m.role === 'user'
-                    ? 'bg-[var(--color-nav-bg)] text-white' : 'bg-teal-50 text-teal-600'}`}>
+                    ? 'bg-[var(--color-nav-bg)] text-[var(--color-text-inverse)]' : 'bg-brand-soft text-brand-ink'}`}>
                     {m.role === 'user' ? <User size={14} /> : <Bot size={14} />}
                   </div>
                   <div className={`min-w-0 max-w-[85%] ${m.role === 'user' ? 'text-right' : ''}`}>
@@ -1092,7 +1096,7 @@ export default function ExplorationPage() {
                     {m.content && (
                       <>
                         <div className={`inline-block text-left rounded-xl px-3.5 py-2.5 ${m.role === 'user'
-                          ? 'whitespace-pre-wrap break-words bg-[var(--color-nav-bg)] text-white text-sm leading-relaxed'
+                          ? 'whitespace-pre-wrap break-words bg-[var(--color-nav-bg)] text-[var(--color-text-inverse)] text-sm leading-relaxed'
                           : 'bg-card border border-[var(--color-border)]'}`}>
                           {m.role === 'user' ? m.content : <Md text={m.content} />}
                         </div>
@@ -1102,8 +1106,8 @@ export default function ExplorationPage() {
                             onClick={() => void copyMessage(m)}
                             title={m.role === 'user' ? '复制用户消息' : '复制助手回复'}
                             aria-label={m.role === 'user' ? '复制用户消息' : '复制助手回复'}
-                            className={`inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-[10px] transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${copiedMessageId === m.id
-                              ? 'bg-teal-50 text-teal-700'
+                            className={`inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-[10px] transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${copiedMessageId === m.id
+                              ? 'bg-brand-soft text-brand-ink'
                               : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
                           >
                             {copiedMessageId === m.id ? <Check size={12} /> : <Copy size={12} />}
@@ -1152,7 +1156,7 @@ export default function ExplorationPage() {
             {/* 消息输入框：回形针上传的附件直接体现在上方对话流中，输入框只承载本轮消息 */}
             <div
               data-testid="exploration-composer-shell"
-              className="workspace-topology-surface relative overflow-visible rounded-xl border border-teal-500 ring-1 ring-teal-500/10 transition-colors focus-within:ring-teal-500/20"
+              className="workspace-topology-surface relative overflow-visible rounded-xl border border-brand ring-1 ring-ring transition-colors focus-within:ring-ring"
             >
               <div data-testid="exploration-composer-input" className="px-3 pb-2 pt-2.5">
                 <textarea
@@ -1180,7 +1184,7 @@ export default function ExplorationPage() {
                     onClick={pickFiles}
                     title="上传参考资料（仅本会话可见，用于辅助澄清业务）"
                     aria-label="上传参考资料"
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-teal-600 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-brand-ink active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <Paperclip size={16} />
                   </button>
@@ -1190,13 +1194,13 @@ export default function ExplorationPage() {
                     aria-pressed={webSearch}
                     data-testid="web-search-toggle"
                     title={webSearch ? '联网搜索已开启，点击关闭' : '联网搜索已关闭，点击开启'}
-                    className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${webSearch
-                      ? 'border-teal-300 bg-teal-50 text-teal-700'
+                    className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${webSearch
+                      ? 'border-brand-line bg-brand-soft text-brand-ink'
                       : 'border-transparent text-[var(--color-text-tertiary)] hover:border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
                   >
                     <Globe2 size={15} />
                     <span>联网</span>
-                    <span className={`h-1.5 w-1.5 rounded-full transition-colors ${webSearch ? 'bg-teal-500' : 'bg-[var(--color-border)]'}`} />
+                    <span className={`h-1.5 w-1.5 rounded-full transition-colors ${webSearch ? 'bg-brand' : 'bg-[var(--color-border)]'}`} />
                   </button>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
@@ -1206,7 +1210,7 @@ export default function ExplorationPage() {
                     disabled={busy || !input.trim()}
                     title="发送消息"
                     aria-label="发送消息"
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white transition-all hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand text-[var(--color-text-inverse)] transition-all hover:bg-brand-deep active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
                   >
                     {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
                   </button>
@@ -1218,8 +1222,8 @@ export default function ExplorationPage() {
                     aria-label="查看我发送的消息"
                     aria-expanded={showMessageHistory}
                     data-testid="message-history-button"
-                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showMessageHistory
-                      ? 'border-teal-300 bg-teal-50 text-teal-700'
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${showMessageHistory
+                      ? 'border-brand-line bg-brand-soft text-brand-ink'
                       : 'border-[var(--color-border)] text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}
                   >
                     <List size={15} />

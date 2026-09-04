@@ -35,32 +35,32 @@ interface KindStyle {
 
 const KIND_STYLE: Record<CanvasKey, KindStyle> = {
   objects: {
-    label: '对象模型', Icon: Box, accent: 'bg-sky-600', soft: 'bg-sky-50',
-    text: 'text-sky-700', border: 'border-sky-200',
+    label: '对象模型', Icon: Box, accent: 'bg-[var(--color-info)]', soft: 'bg-[var(--color-info-bg)]',
+    text: 'text-[var(--color-info)]', border: 'border-[color-mix(in_srgb,var(--color-info)_35%,transparent)]',
   },
   actors: {
-    label: '主体模型', Icon: Users, accent: 'bg-violet-600', soft: 'bg-violet-50',
-    text: 'text-violet-700', border: 'border-violet-200',
+    label: '主体模型', Icon: Users, accent: 'bg-viz-violet', soft: 'bg-viz-violet-soft',
+    text: 'text-viz-violet', border: 'border-viz-violet-soft',
   },
   behaviors: {
-    label: '行为模型', Icon: Play, accent: 'bg-teal-600', soft: 'bg-teal-50',
-    text: 'text-teal-700', border: 'border-teal-200',
+    label: '行为模型', Icon: Play, accent: 'bg-brand', soft: 'bg-brand-soft',
+    text: 'text-brand-ink', border: 'border-brand-line',
   },
   events: {
-    label: '事件模型', Icon: Zap, accent: 'bg-amber-500', soft: 'bg-amber-50',
-    text: 'text-amber-700', border: 'border-amber-200',
+    label: '事件模型', Icon: Zap, accent: 'bg-[var(--color-warning)]', soft: 'bg-[var(--color-warning-bg)]',
+    text: 'text-[var(--color-warning)]', border: 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)]',
   },
   rules: {
-    label: '规则模型', Icon: Scale, accent: 'bg-rose-600', soft: 'bg-rose-50',
-    text: 'text-rose-700', border: 'border-rose-200',
+    label: '规则模型', Icon: Scale, accent: 'bg-viz-rose', soft: 'bg-viz-rose-soft',
+    text: 'text-viz-rose', border: 'border-viz-rose-soft',
   },
   processes: {
-    label: '流程模型', Icon: GitBranch, accent: 'bg-indigo-600', soft: 'bg-indigo-50',
-    text: 'text-indigo-700', border: 'border-indigo-200',
+    label: '流程模型', Icon: GitBranch, accent: 'bg-viz-indigo', soft: 'bg-viz-indigo-soft',
+    text: 'text-viz-indigo', border: 'border-viz-indigo-soft',
   },
   scenarios: {
-    label: '场景模型', Icon: MapIcon, accent: 'bg-emerald-600', soft: 'bg-emerald-50',
-    text: 'text-emerald-700', border: 'border-emerald-200',
+    label: '场景模型', Icon: MapIcon, accent: 'bg-[var(--color-success)]', soft: 'bg-[var(--color-success-bg)]',
+    text: 'text-[var(--color-success)]', border: 'border-[color-mix(in_srgb,var(--color-success)_35%,transparent)]',
   },
 }
 
@@ -103,11 +103,11 @@ const ACTOR_KIND: Record<string, { label: string; Icon: ElementType }> = {
 }
 
 const RULE_KIND: Record<string, { label: string; cls: string }> = {
-  constraint: { label: '约束', cls: 'bg-slate-100 text-slate-700' },
-  validation: { label: '校验', cls: 'bg-blue-50 text-blue-700' },
-  derivation: { label: '派生', cls: 'bg-violet-50 text-violet-700' },
-  approval: { label: '审批', cls: 'bg-amber-50 text-amber-700' },
-  alert: { label: '告警', cls: 'bg-rose-50 text-rose-700' },
+  constraint: { label: '约束', cls: 'bg-muted text-foreground' },
+  validation: { label: '校验', cls: 'bg-[var(--color-info-bg)] text-[var(--color-info)]' },
+  derivation: { label: '派生', cls: 'bg-viz-violet-soft text-viz-violet' },
+  approval: { label: '审批', cls: 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]' },
+  alert: { label: '告警', cls: 'bg-viz-rose-soft text-viz-rose' },
 }
 
 const CARDINALITY: Record<string, [string, string]> = {
@@ -190,23 +190,23 @@ const displayName = (el: CanvasElement): string => str(el.display_name) || el.na
 
 function typeCategory(hint?: string): { Icon: ElementType; cls: string } {
   const value = (hint || '').toLowerCase()
-  if (!value) return { Icon: Type, cls: 'bg-slate-100 text-slate-500' }
+  if (!value) return { Icon: Type, cls: 'bg-muted text-muted-foreground' }
   if (/金额|价格|费用|money|price|amount|currency|decimal/.test(value)) {
-    return { Icon: Coins, cls: 'bg-emerald-50 text-emerald-700' }
+    return { Icon: Coins, cls: 'bg-[var(--color-success-bg)] text-[var(--color-success)]' }
   }
   if (/日期|时间|date|time/.test(value)) {
-    return { Icon: Calendar, cls: 'bg-amber-50 text-amber-700' }
+    return { Icon: Calendar, cls: 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]' }
   }
   if (/是否|布尔|bool|标志/.test(value)) {
-    return { Icon: ToggleLeft, cls: 'bg-violet-50 text-violet-700' }
+    return { Icon: ToggleLeft, cls: 'bg-viz-violet-soft text-viz-violet' }
   }
   if (/枚举|enum|选项|类别/.test(value)) {
-    return { Icon: List, cls: 'bg-rose-50 text-rose-700' }
+    return { Icon: List, cls: 'bg-viz-rose-soft text-viz-rose' }
   }
   if (/数字|数值|整数|数量|个数|number|int|float|count|qty/.test(value)) {
-    return { Icon: Hash, cls: 'bg-blue-50 text-blue-700' }
+    return { Icon: Hash, cls: 'bg-[var(--color-info-bg)] text-[var(--color-info)]' }
   }
-  return { Icon: Type, cls: 'bg-slate-100 text-slate-600' }
+  return { Icon: Type, cls: 'bg-muted text-muted-foreground' }
 }
 
 function EntityRef({ name, preferred, ctx }: { name?: string; preferred?: CanvasKey; ctx: Ctx }) {
@@ -216,7 +216,7 @@ function EntityRef({ name, preferred, ctx }: { name?: string; preferred?: Canvas
     return (
       <span
         title="尚未在画布中定义"
-        className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-[var(--color-border-hover)] bg-white px-2 py-1 text-xs text-[var(--color-text-tertiary)]"
+        className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-[var(--color-border-hover)] bg-card px-2 py-1 text-xs text-[var(--color-text-tertiary)]"
       >
         <CircleAlert size={12} />
         {name}
@@ -232,7 +232,7 @@ function EntityRef({ name, preferred, ctx }: { name?: string; preferred?: Canvas
       type="button"
       onClick={() => ctx.onNavigate?.(hit.key, hit.el)}
       title="打开关联模型"
-      className={`${className} transition hover:-translate-y-px hover:brightness-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30`}
+      className={`${className} transition hover:-translate-y-px hover:brightness-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
     >
       <Icon size={12} />
       {displayName(hit.el)}
@@ -249,7 +249,7 @@ function EntityRef({ name, preferred, ctx }: { name?: string; preferred?: Canvas
 function Cardinality({ value }: { value?: string }) {
   if (!value) {
     return (
-      <span className="rounded-md border border-dashed border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">
+      <span className="rounded-md border border-dashed border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-1.5 py-0.5 text-[10px] text-[var(--color-warning)]">
         基数待补
       </span>
     )
@@ -258,7 +258,7 @@ function Cardinality({ value }: { value?: string }) {
   return (
     <span
       title={cardinality ? cardinality[0] : value}
-      className="rounded-md border border-[var(--color-border)] bg-white px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text-secondary)]"
+      className="rounded-md border border-[var(--color-border)] bg-card px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text-secondary)]"
     >
       {cardinality ? cardinality[1] : value}
     </span>
@@ -308,9 +308,9 @@ function LogicChain({ title, description, items }: {
   items: LogicItem[]
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-[#f7f9fb] dark:bg-[#121820] p-4">
+    <section className="rounded-2xl border border-border bg-[#f7f9fb] dark:bg-[#121820] p-4">
       <div className="mb-4">
-        <div className="text-[11px] font-semibold tracking-[0.12em] text-teal-700">核心逻辑</div>
+        <div className="text-[11px] font-semibold tracking-[0.12em] text-brand-ink">核心逻辑</div>
         <h4 className="mt-1 text-base font-semibold tracking-[-0.02em] text-[var(--color-text-primary)]">{title}</h4>
         <p className="mt-1 max-w-[66ch] text-xs leading-relaxed text-[var(--color-text-tertiary)]">{description}</p>
       </div>
@@ -320,10 +320,10 @@ function LogicChain({ title, description, items }: {
           return (
             <div key={index} className="contents">
               <div className={`min-w-0 flex-1 rounded-xl border px-3 py-3 ${item.warning
-                ? 'border-amber-200 bg-amber-50/70'
+                ? 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)]'
                 : item.emphasized
-                  ? 'border-teal-200 bg-white shadow-[0_8px_24px_rgba(15,118,110,0.08)]'
-                  : 'border-slate-200 bg-white'}`}>
+                  ? 'border-brand-line bg-card shadow-[0_8px_24px_rgba(15,118,110,0.08)]'
+                  : 'border-border bg-card'}`}>
                 <div className="flex items-center gap-1.5 text-[10px] font-medium tracking-[0.08em] text-[var(--color-text-tertiary)]">
                   <Icon size={12} />
                   {item.eyebrow}
@@ -338,7 +338,7 @@ function LogicChain({ title, description, items }: {
               {index < items.length - 1 && (
                 <ArrowRight
                   size={15}
-                  className="mx-auto shrink-0 rotate-90 text-slate-300 md:mx-0 md:rotate-0"
+                  className="mx-auto shrink-0 rotate-90 text-[var(--color-text-tertiary)] md:mx-0 md:rotate-0"
                 />
               )}
             </div>
@@ -358,7 +358,7 @@ function AttributeTable({ attributes, keyName }: { attributes: AttrRow[]; keyNam
         <span>类型</span>
         <span>业务约束</span>
       </div>
-      <div className="divide-y divide-[var(--color-border)] bg-white">
+      <div className="divide-y divide-[var(--color-border)] bg-card">
         {attributes.map((attribute, index) => {
           const type = typeCategory(attribute.type_hint)
           const TypeIcon = type.Icon
@@ -367,16 +367,16 @@ function AttributeTable({ attributes, keyName }: { attributes: AttrRow[]; keyNam
           return (
             <div
               key={`${attribute.name || 'attribute'}-${index}`}
-              className={`grid gap-2 px-3 py-3 sm:grid-cols-[minmax(130px,1fr)_90px_minmax(150px,1.25fr)] sm:items-start sm:gap-3 ${isKey ? 'bg-amber-50/35' : ''}`}
+              className={`grid gap-2 px-3 py-3 sm:grid-cols-[minmax(130px,1fr)_90px_minmax(150px,1.25fr)] sm:items-start sm:gap-3 ${isKey ? 'bg-[var(--color-warning-bg)]' : ''}`}
             >
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {isKey && <Key size={12} className="text-amber-600" />}
+                  {isKey && <Key size={12} className="text-[var(--color-warning)]" />}
                   <span className="text-sm font-medium text-[var(--color-text-primary)]">
                     {attribute.display_name || attribute.name}
                   </span>
                   {attribute.required && (
-                    <span className="rounded bg-rose-50 px-1 py-px text-[9px] font-medium text-rose-600">必填</span>
+                    <span className="rounded bg-viz-rose-soft px-1 py-px text-[9px] font-medium text-viz-rose">必填</span>
                   )}
                 </div>
                 {alias && (
@@ -395,7 +395,7 @@ function AttributeTable({ attributes, keyName }: { attributes: AttrRow[]; keyNam
                 {attribute.enum?.length ? (
                   <div className="flex flex-wrap gap-1">
                     {attribute.enum.map(value => (
-                      <span key={value} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">
+                      <span key={value} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                         {value}
                       </span>
                     ))}
@@ -417,10 +417,10 @@ function RelationMap({ source, relations, ctx }: { source: string; relations: Re
       {relations.map((relation, index) => (
         <div
           key={`${relation.name || relation.target || 'relation'}-${index}`}
-          className="rounded-xl border border-[var(--color-border)] bg-white px-3 py-3"
+          className="rounded-xl border border-[var(--color-border)] bg-card px-3 py-3"
         >
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-md bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700">{source}</span>
+            <span className="rounded-md bg-[var(--color-info-bg)] px-2 py-1 text-xs font-medium text-[var(--color-info)]">{source}</span>
             <span className="inline-flex items-center gap-1 text-[11px] text-[var(--color-text-tertiary)]">
               <ArrowRight size={13} />
               {relation.display_name || relation.name || '关联'}
@@ -439,7 +439,7 @@ function RelationMap({ source, relations, ctx }: { source: string; relations: Re
   )
 }
 
-function CompactList({ items, icon: Icon = CircleCheck, tone = 'text-teal-600' }: {
+function CompactList({ items, icon: Icon = CircleCheck, tone = 'text-brand-ink' }: {
   items: string[]
   icon?: ElementType
   tone?: string
@@ -475,23 +475,23 @@ function ScenarioTimeline({ steps, branches }: { steps: string[]; branches: Scen
         return (
           <li key={`${step}-${index}`} className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
             <div className="flex flex-col items-center">
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 font-mono text-[11px] font-semibold text-emerald-700">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] font-mono text-[11px] font-semibold text-[var(--color-success)]">
                 {stepNumber}
               </span>
-              {index < steps.length - 1 && <span className="my-1 min-h-6 w-px flex-1 bg-emerald-200" />}
+              {index < steps.length - 1 && <span className="my-1 min-h-6 w-px flex-1 bg-[var(--color-success-bg)]" />}
             </div>
             <div className="pb-4">
               <p className="pt-0.5 text-sm leading-relaxed text-[var(--color-text-primary)]">{step}</p>
               {stepBranches.length > 0 && (
-                <div className="mt-2 space-y-1.5 border-l-2 border-amber-200 pl-3">
+                <div className="mt-2 space-y-1.5 border-l-2 border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] pl-3">
                   {stepBranches.map((branch, branchIndex) => (
                     <div
                       key={`${branch.condition || 'branch'}-${branchIndex}`}
                       className="flex flex-wrap items-center gap-1.5 text-[11px] leading-relaxed"
                     >
-                      <GitBranch size={12} className="text-amber-600" />
-                      <span className="font-medium text-amber-800">{branch.condition || '条件未命名'}</span>
-                      <ArrowRight size={11} className="text-amber-400" />
+                      <GitBranch size={12} className="text-[var(--color-warning)]" />
+                      <span className="font-medium text-[var(--color-warning)]">{branch.condition || '条件未命名'}</span>
+                      <ArrowRight size={11} className="text-[var(--color-warning)]" />
                       <span className="text-[var(--color-text-secondary)]">
                         {branch.to_step == null ? '流程结束' : `进入第 ${branch.to_step} 步`}
                       </span>
@@ -520,10 +520,10 @@ function ProcessSteps({ steps, ctx }: { steps: ProcessStep[]; ctx: Ctx }) {
         return (
           <li key={step.id || `${step.name || 'step'}-${index}`} className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
             <div className="flex flex-col items-center">
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-indigo-200 bg-indigo-50 font-mono text-[11px] font-semibold text-indigo-700">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-viz-indigo-soft bg-viz-indigo-soft font-mono text-[11px] font-semibold text-viz-indigo">
                 {step.seq ?? stepNumber}
               </span>
-              {index < ordered.length - 1 && <span className="my-1 min-h-6 w-px flex-1 bg-indigo-200" />}
+              {index < ordered.length - 1 && <span className="my-1 min-h-6 w-px flex-1 bg-viz-indigo-soft" />}
             </div>
             <div className="pb-4">
               <p className="pt-0.5 text-sm font-medium leading-relaxed text-[var(--color-text-primary)]">
@@ -533,12 +533,12 @@ function ProcessSteps({ steps, ctx }: { steps: ProcessStep[]; ctx: Ctx }) {
                 <span>执行</span>
                 {step.actor
                   ? <EntityRef name={step.actor} preferred="actors" ctx={ctx} />
-                  : <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">线下步骤</span>}
+                  : <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">线下步骤</span>}
                 <span aria-hidden="true">·</span>
                 <span>行为</span>
                 {step.behavior
                   ? <EntityRef name={step.behavior} preferred="behaviors" ctx={ctx} />
-                  : <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">未绑定</span>}
+                  : <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">未绑定</span>}
               </div>
               {(inputs.length > 0 || outputs.length > 0) && (
                 <div className="mt-1.5 space-y-1 text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">
@@ -569,7 +569,7 @@ function ProcessBranchTable({ branches }: { branches: ProcessBranch[] }) {
         <span>到步骤</span>
         <span>类型</span>
       </div>
-      <div className="divide-y divide-[var(--color-border)] bg-white">
+      <div className="divide-y divide-[var(--color-border)] bg-card">
         {branches.map((branch, index) => {
           const isException = str(branch.kind) === 'exception'
           return (
@@ -588,7 +588,7 @@ function ProcessBranchTable({ branches }: { branches: ProcessBranch[] }) {
               </span>
               <span>
                 <span className={`inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium ${isException
-                  ? 'bg-rose-50 text-rose-700' : 'bg-teal-50 text-teal-700'}`}>
+                  ? 'bg-viz-rose-soft text-viz-rose' : 'bg-brand-soft text-brand-ink'}`}>
                   {isException ? '异常路径' : '正常路径'}
                 </span>
               </span>
@@ -611,7 +611,7 @@ function MetricTable({ metrics, ctx }: { metrics: MetricRow[]; ctx: Ctx }) {
         <span>来源对象</span>
         <span>目标值</span>
       </div>
-      <div className="divide-y divide-[var(--color-border)] bg-white">
+      <div className="divide-y divide-[var(--color-border)] bg-card">
         {metrics.map((metric, index) => {
           const sources = asArr<string>(metric.source_objects)
           const alias = metric.display_name && metric.name && metric.display_name !== metric.name
@@ -742,7 +742,7 @@ function ElementBody({ sectionKey, el, ctx }: { sectionKey: CanvasKey; el: Canva
         )}
         <Section icon={ListChecks} title="职责边界" count={responsibilities.length}>
           {responsibilities.length
-            ? <CompactList items={responsibilities} icon={CircleCheck} tone="text-violet-500" />
+            ? <CompactList items={responsibilities} icon={CircleCheck} tone="text-viz-violet" />
             : <Empty text="当前没有沉淀职责；详情页不会用问题清单填充这一部分。" />}
         </Section>
       </>
@@ -794,8 +794,8 @@ function ElementBody({ sectionKey, el, ctx }: { sectionKey: CanvasKey; el: Canva
         />
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <span className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium ${el.needs_approval
-            ? 'border-amber-200 bg-amber-50 text-amber-700'
-            : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+            ? 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] text-[var(--color-warning)]'
+            : 'border-border bg-muted text-muted-foreground'}`}>
             <ShieldCheck size={13} />
             {el.needs_approval ? '执行前需要审批' : '无需审批，可直接执行'}
           </span>
@@ -810,7 +810,7 @@ function ElementBody({ sectionKey, el, ctx }: { sectionKey: CanvasKey; el: Canva
         )}
         <Section icon={ShieldCheck} title="执行约束" count={constraints.length}>
           {constraints.length
-            ? <CompactList items={constraints} icon={ShieldCheck} tone="text-rose-500" />
+            ? <CompactList items={constraints} icon={ShieldCheck} tone="text-viz-rose" />
             : <Empty text="当前没有额外执行约束。" />}
         </Section>
       </>
@@ -854,7 +854,7 @@ function ElementBody({ sectionKey, el, ctx }: { sectionKey: CanvasKey; el: Canva
           {payload.length ? (
             <div className="flex flex-wrap gap-2">
               {payload.map(item => (
-                <span key={item} className="rounded-md border border-[var(--color-border)] bg-white px-2.5 py-1.5 text-xs text-[var(--color-text-secondary)]">
+                <span key={item} className="rounded-md border border-[var(--color-border)] bg-card px-2.5 py-1.5 text-xs text-[var(--color-text-secondary)]">
                   {item}
                 </span>
               ))}
@@ -863,7 +863,7 @@ function ElementBody({ sectionKey, el, ctx }: { sectionKey: CanvasKey; el: Canva
         </Section>
         <Section icon={GitBranch} title="事件后的响应" count={consequences.length}>
           {consequences.length
-            ? <CompactList items={consequences} icon={CornerDownRight} tone="text-amber-600" />
+            ? <CompactList items={consequences} icon={CornerDownRight} tone="text-[var(--color-warning)]" />
             : <Empty text="当前没有定义事件发生后的业务响应。" />}
         </Section>
       </>
@@ -872,7 +872,7 @@ function ElementBody({ sectionKey, el, ctx }: { sectionKey: CanvasKey; el: Canva
 
   if (sectionKey === 'rules') {
     const kindValue = str(el.kind)
-    const kind = RULE_KIND[kindValue] || { label: kindValue || '约束', cls: 'bg-slate-100 text-slate-700' }
+    const kind = RULE_KIND[kindValue] || { label: kindValue || '约束', cls: 'bg-muted text-foreground' }
     const target = str(el.applies_to)
     const statement = str(el.statement)
     const errorMessage = str(el.error_message)
@@ -911,14 +911,14 @@ function ElementBody({ sectionKey, el, ctx }: { sectionKey: CanvasKey; el: Canva
         />
         <Section icon={Scale} title="规则原文">
           {statement ? (
-            <blockquote className="border-l-2 border-rose-300 bg-rose-50/40 px-4 py-3 text-sm leading-7 text-[var(--color-text-primary)]">
+            <blockquote className="border-l-2 border-viz-rose-soft bg-viz-rose-soft px-4 py-3 text-sm leading-7 text-[var(--color-text-primary)]">
               {statement}
             </blockquote>
           ) : <Empty text="当前还没有形成可执行的规则表达。" />}
         </Section>
         {errorMessage && (
           <Section icon={CircleAlert} title="不满足规则时">
-            <div className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm leading-relaxed text-rose-800">
+            <div className="rounded-xl border border-viz-rose-soft bg-viz-rose-soft px-3.5 py-3 text-sm leading-relaxed text-viz-rose">
               {errorMessage}
             </div>
           </Section>
@@ -982,7 +982,7 @@ function ElementBody({ sectionKey, el, ctx }: { sectionKey: CanvasKey; el: Canva
         </Section>
         {expectedOutcome && (
           <Section icon={Flag} title="预期结果">
-            <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-3.5 py-3 text-sm font-medium leading-relaxed text-indigo-800">
+            <div className="rounded-xl border border-viz-indigo-soft bg-viz-indigo-soft px-3.5 py-3 text-sm font-medium leading-relaxed text-viz-indigo">
               {expectedOutcome}
             </div>
           </Section>
@@ -1071,7 +1071,7 @@ function ElementBody({ sectionKey, el, ctx }: { sectionKey: CanvasKey; el: Canva
       )}
       {expectedOutcome && (
         <Section icon={Flag} title="闭环结果">
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-sm font-medium leading-relaxed text-emerald-800">
+          <div className="rounded-xl border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] px-3.5 py-3 text-sm font-medium leading-relaxed text-[var(--color-success)]">
             {expectedOutcome}
           </div>
         </Section>
@@ -1197,7 +1197,7 @@ function HeaderMeta({ sectionKey, el }: { sectionKey: CanvasKey; el: CanvasEleme
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--color-text-tertiary)]">
       {items.map(item => (
         <span key={item} className="inline-flex items-center gap-1.5">
-          <span className="h-1 w-1 rounded-full bg-slate-300" />
+          <span className="h-1 w-1 rounded-full bg-accent" />
           {item}
         </span>
       ))}
@@ -1216,18 +1216,18 @@ function ModelAside({ sectionKey, el, canvas, ctx }: {
   const refs = relatedRefs(sectionKey, el, canvas)
   return (
     <aside className="space-y-3">
-      <section className="rounded-xl border border-[var(--color-border)] bg-white px-4 py-4">
+      <section className="rounded-xl border border-[var(--color-border)] bg-card px-4 py-4">
         <div className="text-[10px] font-semibold tracking-[0.12em] text-[var(--color-text-tertiary)]">模型定位</div>
         <p className="mt-2 text-sm font-medium leading-relaxed text-[var(--color-text-primary)]">{guide.purpose}</p>
         <p className="mt-2 text-[11px] leading-5 text-[var(--color-text-tertiary)]">{guide.reading}</p>
       </section>
 
-      <section className="rounded-xl border border-[var(--color-border)] bg-white px-4 py-4">
+      <section className="rounded-xl border border-[var(--color-border)] bg-card px-4 py-4">
         <div className="flex items-center gap-2">
           {gaps.length ? (
-            <CircleAlert size={14} className="text-amber-600" />
+            <CircleAlert size={14} className="text-[var(--color-warning)]" />
           ) : (
-            <CircleCheck size={14} className="text-teal-600" />
+            <CircleCheck size={14} className="text-brand-ink" />
           )}
           <h4 className="text-xs font-semibold text-[var(--color-text-primary)]">结构状态</h4>
         </div>
@@ -1238,18 +1238,18 @@ function ModelAside({ sectionKey, el, canvas, ctx }: {
             </p>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {gaps.slice(0, 3).map(gap => (
-                <span key={gap} className="rounded-md bg-amber-50 px-2 py-1 text-[10px] text-amber-700">
+                <span key={gap} className="rounded-md bg-[var(--color-warning-bg)] px-2 py-1 text-[10px] text-[var(--color-warning)]">
                   {gap}
                 </span>
               ))}
             </div>
           </>
         ) : (
-          <p className="mt-2 text-[11px] leading-5 text-teal-700">关键结构已经形成，可以继续检查关联模型。</p>
+          <p className="mt-2 text-[11px] leading-5 text-brand-ink">关键结构已经形成，可以继续检查关联模型。</p>
         )}
       </section>
 
-      <section className="rounded-xl border border-[var(--color-border)] bg-white px-4 py-4">
+      <section className="rounded-xl border border-[var(--color-border)] bg-card px-4 py-4">
         <div className="flex items-center gap-2">
           <Share2 size={14} className="text-[var(--color-text-tertiary)]" />
           <h4 className="text-xs font-semibold text-[var(--color-text-primary)]">关联模型</h4>
@@ -1310,7 +1310,7 @@ export default function ElementDetailView({ sectionKey, el, canvas, onBack, onNa
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="relative shrink-0 border-b border-[var(--color-border)] bg-white px-5 py-4">
+      <header className="relative shrink-0 border-b border-[var(--color-border)] bg-card px-5 py-4">
         <div className={`absolute inset-y-0 left-0 w-1 ${style.accent}`} />
         <div className="flex items-start gap-3.5">
           {onBack && (
@@ -1319,12 +1319,12 @@ export default function ElementDetailView({ sectionKey, el, canvas, onBack, onNa
               onClick={onBack}
               aria-label="返回上一个模型"
               title="返回上一个模型"
-              className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--color-border)] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
+              className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--color-border)] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <ArrowLeft size={15} />
             </button>
           )}
-          <span className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white ${style.accent}`}>
+          <span className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-[var(--color-text-inverse)] ${style.accent}`}>
             <Icon size={18} />
           </span>
           <div className="min-w-0 flex-1">
@@ -1348,7 +1348,7 @@ export default function ElementDetailView({ sectionKey, el, canvas, onBack, onNa
 
       <div className="flex-1 overflow-y-auto bg-[#f5f7f9] p-4 sm:p-5 dark:bg-[#121820]">
         <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_250px]">
-          <main className="min-w-0 rounded-2xl border border-[var(--color-border)] bg-white p-4 sm:p-5">
+          <main className="min-w-0 rounded-2xl border border-[var(--color-border)] bg-card p-4 sm:p-5">
             {description && (
               <section className="mb-5 border-b border-[var(--color-border)] pb-5">
                 <div className="text-[10px] font-semibold tracking-[0.12em] text-[var(--color-text-tertiary)]">业务定义</div>

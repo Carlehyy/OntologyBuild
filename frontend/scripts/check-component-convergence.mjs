@@ -46,8 +46,6 @@ const NATIVE_SELECT_ALLOWLIST = new Set([
   'pages/agent/InstanceKnowledgeGraph.tsx',
   'pages/agent/ReportStudioPage.tsx',
   'pages/agent/components/OntologyNetworkView.tsx',
-  'pages/explore/CanvasPanel.tsx',
-  'pages/explore/ExplorationPage.tsx',
   'pages/models/ModelsPage.tsx',
   'pages/models/components/ModelDetailDrawer.tsx',
                   'pages/ontology-model/OntologyNetworkPage.tsx',

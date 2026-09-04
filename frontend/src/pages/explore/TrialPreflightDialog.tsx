@@ -88,27 +88,27 @@ export default function TrialPreflightDialog({ open, ontologyId, versionId, read
     >
       {trialRun ? (
         <div data-testid="trial-run-result" className="space-y-4 text-sm">
-          <p className={trialRun.status === 'passed' ? 'text-emerald-800' : 'text-red-800'}>
+          <p className={trialRun.status === 'passed' ? 'text-[var(--color-success)]' : 'text-[var(--color-danger)]'}>
             {trialRun.status === 'passed'
               ? '已进入试跑态：快照冻结，真实数据仅写入隔离空间。'
               : '试跑未通过，请根据错误修正结构或映射后重新发起。'}
           </p>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {Object.entries(trialRun.result?.counts || {}).map(([key, value]) => (
-              <div key={key} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <b className="block text-lg tabular-nums text-slate-800">{String(value)}</b>
-                <span className="text-xs text-slate-500">{TRIAL_COUNT_LABELS[key] || key}</span>
+              <div key={key} className="rounded-lg border border-border bg-muted p-3">
+                <b className="block text-lg tabular-nums text-foreground">{String(value)}</b>
+                <span className="text-xs text-muted-foreground">{TRIAL_COUNT_LABELS[key] || key}</span>
               </div>
             ))}
           </div>
           <TrialActionPlanReview result={trialRun.result} />
           {(trialRun.result?.errors || []).length > 0 && (
-            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-800">
+            <div className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] p-3 text-[var(--color-danger)]">
               {(trialRun.result?.errors || []).map((item, index) => <p key={index}>• {redactTrialText(item.message)}</p>)}
             </div>
           )}
           {(trialRun.result?.warnings || []).length > 0 && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
+            <div className="rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] p-3 text-[var(--color-warning)]">
               {(trialRun.result?.warnings || []).map((item, index) => <p key={index}>• {redactTrialText(item.message)}</p>)}
             </div>
           )}
@@ -117,30 +117,30 @@ export default function TrialPreflightDialog({ open, ontologyId, versionId, read
         <div className="space-y-4 text-sm">
           {trial.isError && (
             gateIssues.length > 0 ? (
-              <div role="alert" className="rounded-xl border border-red-200 bg-red-50/80 px-4 py-3 text-sm text-red-900">
+              <div role="alert" className="rounded-xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-4 py-3 text-sm text-[var(--color-danger)]">
                 <p className="font-semibold">暂时不能进入试跑态：仍有 {gateIssues.length} 项试跑门禁条件未满足。</p>
-                <div className="scrollbar-thin mt-1 max-h-24 space-y-1 overflow-y-auto pr-2 text-xs leading-5 text-red-800">
+                <div className="scrollbar-thin mt-1 max-h-24 space-y-1 overflow-y-auto pr-2 text-xs leading-5 text-[var(--color-danger)]">
                   {gateIssues.map((item, index) => (
                     <p key={`${item.kind || ''}-${item.field || ''}-${index}`}>• {item.message}</p>
                   ))}
                 </div>
               </div>
             ) : (
-              <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">
+              <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] p-3 text-[var(--color-danger)]">
                 {errorText(trial.error)}
               </p>
             )
           )}
 
           <section aria-label="试跑门禁">
-            <h4 className="mb-2 text-xs font-semibold text-slate-800">试跑门禁</h4>
+            <h4 className="mb-2 text-xs font-semibold text-foreground">试跑门禁</h4>
             {preflight.isPending && (
-              <div className="flex items-center gap-2 text-xs text-slate-500">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 size={13} className="animate-spin" /> 正在检查试跑条件…
               </div>
             )}
             {preflight.isError && (
-              <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+              <p role="alert" className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] p-3 text-xs text-[var(--color-danger)]">
                 预检失败：{errorText(preflight.error)}
               </p>
             )}
@@ -150,16 +150,16 @@ export default function TrialPreflightDialog({ open, ontologyId, versionId, read
                   <li key={check.id} data-testid={`trial-preflight-check-${check.id}`}>
                     <div className="flex items-center gap-2 text-xs">
                       {check.status === 'pass'
-                        ? <CircleCheck size={13} className="shrink-0 text-teal-600" />
-                        : <CircleX size={13} className="shrink-0 text-red-600" />}
-                      <span className={check.status === 'pass' ? 'text-slate-600' : 'font-medium text-red-800'}>
+                        ? <CircleCheck size={13} className="shrink-0 text-brand-ink" />
+                        : <CircleX size={13} className="shrink-0 text-[var(--color-danger)]" />}
+                      <span className={check.status === 'pass' ? 'text-muted-foreground' : 'font-medium text-[var(--color-danger)]'}>
                         {check.label}
                       </span>
                     </div>
                     {(check.errors || []).length > 0 && (
                       <ul className="ml-5 mt-0.5 space-y-0.5">
                         {(check.errors || []).map((item, index) => (
-                          <li key={index} className="text-[11px] leading-5 text-red-700">• {item.message}</li>
+                          <li key={index} className="text-[11px] leading-5 text-[var(--color-danger)]">• {item.message}</li>
                         ))}
                       </ul>
                     )}
@@ -170,8 +170,8 @@ export default function TrialPreflightDialog({ open, ontologyId, versionId, read
           </section>
 
           <section aria-label="参考：业务语义质量">
-            <h4 className="mb-2 text-xs font-semibold text-slate-800">参考：业务语义质量</h4>
-            <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5 text-xs leading-5 text-slate-600">
+            <h4 className="mb-2 text-xs font-semibold text-foreground">参考：业务语义质量</h4>
+            <div className="rounded-lg border border-border bg-muted px-3 py-2.5 text-xs leading-5 text-muted-foreground">
               {readiness ? (
                 <p data-testid="trial-preflight-readiness">
                   质量门 {readiness.gatesPassed}/{readiness.gatesTotal}
@@ -181,7 +181,7 @@ export default function TrialPreflightDialog({ open, ontologyId, versionId, read
               ) : (
                 <p>当前会话暂无质量门数据。</p>
               )}
-              <p className="mt-1 text-[11px] text-slate-400">
+              <p className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">
                 仅供参考，不阻断试跑；补齐业务语义可回到业务场景视图继续澄清。
               </p>
             </div>

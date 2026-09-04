@@ -52,8 +52,8 @@ export default function ConsistencyPanel({ ontologyId, versionId, onBackTranslat
         className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-bg-hover)]"
       >
         <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${noSemanticLayer
-          ? 'bg-slate-100 text-slate-500' : consistent
-            ? 'bg-teal-50 text-teal-700' : 'bg-amber-50 text-amber-700'}`}>
+          ? 'bg-muted text-muted-foreground' : consistent
+            ? 'bg-brand-soft text-brand-ink' : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'}`}>
           {noSemanticLayer ? <FileText size={13} /> : consistent ? <ShieldCheck size={13} /> : <ShieldAlert size={13} />}
         </span>
         <span className="min-w-0 flex-1">
@@ -62,8 +62,8 @@ export default function ConsistencyPanel({ ontologyId, versionId, onBackTranslat
             <span
               data-testid="consistency-status-badge"
               className={`rounded-full px-1.5 py-0.5 text-[10px] ${noSemanticLayer
-                ? 'bg-slate-100 text-slate-600' : consistent
-                  ? 'bg-teal-50 text-teal-700' : 'bg-amber-50 text-amber-700'}`}
+                ? 'bg-muted text-muted-foreground' : consistent
+                  ? 'bg-brand-soft text-brand-ink' : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'}`}
             >
               {noSemanticLayer ? '未沉淀语义层' : consistent ? '一致' : `${issues.length} 项漂移`}
             </span>
@@ -82,9 +82,9 @@ export default function ConsistencyPanel({ ontologyId, versionId, onBackTranslat
       </button>
       {expanded && noSemanticLayer && (
         <div className="border-t border-[var(--color-border)] px-3 pb-3 pt-2.5">
-          <div className="flex flex-wrap items-center gap-2 rounded-md bg-slate-50 px-2.5 py-1.5">
-            <FileText size={12} className="shrink-0 text-slate-500" />
-            <span className="text-[11px] leading-5 text-slate-600">
+          <div className="flex flex-wrap items-center gap-2 rounded-md bg-muted px-2.5 py-1.5">
+            <FileText size={12} className="shrink-0 text-muted-foreground" />
+            <span className="text-[11px] leading-5 text-muted-foreground">
               语义层在「生成本体模型」落地时沉淀；生成后此处即可比对业务画布、需求文档与本体结构的三面一致性。
             </span>
             {onGotoDocs && (
@@ -92,7 +92,7 @@ export default function ConsistencyPanel({ ontologyId, versionId, onBackTranslat
                 type="button"
                 onClick={onGotoDocs}
                 data-testid="goto-docs-no-semantic"
-                className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] text-slate-700 transition-colors hover:bg-slate-100"
+                className="rounded border border-border bg-card px-2 py-0.5 text-[11px] text-foreground transition-colors hover:bg-muted"
               >
                 前往需求文档视图
               </button>
@@ -104,9 +104,9 @@ export default function ConsistencyPanel({ ontologyId, versionId, onBackTranslat
         <div className="space-y-2.5 border-t border-[var(--color-border)] px-3 pb-3 pt-2.5">
           {groups.map(group => (
             <div key={group.code} data-testid={`consistency-group-${group.code}`}>
-              <div className="flex items-center gap-1.5 text-[11px] font-medium text-amber-900">
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-[var(--color-warning)]">
                 {group.label}
-                <span className="rounded bg-amber-100 px-1 py-px text-[10px] text-amber-700">{group.issues.length}</span>
+                <span className="rounded bg-[var(--color-warning-bg)] px-1 py-px text-[10px] text-[var(--color-warning)]">{group.issues.length}</span>
               </div>
               <ul className="mt-1 space-y-0.5">
                 {group.issues.map((issue, index) => (
@@ -121,16 +121,16 @@ export default function ConsistencyPanel({ ontologyId, versionId, onBackTranslat
             </div>
           ))}
           {hasDocumentIssue && (
-            <div className="flex flex-wrap items-center gap-2 rounded-md bg-amber-50/60 px-2.5 py-1.5">
-              <FileText size={12} className="shrink-0 text-amber-600" />
-              <span className="text-[11px] leading-5 text-amber-800">
+            <div className="flex flex-wrap items-center gap-2 rounded-md bg-[var(--color-warning-bg)] px-2.5 py-1.5">
+              <FileText size={12} className="shrink-0 text-[var(--color-warning)]" />
+              <span className="text-[11px] leading-5 text-[var(--color-warning)]">
                 需求文档与画布/结构已不同步，建议到需求文档视图重新生成。
               </span>
               {onGotoDocs && (
                 <button
                   type="button"
                   onClick={onGotoDocs}
-                  className="rounded border border-amber-300 bg-white px-2 py-0.5 text-[11px] text-amber-800 transition-colors hover:bg-amber-100"
+                  className="rounded border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-card px-2 py-0.5 text-[11px] text-[var(--color-warning)] transition-colors hover:bg-[var(--color-warning-bg)]"
                 >
                   前往需求文档视图
                 </button>
@@ -146,7 +146,7 @@ export default function ConsistencyPanel({ ontologyId, versionId, onBackTranslat
                   onClick={() => onBackTranslate?.(backTranslateMessage)}
                   data-testid="back-translate-button"
                   title="把人工修改发给探索助手，回译并同步到业务场景画布"
-                  className="inline-flex h-7 items-center gap-1.5 rounded-md bg-teal-600 px-2.5 text-xs font-medium text-white transition-colors hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md bg-brand px-2.5 text-xs font-medium text-[var(--color-text-inverse)] transition-colors hover:bg-brand-deep disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Languages size={12} /> 回译到业务语义
                 </button>
@@ -156,7 +156,7 @@ export default function ConsistencyPanel({ ontologyId, versionId, onBackTranslat
                   type="button"
                   onClick={onGotoDocs}
                   data-testid="regenerate-model-hint"
-                  className="inline-flex h-7 items-center rounded-md border border-[var(--color-border)] px-2.5 text-xs text-[var(--color-text-secondary)] transition-colors hover:border-teal-400 hover:text-teal-700"
+                  className="inline-flex h-7 items-center rounded-md border border-[var(--color-border)] px-2.5 text-xs text-[var(--color-text-secondary)] transition-colors hover:border-brand hover:text-brand-ink"
                 >
                   前往需求文档视图重新「生成本体模型」补齐结构
                 </button>
@@ -165,16 +165,16 @@ export default function ConsistencyPanel({ ontologyId, versionId, onBackTranslat
           )}
           <div
             data-testid="solidify-path-hint"
-            className="flex flex-wrap items-center gap-2 rounded-md bg-slate-50 px-2.5 py-1.5"
+            className="flex flex-wrap items-center gap-2 rounded-md bg-muted px-2.5 py-1.5"
           >
-            <span className="text-[11px] leading-5 text-slate-600">
+            <span className="text-[11px] leading-5 text-muted-foreground">
               消解路径：回译/补齐只更新业务画布，漂移消解需到需求文档视图重新生成文档并「生成本体模型」固化语义层。
             </span>
             {onGotoDocs && (
               <button
                 type="button"
                 onClick={onGotoDocs}
-                className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] text-slate-700 transition-colors hover:bg-slate-100"
+                className="rounded border border-border bg-card px-2 py-0.5 text-[11px] text-foreground transition-colors hover:bg-muted"
               >
                 前往固化
               </button>

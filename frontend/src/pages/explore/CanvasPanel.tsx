@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   Box, Users, Play, Zap, Scale, Map as MapIcon, ChevronDown, ChevronRight, CircleAlert,
   CircleCheck, CircleHelp, GitBranch, Share2, ShieldAlert, ShieldCheck, Copy, Loader2, FileText,
@@ -21,13 +22,13 @@ const SECTIONS: {
   icon: React.ElementType
   tint: string
 }[] = [
-  { key: 'objects', label: '对象模型', icon: Box, tint: 'text-sky-600 bg-sky-50' },
-  { key: 'actors', label: '主体模型', icon: Users, tint: 'text-violet-600 bg-violet-50' },
-  { key: 'behaviors', label: '行为模型', icon: Play, tint: 'text-teal-600 bg-teal-50' },
-  { key: 'events', label: '事件模型', icon: Zap, tint: 'text-amber-600 bg-amber-50' },
-  { key: 'rules', label: '规则模型', icon: Scale, tint: 'text-rose-600 bg-rose-50' },
-  { key: 'processes', label: '流程模型', icon: GitBranch, tint: 'text-indigo-600 bg-indigo-50' },
-  { key: 'scenarios', label: '场景模型', icon: MapIcon, tint: 'text-emerald-600 bg-emerald-50' },
+  { key: 'objects', label: '对象模型', icon: Box, tint: 'text-[var(--color-info)] bg-[var(--color-info-bg)]' },
+  { key: 'actors', label: '主体模型', icon: Users, tint: 'text-viz-violet bg-viz-violet-soft' },
+  { key: 'behaviors', label: '行为模型', icon: Play, tint: 'text-brand-ink bg-brand-soft' },
+  { key: 'events', label: '事件模型', icon: Zap, tint: 'text-[var(--color-warning)] bg-[var(--color-warning-bg)]' },
+  { key: 'rules', label: '规则模型', icon: Scale, tint: 'text-viz-rose bg-viz-rose-soft' },
+  { key: 'processes', label: '流程模型', icon: GitBranch, tint: 'text-viz-indigo bg-viz-indigo-soft' },
+  { key: 'scenarios', label: '场景模型', icon: MapIcon, tint: 'text-[var(--color-success)] bg-[var(--color-success-bg)]' },
 ]
 
 const errorMessage = (error: unknown, fallback: string): string => {
@@ -49,14 +50,14 @@ function GatePanel({ readiness }: { readiness: Readiness }) {
         className="flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-[var(--color-bg-hover)]"
       >
         <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${readiness.ready
-          ? 'bg-teal-50 text-teal-700' : 'bg-amber-50 text-amber-700'}`}>
+          ? 'bg-brand-soft text-brand-ink' : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'}`}>
           {readiness.ready ? <ShieldCheck size={13} /> : <ShieldAlert size={13} />}
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-primary)]">
             质量门
             <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${readiness.ready
-              ? 'bg-teal-50 text-teal-700' : 'bg-amber-50 text-amber-700'}`}>
+              ? 'bg-brand-soft text-brand-ink' : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'}`}>
               {readiness.gatesPassed}/{readiness.gatesTotal}
             </span>
           </span>
@@ -69,7 +70,7 @@ function GatePanel({ readiness }: { readiness: Readiness }) {
           : <ChevronRight size={13} className="shrink-0 text-[var(--color-text-tertiary)]" />}
       </button>
       {expanded && <div className="border-t border-[var(--color-border)] px-3 pb-3 pt-2.5">
-        <div className={`mb-2 text-[11px] ${readiness.ready ? 'text-teal-700' : 'text-amber-800'}`}>
+        <div className={`mb-2 text-[11px] ${readiness.ready ? 'text-brand-ink' : 'text-[var(--color-warning)]'}`}>
           当前阶段：{readiness.stage}
         </div>
         <ul className="space-y-1">
@@ -84,13 +85,13 @@ function GatePanel({ readiness }: { readiness: Readiness }) {
                 className={`w-full flex items-center gap-1.5 text-[11px] leading-5 text-left ${expandable ? 'cursor-pointer' : 'cursor-default'}`}
               >
                 {g.passed
-                  ? <CircleCheck size={11} className="shrink-0 text-teal-600" />
-                  : <CircleAlert size={11} className="shrink-0 text-amber-600" />}
-                <span className={g.passed ? 'text-[var(--color-text-secondary)]' : 'text-amber-900 font-medium'}>
+                  ? <CircleCheck size={11} className="shrink-0 text-brand-ink" />
+                  : <CircleAlert size={11} className="shrink-0 text-[var(--color-warning)]" />}
+                <span className={g.passed ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-warning)] font-medium'}>
                   {g.label}
                 </span>
                 {g.blockingItems.length > 0 && (
-                  <span className="text-amber-700">{g.blockingItems.length}</span>
+                  <span className="text-[var(--color-warning)]">{g.blockingItems.length}</span>
                 )}
                 {g.advisoryItems.length > 0 && (
                   <span className="text-[var(--color-text-tertiary)]">+{g.advisoryItems.length} 建议</span>
@@ -104,7 +105,7 @@ function GatePanel({ readiness }: { readiness: Readiness }) {
               {expanded && (
                 <ul className="mt-0.5 mb-1 ml-4 space-y-0.5">
                   {g.blockingItems.map((it, i) => (
-                    <li key={`b${i}`} className="text-[11px] leading-relaxed text-amber-800/90">· {it}</li>
+                    <li key={`b${i}`} className="text-[11px] leading-relaxed text-[var(--color-warning)]">· {it}</li>
                   ))}
                   {g.advisoryItems.map((it, i) => (
                     <li key={`a${i}`} className="text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">· {it}</li>
@@ -132,7 +133,7 @@ function LedgerPanel({ questions, onAsk }: {
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-3 py-2.5">
       <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-primary)] mb-1.5">
-        <CircleHelp size={13} className="text-amber-500" />
+        <CircleHelp size={13} className="text-[var(--color-warning)]" />
         澄清账本
         <span className="font-normal text-[var(--color-text-tertiary)]">
           {opens.length} 待答 · {closed.length} 已结
@@ -143,7 +144,7 @@ function LedgerPanel({ questions, onAsk }: {
           <div key={q.id} className="rounded-md bg-[var(--color-bg-base)] px-2.5 py-1.5">
             <div className="flex items-start gap-1.5">
               <span className={`mt-px shrink-0 text-[10px] px-1 py-px rounded ${q.kind === 'blocking'
-                ? 'bg-amber-100 text-amber-700' : 'bg-sky-50 text-sky-600'}`}>
+                ? 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]' : 'bg-[var(--color-info-bg)] text-[var(--color-info)]'}`}>
                 {q.kind === 'blocking' ? 'B·堵门' : 'A·建议'}
               </span>
               <span className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">{q.question}</span>
@@ -155,7 +156,7 @@ function LedgerPanel({ questions, onAsk }: {
                     key={opt}
                     disabled={!onAsk}
                     onClick={() => onAsk?.(`「${q.question}」我的答复：${opt}`)}
-                    className="px-1.5 py-0.5 rounded text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-teal-400 hover:text-teal-700 disabled:opacity-40"
+                    className="px-1.5 py-0.5 rounded text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-brand hover:text-brand-ink disabled:opacity-40"
                   >
                     {opt}
                   </button>
@@ -164,7 +165,7 @@ function LedgerPanel({ questions, onAsk }: {
                   <button
                     disabled={!onAsk}
                     onClick={() => onAsk?.(`「${q.question}」确认采用建议：${q.suggestion}`)}
-                    className="px-1.5 py-0.5 rounded text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-teal-400 hover:text-teal-700 disabled:opacity-40"
+                    className="px-1.5 py-0.5 rounded text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-brand hover:text-brand-ink disabled:opacity-40"
                   >
                     采纳建议：{q.suggestion}
                   </button>
@@ -187,7 +188,7 @@ function LedgerPanel({ questions, onAsk }: {
             <div className="text-[11px] leading-relaxed text-[var(--color-text-tertiary)] line-through decoration-[var(--color-border)]">
               {q.question}
             </div>
-            <div className="text-[11px] text-teal-700">
+            <div className="text-[11px] text-brand-ink">
               {q.status === 'dismissed' ? '已搁置：' : '✓ '}{q.resolution}
             </div>
           </div>
@@ -292,7 +293,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
   return (
     <div className="workspace-topology-surface flex h-full min-h-0" data-testid="business-scenario-region">
       {/* 左：模型目录树 */}
-      <div className="flex w-60 shrink-0 flex-col border-r border-[var(--color-border)] bg-slate-50/55">
+      <div className="flex w-60 shrink-0 flex-col border-r border-[var(--color-border)] bg-muted">
         <div className="flex-1 space-y-1.5 overflow-y-auto p-2">
           {readiness && total > 0 && <GatePanel readiness={readiness} />}
           <LedgerPanel questions={canvas?.questions || []} onAsk={onAsk} />
@@ -309,7 +310,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
                   onClick={() => selectSection(key)}
                   aria-expanded={isExpanded}
                   className={`w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${selected
-                    ? 'bg-teal-50 text-teal-800'
+                    ? 'bg-brand-soft text-brand-ink'
                     : 'text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'}`}
                 >
                   <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${tint}`}>
@@ -331,7 +332,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
                           onClick={() => openElement(key, el)}
                           title="查看详情"
                           className={`block w-full truncate rounded px-2 py-1 text-left text-[11px] transition-colors ${activeElement
-                            ? 'bg-teal-50 font-medium text-teal-800'
+                            ? 'bg-brand-soft font-medium text-brand-ink'
                             : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'}`}
                         >
                           {el.display_name || el.name}
@@ -353,10 +354,10 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
             title={(counts.objects || 0) === 0 ? '画布还没有对象模型' : '从画布确定性生成 ER/流程/时序/状态图（不经 LLM）'}
             data-testid="business-flow-button"
             className={`w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors disabled:opacity-40 ${sel.kind === 'diagram'
-              ? 'bg-emerald-50 text-emerald-800'
+              ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]'
               : 'text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'}`}
           >
-            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-600">
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[var(--color-success-bg)] text-[var(--color-success)]">
               <Share2 size={12} />
             </span>
             <span className="flex-1 truncate text-xs font-medium">图示</span>
@@ -410,7 +411,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
                       setDgKind(t.kind); setDgTarget(''); void loadDiagram(t.kind, '')
                     }}
                     className={`px-3 py-1.5 text-xs transition-colors ${dgKind === t.kind
-                      ? 'bg-teal-600 font-medium text-white'
+                      ? 'bg-brand font-medium text-[var(--color-text-inverse)]'
                       : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'}`}
                   >
                     {t.label}
@@ -418,18 +419,20 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
                 ))}
               </div>
               {targetSpec && (
-                <select
-                  value={dgTarget}
-                  onChange={e => {
-                    setDgTarget(e.target.value); void loadDiagram(dgKind, e.target.value)
+                <Select
+                  value={dgTarget || '__none__'}
+                  onValueChange={value => {
+                    setDgTarget(value === '__none__' ? '' : value); void loadDiagram(dgKind, value === '__none__' ? '' : value)
                   }}
-                  className="h-8 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2 text-xs outline-none"
                 >
-                  <option value="">
-                    {diagramTargetPlaceholder(targetSpec)}
-                  </option>
-                  {targetOptions.map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
+                  <SelectTrigger className="h-8 w-fit min-w-28 rounded-md bg-card px-2 text-xs" aria-label="选择图谱目标">
+                    <SelectValue placeholder={diagramTargetPlaceholder(targetSpec)} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">{diagramTargetPlaceholder(targetSpec)}</SelectItem>
+                    {targetOptions.map(n => <SelectItem key={n} value={n}>{n}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               )}
             </div>
             <div className="flex-1 overflow-auto px-5 py-4">
@@ -452,7 +455,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
             const { icon: SectionIcon, tint } = section
             return (
               <div className="flex h-full min-h-0 flex-col">
-                <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-[var(--color-border)] bg-white px-5">
+                <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-[var(--color-border)] bg-card px-5">
                   <span className={`flex h-7 w-7 items-center justify-center rounded-lg ${tint}`}>
                     <SectionIcon size={15} />
                   </span>
@@ -473,7 +476,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
                       key={el.id}
                       onClick={() => openElement(section.key, el)}
                       title="查看详情"
-                      className="group block w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-3.5 py-2.5 text-left transition-colors hover:border-teal-300 hover:bg-teal-50/40"
+                      className="group block w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-3.5 py-2.5 text-left transition-colors hover:border-brand-line hover:bg-brand-soft"
                     >
                       <div className="flex items-center gap-1 text-xs font-medium text-[var(--color-text-primary)]">
                         <span className="truncate">
@@ -487,7 +490,7 @@ export default function CanvasPanel({ sessionId, canvas, completeness, readiness
                       {(el.description || elementBadges(section.key, el).length > 0) && (
                         <div className="mt-1 flex flex-wrap items-center gap-1">
                           {elementBadges(section.key, el).map((b, i) => (
-                            <span key={i} className="rounded bg-black/[0.04] px-1.5 py-px text-[10px] text-[var(--color-text-secondary)]">{b}</span>
+                            <span key={i} className="rounded bg-[var(--color-bg-overlay)] px-1.5 py-px text-[10px] text-[var(--color-text-secondary)]">{b}</span>
                           ))}
                           {el.description && (
                             <span className="max-w-full truncate text-[11px] text-[var(--color-text-tertiary)]">{el.description}</span>

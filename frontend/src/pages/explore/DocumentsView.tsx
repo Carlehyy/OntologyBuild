@@ -122,7 +122,7 @@ export default function DocumentsView({
   return (
     <div className="flex h-full min-h-0" data-testid="requirements-view">
       {/* 版本列表 */}
-      <div className="flex w-56 shrink-0 flex-col border-r border-[var(--color-border)] bg-slate-50/55">
+      <div className="flex w-56 shrink-0 flex-col border-r border-[var(--color-border)] bg-muted">
         <div data-testid="requirements-history-header" className="flex h-14 shrink-0 flex-col justify-center border-b border-[var(--color-border)] px-4">
           <div className="text-sm font-semibold text-[var(--color-text-primary)]">需求文档</div>
           <div className="text-xs text-[var(--color-text-tertiary)] mt-0.5">历史版本 · 共 {docs.length} 个</div>
@@ -139,7 +139,7 @@ export default function DocumentsView({
               key={d.id}
               onClick={() => setActiveId(d.id)}
               className={`w-full text-left px-2.5 py-2 rounded-md text-xs transition-colors ${d.id === activeId
-                ? 'bg-teal-50 text-teal-800 font-medium'
+                ? 'bg-brand-soft text-brand-ink font-medium'
                 : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'}`}
             >
               <div className="flex items-center gap-1.5">
@@ -148,7 +148,7 @@ export default function DocumentsView({
                 {d.isStale && (
                   <span
                     data-testid={`stale-document-${d.id}`}
-                    className="ml-auto rounded border border-rose-200 bg-rose-50 px-1.5 py-px text-[9px] font-medium text-rose-700"
+                    className="ml-auto rounded border border-viz-rose-soft bg-viz-rose-soft px-1.5 py-px text-[9px] font-medium text-viz-rose"
                   >
                     已过期
                   </span>
@@ -173,7 +173,7 @@ export default function DocumentsView({
               onClick={() => void generateRequirements()}
               disabled={!canGenerateDocument || documentGenerating}
               title={canGenerateDocument ? '根据当前业务画布生成新的需求文档版本' : '画布还是空的，先对话沉淀模型'}
-              className="inline-flex items-center gap-1.5 rounded-md border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-700 transition-colors hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-md border border-brand-line bg-brand-soft px-3 py-1.5 text-xs font-medium text-brand-ink transition-colors hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-40"
             >
               {documentGenerating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
               生成需求文档
@@ -201,13 +201,13 @@ export default function DocumentsView({
             {doc.isStale && (
               <div
                 data-testid="stale-document-notice"
-                className="rounded-lg border border-rose-200 bg-rose-50/65 px-3 py-2.5"
+                className="rounded-lg border border-viz-rose-soft bg-viz-rose-soft px-3 py-2.5"
               >
-                <div className="flex items-center gap-1.5 text-xs font-medium text-rose-700">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-viz-rose">
                   <ShieldAlert size={13} />
                   当前文档已过期
                 </div>
-                <div className="mt-1 text-[11px] leading-relaxed text-rose-800/90">
+                <div className="mt-1 text-[11px] leading-relaxed text-viz-rose">
                   该文档来自画布
                   {doc.sourceCanvasVersion == null ? '历史快照' : ` v${doc.sourceCanvasVersion}`}
                   ，当前画布为 v{doc.currentCanvasVersion}。建议先生成新版需求文档，避免把旧业务口径转成本体。
@@ -215,30 +215,30 @@ export default function DocumentsView({
               </div>
             )}
             {gateBlock && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2.5">
-                <div className="flex items-center gap-1.5 text-xs font-medium text-amber-800">
+              <div className="rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-3 py-2.5">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-warning)]">
                   <ShieldAlert size={13} />
                   质量门未通过（{gateBlock.gatesPassed}/{gateBlock.gatesTotal} 门）——
                   还有 {gateBlock.blockingCount} 项口径未定量
                 </div>
                 <ul className="mt-1.5 space-y-0.5 max-h-36 overflow-y-auto">
                   {gateBlocking.slice(0, 10).map((b, i) => (
-                    <li key={i} className="text-[11px] leading-relaxed text-amber-800/90">
+                    <li key={i} className="text-[11px] leading-relaxed text-[var(--color-warning)]">
                       · [{b.gate}] {b.item}
                     </li>
                   ))}
                   {gateBlocking.length > 10 && (
-                    <li className="text-[11px] text-amber-700">…共 {gateBlocking.length} 项</li>
+                    <li className="text-[11px] text-[var(--color-warning)]">…共 {gateBlocking.length} 项</li>
                   )}
                 </ul>
                 <div className="mt-2 flex items-center gap-2">
-                  <span className="text-[11px] text-amber-800/80 flex-1">
+                  <span className="text-[11px] text-[var(--color-warning)] flex-1">
                     建议回到对话，按业务场景视图「质量门」提示逐项澄清后重新生成文档。
                   </span>
                   <button
                     onClick={() => void generateDraft(true)}
                     disabled={generating}
-                    className="shrink-0 px-2.5 py-1 rounded-md text-[11px] border border-amber-300 text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                    className="shrink-0 px-2.5 py-1 rounded-md text-[11px] border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] text-[var(--color-warning)] hover:bg-[var(--color-warning-bg)] disabled:opacity-50"
                   >
                     已知悉风险，越权生成（留痕）
                   </button>
@@ -248,26 +248,26 @@ export default function DocumentsView({
             {draftRisk?.kind === 'stale' && (
               <div
                 data-testid="stale-draft-block"
-                className="rounded-lg border border-rose-200 bg-rose-50/70 px-3 py-2.5"
+                className="rounded-lg border border-viz-rose-soft bg-viz-rose-soft px-3 py-2.5"
               >
-                <div className="flex items-center gap-1.5 text-xs font-medium text-rose-800">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-viz-rose">
                   <ShieldAlert size={13} />
                   文档快照已过期，默认拒绝生成
                 </div>
-                <div className="mt-1 text-[11px] leading-relaxed text-rose-800/90">
+                <div className="mt-1 text-[11px] leading-relaxed text-viz-rose">
                   {draftRisk.message}
                   {draftRisk.source && (
                     <> 来源 v{draftRisk.source.sourceCanvasVersion ?? '未知'}，当前 v{draftRisk.source.currentCanvasVersion}。</>
                   )}
                 </div>
                 <div className="mt-2 flex items-center gap-2">
-                  <span className="flex-1 text-[11px] text-rose-800/80">
+                  <span className="flex-1 text-[11px] text-viz-rose">
                     强制生成将固定使用旧快照，并同时越过后续质量门与语义阻断；所有越权都会写入草稿报告。
                   </span>
                   <button
                     onClick={() => void generateDraft(true)}
                     disabled={generating}
-                    className="shrink-0 rounded-md border border-rose-300 px-2.5 py-1 text-[11px] text-rose-800 hover:bg-rose-100 disabled:opacity-50"
+                    className="shrink-0 rounded-md border border-viz-rose-soft px-2.5 py-1 text-[11px] text-viz-rose hover:bg-viz-rose-soft disabled:opacity-50"
                   >
                     仍使用旧快照强制生成
                   </button>
@@ -277,32 +277,32 @@ export default function DocumentsView({
             {draftRisk?.kind === 'semantic' && (
               <div
                 data-testid="semantic-draft-block"
-                className="rounded-lg border border-rose-200 bg-rose-50/70 px-3 py-2.5"
+                className="rounded-lg border border-viz-rose-soft bg-viz-rose-soft px-3 py-2.5"
               >
-                <div className="flex items-center gap-1.5 text-xs font-medium text-rose-800">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-viz-rose">
                   <ShieldAlert size={13} />
                   语义无法无损转换，默认拒绝生成
                 </div>
-                <div className="mt-1 text-[11px] leading-relaxed text-rose-800/90">
+                <div className="mt-1 text-[11px] leading-relaxed text-viz-rose">
                   {draftRisk.message}
                 </div>
                 {draftRisk.issues.length > 0 && (
                   <ul className="mt-1.5 max-h-28 space-y-0.5 overflow-y-auto">
                     {draftRisk.issues.slice(0, 8).map((issue, index) => (
-                      <li key={`${issue.code}-${index}`} className="text-[11px] leading-relaxed text-rose-800/90">
+                      <li key={`${issue.code}-${index}`} className="text-[11px] leading-relaxed text-viz-rose">
                         · {issue.message}
                       </li>
                     ))}
                   </ul>
                 )}
                 <div className="mt-2 flex items-center gap-2">
-                  <span className="flex-1 text-[11px] text-rose-800/80">
+                  <span className="flex-1 text-[11px] text-viz-rose">
                     建议先修正目标引用或规则作用域。强制生成只保留可表达部分，必须逐项人工复核。
                   </span>
                   <button
                     onClick={() => void generateDraft(true)}
                     disabled={generating}
-                    className="shrink-0 rounded-md border border-rose-300 px-2.5 py-1 text-[11px] text-rose-800 hover:bg-rose-100 disabled:opacity-50"
+                    className="shrink-0 rounded-md border border-viz-rose-soft px-2.5 py-1 text-[11px] text-viz-rose hover:bg-viz-rose-soft disabled:opacity-50"
                   >
                     接受语义损失并强制生成
                   </button>
@@ -318,7 +318,7 @@ export default function DocumentsView({
                   <span className="truncate">写入本体：{binding.name || binding.ontologyId}</span>
                   {binding.versionId && (
                     <span
-                      className="shrink-0 rounded border border-teal-200 bg-teal-50 px-1.5 py-px text-[10px] font-medium text-teal-700"
+                      className="shrink-0 rounded border border-brand-line bg-brand-soft px-1.5 py-px text-[10px] font-medium text-brand-ink"
                       title="草稿落地写入绑定的草稿版本，生效路径：草稿 → 试跑验证 → 发布"
                     >
                       草稿版本 · 试跑后发布生效
@@ -330,7 +330,7 @@ export default function DocumentsView({
                 onClick={() => void generateDraft(false)}
                 disabled={generating || !binding}
                 title={binding ? undefined : '先在页头绑定草稿态本体，草稿才能落地到对应版本'}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-medium text-white bg-teal-600 hover:bg-teal-700 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-medium text-[var(--color-text-inverse)] bg-brand hover:bg-brand-deep disabled:opacity-50"
               >
                 {generating ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
                 生成本体模型
