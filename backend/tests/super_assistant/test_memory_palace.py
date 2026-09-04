@@ -743,8 +743,9 @@ def test_decode_zip_names_recovers_gbk_filenames():
     utf8.flag_bits |= 0x800
     ascii_only = zipfile.ZipInfo("plain.md")
 
-    names = palace_service._decode_zip_names([legacy, utf8, ascii_only])
-    assert names == ["甲文档.md", "乙文档.md", "plain.md"]
+    macos = zipfile.ZipInfo("乙文档.md".encode("utf-8").decode("cp437"))
+    names = palace_service._decode_zip_names([legacy, utf8, ascii_only, macos])
+    assert names == ["甲文档.md", "乙文档.md", "plain.md", "乙文档.md"]
 
 
 def test_batch_import_count_cap(env, monkeypatch):
