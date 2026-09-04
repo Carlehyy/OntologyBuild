@@ -34,9 +34,17 @@ export function palaceGraphCategories(): { name: string }[] {
  * 组装图谱 option。highlightIds 提供时进入「邻域高亮」静态样式：
  * 命中节点保持正常样式，其余节点 itemStyle opacity 0.15 且 label 隐藏，
  * 两端未全部命中的边降透明（参考 blur 配置，但作为静态样式实现，不依赖 emphasis）。
+ *
+ * compactLabels（大图密度开关）：节点数过多时默认隐藏名称标签（糊成一片），
+ * 依赖 tooltip 与 emphasis（悬停/邻接）按需展示；顶部预留图例行高度。
  */
-export function palaceGraphOption(graph: PalaceGraph, highlightIds?: Set<string> | string[]): EChartsOption {
+export function palaceGraphOption(
+  graph: PalaceGraph,
+  highlightIds?: Set<string> | string[],
+  options?: { compactLabels?: boolean },
+): EChartsOption {
   const base = baseChartOption()
+  const compactLabels = options?.compactLabels ?? false
   const highlight = highlightIds
     ? (highlightIds instanceof Set ? highlightIds : new Set(highlightIds))
     : null
@@ -52,7 +60,10 @@ export function palaceGraphOption(graph: PalaceGraph, highlightIds?: Set<string>
       symbolSize: Math.min(46, 14 + Math.sqrt(Math.max(1, node.mention_count)) * 6),
       nodeType: node.type,
       nodeSources: (node.source_files || []).slice(0, 4).join('、'),
-      ...(dimmed ? { itemStyle: { opacity: 0.15 }, label: { show: false } } : {}),
+      // 密图下默认隐藏标签；但命中集（聚焦/邻域）的节点必须可读，强制展示
+      ...(dimmed
+        ? { itemStyle: { opacity: 0.15 }, label: { show: false } }
+        : (compactLabels && hasHighlight ? { label: { show: true } } : {})),
     }
   })
   const idSet = new Set(graph.nodes.map(node => node.id))
@@ -134,6 +145,8 @@ export function palaceGraphOption(graph: PalaceGraph, highlightIds?: Set<string>
             shadowBlur: 16,
             shadowColor: 'rgba(5,150,105,0.3)',
           },
+          // 密图下标签默认隐藏，悬停/邻接时按需展示
+          label: { show: true },
         },
         blur: {
           itemStyle: { opacity: 0.15 },
@@ -145,13 +158,13 @@ export function palaceGraphOption(graph: PalaceGraph, highlightIds?: Set<string>
         edgeSymbol: ['none', 'arrow'],
         edgeSymbolSize: 6,
         label: {
-          show: true,
+          show: !compactLabels,
           position: 'right',
           color: CHART_TEXT,
           fontSize: 10,
         },
         labelLayout: { hideOverlap: true },
-        top: 28,
+        top: 44,
         left: 8,
         right: 8,
         bottom: 8,
