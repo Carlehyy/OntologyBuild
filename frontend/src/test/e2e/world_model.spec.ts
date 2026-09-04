@@ -696,7 +696,8 @@ test('发布为推演服务：语义注册、服务面板与状态切换', async
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByText('发布为推演服务')).toBeVisible()
   await dialog.getByLabel('服务名称').fill('台区负荷短期推演服务')
-  await dialog.getByLabel('选择所属本体').selectOption('ontology-1')
+  await dialog.getByLabel('选择所属本体').click()
+  await page.getByRole('option', { name: '供应链本体' }).click()
   await dialog.getByRole('checkbox', { name: '线路' }).click()
   await dialog.getByRole('button', { name: '发布并上线' }).click()
 

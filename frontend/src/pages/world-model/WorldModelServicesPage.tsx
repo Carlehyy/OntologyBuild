@@ -36,7 +36,7 @@ import {
 import { Button } from '@/components/ui/Button'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/motion-ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip } from '@/components/motion-ui/tooltip'
 import { writeTextToClipboard } from '@/utils/clipboard'
 import { validateJsonObject, type JsonParseIssue } from '@/utils/jsonInput'

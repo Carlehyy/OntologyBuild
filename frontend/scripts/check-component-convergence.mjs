@@ -73,7 +73,6 @@ const NATIVE_SELECT_ALLOWLIST = new Set([
   'pages/scenes/modeling/SceneModelingPage.tsx',
   'pages/settings/UserManagementPanel.tsx',
   'pages/tickets/TicketDetailDrawer.tsx',
-  'pages/world-model/PublishServiceDialog.tsx',
 ])
 
 function sourceFiles(root) {

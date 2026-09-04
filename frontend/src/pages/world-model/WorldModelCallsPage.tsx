@@ -25,7 +25,7 @@ import {
   type CallRecordOverview,
 } from '@/api/worldModel'
 import { Button } from '@/components/ui/Button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/motion-ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import CallsTrendChart from './CallsTrendChart'
 import StatCard from './StatCard'
 import { formatDurationMs } from './statsFormat'

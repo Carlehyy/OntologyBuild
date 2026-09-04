@@ -10,9 +10,10 @@ import {
   type WorldModelProjectDetail,
   type WorldModelServiceInfo,
 } from '@/api/worldModel'
-import { Modal } from '@/components/ui/Modal'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/Toast'
 
 interface OntologyOption {
@@ -118,31 +119,22 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
     }
   }
 
-  const selectClass = 'h-9 w-full rounded-md border border-[var(--color-border)] bg-card px-3 text-sm text-[var(--color-text-primary)] focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring'
   const labelClass = 'mb-1.5 block text-sm font-medium text-[var(--color-text-primary)]'
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={service ? '重新发布推演服务' : '发布为推演服务'}
-      description="发布即上线：选定冻结版本并完成本体语义注册后，服务会获得对外调用端点，重复发布将覆盖更新。"
-      headerIcon={<Rocket size={17} />}
-      size="lg"
-      footer={(
-        <>
-          <Button variant="ghost" onClick={onClose} disabled={submitting}>取消</Button>
-          <Button
-            onClick={() => void submit()}
-            loading={submitting}
-            disabled={!canSubmit}
-            className="bg-brand text-white hover:bg-brand-deep active:bg-brand-deep disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none"
-          >
-            {service ? '重新发布' : '发布并上线'}
-          </Button>
-        </>
-      )}
-    >
+    <Dialog open={open} onOpenChange={next => { if (!next && !submitting) onClose() }}>
+      <DialogContent className="w-[min(92vw,40rem)]">
+        <DialogHeader>
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand-ink">
+            <Rocket size={17} />
+          </div>
+          <div className="min-w-0 pt-0.5">
+            <DialogTitle>{service ? '重新发布推演服务' : '发布为推演服务'}</DialogTitle>
+            <DialogDescription>
+              发布即上线：选定冻结版本并完成本体语义注册后，服务会获得对外调用端点，重复发布将覆盖更新。
+            </DialogDescription>
+          </div>
+        </DialogHeader>
       <div className="space-y-5">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input
@@ -156,12 +148,17 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
           />
           <div>
             <label className={labelClass}>发布版本</label>
-            <select value={versionId} onChange={event => setVersionId(event.target.value)} className={selectClass} aria-label="选择发布版本">
-              <option value="">最新保存版本（v{versions[0]?.version_no ?? '-'}）</option>
-              {versions.map(version => (
-                <option key={version.id} value={version.id}>v{version.version_no}</option>
-              ))}
-            </select>
+            <Select value={versionId || '__latest__'} onValueChange={value => setVersionId(value === '__latest__' ? '' : value)}>
+              <SelectTrigger className="h-9 w-full rounded-md bg-card px-3 text-sm" aria-label="选择发布版本">
+                <SelectValue placeholder={`最新保存版本（v${versions[0]?.version_no ?? '-'}）`} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__latest__">最新保存版本（v{versions[0]?.version_no ?? '-'}）</SelectItem>
+                {versions.map(version => (
+                  <SelectItem key={version.id} value={version.id}>v{version.version_no}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
 
@@ -185,16 +182,22 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
           <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className={labelClass}>所属本体</label>
-              <select
-                value={ontologyId}
-                onChange={event => { setOntologyId(event.target.value); setObjectTypeIds([]); setPreconditions([]) }}
-                className={selectClass}
-                aria-label="选择所属本体"
-                disabled={loadingOntologies}
+              <Select
+                value={ontologyId || '__none__'}
+                onValueChange={value => { setOntologyId(value === '__none__' ? '' : value); setObjectTypeIds([]); setPreconditions([]) }}
               >
-                <option value="">{loadingOntologies ? '加载本体列表…' : '请选择本体'}</option>
-                {ontologies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-              </select>
+                <SelectTrigger
+                  className="h-9 w-full rounded-md bg-card px-3 text-sm"
+                  aria-label="选择所属本体"
+                  disabled={loadingOntologies}
+                >
+                  <SelectValue placeholder={loadingOntologies ? '加载本体列表…' : '请选择本体'} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">请选择本体</SelectItem>
+                  {ontologies.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <label className={labelClass}>适用对象类型（可多选）</label>
@@ -238,14 +241,21 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
               <div className="space-y-2">
                 {preconditions.map((item, index) => (
                   <div key={index} className="flex items-center gap-2">
-                    <select
-                      value={item.object_type_id}
-                      onChange={event => setPreconditions(current => current.map((row, i) => i === index ? { ...row, object_type_id: event.target.value } : row))}
-                      className={`${selectClass} flex-1`}
-                      aria-label={`前置条件 ${index + 1} 对象类型`}
+                    <Select
+                      value={item.object_type_id || '__none__'}
+                      onValueChange={value => setPreconditions(current => current.map((row, i) => i === index ? { ...row, object_type_id: value === '__none__' ? '' : value } : row))}
                     >
-                      {objectTypes.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}
-                    </select>
+                      <SelectTrigger
+                        className={`${selectTriggerClass} flex-1`}
+                        aria-label={`前置条件 ${index + 1} 对象类型`}
+                      >
+                        <SelectValue placeholder="请选择对象类型" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">请选择对象类型</SelectItem>
+                        {objectTypes.map(type => <SelectItem key={type.id} value={type.id}>{type.label}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
                     <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">数量 ≥</span>
                     <input
                       type="number"
@@ -272,6 +282,19 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
 
         {error && <p role="alert" className="text-sm text-[var(--color-danger)]">{error}</p>}
       </div>
-    </Modal>
+      <DialogFooter>
+        <Button variant="ghost" onClick={onClose} disabled={submitting}>取消</Button>
+        <Button
+          onClick={() => void submit()}
+          loading={submitting}
+          disabled={!canSubmit}
+        >
+          {service ? '重新发布' : '发布并上线'}
+        </Button>
+      </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
+
+const selectTriggerClass = 'h-9 w-full rounded-md bg-card px-3 text-sm'

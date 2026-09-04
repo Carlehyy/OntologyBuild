@@ -77,7 +77,9 @@ const SelectContent = React.forwardRef<
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
-        'relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-lg',
+        // 层级取 --z-modal+1：弹窗内打开下拉时必须压过遮罩（遮罩 z-[--z-modal]），
+        // 否则 Radix Portal 的下拉被遮罩拦截无法点击
+        'relative z-[calc(var(--z-modal)+1)] max-h-96 min-w-[8rem] overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-lg',
         'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
         'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
         'data-[side=bottom]:slide-in-from-top-2 data-[side=top]:slide-in-from-bottom-2',
