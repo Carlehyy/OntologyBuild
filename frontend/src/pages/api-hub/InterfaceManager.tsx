@@ -434,7 +434,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           <div className="flex min-w-[430px] flex-[1_1_430px] items-center gap-2">
             <input value={draft.name} onChange={event => patchDraft('name', event.target.value)} className="h-8 min-w-[180px] max-w-md flex-1 rounded-md border border-[var(--color-border)] bg-card px-3 text-sm font-semibold outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] hover:border-[var(--color-border-hover)] focus:border-ring focus:ring-2 focus:ring-ring" placeholder="接口名称" />
             <Select value={draft.group_name || '__default__'} onValueChange={changeGroup}>
-              <SelectTrigger className="h-8 w-40 shrink-0 rounded-md text-xs" title="选择或新增分类" aria-label="选择或新增分类">
+              <SelectTrigger className="h-8 w-40 shrink-0 rounded-md bg-card text-xs" title="选择或新增分类" aria-label="选择或新增分类">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -457,7 +457,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
         </div>
 
         <div className="shrink-0 p-4 pb-3">
-          <div className={`flex overflow-hidden rounded-md border bg-[var(--color-bg-base)] focus-within:border-[var(--color-nav-bg)] ${urlError ? 'border-[color-mix(in_srgb,var(--color-danger)_40%,transparent)]' : 'border-[var(--color-border)]'}`}>
+          <div className={`flex overflow-hidden rounded-md border border-border bg-card focus-within:border-[var(--color-nav-bg)] ${urlError ? 'border-[color-mix(in_srgb,var(--color-danger)_40%,transparent)]' : ''}`}>
             <Select value={draft.method} onValueChange={value => patchDraft('method', value)}>
               <SelectTrigger aria-label="请求方法" className="h-10 w-28 shrink-0 rounded-none border-0 border-r border-border bg-transparent px-3 text-xs font-bold shadow-none focus:border-ring focus:ring-0">
                 <SelectValue />
@@ -490,7 +490,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           {editorTab === 'params' && <KVEditor value={draft.query_params} onChange={value => patchDraft('query_params', value)} keyPlaceholder="参数名" valuePlaceholder="参数值" />}
           {editorTab === 'headers' && <KVEditor value={draft.headers} onChange={value => patchDraft('headers', value)} keyPlaceholder="Header" valuePlaceholder="值" />}
           {editorTab === 'body' && <BodyEditor draft={draft} patchDraft={patchDraft} selectedFiles={selectedFiles} setSelectedFiles={setSelectedFiles} />}
-          {editorTab === 'description' && <textarea value={draft.description} onChange={event => patchDraft('description', event.target.value)} className="h-28 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder="说明接口用途、可传入的业务参数和返回结果；数据管家编排与 AI 助手将据此理解此接口的用途。" />}
+          {editorTab === 'description' && <textarea value={draft.description} onChange={event => patchDraft('description', event.target.value)} className="h-28 w-full resize-none rounded-md border border-border bg-card p-3 text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder="说明接口用途、可传入的业务参数和返回结果；数据管家编排与 AI 助手将据此理解此接口的用途。" />}
           {editorTab === 'privacy' && <PersonalVarPanel privacyVars={privacyVars} envVars={envVars} />}
         </div>
 
@@ -595,7 +595,7 @@ function PersonalVarPanel({ privacyVars, envVars }: { privacyVars: PrivacyVar[];
         items.map(item => {
           const ref = `{{${prefix}:${item.key}}}`
           return (
-            <div key={ref} className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 py-2">
+            <div key={ref} className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2">
               <span className="shrink-0 text-[var(--color-nav-bg)]">{icon}</span>
               <span className="font-mono text-xs font-medium text-[var(--color-text-primary)]">{item.key}</span>
               <code className="ml-1 flex-1 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">{ref}</code>
@@ -620,7 +620,7 @@ function PersonalVarPanel({ privacyVars, envVars }: { privacyVars: PrivacyVar[];
 
   return (
     <div className="space-y-3">
-      <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 py-2.5 text-[11px] leading-5 text-[var(--color-text-secondary)]">
+      <div className="rounded-md border border-border bg-card px-3 py-2.5 text-[11px] leading-5 text-[var(--color-text-secondary)]">
         在「请求头」「请求体」「URL」的值中粘贴 <code className="rounded bg-[var(--color-bg-hover)] px-1 font-mono">{'{{privacy:变量名}}'}</code> 或 <code className="rounded bg-[var(--color-bg-hover)] px-1 font-mono">{'{{env:变量名}}'}</code> 格式，调用时平台会自动用你本人的变量明文替换。明文不写入接口配置，也不进入调用历史；「HTTP 发布」与 n8n 流水线链路没有用户身份，不会解析这些占位符。
       </div>
       {section('隐私变量', 'privacy', privacyVars, <ShieldCheck size={14} />, '当前没有可用的隐私变量。请在「个人资料 → 隐私变量」中创建并通过上报脚本上报值。')}
@@ -637,7 +637,7 @@ function PersonalVarPanel({ privacyVars, envVars }: { privacyVars: PrivacyVar[];
 function KVEditor({ value, onChange, keyPlaceholder, valuePlaceholder }: { value: KV[]; onChange: (value: KV[]) => void; keyPlaceholder: string; valuePlaceholder: string }) {
   const rows = value.length ? value : [{ key: '', value: '' }]
   const update = (index: number, key: keyof KV, text: string) => onChange(rows.map((row, i) => i === index ? { ...row, [key]: text } : row))
-  return <div className="space-y-2">{rows.map((row, index) => <div key={index} className="flex items-center gap-2"><input value={row.key} onChange={event => update(index, 'key', event.target.value)} className="h-8 w-2/5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2.5 font-mono text-xs outline-none" placeholder={keyPlaceholder} /><input value={row.value} onChange={event => update(index, 'value', event.target.value)} className="h-8 min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] px-2.5 font-mono text-xs outline-none" placeholder={valuePlaceholder} /><button onClick={() => onChange(rows.filter((_, i) => i !== index))} className="text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)]"><X size={14} /></button></div>)}<button onClick={() => onChange([...rows, { key: '', value: '' }])} className="flex items-center gap-1 text-xs text-[var(--color-nav-bg)]"><Plus size={13} />添加一行</button></div>
+  return <div className="space-y-2">{rows.map((row, index) => <div key={index} className="flex items-center gap-2"><input value={row.key} onChange={event => update(index, 'key', event.target.value)} className="h-8 w-2/5 rounded-md border border-border bg-card px-2.5 font-mono text-xs outline-none" placeholder={keyPlaceholder} /><input value={row.value} onChange={event => update(index, 'value', event.target.value)} className="h-8 min-w-0 flex-1 rounded-md border border-border bg-card px-2.5 font-mono text-xs outline-none" placeholder={valuePlaceholder} /><button onClick={() => onChange(rows.filter((_, i) => i !== index))} className="text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)]"><X size={14} /></button></div>)}<button onClick={() => onChange([...rows, { key: '', value: '' }])} className="flex items-center gap-1 text-xs text-[var(--color-nav-bg)]"><Plus size={13} />添加一行</button></div>
 }
 
 function BodyEditor({
@@ -682,7 +682,7 @@ function BodyEditor({
         <div className="grid gap-3 lg:grid-cols-[minmax(240px,0.9fr)_minmax(360px,1.4fr)]">
           <label className="block">
             <span className="mb-1.5 block text-[11px] font-semibold text-foreground">文本字段</span>
-            <textarea value={draft.body_content} onChange={event => patchDraft('body_content', event.target.value)} className="h-32 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs outline-none focus:border-ring focus:ring-2 focus:ring-ring" placeholder={'description=说明\ncategory=document'} />
+            <textarea value={draft.body_content} onChange={event => patchDraft('body_content', event.target.value)} className="h-32 w-full resize-none rounded-md border border-border bg-card p-3 font-mono text-xs outline-none focus:border-ring focus:ring-2 focus:ring-ring" placeholder={'description=说明\ncategory=document'} />
             <span className="mt-1 block text-[10px] leading-4 text-[var(--color-text-tertiary)]">每行一个 key=value，调用时与文件一起组成 multipart/form-data。</span>
           </label>
           <div>
@@ -716,7 +716,7 @@ function BodyEditor({
           </div>
         </div>
       ) : (
-        <textarea value={draft.body_content} onChange={event => patchDraft('body_content', event.target.value)} className="h-28 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder={draft.body_type === 'json' ? '{\n  "key": "value"\n}' : draft.body_type === 'form' ? 'key=value\nother=value' : '原始请求内容'} />
+        <textarea value={draft.body_content} onChange={event => patchDraft('body_content', event.target.value)} className="h-28 w-full resize-none rounded-md border border-border bg-card p-3 font-mono text-xs outline-none focus:border-[var(--color-nav-bg)]" placeholder={draft.body_type === 'json' ? '{\n  "key": "value"\n}' : draft.body_type === 'form' ? 'key=value\nother=value' : '原始请求内容'} />
       )}
     </div>
   )
