@@ -808,7 +808,14 @@ def batch_import_files(db: Session, current_user: User, archive: UploadFile) -> 
     accepted = 0
     quota_reason: str | None = None
     with zf:
-        for name in _batch_candidates(_decode_zip_names(zf.infolist())):
+        infos = zf.infolist()
+        decoded = _decode_zip_names(infos)
+        # 打开条目必须用原始 ZipInfo：解码恢复的名字与 zip 内实际存储键
+        # （乱码形态）不同，按名字 getinfo 会 KeyError（生产实测 500）。
+        info_by_name: dict[str, zipfile.ZipInfo] = {}
+        for name, info in zip(decoded, infos):
+            info_by_name.setdefault(name, info)
+        for name in _batch_candidates(decoded):
             display = Path(name).name or name
             if quota_reason is not None:  # 配额超限后剩余条目全部跳过
                 skipped.append({"filename": display, "reason": quota_reason})
@@ -823,7 +830,9 @@ def batch_import_files(db: Session, current_user: User, archive: UploadFile) -> 
             if accepted >= max_batch_files:
                 skipped.append({"filename": display, "reason": f"超出单次导入数量上限（{max_batch_files}）"})
                 continue
-            info = zf.getinfo(name)
+            info = info_by_name.get(name)
+            if info is None:  # 理论不可达：candidates 全部来自 decoded
+                continue
             try:
                 _check_quotas(db, owner_id, extra_bytes=int(info.file_size), extra_files=1)
             except HTTPException as exc:
