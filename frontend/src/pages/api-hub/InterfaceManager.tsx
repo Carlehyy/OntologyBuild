@@ -356,7 +356,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
 
   return (
     <div ref={containerRef} className="scrollbar-none grid h-full min-h-0 overflow-x-auto overflow-y-hidden p-1" style={{ gridTemplateColumns: `minmax(250px, ${sizes[0]}fr) 4px minmax(680px, ${sizes[1]}fr)` }}>
-      <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-sm">
+      <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-card shadow-sm">
         <div className="flex min-h-16 shrink-0 items-center border-b border-[var(--color-border)] px-3">
           <div className="flex w-full items-center justify-between"><div><h2 className="text-sm font-semibold">接口清单</h2><p className="text-[10px] text-[var(--color-text-tertiary)]">{interfaces.length} 个已纳管接口</p></div><Button size="sm" onClick={create}><CirclePlus size={13} />新建接口</Button></div>
         </div>
@@ -429,7 +429,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
 
       <div onPointerDown={startResize} role="separator" aria-orientation="vertical" aria-label="调整接口清单宽度" className="group flex cursor-col-resize items-center justify-center"><span className="flex h-12 w-3 items-center justify-center rounded-full border border-transparent text-[var(--color-text-tertiary)] transition-colors group-hover:border-brand-line group-hover:bg-brand-soft group-hover:text-brand-ink"><GripVertical size={12} /></span></div>
 
-      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-sm">
+      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-card shadow-sm">
         <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-4 py-3">
           <div className="flex min-w-[430px] flex-[1_1_430px] items-center gap-2">
             <input value={draft.name} onChange={event => patchDraft('name', event.target.value)} className="h-8 min-w-[180px] max-w-md flex-1 rounded-md border border-[var(--color-border)] bg-card px-3 text-sm font-semibold outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] hover:border-[var(--color-border-hover)] focus:border-ring focus:ring-2 focus:ring-ring" placeholder="接口名称" />
@@ -443,14 +443,14 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
                 <SelectItem value="__new__">＋ 新增分类…</SelectItem>
               </SelectContent>
             </Select>
-            <Button size="sm" loading={saving} onClick={save}><Check size={14} />{draft.id ? '保存配置' : '保存接口'}</Button>
+            <Button size="sm" loading={saving} onClick={save}>{!saving && <Check size={14} />}{draft.id ? '保存配置' : '保存接口'}</Button>
             {isDirty && <span className="shrink-0 rounded bg-[var(--color-warning-bg)] px-2 py-1 text-[10px] font-medium text-[var(--color-warning)]">未保存</span>}
           </div>
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
             {draft.id && <Button variant="ghost" size="icon-sm" title="复制为新接口" onClick={() => { setSelectedId(null); setBaseline(emptyHubInterface()); setDraft({ ...structuredClone(draft), id: null, name: `${draft.name} 副本`, mcp_enabled: false, open_enabled: false, http_enabled: false, proxy_slug: '', proxy_query_keys: [], proxy_header_keys: [], proxy_body_enabled: false, proxy_body_keys: [] }); setResult(null); setResultFingerprint(''); setSelectedFiles([]) }}><Copy size={14} /></Button>}
             {draft.id && <Button variant="ghost" size="icon-sm" title="删除接口" className="text-[var(--color-danger)]" onClick={() => setDeleteOpen(true)}><Trash2 size={14} /></Button>}
             {draft.id && <Button variant="outline" size="sm" className="border-brand-line text-brand-ink hover:bg-brand-soft" onClick={() => setPublicationTarget(structuredClone(baseline))}><Share2 size={14} />HTTP 发布</Button>}
-            {draft.id && draft.http_enabled && <Button variant="outline" size="sm" className="border-brand-line text-brand-ink hover:bg-brand-soft" loading={publicationCopying} onClick={copyPublishedExample} aria-label={'复制“' + draft.name + '”的 HTTP 调用示例'}>{publicationCopied ? <Check size={14} /> : <Copy size={14} />}{publicationCopied ? '已复制' : '复制 HTTP 示例'}<span className="sr-only" aria-live="polite">{publicationCopied ? 'HTTP 调用示例复制成功' : ''}</span></Button>}
+            {draft.id && draft.http_enabled && <Button variant="outline" size="sm" className="border-brand-line text-brand-ink hover:bg-brand-soft" loading={publicationCopying} onClick={copyPublishedExample} aria-label={'复制“' + draft.name + '”的 HTTP 调用示例'}>{!publicationCopying && (publicationCopied ? <Check size={14} /> : <Copy size={14} />)}{publicationCopied ? '已复制' : '复制 HTTP 示例'}<span className="sr-only" aria-live="polite">{publicationCopied ? 'HTTP 调用示例复制成功' : ''}</span></Button>}
             {/* 桥接接口由平台进程内分发，外部 cURL 无法触达，不提供调试示例 */}
             {!draft.url.trim().startsWith('mcp-bridge://') && <Button variant="outline" size="sm" className="border-brand-line text-brand-ink hover:bg-brand-soft" onClick={() => void showCallExample()}><FileCode2 size={14} />上游调试 cURL</Button>}
           </div>
