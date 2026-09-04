@@ -183,12 +183,15 @@ export default function ChainPanorama({
   edges,
   guides,
   isRefreshing,
+  isChainLoading = false,
   onOpenPending,
 }: {
   nodes: ChainNode[]
   edges: ChainEdge[]
   guides: ChainGuide[]
   isRefreshing: boolean
+  /** 首次构建链路的上游查询仍在加载:占位骨架,避免渲染成"空画布像没有链路"。 */
+  isChainLoading?: boolean
   onOpenPending: (logId: string) => void
 }) {
   const [highlightSet, setHighlightSet] = useState<Set<string> | null>(null)
@@ -287,7 +290,25 @@ export default function ChainPanorama({
         className="chain-canvas overflow-hidden rounded-lg border border-slate-100"
         style={{ height: canvasHeight }}
       >
-        <ReactFlow
+        {isChainLoading && nodes.length === 0 ? (
+          <div
+            role="status"
+            aria-label="正在构建链路全景"
+            className="flex h-full flex-col items-center justify-center gap-3 bg-slate-50/60"
+          >
+            <Loader2 size={18} className="animate-spin text-teal-600" />
+            <span className="text-xs text-slate-400">正在构建链路全景…</span>
+            <div className="flex w-52 flex-col gap-2" aria-hidden="true">
+              {[0, 1, 2].map(row => (
+                <div key={row} className="flex justify-center gap-3">
+                  <span className="h-9 w-40 animate-pulse rounded-lg bg-slate-200/80" />
+                  <span className="h-9 w-40 animate-pulse rounded-lg bg-slate-200/60" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <ReactFlow
           nodes={flowNodes}
           edges={flowEdges}
           nodeTypes={nodeTypes}
@@ -309,6 +330,7 @@ export default function ChainPanorama({
           <Background gap={22} size={1} color="#e2e8f0" />
           <Controls showInteractive={false} position="bottom-right" />
         </ReactFlow>
+        )}
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
         <span className="text-[11px] font-medium text-gray-400">链路导读</span>

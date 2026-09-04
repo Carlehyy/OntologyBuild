@@ -1,6 +1,6 @@
 /* 治理 Hero(参考数据任务池的简洁排版):
    ⓪ KPI 总览区 —— 左侧四个小卡片(2×2,每卡带近 7 日迷你图),右侧加宽的
-      近 7 日执行心电图(echarts 时间柱状&折线组合);
+      近 7 日运行趋势(与总览页同一 RuntimeTrendChart:命中/错误/成功/失败按日堆叠);
    执行链全景为独立组件 ChainPanorama(@xyflow/react)。 */
 import { useMemo } from 'react'
 import ReactECharts from 'echarts-for-react'
@@ -8,12 +8,21 @@ import {
   HandMetal, Loader2, Rocket, ScrollText, ShieldAlert,
 } from 'lucide-react'
 import type { GovernanceKpis } from '../tabs/governanceFormat'
-import type { DailySparkDatum } from './storyModel'
-import { CHART_BLUE, CHART_EMERALD, CHART_RED, CHART_VIOLET } from '../../../../lib/echartsTheme.ts'
 import {
-  buildDailyComboOption, buildMiniBarOption, buildMiniLineOption,
+  CHART_BLUE, CHART_EMERALD, CHART_RED, CHART_VIOLET,
+} from '../../../../lib/echartsTheme.ts'
+import RuntimeTrendChart from '../tabs/RuntimeTrendChart'
+import {
+  buildMiniBarOption, buildMiniLineOption,
   type KpiSparkSeries,
 } from './charts'
+
+/** 与总览页 daily7d 同构的按日运行桶。 */
+interface RuntimeDay {
+  date: string
+  firings: { fired: number; error: number }
+  actionRuns: { success: number; failed: number }
+}
 
 function StatCell({ icon: Icon, iconCls, label, value, detail, spark, onClick }: {
   icon: any; iconCls: string; label: string; value: string; detail: string
@@ -46,10 +55,11 @@ function StatCell({ icon: Icon, iconCls, label, value, detail, spark, onClick }:
   )
 }
 
-/** 近 7 日执行心电图(echarts 组合图):执行成功/失败堆叠柱 + 哨兵命中平滑面积线。 */
-function DailySpark({ data, isRefreshing }: { data: DailySparkDatum[]; isRefreshing: boolean }) {
-  const totalEvents = data.reduce((sum, day) => sum + day.fired + day.firedError + day.runSuccess + day.runFailed, 0)
-  const option = useMemo(() => buildDailyComboOption(data), [data])
+/** 近 7 日运行趋势:与总览页"运行汇总"同一图表语言(命中/错误/成功/失败按日堆叠柱),
+   治理者在一页看到的口径与总览一致,错误不再被折线均摊进"命中"。 */
+function DailyRuntimeTrend({ days, isRefreshing }: { days: RuntimeDay[]; isRefreshing: boolean }) {
+  const totalEvents = days.reduce(
+    (sum, day) => sum + day.firings.fired + day.firings.error + day.actionRuns.success + day.actionRuns.failed, 0)
   return (
     <div data-testid="governance-daily-spark" className="relative flex h-full flex-col">
       {isRefreshing && (
@@ -57,14 +67,9 @@ function DailySpark({ data, isRefreshing }: { data: DailySparkDatum[]; isRefresh
           <Loader2 size={10} className="animate-spin" /> 同步中
         </span>
       )}
-      <p className="text-[11px] text-gray-400">近 7 日执行心电图</p>
-      <div className="relative">
-        <ReactECharts
-          option={option}
-          style={{ width: '100%', height: 176 }}
-          opts={{ renderer: 'canvas' }}
-          notMerge
-        />
+      <p className="text-[11px] text-gray-400">近 7 日运行趋势</p>
+      <div className="relative mt-1 flex-1">
+        <RuntimeTrendChart days={days} rangeLabel="近 7 日" />
         {totalEvents === 0 && (
           <span className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 text-center text-[11px] text-gray-300">
             近 7 日暂无哨兵命中或动作执行记录
@@ -76,19 +81,21 @@ function DailySpark({ data, isRefreshing }: { data: DailySparkDatum[]; isRefresh
 }
 
 /** 治理顶部总览:左侧四个 KPI 小卡片(2×2:待审批·决策批准率 / 哨兵在线·自治动作,
-   每卡带近 7 日迷你图),右侧加宽的近 7 日执行心电图,整体位于本体执行链上方。 */
+   每卡带近 7 日迷你图),右侧加宽的近 7 日运行趋势,整体位于本体执行链上方。 */
 export function KpiOverviewGrid({
   kpis,
-  dailySpark,
+  runtimeDays,
   sparks,
   isRefreshing,
   onNavigate,
+  onOpenFirstPending,
 }: {
   kpis: GovernanceKpis
-  dailySpark: DailySparkDatum[]
+  runtimeDays: RuntimeDay[]
   sparks: KpiSparkSeries
   isRefreshing: boolean
   onNavigate: (section: 'board') => void
+  onOpenFirstPending: () => void
 }) {
   const pct = (v: number | null) => (v === null ? '—' : `${Math.round(v * 100)}%`)
   return (
@@ -96,12 +103,12 @@ export function KpiOverviewGrid({
       <div data-testid="governance-kpi-strip" className="grid grid-cols-2 content-start gap-4">
         <StatCell icon={HandMetal} iconCls="text-blue-500" label="待审批"
           value={String(kpis.pendingCount)}
-          detail={kpis.pendingCount > 0 ? '需要人工裁决' : '全部已处理'}
+          detail={kpis.pendingCount > 0 ? '需要人工裁决 · 点击直达' : '全部已处理'}
           spark={{
             kind: 'bar', values: sparks.decisions, color: CHART_BLUE,
             hint: '近 7 日每日人工决策处理量(批准+拒绝)',
           }}
-          onClick={() => onNavigate('board')} />
+          onClick={() => (kpis.pendingCount > 0 ? onOpenFirstPending() : onNavigate('board'))} />
         <StatCell icon={ScrollText} iconCls="text-indigo-500" label="决策批准率"
           value={kpis.approvalRate !== null ? pct(kpis.approvalRate) : '—'}
           detail={kpis.decisionsTotal > 0
@@ -136,7 +143,7 @@ export function KpiOverviewGrid({
           onClick={() => onNavigate('board')} />
       </div>
       <div className="rounded-xl border bg-white p-4">
-        <DailySpark data={dailySpark} isRefreshing={isRefreshing} />
+        <DailyRuntimeTrend days={runtimeDays} isRefreshing={isRefreshing} />
       </div>
     </div>
   )

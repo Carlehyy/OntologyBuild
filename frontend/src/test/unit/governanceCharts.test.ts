@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
-  buildDailyComboOption,
   buildKpiSparkSeries,
   buildMiniBarOption,
   buildMiniCategoryBarOption,
@@ -16,23 +15,6 @@ const daily7d = [
   { date: '2026-08-17', fired: 0, firedError: 1, runSuccess: 0, runFailed: 1 },
   { date: '2026-08-18', fired: 0, firedError: 0, runSuccess: 0, runFailed: 0 },
 ]
-
-describe('buildDailyComboOption', () => {
-  it('执行成功/失败堆叠柱 + 哨兵命中折线面积线,命中含错误', () => {
-    const option = buildDailyComboOption(daily7d) as any
-    assert.equal(option.series.length, 3)
-    const [success, failed, hits] = option.series
-    assert.equal(success.type, 'bar')
-    assert.equal(success.stack, 'run')
-    assert.deepEqual(success.data, [2, 0, 0])
-    assert.equal(failed.stack, 'run')
-    assert.deepEqual(failed.data, [0, 1, 0])
-    assert.equal(hits.type, 'line')
-    assert.deepEqual(hits.data, [1, 1, 0])
-    assert.ok(hits.areaStyle, '命中折线带面积渐变')
-    assert.deepEqual(option.xAxis.data, ['8/16', '8/17', '8/18'])
-  })
-})
 
 describe('buildMiniBarOption / buildMiniLineOption', () => {
   it('迷你柱无轴无提示,按值渲染', () => {

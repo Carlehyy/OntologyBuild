@@ -1,109 +1,15 @@
 /* 治理页与详情总览页共用的 echarts 纯 option 构建:与组件解耦,可在 node:test 中验证。
-   - buildDailyComboOption:近 7 日执行心电图(时间柱状&折线组合,
-     执行成功/失败堆叠柱 + 哨兵命中平滑面积线,借鉴 area-time-axis)
    - buildMiniBarOption / buildMiniLineOption:KPI 卡近 7 日迷你图(无轴火花线)
    - buildMiniCategoryBarOption / buildMiniDonutOption / buildMiniSegmentBarOption:
      详情总览 KPI 卡的构成/占比迷你图(无轴无提示,供固定浅色作用域使用)
-   - buildKpiSparkSeries:四个 KPI 卡的近 7 日序列装配(全部来自现有只读数据) */
+   - buildKpiSparkSeries:四个 KPI 卡的近 7 日序列装配(全部来自现有只读数据)
+   近 7 日运行趋势主图已与总览页统一复用 tabs/RuntimeTrendChart,不再另有组合图。 */
 import type { EChartsOption } from 'echarts'
 import type { DailySparkDatum } from './storyModel.ts'
 import {
   CHART_AXIS,
-  CHART_AXIS_LINE_SOFT,
-  CHART_EMERALD,
-  CHART_RED,
-  CHART_RED_RGB,
   CHART_SPLIT,
-  CHART_SPLIT_LINE_SOFT,
-  CHART_TEXT,
-  CHART_TEXT_STRONG,
-  CHART_TOOLTIP_BORDER,
 } from '../../../../lib/echartsTheme.ts'
-
-const formatDay = (date: string) => {
-  const value = new Date(`${date}T00:00:00`)
-  if (Number.isNaN(value.getTime())) return date
-  return value.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
-}
-
-/** 近 7 日执行心电图:执行成功/失败堆叠柱 + 哨兵命中平滑面积线(时间轴)。 */
-export function buildDailyComboOption(daily: DailySparkDatum[]): EChartsOption {
-  const days = daily.map(day => formatDay(day.date))
-  return {
-    aria: {
-      enabled: true,
-      description: '近 7 日执行心电图:每日动作执行成功与失败堆叠柱状,哨兵命中折线面积图',
-    },
-    animationDuration: 500,
-    animationEasing: 'cubicOut',
-    grid: { left: 4, right: 8, top: 30, bottom: 2, containLabel: true },
-    legend: {
-      top: 0,
-      right: 0,
-      icon: 'roundRect',
-      itemWidth: 8,
-      itemHeight: 8,
-      itemGap: 12,
-      textStyle: { color: CHART_TEXT, fontSize: 10 },
-    },
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: { type: 'shadow' },
-      borderColor: CHART_TOOLTIP_BORDER,
-      textStyle: { color: CHART_TEXT_STRONG, fontSize: 12 },
-    },
-    xAxis: {
-      type: 'category',
-      data: days,
-      axisTick: { show: false },
-      axisLine: { lineStyle: { color: CHART_AXIS_LINE_SOFT } },
-      axisLabel: { color: CHART_TEXT, fontSize: 10 },
-    },
-    yAxis: {
-      type: 'value',
-      minInterval: 1,
-      splitLine: { lineStyle: { color: CHART_SPLIT_LINE_SOFT, type: 'dashed' } },
-      axisLabel: { color: CHART_TEXT, fontSize: 10 },
-    },
-    series: [
-      {
-        name: '执行成功',
-        type: 'bar',
-        stack: 'run',
-        barMaxWidth: 14,
-        itemStyle: { color: CHART_EMERALD, borderRadius: [2, 2, 0, 0] },
-        data: daily.map(day => day.runSuccess),
-      },
-      {
-        name: '失败',
-        type: 'bar',
-        stack: 'run',
-        barMaxWidth: 14,
-        itemStyle: { color: CHART_RED, borderRadius: [2, 2, 0, 0] },
-        data: daily.map(day => day.runFailed),
-      },
-      {
-        name: '哨兵命中',
-        type: 'line',
-        smooth: true,
-        symbol: 'circle',
-        symbolSize: 5,
-        lineStyle: { color: CHART_RED, width: 2 },
-        itemStyle: { color: CHART_RED },
-        areaStyle: {
-          color: {
-            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [
-              { offset: 0, color: `rgba(${CHART_RED_RGB},0.18)` },
-              { offset: 1, color: `rgba(${CHART_RED_RGB},0.01)` },
-            ],
-          },
-        },
-        data: daily.map(day => day.fired + day.firedError),
-      },
-    ],
-  }
-}
 
 /** KPI 卡迷你柱状火花线:无轴无网格,只看 7 天起伏。 */
 export function buildMiniBarOption(values: number[], color: string): EChartsOption {
