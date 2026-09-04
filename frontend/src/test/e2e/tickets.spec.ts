@@ -326,7 +326,8 @@ test('管理员处理工单：评论必填，提交后状态更新并落入处�
   // 处理面板：空评论时提交按钮禁用（评论必填）
   const submit = drawer.getByRole('button', { name: '提交处理' })
   await expect(submit).toBeDisabled()
-  await drawer.getByLabel('进度状态', { exact: false }).selectOption('accepted')
+  await drawer.getByLabel('进度状态', { exact: false }).click()
+  await page.getByRole('option', { name: '已接纳' }).click()
   await drawer.getByLabel('处理评论', { exact: false }).fill('确认为有效反馈，排入下个迭代')
   await expect(submit).toBeEnabled()
   await submit.click()

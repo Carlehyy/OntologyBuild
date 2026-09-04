@@ -23,7 +23,7 @@ export function CategoryBadge({ category }: { category: TicketCategory | null | 
   const meta = TICKET_CATEGORY_META[category]
   if (!meta) return null
   return (
-    <span className="inline-flex items-center whitespace-nowrap rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
+    <span className="inline-flex items-center whitespace-nowrap rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
       {meta.label}
     </span>
   )
@@ -56,20 +56,20 @@ export function ImagePreviewModal({
       aria-label={`图片预览 ${filename}`}
       style={{ zIndex: 'calc(var(--z-modal) + 10)' }}
     >
-      <div className="absolute inset-0 bg-black/70" onClick={onClose} />
+      <div className="absolute inset-0 bg-[var(--color-bg-overlay)]" onClick={onClose} />
       <figure className="relative flex max-h-full max-w-full flex-col items-center gap-3">
         <img
           src={src}
           alt={filename}
           className="max-h-[calc(100vh-8rem)] max-w-full rounded-xl object-contain shadow-2xl"
         />
-        <figcaption className="max-w-full truncate rounded-lg bg-black/60 px-3 py-1.5 text-xs text-white">
+        <figcaption className="max-w-full truncate rounded-lg bg-[var(--color-bg-overlay)] px-3 py-1.5 text-xs text-[var(--color-text-inverse)]">
           {filename}
         </figcaption>
         <button
           type="button"
           onClick={onClose}
-          className="absolute -right-2 -top-2 flex h-8 w-8 items-center justify-center rounded-full bg-white text-slate-600 shadow-lg transition-colors hover:bg-slate-100"
+          className="absolute -right-2 -top-2 flex h-8 w-8 items-center justify-center rounded-full bg-card text-muted-foreground shadow-lg transition-colors hover:bg-muted"
           aria-label="关闭图片预览"
         >
           <X size={16} />

@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import {
@@ -95,20 +96,20 @@ function typeLabel(type?: string) {
 
 function providerColor(provider: string): string {
   const colors: Record<string, string> = {
-    openai: 'bg-emerald-50 text-emerald-600 border-emerald-200',
-    anthropic: 'bg-purple-50 text-purple-600 border-purple-200',
-    compatible: 'bg-blue-50 text-blue-600 border-blue-200',
-    minimax: 'bg-rose-50 text-rose-600 border-rose-200',
-    deepseek: 'bg-sky-50 text-sky-600 border-sky-200',
-    easyocr: 'bg-orange-50 text-orange-600 border-orange-200',
-    paddleocr: 'bg-cyan-50 text-cyan-600 border-cyan-200',
-    tesseract: 'bg-pink-50 text-pink-600 border-pink-200',
-    external_api: 'bg-amber-50 text-amber-600 border-amber-200',
-    custom: 'bg-slate-50 text-slate-600 border-slate-200',
-    local_service: 'bg-teal-50 text-teal-600 border-teal-200',
-    http_api: 'bg-indigo-50 text-indigo-600 border-indigo-200',
+    openai: 'bg-[var(--color-success-bg)] text-[var(--color-success)] border-[color-mix(in_srgb,var(--color-success)_35%,transparent)]',
+    anthropic: 'bg-viz-violet-soft text-viz-violet border-viz-violet-soft',
+    compatible: 'bg-[var(--color-info-bg)] text-[var(--color-info)] border-[color-mix(in_srgb,var(--color-info)_35%,transparent)]',
+    minimax: 'bg-viz-rose-soft text-viz-rose border-viz-rose-soft',
+    deepseek: 'bg-[var(--color-info-bg)] text-[var(--color-info)] border-[color-mix(in_srgb,var(--color-info)_35%,transparent)]',
+    easyocr: 'bg-viz-orange-soft text-viz-orange border-viz-orange-soft',
+    paddleocr: 'bg-viz-cyan-soft text-viz-cyan border-viz-cyan-soft',
+    tesseract: 'bg-viz-fuchsia-soft text-viz-fuchsia border-viz-fuchsia-soft',
+    external_api: 'bg-[var(--color-warning-bg)] text-[var(--color-warning)] border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)]',
+    custom: 'bg-muted text-muted-foreground border-border',
+    local_service: 'bg-brand-soft text-brand-ink border-brand-line',
+    http_api: 'bg-viz-indigo-soft text-viz-indigo border-viz-indigo-soft',
   }
-  return colors[provider] || 'bg-gray-50 text-gray-600 border-gray-200'
+  return colors[provider] || 'bg-muted text-muted-foreground border-border'
 }
 
 // 运行 / 健康状态样式
@@ -316,20 +317,20 @@ export default function ModelsPage() {
       <ToastContainer toasts={toasts} onRemove={removeToast} />
 
       {/* 搜索、筛选、操作按钮 */}
-      <div className="flex items-center gap-3 bg-white rounded-xl border border-slate-200 px-4 py-3 flex-wrap mb-5 shadow-sm/50">
+      <div className="flex items-center gap-3 bg-card rounded-xl border border-border px-4 py-3 flex-wrap mb-5 shadow-sm/50">
         <div className="relative w-full sm:w-64">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
           <input
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             placeholder="搜索提供商..."
-            className="w-full pl-8 pr-3 py-1.5 rounded-lg text-sm border border-slate-200 text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all"
+            className="w-full pl-8 pr-3 py-1.5 rounded-lg text-sm border border-border text-foreground placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all"
           />
         </div>
 
-        <div ref={filterTabsRef} className="relative flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5">
+        <div ref={filterTabsRef} className="relative flex items-center gap-1 rounded-lg border border-border bg-muted p-0.5">
           <div
-            className="absolute top-0.5 h-[calc(100%-4px)] rounded-md bg-teal-600 shadow-sm transition-all duration-300 ease-out"
+            className="absolute top-0.5 h-[calc(100%-4px)] rounded-md bg-brand shadow-sm transition-all duration-300 ease-out"
             style={{ left: `${indicatorPos.left}px`, width: `${indicatorPos.width}px` }}
           />
           {[
@@ -344,27 +345,28 @@ export default function ModelsPage() {
               onClick={() => setFilterType(tab.value)}
               className={`relative px-3 py-1.5 rounded-md text-xs font-medium z-10 transition-colors duration-200 ${
                 filterType === tab.value
-                  ? 'text-white'
-                  : 'text-slate-500 hover:text-slate-700'
+                  ? 'text-[var(--color-text-inverse)]'
+                  : 'text-muted-foreground hover:text-foreground'
               }`}
             >
               {tab.label}
-              <span className={`ml-1 ${filterType === tab.value ? 'text-slate-300' : 'text-slate-400'}`}>
+              <span className={`ml-1 ${filterType === tab.value ? 'text-[var(--color-text-tertiary)]' : 'text-[var(--color-text-tertiary)]'}`}>
                 {tab.count}
               </span>
             </button>
           ))}
         </div>
 
-        <select
-          value={enabledFilter}
-          onChange={e => setEnabledFilter(e.target.value)}
-          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all cursor-pointer"
-        >
-          <option value="all">全部状态</option>
-          <option value="enabled">已启用</option>
-          <option value="disabled">已禁用</option>
-        </select>
+        <Select value={enabledFilter} onValueChange={setEnabledFilter}>
+          <SelectTrigger className="w-32 rounded-lg bg-card px-3 py-1.5 text-xs font-medium" aria-label="按启用状态筛选">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部状态</SelectItem>
+            <SelectItem value="enabled">已启用</SelectItem>
+            <SelectItem value="disabled">已禁用</SelectItem>
+          </SelectContent>
+        </Select>
 
         <div className="ml-auto flex items-center gap-2">
           <input
@@ -376,21 +378,21 @@ export default function ModelsPage() {
           />
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium bg-card text-muted-foreground border border-border hover:bg-muted transition-colors"
             title="导入配置"
           >
             <Upload size={14} /> 导入
           </button>
           <button
             onClick={handleExport}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium bg-card text-muted-foreground border border-border hover:bg-muted transition-colors"
             title="导出配置"
           >
             <Download size={14} /> 导出
           </button>
           <button
             onClick={() => { setShowCreate(true); reset({ config_type: 'llm', provider: 'openai', ocr_enabled: 'false', ocr_lang: 'ch', ocr_device: 'cpu' }) }}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium text-white bg-[var(--color-nav-bg)] hover:opacity-90 transition-colors shadow-sm"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium text-[var(--color-text-inverse)] bg-[var(--color-nav-bg)] hover:opacity-90 transition-colors shadow-sm"
           >
             <Plus size={14} /> 添加模型
           </button>
@@ -399,20 +401,20 @@ export default function ModelsPage() {
 
       {/* Content */}
       {error ? (
-        <div className="bg-white border border-red-100 rounded-xl p-8 text-center text-sm text-red-600">
+        <div className="bg-card border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] rounded-xl p-8 text-center text-sm text-[var(--color-danger)]">
           {error}
         </div>
       ) : loading ? (
-        <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-sm text-slate-400">
+        <div className="bg-card border border-border rounded-xl p-8 text-center text-sm text-[var(--color-text-tertiary)]">
           加载中...
         </div>
       ) : sortedModels.length === 0 ? (
-        <div className="bg-white border border-slate-200 rounded-xl p-12 text-center">
-          <div className="w-16 h-16 rounded-full bg-slate-50 flex items-center justify-center mx-auto mb-4">
-            <Settings2 size={28} className="text-slate-300" />
+        <div className="bg-card border border-border rounded-xl p-12 text-center">
+          <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
+            <Settings2 size={28} className="text-[var(--color-text-tertiary)]" />
           </div>
-          <p className="text-slate-500 text-sm font-medium">暂无提供商配置</p>
-          <p className="text-slate-400 text-xs mt-1">点击右上角按钮添加第一个提供商</p>
+          <p className="text-muted-foreground text-sm font-medium">暂无提供商配置</p>
+          <p className="text-[var(--color-text-tertiary)] text-xs mt-1">点击右上角按钮添加第一个提供商</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -427,8 +429,8 @@ export default function ModelsPage() {
             return (
               <div
                 key={m.id}
-                className={`group bg-white rounded-2xl border transition-all duration-200 hover:shadow-lg overflow-hidden ${
-                  isDefault ? 'border-teal-600 ring-1 ring-teal-100' : 'border-slate-200'
+                className={`group bg-card rounded-2xl border transition-all duration-200 hover:shadow-lg overflow-hidden ${
+                  isDefault ? 'border-brand ring-1 ring-ring' : 'border-border'
                 } ${enabled ? '' : 'opacity-95'}`}
               >
                 <div className="p-4 pb-3.5">
@@ -437,15 +439,15 @@ export default function ModelsPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
                         <h3
-                          className={`font-semibold text-[14px] truncate cursor-pointer hover:text-teal-700 transition-colors ${enabled ? 'text-slate-800' : 'text-slate-400'}`}
+                          className={`font-semibold text-[14px] truncate cursor-pointer hover:text-brand-ink transition-colors ${enabled ? 'text-foreground' : 'text-[var(--color-text-tertiary)]'}`}
                           onClick={() => setDetailModel(m)}
                         >
                           {m.name}
                         </h3>
-                        {isDefault && <Star size={13} className="shrink-0 text-amber-500 fill-amber-500" />}
+                        {isDefault && <Star size={13} className="shrink-0 text-[var(--color-warning)] fill-[var(--color-warning)]" />}
                       </div>
                       <div className="flex items-center gap-1.5 mt-1.5">
-                        <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-slate-50 text-slate-500 border border-slate-200 font-medium">
+                        <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground border border-border font-medium">
                           {typeLabel(m.config_type)}
                         </span>
                         <span className={`text-[11px] px-1.5 py-0.5 rounded-md border font-medium capitalize ${providerColor(m.provider)}`}>
@@ -468,7 +470,7 @@ export default function ModelsPage() {
                       style={{ background: enabled ? '#059669' : '#cbd2dc' }}
                     >
                       <span
-                        className="absolute top-0.5 w-[18px] h-[18px] rounded-full bg-white shadow transition-all"
+                        className="absolute top-0.5 w-[18px] h-[18px] rounded-full bg-card shadow transition-all"
                         style={{ left: enabled ? 18 : 2 }}
                       />
                     </button>
@@ -483,25 +485,25 @@ export default function ModelsPage() {
                       <span className="w-1.5 h-1.5 rounded-full" style={{ background: runMeta.dot }} />
                       {runMeta.label}
                     </span>
-                    <span className="text-[11px] text-slate-400 whitespace-nowrap">
-                      最近调用 <span className="text-slate-500 tabular-nums">{summary.lastCall}</span>
+                    <span className="text-[11px] text-[var(--color-text-tertiary)] whitespace-nowrap">
+                      最近调用 <span className="text-muted-foreground tabular-nums">{summary.lastCall}</span>
                     </span>
                   </div>
 
                   {/* 指标 */}
                   <div className="flex gap-2 mt-3.5">
-                        <div className="flex-1 bg-slate-50 rounded-lg px-2.5 py-2">
-                          <div className="text-[10px] text-slate-400 font-medium">今日调用</div>
-                          <div className="text-[16px] font-bold text-slate-800 mt-0.5">{enabled ? summary.todayCalls : '—'}</div>
+                        <div className="flex-1 bg-muted rounded-lg px-2.5 py-2">
+                          <div className="text-[10px] text-[var(--color-text-tertiary)] font-medium">今日调用</div>
+                          <div className="text-[16px] font-bold text-foreground mt-0.5">{enabled ? summary.todayCalls : '—'}</div>
                         </div>
-                        <div className="flex-1 bg-slate-50 rounded-lg px-2.5 py-2">
-                          <div className="text-[10px] text-slate-400 font-medium">30天可用率</div>
+                        <div className="flex-1 bg-muted rounded-lg px-2.5 py-2">
+                          <div className="text-[10px] text-[var(--color-text-tertiary)] font-medium">30天可用率</div>
                           <div className="text-[16px] font-bold mt-0.5" style={{ color: availColor(summary.availability) }}>
                             {summary.availability === '—' ? '—' : `${summary.availability}%`}
                           </div>
                         </div>
-                        <div className="flex-1 bg-slate-50 rounded-lg px-2.5 py-2">
-                          <div className="text-[10px] text-slate-400 font-medium">平均延迟</div>
+                        <div className="flex-1 bg-muted rounded-lg px-2.5 py-2">
+                          <div className="text-[10px] text-[var(--color-text-tertiary)] font-medium">平均延迟</div>
                           <div className="text-[16px] font-bold mt-0.5" style={{ color: latColor(summary.avgLatency) }}>
                             {enabled && summary.avgLatency ? `${(summary.avgLatency / 1000).toFixed(1)}s` : '—'}
                           </div>
@@ -510,23 +512,23 @@ export default function ModelsPage() {
 
                       <div className="mt-3.5">
                         <div className="flex items-center justify-between mb-1.5">
-                          <span className="text-[11px] font-semibold text-slate-500">近 60 次调用</span>
-                          <span className="text-[10px] text-slate-300">← 早 · 近 →</span>
+                          <span className="text-[11px] font-semibold text-muted-foreground">近 60 次调用</span>
+                          <span className="text-[10px] text-[var(--color-text-tertiary)]">← 早 · 近 →</span>
                         </div>
                         <ModelHeatStrip cells={cells} />
                       </div>
                 </div>
 
                 {/* Card Actions */}
-                <div className="px-4 py-2.5 border-t border-slate-100 flex items-center gap-1.5 transition-opacity">
+                <div className="px-4 py-2.5 border-t border-border flex items-center gap-1.5 transition-opacity">
                   <button
                     onClick={() => handleTest(m.id)}
                     disabled={status === 'testing'}
                     className={`inline-flex shrink-0 whitespace-nowrap items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all disabled:opacity-50 ${
-                      status === 'testing' ? 'bg-blue-50 text-blue-600' :
-                      status === 'success' ? 'bg-emerald-50 text-emerald-600' :
-                      status === 'error' ? 'bg-red-50 text-red-600' :
-                      'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                      status === 'testing' ? 'bg-[var(--color-info-bg)] text-[var(--color-info)]' :
+                      status === 'success' ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' :
+                      status === 'error' ? 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]' :
+                      'bg-muted text-muted-foreground hover:bg-muted'
                     }`}
                   >
                     {status === 'testing' ? <Loader2 size={11} className="animate-spin" /> :
@@ -537,7 +539,7 @@ export default function ModelsPage() {
                   </button>
                   <button
                     onClick={() => setDetailModel(m)}
-                    className="inline-flex shrink-0 whitespace-nowrap items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-slate-50 text-slate-600 hover:bg-slate-100 transition-colors"
+                    className="inline-flex shrink-0 whitespace-nowrap items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-muted text-muted-foreground hover:bg-muted transition-colors"
                   >
                     <FileClock size={11} /> 日志
                   </button>
@@ -551,7 +553,7 @@ export default function ModelsPage() {
                           addToast('error', `"${m.name}" 设置默认失败`)
                         }
                       }}
-                      className="inline-flex shrink-0 whitespace-nowrap items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                      className="inline-flex shrink-0 whitespace-nowrap items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-muted text-foreground hover:bg-[var(--color-bg-active)] transition-colors"
                     >
                       <Star size={11} /> 默认
                     </button>
@@ -559,14 +561,14 @@ export default function ModelsPage() {
                   <div className="ml-auto flex items-center gap-1">
                     <button
                       onClick={() => openEdit(m)}
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+                      className="p-1.5 rounded-lg text-[var(--color-text-tertiary)] hover:text-muted-foreground hover:bg-muted transition-colors"
                       title="编辑"
                     >
                       <Pencil size={13} />
                     </button>
                     <button
                       onClick={() => setDeleteTarget(m)}
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                      className="p-1.5 rounded-lg text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)] transition-colors"
                       title="删除"
                     >
                       <Trash2 size={13} />
@@ -582,22 +584,22 @@ export default function ModelsPage() {
 
       {/* 图例 */}
       {sortedModels.length > 0 && (
-        <div className="flex items-center gap-4 flex-wrap mt-5 px-4 py-3 bg-white border border-slate-200 rounded-xl">
-          <span className="text-[11px] font-semibold text-slate-500">调用热力条图例</span>
-          <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+        <div className="flex items-center gap-4 flex-wrap mt-5 px-4 py-3 bg-card border border-border rounded-xl">
+          <span className="text-[11px] font-semibold text-muted-foreground">调用热力条图例</span>
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]">
             成功
             {['#216e39', '#2d8a4e', '#40c463', '#9be9a8'].map(c => (
               <span key={c} className="w-3 h-3 rounded-[2px]" style={{ background: c }} />
             ))}
-            <span className="text-slate-300">快←→慢</span>
+            <span className="text-[var(--color-text-tertiary)]">快←→慢</span>
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]">
             <span className="w-3 h-3 rounded-[2px]" style={{ background: '#f0a020' }} /> 超时
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]">
             <span className="w-3 h-3 rounded-[2px]" style={{ background: '#e5484d' }} /> 异常
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]">
             <span className="w-3 h-3 rounded-[2px]" style={{ background: '#eceef1' }} /> 已停用
           </div>
         </div>
@@ -618,102 +620,102 @@ export default function ModelsPage() {
 
       {/* Edit Modal */}
       {editTarget && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setEditTarget(null)}>
-          <div className="bg-white rounded-xl shadow-2xl p-6 w-[560px] max-h-[88vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[var(--color-bg-overlay)] backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setEditTarget(null)}>
+          <div className="bg-card rounded-xl shadow-2xl p-6 w-[560px] max-h-[88vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-5">
-              <h3 className="font-semibold text-slate-800">编辑模型</h3>
-              <button onClick={() => setEditTarget(null)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors">
+              <h3 className="font-semibold text-foreground">编辑模型</h3>
+              <button onClick={() => setEditTarget(null)} className="text-[var(--color-text-tertiary)] hover:text-muted-foreground p-1 rounded-lg hover:bg-muted transition-colors">
                 <X size={16} />
               </button>
             </div>
             <form onSubmit={handleEditSubmit(handleUpdate)} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">名称 *</label>
-                  <input {...regEdit('name', { required: true })} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+                  <label className="block text-sm font-medium text-foreground mb-1.5">名称 *</label>
+                  <input {...regEdit('name', { required: true })} className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">配置分类 *</label>
+                  <label className="block text-sm font-medium text-foreground mb-1.5">配置分类 *</label>
                   <select {...regEdit('config_type', { required: true, onChange: e => setValue('provider', PROVIDERS[e.target.value]?.[0]?.value || 'custom') })}
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all">
+                    className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all">
                     {CONFIG_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </select>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Provider *</label>
+                  <label className="block text-sm font-medium text-foreground mb-1.5">Provider *</label>
                   <select {...regEdit('provider', { required: true })}
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all">
+                    className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all">
                     {(PROVIDERS[watchEdit('config_type') || 'llm'] || PROVIDERS.llm).map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">API Key</label>
+                  <label className="block text-sm font-medium text-foreground mb-1.5">API Key</label>
                   <input {...regEdit('api_key')} type="password" placeholder={editTarget.has_api_key ? '已保存，留空保留原密钥' : 'sk-...'}
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+                    className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">API Base</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">API Base</label>
                 <input {...regEdit('api_base')} placeholder="https://api.openai.com/v1"
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">模型名</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">模型名</label>
                 <input {...regEdit('models_str')} placeholder="gpt-4o"
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
-                <p className="text-[11px] text-slate-400 mt-1">每个提供商仅支持配置一个模型</p>
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
+                <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">每个提供商仅支持配置一个模型</p>
               </div>
               {(watchEdit('config_type') || 'llm') === 'llm' && (
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">最大上下文（tokens）</label>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">最大上下文（tokens）</label>
                     <input {...regEdit('max_context_tokens')} type="number" min={1} placeholder="如：128000"
-                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
-                    <p className="text-[11px] text-slate-400 mt-1">模型可接受的最大输入上下文，留空则不限制</p>
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
+                    <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">模型可接受的最大输入上下文，留空则不限制</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">最大输出（tokens）</label>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">最大输出（tokens）</label>
                     <input {...regEdit('max_output_tokens')} type="number" min={1} placeholder="如：4096"
-                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
-                    <p className="text-[11px] text-slate-400 mt-1">单次调用最大生成 tokens，留空用默认值</p>
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
+                    <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">单次调用最大生成 tokens，留空用默认值</p>
                   </div>
                 </div>
               )}
               {(watchEdit('config_type') || 'llm') === 'ocr' && (
                 <div className="grid grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">启用运行</label>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">启用运行</label>
                     <select {...regEdit('ocr_enabled')}
-                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all">
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all">
                       <option value="false">关闭</option><option value="true">开启</option>
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">OCR语言</label>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">OCR语言</label>
                     <input {...regEdit('ocr_lang')} placeholder="ch"
-                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">设备</label>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">设备</label>
                     <select {...regEdit('ocr_device')}
-                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all">
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all">
                       <option value="cpu">CPU</option><option value="gpu">GPU</option>
                     </select>
                   </div>
                 </div>
               )}
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">高级参数 JSON</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">高级参数 JSON</label>
                 <textarea {...regEdit('options_json')} rows={3} placeholder='{"timeout": 30}'
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
               </div>
               <div className="flex justify-center gap-3 pt-2">
                 <button type="button" onClick={() => setEditTarget(null)}
-                  className="px-5 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-colors">取消</button>
+                  className="px-5 py-2 border border-border rounded-lg text-sm text-muted-foreground hover:bg-muted transition-colors">取消</button>
                 <button type="submit"
-                  className="flex items-center gap-1.5 px-5 py-2 bg-teal-600 text-white rounded-lg text-sm hover:bg-teal-700 transition-colors">
+                  className="flex items-center gap-1.5 px-5 py-2 bg-brand text-[var(--color-text-inverse)] rounded-lg text-sm hover:bg-brand-deep transition-colors">
                   保存
                 </button>
               </div>
@@ -744,98 +746,98 @@ export default function ModelsPage() {
 /** Model Form Modal (Create) */
 function ModelFormModal({ title, onClose, onSubmit, register, handleSubmit, configType, setValue }: any) {
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-2xl p-6 w-[560px] max-h-[88vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <h3 className="font-semibold text-slate-800 mb-5">{title}</h3>
+    <div className="fixed inset-0 bg-[var(--color-bg-overlay)] backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-card rounded-xl shadow-2xl p-6 w-[560px] max-h-[88vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <h3 className="font-semibold text-foreground mb-5">{title}</h3>
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">名称 *</label>
+              <label className="block text-sm font-medium text-foreground mb-1.5">名称 *</label>
               <input {...register('name', { required: true })} placeholder="如：GPT-4o 生产环境"
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+                className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">配置分类 *</label>
+              <label className="block text-sm font-medium text-foreground mb-1.5">配置分类 *</label>
               <select {...register('config_type', { required: true, onChange: (e: any) => setValue('provider', PROVIDERS[e.target.value]?.[0]?.value || 'custom') })}
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all">
+                className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all">
                 {CONFIG_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">Provider *</label>
+              <label className="block text-sm font-medium text-foreground mb-1.5">Provider *</label>
               <select {...register('provider', { required: true })}
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all">
+                className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all">
                 {(PROVIDERS[configType] || PROVIDERS.llm).map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">API Key</label>
+              <label className="block text-sm font-medium text-foreground mb-1.5">API Key</label>
               <input {...register('api_key')} type="password" placeholder="sk-..."
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+                className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">API Base</label>
+            <label className="block text-sm font-medium text-foreground mb-1.5">API Base</label>
             <input {...register('api_base')} placeholder="https://api.openai.com/v1"
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">模型名</label>
+            <label className="block text-sm font-medium text-foreground mb-1.5">模型名</label>
             <input {...register('models_str')} placeholder="gpt-4o"
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
-            <p className="text-[11px] text-slate-400 mt-1">每个提供商仅支持配置一个模型</p>
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm font-mono text-foreground placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
+            <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">每个提供商仅支持配置一个模型</p>
           </div>
           {configType === 'llm' && (
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">最大上下文（tokens）</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">最大上下文（tokens）</label>
                 <input {...register('max_context_tokens')} type="number" min={1} placeholder="如：128000"
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
-                <p className="text-[11px] text-slate-400 mt-1">模型可接受的最大输入上下文，留空则不限制</p>
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
+                <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">模型可接受的最大输入上下文，留空则不限制</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">最大输出（tokens）</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">最大输出（tokens）</label>
                 <input {...register('max_output_tokens')} type="number" min={1} placeholder="如：4096"
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
-                <p className="text-[11px] text-slate-400 mt-1">单次调用最大生成 tokens，留空用默认值</p>
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
+                <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">单次调用最大生成 tokens，留空用默认值</p>
               </div>
             </div>
           )}
           {configType === 'ocr' && (
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">启用运行</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">启用运行</label>
                 <select {...register('ocr_enabled')}
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all">
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all">
                   <option value="false">关闭</option><option value="true">开启</option>
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">OCR语言</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">OCR语言</label>
                 <input {...register('ocr_lang')} placeholder="ch"
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">设备</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">设备</label>
                 <select {...register('ocr_device')}
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all">
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all">
                   <option value="cpu">CPU</option><option value="gpu">GPU</option>
                 </select>
               </div>
             </div>
           )}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">高级参数 JSON</label>
+            <label className="block text-sm font-medium text-foreground mb-1.5">高级参数 JSON</label>
             <textarea {...register('options_json')} rows={3} placeholder='{"timeout": 30}'
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 transition-all" />
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm font-mono text-foreground placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:ring-2 focus:ring-ring focus:border-brand transition-all" />
           </div>
           <div className="flex justify-center gap-3 pt-2">
             <button type="button" onClick={onClose}
-              className="px-5 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-colors">取消</button>
+              className="px-5 py-2 border border-border rounded-lg text-sm text-muted-foreground hover:bg-muted transition-colors">取消</button>
             <button type="submit"
-              className="flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm text-white bg-teal-600 hover:bg-teal-700 transition-colors">
+              className="flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm text-[var(--color-text-inverse)] bg-brand hover:bg-brand-deep transition-colors">
               保存
             </button>
           </div>

@@ -221,7 +221,8 @@ test.describe('模型配置稳定性流程', () => {
     await drawer.getByRole('button', { name: '下一页' }).click()
     await expect(drawer.getByText('显示 21–21 / 21 条')).toBeVisible()
 
-    await drawer.getByLabel('调用状态').selectOption('error')
+    await drawer.getByLabel('调用状态').click()
+    await page.getByRole('option', { name: '失败', exact: true }).click()
     await drawer.getByRole('button', { name: '查询' }).click()
     await expect(drawer.getByText('显示 1–7 / 7 条')).toBeVisible()
     await expect(drawer.locator('tbody').getByText('失败', { exact: true })).toHaveCount(7)

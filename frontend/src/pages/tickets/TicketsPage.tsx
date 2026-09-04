@@ -16,7 +16,7 @@ import TicketDetailDrawer from './TicketDetailDrawer'
 import { CategoryBadge, StatusBadge } from './shared'
 
 // 与「事件登记」一致的基础面板：白底、细边框、轻阴影。
-const PANEL = 'rounded-xl border border-slate-200 bg-white shadow-sm/50'
+const PANEL = 'rounded-xl border border-border bg-card shadow-sm/50'
 const PAGE_SIZE = 8
 
 const STATUS_TABS: Array<{ value: TicketStatus | 'all'; label: string }> = [
@@ -64,7 +64,7 @@ export default function TicketsPage() {
       {/* 顶部操作：状态筛选 + 提交工单 */}
       <div className={`${PANEL} shrink-0 px-4 py-3`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1 text-sm">
+          <div className="flex items-center gap-1 rounded-lg border border-border bg-muted p-1 text-sm">
             {STATUS_TABS.map(tab => (
               <button
                 key={tab.value}
@@ -73,8 +73,8 @@ export default function TicketsPage() {
                 aria-pressed={status === tab.value}
                 className={`relative z-10 inline-flex items-center gap-1 rounded-md px-3.5 py-2 font-medium transition-colors duration-200 ${
                   status === tab.value
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'text-slate-500 hover:text-emerald-700'
+                    ? 'bg-[var(--color-success)] text-[var(--color-text-inverse)] shadow-sm'
+                    : 'text-muted-foreground hover:text-[var(--color-success)]'
                 }`}
               >
                 {tab.label}
@@ -84,17 +84,17 @@ export default function TicketsPage() {
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
             {!isAdmin && (
-              <span className="hidden text-xs text-slate-400 sm:inline">
+              <span className="hidden text-xs text-[var(--color-text-tertiary)] sm:inline">
                 展示我提交的工单（{username}）
               </span>
             )}
             {isAdmin && (
-              <span className="hidden text-xs text-slate-400 sm:inline">展示全部用户的工单</span>
+              <span className="hidden text-xs text-[var(--color-text-tertiary)] sm:inline">展示全部用户的工单</span>
             )}
             <button
               type="button"
               onClick={() => setFormOpen(true)}
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 active:bg-emerald-800"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-[var(--color-success)] px-3 text-sm font-medium text-[var(--color-text-inverse)] shadow-sm transition-colors hover:bg-[var(--color-success)] active:bg-[var(--color-success)]"
             >
               <Plus className="h-4 w-4" />提交工单
             </button>
@@ -119,22 +119,22 @@ export default function TicketsPage() {
       {/* 筛选栏 */}
       <div className={`${PANEL} flex shrink-0 flex-wrap items-center gap-2 px-4 py-3`}>
         <div className="relative min-w-[220px] max-w-[340px] flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
           <input
             value={search}
             onChange={event => setSearch(event.target.value)}
             placeholder="搜索工单标题、内容、编号、提交人..."
-            className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 placeholder:text-slate-400"
+            className="w-full rounded-lg border border-border bg-card py-2 pl-9 pr-3 text-sm text-foreground outline-none transition focus:border-[var(--color-success)] focus:ring-2 focus:ring-[var(--color-success)] placeholder:text-[var(--color-text-tertiary)]"
           />
         </div>
         <div className="ml-auto flex items-center gap-1">
-          <span className="mr-1 text-sm text-slate-400">
-            共 <span className="font-semibold tabular-nums text-slate-700">{listQ.data?.total ?? 0}</span> 条
+          <span className="mr-1 text-sm text-[var(--color-text-tertiary)]">
+            共 <span className="font-semibold tabular-nums text-foreground">{listQ.data?.total ?? 0}</span> 条
           </span>
           <button
             type="button"
             onClick={refresh}
-            className="rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
+            className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             title="刷新"
             aria-label="刷新工单列表"
           >
@@ -148,7 +148,7 @@ export default function TicketsPage() {
         <div className="thin-scroll min-h-0 flex-1 overflow-auto">
           <table className="w-full min-w-[880px] table-fixed text-sm">
             <thead>
-              <tr className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-sm text-slate-600">
+              <tr className="sticky top-0 z-10 border-b border-border bg-muted text-sm text-muted-foreground">
                 <th className="w-[30%] px-4 py-3 text-left font-medium">工单</th>
                 <th className="w-[14%] px-3 py-3 text-center font-medium">提交人</th>
                 <th className="w-[11%] px-3 py-3 text-center font-medium">状态</th>
@@ -159,17 +159,17 @@ export default function TicketsPage() {
             </thead>
             <tbody>
               {listQ.isLoading ? (
-                <tr><td colSpan={6} className="py-16 text-center text-sm text-slate-400">加载中...</td></tr>
+                <tr><td colSpan={6} className="py-16 text-center text-sm text-[var(--color-text-tertiary)]">加载中...</td></tr>
               ) : listQ.data?.items?.length === 0 ? (
                 <tr><td colSpan={6} className="py-16 text-center">
-                  <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100">
-                    <Megaphone className="h-5 w-5 text-slate-300" />
+                  <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-muted">
+                    <Megaphone className="h-5 w-5 text-[var(--color-text-tertiary)]" />
                   </div>
-                  <p className="text-sm text-slate-400">暂无工单</p>
-                  <p className="mt-1 text-xs text-slate-300">遇到了 Bug 或不好用的地方？提交工单告诉我们</p>
+                  <p className="text-sm text-[var(--color-text-tertiary)]">暂无工单</p>
+                  <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">遇到了 Bug 或不好用的地方？提交工单告诉我们</p>
                   <button
                     onClick={() => setFormOpen(true)}
-                    className="mt-3 inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100"
+                    className="mt-3 inline-flex items-center gap-1 rounded-lg bg-[var(--color-success-bg)] px-3 py-1.5 text-sm font-medium text-[var(--color-success)] transition-colors hover:bg-[var(--color-success-bg)]"
                   >
                     <Plus className="h-3.5 w-3.5" />立即提交
                   </button>
@@ -185,33 +185,33 @@ export default function TicketsPage() {
                       setDetailTicketId(row.id)
                     }
                   }}
-                  className="group cursor-pointer border-t border-slate-100 transition-colors hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none"
+                  className="group cursor-pointer border-t border-border transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
                   style={{ animation: `rowIn 0.35s ease-out ${index * 30}ms both` }}
                 >
                   <td className="px-4 py-3 text-left align-middle">
                     <div className="flex items-center gap-1.5">
-                      <span className="truncate font-medium text-slate-800" title={row.title}>{row.title}</span>
+                      <span className="truncate font-medium text-foreground" title={row.title}>{row.title}</span>
                       <CategoryBadge category={row.category} />
                     </div>
-                    <div className="mt-0.5 font-mono text-xs text-slate-400">{row.ticketNo}</div>
+                    <div className="mt-0.5 font-mono text-xs text-[var(--color-text-tertiary)]">{row.ticketNo}</div>
                   </td>
                   <td className="px-3 py-3 text-center align-middle">
-                    <span className="truncate text-sm text-slate-600">{row.submitterName || '—'}</span>
+                    <span className="truncate text-sm text-muted-foreground">{row.submitterName || '—'}</span>
                   </td>
                   <td className="px-3 py-3 text-center align-middle">
                     <div className="flex justify-center"><StatusBadge status={row.status} /></div>
                   </td>
-                  <td className="max-w-0 px-3 py-3 text-center align-middle text-slate-500">
-                    <div className="truncate" title={row.content}>{row.content || <span className="italic text-slate-300">无内容</span>}</div>
+                  <td className="max-w-0 px-3 py-3 text-center align-middle text-muted-foreground">
+                    <div className="truncate" title={row.content}>{row.content || <span className="italic text-[var(--color-text-tertiary)]">无内容</span>}</div>
                   </td>
                   <td className="px-3 py-3 text-center align-middle">
                     {row.attachmentCount && row.attachmentCount > 0 ? (
-                      <span className="inline-flex items-center gap-1 whitespace-nowrap text-sm text-slate-500" title={`${row.attachmentCount} 个附件`}>
+                      <span className="inline-flex items-center gap-1 whitespace-nowrap text-sm text-muted-foreground" title={`${row.attachmentCount} 个附件`}>
                         <Paperclip size={14} /> {row.attachmentCount}
                       </span>
-                    ) : <span className="text-sm text-slate-300">—</span>}
+                    ) : <span className="text-sm text-[var(--color-text-tertiary)]">—</span>}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-3 text-center align-middle text-sm tabular-nums text-slate-500">{fmtTime(row.createdAt)}</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-center align-middle text-sm tabular-nums text-muted-foreground">{fmtTime(row.createdAt)}</td>
                 </tr>
               ))}
             </tbody>
@@ -219,15 +219,15 @@ export default function TicketsPage() {
         </div>
 
         {/* 分页 */}
-        <div className="flex shrink-0 items-center justify-between border-t border-slate-100 bg-white px-4 py-2">
-          <div className="text-sm tabular-nums text-slate-400">
+        <div className="flex shrink-0 items-center justify-between border-t border-border bg-card px-4 py-2">
+          <div className="text-sm tabular-nums text-[var(--color-text-tertiary)]">
             显示 {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, listQ.data?.total ?? 0)} / {listQ.data?.total ?? 0}
           </div>
           <div className="flex items-center gap-1">
             <button
               disabled={page <= 1}
               onClick={() => setPage(current => Math.max(1, current - 1))}
-              className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 disabled:opacity-40"
+              className="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-muted disabled:opacity-40"
               aria-label="上一页"
             >
               <ChevronLeft className="w-3.5 h-3.5" />
@@ -240,7 +240,7 @@ export default function TicketsPage() {
                   key={target}
                   onClick={() => setPage(target)}
                   className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition-colors ${
-                    target === page ? 'bg-emerald-600 text-white shadow-sm' : 'border border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
+                    target === page ? 'bg-[var(--color-success)] text-[var(--color-text-inverse)] shadow-sm' : 'border border-border bg-card text-muted-foreground hover:bg-muted'
                   }`}
                 >
                   {target}
@@ -250,7 +250,7 @@ export default function TicketsPage() {
             <button
               disabled={page >= totalPages}
               onClick={() => setPage(current => Math.min(totalPages, current + 1))}
-              className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 disabled:opacity-40"
+              className="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-muted disabled:opacity-40"
               aria-label="下一页"
             >
               <ChevronRight className="w-3.5 h-3.5" />
@@ -262,7 +262,7 @@ export default function TicketsPage() {
       {/* 移动端 FAB */}
       <button
         onClick={() => setFormOpen(true)}
-        className="fixed bottom-6 right-6 z-20 flex h-11 w-11 items-center justify-center rounded-full bg-emerald-600 text-white shadow-lg transition-colors hover:bg-emerald-700 md:hidden"
+        className="fixed bottom-6 right-6 z-20 flex h-11 w-11 items-center justify-center rounded-full bg-[var(--color-success)] text-[var(--color-text-inverse)] shadow-lg transition-colors hover:bg-[var(--color-success)] md:hidden"
         aria-label="提交工单"
       >
         <Plus className="w-5 h-5" />
@@ -301,12 +301,12 @@ function MetricCard({
 }) {
   return (
     <div className={`${PANEL} min-w-0 px-3 py-2.5`}>
-      <p className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+      <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         {dot ?? icon}
         {label}
       </p>
-      <p className="mt-0.5 text-2xl font-semibold tabular-nums text-slate-900">
-        {loading ? <Loader2 className="h-5 w-5 animate-spin text-slate-300" /> : value.toLocaleString()}
+      <p className="mt-0.5 text-2xl font-semibold tabular-nums text-foreground">
+        {loading ? <Loader2 className="h-5 w-5 animate-spin text-[var(--color-text-tertiary)]" /> : value.toLocaleString()}
       </p>
     </div>
   )

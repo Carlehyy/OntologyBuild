@@ -47,7 +47,6 @@ const NATIVE_SELECT_ALLOWLIST = new Set([
   'pages/agent/ReportStudioPage.tsx',
   'pages/agent/components/OntologyNetworkView.tsx',
   'pages/models/ModelsPage.tsx',
-  'pages/models/components/ModelDetailDrawer.tsx',
                   'pages/ontology-model/OntologyNetworkPage.tsx',
   'pages/pipelines/PipelineEditWizard.tsx',
   'pages/pipelines/PipelineListPage.tsx',
@@ -59,8 +58,6 @@ const NATIVE_SELECT_ALLOWLIST = new Set([
   'pages/scenes/detail/DisplayTab.tsx',
   'pages/scenes/list/SceneListPage.tsx',
   'pages/scenes/modeling/SceneModelingPage.tsx',
-  'pages/settings/UserManagementPanel.tsx',
-  'pages/tickets/TicketDetailDrawer.tsx',
 ])
 
 function sourceFiles(root) {

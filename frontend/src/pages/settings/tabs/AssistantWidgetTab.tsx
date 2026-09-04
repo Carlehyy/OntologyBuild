@@ -62,35 +62,35 @@ export default function AssistantWidgetTab() {
   return (
     <div className="min-h-full">
       {notice && (
-        <div role="status" className={`fixed right-6 top-20 z-[80] flex max-w-sm items-center gap-2 rounded-xl border bg-white px-4 py-3 text-sm shadow-[0_18px_48px_rgba(15,23,42,0.14)] ${notice.kind === 'success' ? 'border-teal-200 text-teal-800' : 'border-red-200 text-red-700'}`}>
+        <div role="status" className={`fixed right-6 top-20 z-[80] flex max-w-sm items-center gap-2 rounded-xl border bg-card px-4 py-3 text-sm shadow-[0_18px_48px_rgba(15,23,42,0.14)] ${notice.kind === 'success' ? 'border-brand-line text-brand-ink' : 'border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] text-[var(--color-danger)]'}`}>
           {notice.kind === 'success' ? <Check size={15} /> : <X size={15} />}{notice.text}
         </div>
       )}
 
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+      <div className="overflow-hidden rounded-xl border border-border bg-card">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
           <div>
-            <h2 className="text-sm font-semibold text-slate-900">悬浮 AI 助手的页面显示范围</h2>
-            <p className="mt-1 text-xs text-slate-500">勾选一级或二级目录，表示在这些页面显示右下角的 AI 助手；未勾选目录下的页面（含详情页）将隐藏该入口。配置对全平台用户生效。</p>
+            <h2 className="text-sm font-semibold text-foreground">悬浮 AI 助手的页面显示范围</h2>
+            <p className="mt-1 text-xs text-muted-foreground">勾选一级或二级目录，表示在这些页面显示右下角的 AI 助手；未勾选目录下的页面（含详情页）将隐藏该入口。配置对全平台用户生效。</p>
           </div>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => { setNotice(null); setHiddenDraft([]) }} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50">全部显示</button>
-            <button type="button" onClick={() => { setNotice(null); setHiddenDraft(ALL_LEAF_KEYS) }} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50">全部隐藏</button>
-            <button type="button" disabled={save.isPending} onClick={() => save.mutate()} className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-medium text-white transition-colors hover:bg-teal-800 disabled:opacity-60">
+            <button type="button" onClick={() => { setNotice(null); setHiddenDraft([]) }} className="rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted">全部显示</button>
+            <button type="button" onClick={() => { setNotice(null); setHiddenDraft(ALL_LEAF_KEYS) }} className="rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted">全部隐藏</button>
+            <button type="button" disabled={save.isPending} onClick={() => save.mutate()} className="inline-flex items-center gap-1.5 rounded-lg bg-brand-deep px-3.5 py-2 text-xs font-medium text-[var(--color-text-inverse)] transition-colors hover:bg-brand-deep disabled:opacity-60">
               {save.isPending ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}保存配置
             </button>
           </div>
         </header>
         <div className="p-5">
-          <div className="mb-4 flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-            <Sparkles size={16} className="mt-0.5 shrink-0 text-teal-700" />
+          <div className="mb-4 flex items-start gap-3 rounded-lg border border-border bg-muted px-4 py-3">
+            <Sparkles size={16} className="mt-0.5 shrink-0 text-brand-ink" />
             <div>
-              <p className="text-xs font-medium text-slate-800">未列入左侧导航的页面不受影响</p>
-              <p className="mt-0.5 text-[11px] leading-5 text-slate-500">收件箱、平台概览、超级助手主页等不在导航目录中的页面始终显示 AI 助手；此处的勾选只控制导航目录覆盖的页面。</p>
+              <p className="text-xs font-medium text-foreground">未列入左侧导航的页面不受影响</p>
+              <p className="mt-0.5 text-[11px] leading-5 text-muted-foreground">收件箱、平台概览、超级助手主页等不在导航目录中的页面始终显示 AI 助手；此处的勾选只控制导航目录覆盖的页面。</p>
             </div>
           </div>
           {isLoading ? (
-            <div className="flex items-center justify-center gap-2 py-14 text-sm text-slate-400"><Loader2 size={16} className="animate-spin" />正在加载配置...</div>
+            <div className="flex items-center justify-center gap-2 py-14 text-sm text-[var(--color-text-tertiary)]"><Loader2 size={16} className="animate-spin" />正在加载配置...</div>
           ) : (
             <div className="grid gap-3 xl:grid-cols-2" data-testid="assistant-widget-visibility-tree">
               {CONFIGURABLE_ITEMS.map(item => {
@@ -101,31 +101,31 @@ export default function AssistantWidgetTab() {
                 const partiallyChecked = visibleCount > 0 && !branchChecked
                 const Icon = item.icon
                 return (
-                  <article key={item.key} className={`rounded-xl border p-4 transition-colors ${visibleCount ? 'border-teal-200 bg-teal-50/30' : 'border-slate-200 bg-white'}`}>
+                  <article key={item.key} className={`rounded-xl border p-4 transition-colors ${visibleCount ? 'border-brand-line bg-brand-soft' : 'border-border bg-card'}`}>
                     <button type="button" role="checkbox" aria-checked={partiallyChecked ? 'mixed' : branchChecked} onClick={() => toggleBranch(leafKeys)} className="flex w-full items-start gap-3 text-left">
-                      <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border ${visibleCount ? 'border-teal-600 bg-teal-600 text-white' : 'border-slate-300 bg-white'}`}>
-                        {branchChecked ? <Check size={12} strokeWidth={3} /> : partiallyChecked ? <span className="h-0.5 w-2 rounded bg-white" /> : null}
+                      <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border ${visibleCount ? 'border-brand bg-brand text-[var(--color-text-inverse)]' : 'border-border bg-card'}`}>
+                        {branchChecked ? <Check size={12} strokeWidth={3} /> : partiallyChecked ? <span className="h-0.5 w-2 rounded bg-card" /> : null}
                       </span>
-                      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${visibleCount ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-500'}`}>
+                      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${visibleCount ? 'bg-brand-soft text-brand-ink' : 'bg-muted text-muted-foreground'}`}>
                         <Icon size={17} />
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-medium text-slate-800">{item.label}</span>
-                        {item.description && <span className="mt-0.5 block text-[11px] leading-5 text-slate-400">{item.description}</span>}
+                        <span className="block text-sm font-medium text-foreground">{item.label}</span>
+                        {item.description && <span className="mt-0.5 block text-[11px] leading-5 text-[var(--color-text-tertiary)]">{item.description}</span>}
                       </span>
                     </button>
                     {children.length > 0 && (
-                      <div className="ml-8 mt-3 space-y-1 border-l border-slate-200 pl-4">
+                      <div className="ml-8 mt-3 space-y-1 border-l border-border pl-4">
                         {children.map(child => {
                           const ChildIcon = child.icon
                           const checked = visible(child.key)
                           return (
-                            <button key={child.key} type="button" role="checkbox" aria-checked={checked} onClick={() => toggleLeaf(child.key)} className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-white">
-                              <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${checked ? 'border-teal-600 bg-teal-600 text-white' : 'border-slate-300 bg-white'}`}>
+                            <button key={child.key} type="button" role="checkbox" aria-checked={checked} onClick={() => toggleLeaf(child.key)} className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-card">
+                              <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${checked ? 'border-brand bg-brand text-[var(--color-text-inverse)]' : 'border-border bg-card'}`}>
                                 {checked && <Check size={10} strokeWidth={3} />}
                               </span>
-                              <ChildIcon size={14} className={checked ? 'text-teal-700' : 'text-slate-400'} />
-                              <span className={`text-xs ${checked ? 'font-medium text-slate-700' : 'text-slate-500'}`}>{child.label}</span>
+                              <ChildIcon size={14} className={checked ? 'text-brand-ink' : 'text-[var(--color-text-tertiary)]'} />
+                              <span className={`text-xs ${checked ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>{child.label}</span>
                             </button>
                           )
                         })}

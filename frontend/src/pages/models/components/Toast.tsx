@@ -24,32 +24,32 @@ const iconMap = {
 
 const colorMap = {
   success: {
-    bg: 'bg-emerald-50',
-    border: 'border-emerald-200',
-    text: 'text-emerald-700',
-    icon: 'text-emerald-500',
-    progress: 'bg-emerald-400',
+    bg: 'bg-[var(--color-success-bg)]',
+    border: 'border-[color-mix(in_srgb,var(--color-success)_35%,transparent)]',
+    text: 'text-[var(--color-success)]',
+    icon: 'text-[var(--color-success)]',
+    progress: 'bg-[var(--color-success-bg)]',
   },
   error: {
-    bg: 'bg-red-50',
-    border: 'border-red-200',
-    text: 'text-red-700',
-    icon: 'text-red-500',
-    progress: 'bg-red-400',
+    bg: 'bg-[var(--color-danger-bg)]',
+    border: 'border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)]',
+    text: 'text-[var(--color-danger)]',
+    icon: 'text-[var(--color-danger)]',
+    progress: 'bg-[var(--color-danger-bg)]',
   },
   warning: {
-    bg: 'bg-amber-50',
-    border: 'border-amber-200',
-    text: 'text-amber-700',
-    icon: 'text-amber-500',
-    progress: 'bg-amber-400',
+    bg: 'bg-[var(--color-warning-bg)]',
+    border: 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)]',
+    text: 'text-[var(--color-warning)]',
+    icon: 'text-[var(--color-warning)]',
+    progress: 'bg-[var(--color-warning-bg)]',
   },
   info: {
-    bg: 'bg-blue-50',
-    border: 'border-blue-200',
-    text: 'text-blue-700',
-    icon: 'text-blue-500',
-    progress: 'bg-blue-400',
+    bg: 'bg-[var(--color-info-bg)]',
+    border: 'border-[color-mix(in_srgb,var(--color-info)_35%,transparent)]',
+    text: 'text-[var(--color-info)]',
+    icon: 'text-[var(--color-info)]',
+    progress: 'bg-[var(--color-info-bg)]',
   },
 }
 
@@ -84,7 +84,7 @@ function ToastItemComponent({ toast, onRemove }: { toast: ToastItem; onRemove: (
       <span className={`text-sm font-medium ${colors.text} flex-1`}>{toast.message}</span>
       <button
         onClick={() => onRemove(toast.id)}
-        className={`shrink-0 p-1 rounded-lg hover:bg-black/5 transition-colors ${colors.text}`}
+        className={`shrink-0 p-1 rounded-lg hover:bg-[var(--color-bg-overlay)] transition-colors ${colors.text}`}
       >
         <X size={14} />
       </button>
