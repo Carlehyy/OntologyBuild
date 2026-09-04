@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageSizeSelect } from './PageSizeSelect'
 import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Database, ExternalLink, Eye, KeyRound, Loader2, Plus, RefreshCw, Save, Trash2, Undo2, XCircle } from 'lucide-react'
 import { useParams } from 'react-router-dom'
