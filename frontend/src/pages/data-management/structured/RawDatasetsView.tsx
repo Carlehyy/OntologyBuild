@@ -11,6 +11,7 @@ import DatasetEditorModal from './DatasetEditorModal'
 import CreateTableModal from './CreateTableModal'
 import manualSharingApi from '@/api/v2/manual-sharing'
 import { ManualApprovalModal, ManualShareModal } from './ManualDatasetSharingModals'
+import { PageSizeSelect } from './PageSizeSelect'
 
 const PIPELINE_STATUS_LABEL: Record<string, string> = {
   draft: '草稿', editing: '编辑中', running: '运行中', failed: '失败', published: '已发布',
@@ -213,37 +214,37 @@ export default function RawDatasetsView({
   }
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 shadow-sm/50 h-full flex flex-col">
+    <div className="bg-card rounded-xl border border-border shadow-sm/50 h-full flex flex-col">
       <input ref={versionFileRef} type="file" className="hidden" accept=".csv,.xlsx,.xls,.json,.xml,.pdf,.docx,.txt,.md" onChange={handleVersionUpload} />
 
       {/* 工具行 + 提示条：删除重复说明文字，首屏直接聚焦可执行操作。 */}
-      <div className="shrink-0 px-5 pt-4 pb-3 border-b border-gray-100 space-y-2">
+      <div className="shrink-0 px-5 pt-4 pb-3 border-b border-border space-y-2">
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative w-full sm:w-72">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
           <input
             value={search}
             onChange={event => setSearch(event.target.value)}
             placeholder="搜索数据集名称"
             aria-label="按数据集名称搜索"
-            className="h-8 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-8 text-xs text-slate-700 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/15"
+            className="h-8 w-full rounded-lg border border-border bg-card pl-8 pr-8 text-xs text-foreground outline-none transition focus:border-brand focus:ring-2 focus:ring-ring"
           />
           {search && (
             <button type="button" onClick={() => setSearch('')} aria-label="清除数据集搜索"
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:text-slate-700">
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--color-text-tertiary)] hover:text-foreground">
               <X size={12} />
             </button>
           )}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          <button onClick={load} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 px-2 py-1.5">
+          <button onClick={load} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1.5">
             <RefreshCw size={12} /> 刷新
           </button>
           {!isSync && (
             <>
               <button
                 onClick={() => setCreateOpen(true)}
-                className="flex items-center gap-1 px-3 py-1.5 border border-[var(--color-nav-bg)] text-[var(--color-nav-bg)] text-xs font-medium rounded-lg hover:bg-gray-50"
+                className="flex items-center gap-1 px-3 py-1.5 border border-[var(--color-nav-bg)] text-[var(--color-nav-bg)] text-xs font-medium rounded-lg hover:bg-muted"
                 title="上传一个 CSV/Excel 自动识别并设置字段，或直接定义空表"
               >
                 <Table2 size={12} />
@@ -251,12 +252,12 @@ export default function RawDatasetsView({
               </button>
               <button
                 onClick={() => setApprovalOpen(true)}
-                className="relative flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                className="relative flex items-center gap-1 rounded-lg border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] px-3 py-1.5 text-xs font-medium text-[var(--color-success)] hover:bg-[var(--color-success-bg)]"
                 title="审批外部维护者提交的人工数据集修改；批准后才正式生效"
               >
                 <ShieldCheck size={12} /> 审批任务
                 {pendingApprovals > 0 && (
-                  <span className="absolute -right-1.5 -top-1.5 flex min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-semibold leading-4 text-white shadow-sm">
+                  <span className="absolute -right-1.5 -top-1.5 flex min-w-4 items-center justify-center rounded-full bg-[var(--color-warning)] px-1 text-[9px] font-semibold leading-4 text-[var(--color-text-inverse)] shadow-sm">
                     {pendingApprovals > 99 ? '99+' : pendingApprovals}
                   </span>
                 )}
@@ -269,20 +270,20 @@ export default function RawDatasetsView({
       {/* 操作结果提示条 */}
       {banner && (
         <div className={`px-4 py-2.5 rounded-lg border text-sm ${
-          banner.type === 'success' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-600'
+          banner.type === 'success' ? 'bg-[var(--color-success-bg)] border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] text-[var(--color-success)]' : 'bg-[var(--color-danger-bg)] border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] text-[var(--color-danger)]'
         }`}>
           <div className="flex items-center gap-2">
             {banner.type === 'success' ? <CheckCircle2 size={15} className="shrink-0" /> : <XCircle size={15} className="shrink-0" />}
             <span className="flex-1">{banner.text}</span>
-            <button onClick={() => setBanner(null)} className="text-gray-400 hover:text-gray-600 shrink-0"><X size={14} /></button>
+            <button onClick={() => setBanner(null)} className="text-[var(--color-text-tertiary)] hover:text-muted-foreground shrink-0"><X size={14} /></button>
           </div>
         </div>
       )}
       {loadError && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
+        <div className="flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-4 py-2.5 text-sm text-[var(--color-danger)]">
           <XCircle size={15} className="shrink-0" />
           <span className="flex-1">加载失败：{loadError}</span>
-          <button type="button" onClick={load} className="rounded-md border border-red-200 bg-white px-2.5 py-1 text-xs hover:bg-red-100">重试</button>
+          <button type="button" onClick={load} className="rounded-md border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-card px-2.5 py-1 text-xs hover:bg-[var(--color-danger-bg)]">重试</button>
         </div>
       )}
       </div>
@@ -290,16 +291,16 @@ export default function RawDatasetsView({
       {/* 列表 — 可滚动 */}
       <div className="flex-1 overflow-y-auto px-5 py-3">
       {loading ? (
-        <div className="text-gray-400 text-sm p-8 text-center">加载中...</div>
+        <div className="text-[var(--color-text-tertiary)] text-sm p-8 text-center">加载中...</div>
       ) : loadError && items.length === 0 ? (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-10 text-center text-red-700">
+        <div className="rounded-xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] p-10 text-center text-[var(--color-danger)]">
           <XCircle size={28} className="mx-auto mb-2 opacity-70" />
           <p className="text-sm font-medium">无法加载{isSync ? '连接同步数据集' : '人工数据集'}</p>
-          <p className="mt-1 text-xs text-red-500">{loadError}</p>
-          <button type="button" onClick={load} className="mt-3 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs hover:bg-red-100">重新加载</button>
+          <p className="mt-1 text-xs text-[var(--color-danger)]">{loadError}</p>
+          <button type="button" onClick={load} className="mt-3 rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-card px-3 py-1.5 text-xs hover:bg-[var(--color-danger-bg)]">重新加载</button>
         </div>
       ) : items.length === 0 ? (
-        <div className="border-2 border-dashed rounded-xl p-12 text-center text-gray-400 space-y-2">
+        <div className="border-2 border-dashed rounded-xl p-12 text-center text-[var(--color-text-tertiary)] space-y-2">
           <Database size={32} className="mx-auto opacity-30" />
           <p className="text-sm font-medium">
             {searchQuery
@@ -317,7 +318,7 @@ export default function RawDatasetsView({
             <div className="flex justify-center pt-1">
               <button
                 onClick={() => setCreateOpen(true)}
-                className="text-xs px-3 py-1.5 bg-[var(--color-nav-bg)] text-white rounded-lg hover:opacity-90"
+                className="text-xs px-3 py-1.5 bg-[var(--color-nav-bg)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90"
               >
                 在线新建表格
               </button>
@@ -325,59 +326,59 @@ export default function RawDatasetsView({
           )}
         </div>
       ) : (
-        <div className="border rounded-xl overflow-hidden bg-white">
+        <div className="border rounded-xl overflow-hidden bg-card">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b">
+            <thead className="bg-muted border-b">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs">名称</th>
-                <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-600">版本号</th>
-                <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-600">有效数据</th>
-                <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-600">创建时间</th>
-                <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-600">更新时间</th>
-                <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-600">操作</th>
+                <th className="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs">名称</th>
+                <th className="px-4 py-2.5 text-center text-xs font-medium text-muted-foreground">版本号</th>
+                <th className="px-4 py-2.5 text-center text-xs font-medium text-muted-foreground">有效数据</th>
+                <th className="px-4 py-2.5 text-center text-xs font-medium text-muted-foreground">创建时间</th>
+                <th className="px-4 py-2.5 text-center text-xs font-medium text-muted-foreground">更新时间</th>
+                <th className="px-4 py-2.5 text-center text-xs font-medium text-muted-foreground">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y">
               {items.map(ds => (
-                    <tr key={ds.id} className="transition-colors hover:bg-slate-50/80">
+                    <tr key={ds.id} className="transition-colors hover:bg-muted">
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
-                          <span className="font-medium text-gray-900">{ds.name}</span>
+                          <span className="font-medium text-foreground">{ds.name}</span>
                           {isSync && (
-                            <span className="rounded border border-blue-200 bg-blue-50 px-1 py-0.5 text-[10px] text-blue-700">
+                            <span className="rounded border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] px-1 py-0.5 text-[10px] text-[var(--color-info)]">
                               {ds.connection_name || '连接同步'}
                             </span>
                           )}
                           {ds.primary_key && (
-                            <span className="inline-flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-200 shrink-0"
+                            <span className="inline-flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded border bg-[var(--color-warning-bg)] text-[var(--color-warning)] border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] shrink-0"
                               title={`主键契约：${ds.primary_key}（可直接被本体映射灌入）`}>
                               <KeyRound size={9} /> {ds.primary_key}
                             </span>
                           )}
                         </div>
-                        <p className="text-xs text-gray-400 font-mono">{ds.id.slice(0, 8)}</p>
+                        <p className="text-xs text-[var(--color-text-tertiary)] font-mono">{ds.id.slice(0, 8)}</p>
                       </td>
                       <td className="px-4 py-3 text-center">
                         {ds.version_count > 0 ? (
-                          <span className="inline-flex items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-xs font-medium text-teal-700" title={`共 ${ds.version_count} 个版本`}>
+                          <span className="inline-flex items-center gap-1 rounded-md border border-brand-line bg-brand-soft px-2 py-1 text-xs font-medium text-brand-ink" title={`共 ${ds.version_count} 个版本`}>
                             <Database size={10} /> v{ds.latest_version_no}
                           </span>
                         ) : (
-                          <span className="text-xs text-gray-300">暂无版本</span>
+                          <span className="text-xs text-[var(--color-text-tertiary)]">暂无版本</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-center text-xs font-medium tabular-nums text-slate-700">{ds.rowcount != null ? `${ds.rowcount.toLocaleString('zh-CN')} 行` : '—'}</td>
-                      <td className="px-4 py-3 text-center text-xs text-gray-500">{formatTime(ds.created_at)}</td>
-                      <td className="px-4 py-3 text-center text-xs text-gray-500">{formatTime(ds.updated_at)}</td>
+                      <td className="px-4 py-3 text-center text-xs font-medium tabular-nums text-foreground">{ds.rowcount != null ? `${ds.rowcount.toLocaleString('zh-CN')} 行` : '—'}</td>
+                      <td className="px-4 py-3 text-center text-xs text-muted-foreground">{formatTime(ds.created_at)}</td>
+                      <td className="px-4 py-3 text-center text-xs text-muted-foreground">{formatTime(ds.updated_at)}</td>
                       <td className="px-4 py-3 text-center">
                         {isSync ? (
-                          <span className="text-[11px] text-slate-400">由数据连接同步维护</span>
+                          <span className="text-[11px] text-[var(--color-text-tertiary)]">由数据连接同步维护</span>
                         ) : (
                           <div className="flex items-center justify-center gap-0.5" aria-label={`数据集 ${ds.name} 的操作`}>
                             <button
                             type="button"
                             onClick={() => setShareTarget(ds)}
-                            className="group grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+                            className="group grid h-8 w-8 place-items-center rounded-lg text-[var(--color-text-tertiary)] transition hover:bg-brand-soft hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             title="分享"
                             aria-label={`分享数据集 ${ds.name}`}
                           >
@@ -386,7 +387,7 @@ export default function RawDatasetsView({
                             <button
                             type="button"
                             onClick={() => setEditorTarget(ds)}
-                            className="group grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+                            className="group grid h-8 w-8 place-items-center rounded-lg text-[var(--color-text-tertiary)] transition hover:bg-brand-soft hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             title="维护数据"
                             aria-label={`维护数据集 ${ds.name}`}
                           >
@@ -396,7 +397,7 @@ export default function RawDatasetsView({
                             type="button"
                             onClick={() => pickVersionFile(ds.id)}
                             disabled={uploadingVersionId === ds.id}
-                            className="group grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 disabled:cursor-wait disabled:opacity-45"
+                            className="group grid h-8 w-8 place-items-center rounded-lg text-[var(--color-text-tertiary)] transition hover:bg-brand-soft hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-45"
                             title="上传新版本"
                             aria-label={`为数据集 ${ds.name} 上传新版本`}
                           >
@@ -405,7 +406,7 @@ export default function RawDatasetsView({
                             <button
                             type="button"
                             onClick={() => setDeleteTarget(ds)}
-                            className="group grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/35"
+                            className="group grid h-8 w-8 place-items-center rounded-lg text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-danger-bg)] hover:text-[var(--color-danger)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-danger)]"
                             title="删除"
                             aria-label={`删除数据集 ${ds.name}`}
                           >
@@ -423,23 +424,24 @@ export default function RawDatasetsView({
       </div>
 
       {!loading && !loadError && total > 0 && (
-        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-slate-100 bg-slate-50/50 px-5 py-2.5">
-          <label className="flex items-center gap-1.5 text-xs text-slate-500">
+        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-border bg-muted px-5 py-2.5">
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
             每页
-            <select value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}
-              className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
-              aria-label={`${isSync ? '连接同步数据集' : '人工数据集'}每页显示条数`}>
-              {[10, 20, 50].map(size => <option key={size} value={size}>{size}</option>)}
-            </select>
+            <PageSizeSelect
+              value={pageSize}
+              onChange={size => { setPageSize(size); setPage(1) }}
+              sizes={[10, 20, 50]}
+              ariaLabel={`${isSync ? '连接同步数据集' : '人工数据集'}每页显示条数`}
+            />
             条
           </label>
-          <span className="min-w-20 text-center text-xs tabular-nums text-slate-500">第 {page} / {totalPages} 页</span>
+          <span className="min-w-20 text-center text-xs tabular-nums text-muted-foreground">第 {page} / {totalPages} 页</span>
           <div className="flex items-center gap-1">
             <button type="button" onClick={() => setPage(current => Math.max(1, current - 1))} disabled={page <= 1}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-35"
               aria-label={`${isSync ? '连接同步数据集' : '人工数据集'}上一页`}><ChevronLeft size={14} /></button>
             <button type="button" onClick={() => setPage(current => Math.min(totalPages, current + 1))} disabled={page >= totalPages}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-35"
               aria-label={`${isSync ? '连接同步数据集' : '人工数据集'}下一页`}><ChevronRight size={14} /></button>
           </div>
         </div>
@@ -480,30 +482,30 @@ export default function RawDatasetsView({
 
       {/* 被引用时只展示依赖；必须先解除，不能绕过真实外键强删 */}
       {deleteBlocked && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-lg p-6 w-[440px]">
+        <div className="fixed inset-0 bg-[var(--color-bg-overlay)] flex items-center justify-center z-50">
+          <div className="bg-card rounded-lg shadow-lg p-6 w-[440px]">
             <h3 className="font-semibold text-lg mb-2">数据集正在被使用</h3>
-            <p className="text-gray-600 text-sm mb-3">
+            <p className="text-muted-foreground text-sm mb-3">
               「{deleteBlocked.item.name}」被以下对象引用。为保护流水线与本体血缘，请先解除这些依赖：
             </p>
             <div className="space-y-1 mb-5">
               {deleteBlocked.consumers.map(c => (
-                <div key={c.id} className="flex items-center gap-2 text-xs bg-gray-50 rounded-lg px-3 py-2">
-                  <GitBranch size={11} className="text-gray-400" />
+                <div key={c.id} className="flex items-center gap-2 text-xs bg-muted rounded-lg px-3 py-2">
+                  <GitBranch size={11} className="text-[var(--color-text-tertiary)]" />
                   <span className="font-medium">{c.name}</span>
-                  <span className="text-gray-400">（流水线 · {PIPELINE_STATUS_LABEL[c.status] || c.status}）</span>
+                  <span className="text-[var(--color-text-tertiary)]">（流水线 · {PIPELINE_STATUS_LABEL[c.status] || c.status}）</span>
                 </div>
               ))}
               {deleteBlocked.mappings.map((m, i) => (
-                <div key={`m-${i}`} className="flex items-center gap-2 text-xs bg-gray-50 rounded-lg px-3 py-2">
-                  <GitBranch size={11} className="text-gray-400" />
+                <div key={`m-${i}`} className="flex items-center gap-2 text-xs bg-muted rounded-lg px-3 py-2">
+                  <GitBranch size={11} className="text-[var(--color-text-tertiary)]" />
                   <span className="font-medium">{m.name || '本体映射'}</span>
-                  <span className="text-gray-400">（本体映射）</span>
+                  <span className="text-[var(--color-text-tertiary)]">（本体映射）</span>
                 </div>
               ))}
             </div>
             <div className="flex justify-end gap-3">
-              <button onClick={() => setDeleteBlocked(null)} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">我知道了</button>
+              <button onClick={() => setDeleteBlocked(null)} className="px-4 py-2 border rounded-lg text-sm hover:bg-muted">我知道了</button>
             </div>
           </div>
         </div>

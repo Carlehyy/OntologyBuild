@@ -6,6 +6,7 @@ import {
   Info, Save,
 } from 'lucide-react'
 import curatedApi, { type ReviewDiff, type ReviewRowEdit } from '@/api/v2/curated'
+import { PageSizeSelect } from './PageSizeSelect'
 import datasetsApi, { FIELD_TYPE_LABELS, type DatasetSchemaColumn } from '@/api/v2/datasets'
 
 interface Props {
@@ -26,17 +27,17 @@ const STATUS_LABEL: Record<string, string> = {
 }
 
 const STATUS_STYLE: Record<string, string> = {
-  pending_review: 'bg-yellow-50 text-yellow-700 border-yellow-200',
-  pending:        'bg-yellow-50 text-yellow-700 border-yellow-200',
-  in_review:      'bg-yellow-50 text-yellow-700 border-yellow-200',
-  approved:       'bg-green-50 text-green-700 border-green-200',
-  rejected:       'bg-rose-50 text-rose-700 border-rose-200',
+  pending_review: 'bg-[var(--color-warning-bg)] text-[var(--color-warning)] border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)]',
+  pending:        'bg-[var(--color-warning-bg)] text-[var(--color-warning)] border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)]',
+  in_review:      'bg-[var(--color-warning-bg)] text-[var(--color-warning)] border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)]',
+  approved:       'bg-[var(--color-success-bg)] text-[var(--color-success)] border-[color-mix(in_srgb,var(--color-success)_35%,transparent)]',
+  rejected:       'bg-viz-rose-soft text-viz-rose border-viz-rose-soft',
 }
 
 const STATUS_ICON = (status: string) => {
-  if (status === 'approved') return <CheckCircle size={13} className="text-green-500" />
-  if (status === 'rejected') return <AlertTriangle size={13} className="text-rose-500" />
-  return <Clock size={13} className="text-yellow-400" />
+  if (status === 'approved') return <CheckCircle size={13} className="text-[var(--color-success)]" />
+  if (status === 'rejected') return <AlertTriangle size={13} className="text-viz-rose" />
+  return <Clock size={13} className="text-[var(--color-warning)]" />
 }
 
 const isPendingReview = (status: string) => (
@@ -122,20 +123,20 @@ function ColumnLabel({
       <span>{columnDisplayText(name, schemaColumn)}</span>
       {isMissingDisplayName && (
         <span
-          className="rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-[9px] font-normal text-amber-700"
+          className="rounded border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-1 py-0.5 text-[9px] font-normal text-[var(--color-warning)]"
           title="来源字段契约中没有保存字段名称，当前仅显示字段标识"
         >未设置字段名称</span>
       )}
       {isPrimaryKey && (
-        <span className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-700" title="主键列：已校验全量非空，用于稳定识别数据行">
+        <span className="inline-flex items-center gap-0.5 rounded bg-[var(--color-warning-bg)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--color-warning)]" title="主键列：已校验全量非空，用于稳定识别数据行">
           <KeyRound size={8} /> 主键 · 非空
         </span>
       )}
       {!isPrimaryKey && isRequired && (
-        <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[9px] font-medium text-rose-600">非空</span>
+        <span className="rounded bg-viz-rose-soft px-1.5 py-0.5 text-[9px] font-medium text-viz-rose">非空</span>
       )}
       {schemaColumn?.type && (
-        <span className="rounded bg-slate-200/70 px-1.5 py-0.5 text-[9px] font-normal text-slate-500">
+        <span className="rounded bg-[var(--color-bg-active)] px-1.5 py-0.5 text-[9px] font-normal text-muted-foreground">
           {FIELD_TYPE_LABELS[schemaColumn.type] ?? schemaColumn.type}
         </span>
       )}
@@ -152,20 +153,20 @@ function ReadonlyTable({ rows, highlight, primaryKeys = [], startIndex = 0, sche
   schemaColumns?: Record<string, DatasetSchemaColumn>
   fillAvailable?: boolean
 }) {
-  if (!rows.length) return <div className={`grid place-items-center text-xs text-slate-400 ${fillAvailable ? 'h-full rounded-xl border border-slate-200 bg-slate-50/30' : 'p-6'}`}>无数据</div>
+  if (!rows.length) return <div className={`grid place-items-center text-xs text-[var(--color-text-tertiary)] ${fillAvailable ? 'h-full rounded-xl border border-border bg-muted' : 'p-6'}`}>无数据</div>
   const cols = columnsFromRows(rows, [...primaryKeys, ...Object.keys(schemaColumns)])
-  const tint = highlight === 'add' ? 'bg-green-50/40' : highlight === 'del' ? 'bg-red-50/40' : ''
+  const tint = highlight === 'add' ? 'bg-[var(--color-success-bg)]' : highlight === 'del' ? 'bg-[var(--color-danger-bg)]' : ''
   return (
     <div
-      className={fillAvailable ? 'h-full max-w-full overflow-auto rounded-xl border border-slate-200 bg-white' : 'max-w-full overflow-x-auto'}
+      className={fillAvailable ? 'h-full max-w-full overflow-auto rounded-xl border border-border bg-card' : 'max-w-full overflow-x-auto'}
       data-testid="curated-data-grid"
     >
       <table className="w-max min-w-full border-separate border-spacing-0 text-xs">
-        <thead className="sticky top-0 z-20 bg-slate-50">
+        <thead className="sticky top-0 z-20 bg-muted">
           <tr>
-            <th className="sticky left-0 z-30 w-12 border-b border-r border-slate-200 bg-slate-50 px-3 py-2.5 text-center font-normal text-slate-400">#</th>
+            <th className="sticky left-0 z-30 w-12 border-b border-r border-border bg-muted px-3 py-2.5 text-center font-normal text-[var(--color-text-tertiary)]">#</th>
             {cols.map(c => (
-              <th key={c} className="min-w-[150px] whitespace-nowrap border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-left font-medium text-slate-700">
+              <th key={c} className="min-w-[150px] whitespace-nowrap border-b border-border bg-muted px-4 py-2.5 text-left font-medium text-foreground">
                 <ColumnLabel name={c} primaryKeys={primaryKeys} schemaColumn={schemaColumns[c]} />
               </th>
             ))}
@@ -173,12 +174,12 @@ function ReadonlyTable({ rows, highlight, primaryKeys = [], startIndex = 0, sche
         </thead>
         <tbody>
           {rows.map((row, i) => (
-            <tr key={i} className={`${tint} transition-colors hover:bg-slate-50/70`}>
-              <td className="sticky left-0 z-10 border-b border-r border-slate-100 bg-white px-3 py-2.5 text-center tabular-nums text-slate-300 select-none">{startIndex + i + 1}</td>
+            <tr key={i} className={`${tint} transition-colors hover:bg-muted`}>
+              <td className="sticky left-0 z-10 border-b border-r border-border bg-card px-3 py-2.5 text-center tabular-nums text-[var(--color-text-tertiary)] select-none">{startIndex + i + 1}</td>
               {cols.map(c => (
-                <td key={c} className={`max-w-[320px] border-b border-slate-100 px-4 py-2.5 ${primaryKeys.includes(c) ? 'bg-amber-50/45 font-mono' : ''}`}>
-                  <span className="block truncate text-slate-700" title={cellText(row[c])}>
-                    {cellText(row[c]) || <span className="text-slate-300">—</span>}
+                <td key={c} className={`max-w-[320px] border-b border-border px-4 py-2.5 ${primaryKeys.includes(c) ? 'bg-[var(--color-warning-bg)] font-mono' : ''}`}>
+                  <span className="block truncate text-foreground" title={cellText(row[c])}>
+                    {cellText(row[c]) || <span className="text-[var(--color-text-tertiary)]">—</span>}
                   </span>
                 </td>
               ))}
@@ -205,7 +206,7 @@ function EditableReviewTable({
   onCellChange: (rowPk: string, fieldName: string, oldValue: string, newValue: string) => void
 }) {
   if (!rows.length) {
-    return <div className="grid h-full place-items-center rounded-xl border border-slate-200 bg-slate-50/30 text-xs text-slate-400">无数据</div>
+    return <div className="grid h-full place-items-center rounded-xl border border-border bg-muted text-xs text-[var(--color-text-tertiary)]">无数据</div>
   }
   const columns = columnsFromRows(rows, [...primaryKeys, ...Object.keys(schemaColumns)])
   const pendingByCell = new Map(
@@ -213,13 +214,13 @@ function EditableReviewTable({
   )
 
   return (
-    <div className="h-full max-w-full overflow-auto rounded-xl border border-slate-200 bg-white" data-testid="curated-edit-grid">
+    <div className="h-full max-w-full overflow-auto rounded-xl border border-border bg-card" data-testid="curated-edit-grid">
       <table className="w-max min-w-full border-separate border-spacing-0 text-xs">
-        <thead className="sticky top-0 z-20 bg-slate-50">
+        <thead className="sticky top-0 z-20 bg-muted">
           <tr>
-            <th className="sticky left-0 z-30 w-12 border-b border-r border-slate-200 bg-slate-50 px-3 py-2.5 text-center font-normal text-slate-400">#</th>
+            <th className="sticky left-0 z-30 w-12 border-b border-r border-border bg-muted px-3 py-2.5 text-center font-normal text-[var(--color-text-tertiary)]">#</th>
             {columns.map(column => (
-              <th key={column} className="min-w-[170px] whitespace-nowrap border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-left font-medium text-slate-700">
+              <th key={column} className="min-w-[170px] whitespace-nowrap border-b border-border bg-muted px-4 py-2.5 text-left font-medium text-foreground">
                 <ColumnLabel name={column} primaryKeys={primaryKeys} schemaColumn={schemaColumns[column]} />
               </th>
             ))}
@@ -230,8 +231,8 @@ function EditableReviewTable({
             // 不用 id、第一列、分页序号或浏览器字符串化猜测行身份。
             const rowPk = rowPks[rowIndex] ?? null
             return (
-              <tr key={`${rowPk ?? 'invalid-row'}-${rowIndex}`} className="transition-colors hover:bg-slate-50/70">
-                <td className="sticky left-0 z-10 border-b border-r border-slate-100 bg-white px-3 py-2.5 text-center tabular-nums text-slate-300 select-none">
+              <tr key={`${rowPk ?? 'invalid-row'}-${rowIndex}`} className="transition-colors hover:bg-muted">
+                <td className="sticky left-0 z-10 border-b border-r border-border bg-card px-3 py-2.5 text-center tabular-nums text-[var(--color-text-tertiary)] select-none">
                   {startIndex + rowIndex + 1}
                 </td>
                 {columns.map(column => {
@@ -245,13 +246,13 @@ function EditableReviewTable({
                   return (
                     <td
                       key={column}
-                      className={`max-w-[360px] border-b border-slate-100 px-2 py-1.5 ${
-                        isPrimaryKey ? 'bg-amber-50/45 font-mono' : edit ? 'bg-amber-50/70' : ''
+                      className={`max-w-[360px] border-b border-border px-2 py-1.5 ${
+                        isPrimaryKey ? 'bg-[var(--color-warning-bg)] font-mono' : edit ? 'bg-[var(--color-warning-bg)]' : ''
                       }`}
                     >
                       {isPrimaryKey ? (
-                        <span className="flex min-h-8 items-center gap-1.5 px-2 text-slate-700" title={originalValue}>
-                          <LockKeyhole size={10} className="shrink-0 text-amber-600" />
+                        <span className="flex min-h-8 items-center gap-1.5 px-2 text-foreground" title={originalValue}>
+                          <LockKeyhole size={10} className="shrink-0 text-[var(--color-warning)]" />
                           <span className="block truncate">{originalValue || '—'}</span>
                         </span>
                       ) : (
@@ -265,11 +266,11 @@ function EditableReviewTable({
                           }}
                           aria-label={`编辑 ${label}，行主键 ${rowPk ?? '无效'}`}
                           title={!rowPk ? '该行主键为空，系统拒绝猜测行身份' : undefined}
-                          className={`h-8 w-full min-w-[150px] rounded-md border px-2.5 text-xs text-slate-800 outline-none transition ${
+                          className={`h-8 w-full min-w-[150px] rounded-md border px-2.5 text-xs text-foreground outline-none transition ${
                             edit
-                              ? 'border-amber-300 bg-amber-50 font-medium focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20'
-                              : 'border-transparent bg-transparent hover:border-slate-200 hover:bg-white focus:border-teal-500 focus:bg-white focus:ring-2 focus:ring-teal-500/20'
-                          } disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400`}
+                              ? 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] font-medium focus:border-[var(--color-warning)] focus:ring-2 focus:ring-[var(--color-warning)]'
+                              : 'border-transparent bg-transparent hover:border-border hover:bg-card focus:border-brand focus:bg-card focus:ring-2 focus:ring-ring'
+                          } disabled:cursor-not-allowed disabled:bg-muted disabled:text-[var(--color-text-tertiary)]`}
                         />
                       )}
                     </td>
@@ -292,18 +293,18 @@ function UpdatedRowsTable({
   primaryKeys: string[]
   schemaColumns: Record<string, DatasetSchemaColumn>
 }) {
-  if (!updates.length) return <div className="p-6 text-center text-xs text-gray-400">无更新行</div>
+  if (!updates.length) return <div className="p-6 text-center text-xs text-[var(--color-text-tertiary)]">无更新行</div>
   const allRows = updates.flatMap(update => [update.before, update.after])
   const columns = columnsFromRows(allRows, [...primaryKeys, ...Object.keys(schemaColumns)])
 
   return (
-    <div className="max-w-full overflow-x-auto rounded-lg border border-amber-200 bg-white" data-testid="curated-updated-grid">
+    <div className="max-w-full overflow-x-auto rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-card" data-testid="curated-updated-grid">
       <table className="w-max min-w-full text-xs">
-        <thead className="sticky top-0 z-10 border-b bg-slate-50">
+        <thead className="sticky top-0 z-10 border-b bg-muted">
           <tr>
-            <th className="sticky left-0 z-20 min-w-[170px] border-r bg-slate-50 px-3 py-2 text-left font-medium text-slate-500">对比行 / 变更列</th>
+            <th className="sticky left-0 z-20 min-w-[170px] border-r bg-muted px-3 py-2 text-left font-medium text-muted-foreground">对比行 / 变更列</th>
             {columns.map(column => (
-              <th key={column} className="min-w-[140px] whitespace-nowrap px-4 py-2 text-left font-medium text-slate-600">
+              <th key={column} className="min-w-[140px] whitespace-nowrap px-4 py-2 text-left font-medium text-muted-foreground">
                 <ColumnLabel name={column} primaryKeys={primaryKeys} schemaColumn={schemaColumns[column]} />
               </th>
             ))}
@@ -319,38 +320,38 @@ function UpdatedRowsTable({
               .join('、')
             return (
               <Fragment key={`${primaryKeys.map(key => cellText(update.after[key])).join('::') || 'row'}-${index}`}>
-                <tr className="border-t border-amber-200 bg-red-50/35">
-                  <td className="sticky left-0 z-[5] min-w-[170px] border-r border-amber-100 bg-red-50 px-3 py-2 align-top">
-                    <span className="inline-flex rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700">更新前</span>
-                    <span className="ml-1 text-[10px] text-slate-400">#{index + 1}</span>
-                    <span className="mt-1 block max-w-[150px] truncate text-[9px] text-red-600" title={`变更列：${changedColumnLabels}`}>
+                <tr className="border-t border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-danger-bg)]">
+                  <td className="sticky left-0 z-[5] min-w-[170px] border-r border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-danger-bg)] px-3 py-2 align-top">
+                    <span className="inline-flex rounded bg-[var(--color-danger-bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-danger)]">更新前</span>
+                    <span className="ml-1 text-[10px] text-[var(--color-text-tertiary)]">#{index + 1}</span>
+                    <span className="mt-1 block max-w-[150px] truncate text-[9px] text-[var(--color-danger)]" title={`变更列：${changedColumnLabels}`}>
                       变更列：{changedColumnLabels}
                     </span>
                   </td>
                   {columns.map(column => {
                     const changed = changedColumns.has(column)
                     return (
-                      <td key={column} className={`max-w-[280px] px-4 py-2 ${changed ? 'bg-red-100/70 text-red-700' : 'text-slate-600'} ${primaryKeys.includes(column) ? 'font-mono' : ''}`}>
-                        <span className={`block truncate ${changed ? 'line-through decoration-red-300' : ''}`} title={cellText(update.before[column])}>
-                          {cellText(update.before[column]) || <span className="text-slate-300">—</span>}
+                      <td key={column} className={`max-w-[280px] px-4 py-2 ${changed ? 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]' : 'text-muted-foreground'} ${primaryKeys.includes(column) ? 'font-mono' : ''}`}>
+                        <span className={`block truncate ${changed ? 'line-through decoration-[var(--color-danger)]' : ''}`} title={cellText(update.before[column])}>
+                          {cellText(update.before[column]) || <span className="text-[var(--color-text-tertiary)]">—</span>}
                         </span>
                       </td>
                     )
                   })}
                 </tr>
-                <tr className="border-b border-amber-200 bg-emerald-50/35">
-                  <td className="sticky left-0 z-[5] min-w-[170px] border-r border-amber-100 bg-emerald-50 px-3 py-2 align-top">
-                    <span className="inline-flex rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">更新后</span>
-                    <span className="ml-1 text-[9px] text-emerald-600">绿色为新值</span>
+                <tr className="border-b border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-success-bg)]">
+                  <td className="sticky left-0 z-[5] min-w-[170px] border-r border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-success-bg)] px-3 py-2 align-top">
+                    <span className="inline-flex rounded bg-[var(--color-success-bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-success)]">更新后</span>
+                    <span className="ml-1 text-[9px] text-[var(--color-success)]">绿色为新值</span>
                   </td>
                   {columns.map(column => {
                     const changed = changedColumns.has(column)
                     return (
-                      <td key={column} className={`max-w-[280px] px-4 py-2 ${changed ? 'bg-emerald-100/80 font-semibold text-emerald-800 ring-1 ring-inset ring-emerald-200' : 'text-slate-600'} ${primaryKeys.includes(column) ? 'font-mono' : ''}`}>
+                      <td key={column} className={`max-w-[280px] px-4 py-2 ${changed ? 'bg-[var(--color-success-bg)] font-semibold text-[var(--color-success)] ring-1 ring-inset ring-[var(--color-success)]' : 'text-muted-foreground'} ${primaryKeys.includes(column) ? 'font-mono' : ''}`}>
                         <span className="block truncate" title={cellText(update.after[column])}>
-                          {cellText(update.after[column]) || <span className="text-slate-300">—</span>}
+                          {cellText(update.after[column]) || <span className="text-[var(--color-text-tertiary)]">—</span>}
                         </span>
-                        {changed && <span className="mt-0.5 block text-[9px] font-medium text-emerald-600">已变更</span>}
+                        {changed && <span className="mt-0.5 block text-[9px] font-medium text-[var(--color-success)]">已变更</span>}
                       </td>
                     )
                   })}
@@ -647,36 +648,36 @@ export default function CuratedDetailPanel({
 
   return (
     <>
-      <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-[2px]" onClick={requestClose}>
+      <div className="fixed inset-0 z-40 flex items-center justify-center bg-accent p-4 backdrop-blur-[2px]" onClick={requestClose}>
         <div
-          className="z-50 flex h-[78vh] max-h-[760px] min-h-[520px] w-[min(96vw,1440px)] flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.18)]"
+          className="z-50 flex h-[78vh] max-h-[760px] min-h-[520px] w-[min(96vw,1440px)] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-[0_24px_80px_rgba(15,23,42,0.18)]"
           onClick={e => e.stopPropagation()}
           role="dialog"
           aria-modal="true"
           aria-labelledby="curated-review-title"
         >
           {/* Header */}
-          <div className="flex shrink-0 items-start gap-3 border-b border-slate-100 px-5 py-4">
-            <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-teal-50 text-teal-700">
+          <div className="flex shrink-0 items-start gap-3 border-b border-border px-5 py-4">
+            <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand-ink">
               <Table2 size={15} />
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 id="curated-review-title" className="truncate text-sm font-semibold text-slate-900">{datasetName}</h2>
-                <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs ${STATUS_STYLE[status] || 'border-gray-200 bg-gray-100 text-gray-600'}`}>
+                <h2 id="curated-review-title" className="truncate text-sm font-semibold text-foreground">{datasetName}</h2>
+                <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs ${STATUS_STYLE[status] || 'border-border bg-muted text-muted-foreground'}`}>
                   {STATUS_ICON(status)}
                   {STATUS_LABEL[status] || status}
                 </span>
-                <span className="text-xs tabular-nums text-slate-400">
+                <span className="text-xs tabular-nums text-[var(--color-text-tertiary)]">
                   v{diff?.current?.version_no ?? '—'} · {totalRows.toLocaleString()} 行
                 </span>
                 {primaryKeys.length > 0 && (
-                  <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700" title="主键列已校验非空">
+                  <span className="inline-flex items-center gap-1 rounded-md bg-[var(--color-warning-bg)] px-2 py-1 text-[11px] font-medium text-[var(--color-warning)]" title="主键列已校验非空">
                     <LockKeyhole size={10} /> 主键：{primaryKeys.join('、')}
                   </span>
                 )}
               </div>
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
                 来源流水线：{pipelineName} · {
                   reviewPending
                     ? '核对版本变化；如需修正，请在“本次接受后全量”中按主键编辑并保存。'
@@ -690,16 +691,16 @@ export default function CuratedDetailPanel({
               {status === 'approved' && (
                 <>
                   <button type="button" onClick={() => void handleExport('csv')} disabled={Boolean(exporting)}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-50">
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:opacity-50">
                     {exporting === 'csv' ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />} 导出 CSV
                   </button>
                   <button type="button" onClick={() => void handleExport('xlsx')} disabled={Boolean(exporting)}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-50">
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:opacity-50">
                     {exporting === 'xlsx' ? <Loader2 size={12} className="animate-spin" /> : <FileSpreadsheet size={12} />} 导出 Excel
                   </button>
                 </>
               )}
-              <button onClick={requestClose} className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30" aria-label="关闭审核详情">
+              <button onClick={requestClose} className="grid h-8 w-8 place-items-center rounded-lg text-[var(--color-text-tertiary)] transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="关闭审核详情">
                 <X size={16} />
               </button>
             </div>
@@ -707,13 +708,13 @@ export default function CuratedDetailPanel({
 
           {/* 顶部只承载审核说明，决策动作统一收口到底部操作栏。 */}
           {reviewPending ? (
-            <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-100 bg-amber-50/55 px-5 py-3 text-xs text-amber-900">
+            <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-5 py-3 text-xs text-[var(--color-warning)]">
               <span className="inline-flex items-center gap-1.5 font-semibold">
-                <Clock size={13} className="text-amber-600" />
+                <Clock size={13} className="text-[var(--color-warning)]" />
                 发现新数据，请完成审核
               </span>
-              <span className="text-amber-800/75">请核对审核影响、上一已批准版本全量与本次接受后全量，再在底部作出决定。</span>
-              <span className="ml-auto inline-flex items-center gap-1 text-amber-700/70">
+              <span className="text-[var(--color-warning)]">请核对审核影响、上一已批准版本全量与本次接受后全量，再在底部作出决定。</span>
+              <span className="ml-auto inline-flex items-center gap-1 text-[var(--color-warning)]">
                 <LockKeyhole size={11} />
                 {primaryKeys.length
                   ? '审核影响只读；本次全量可修正非主键字段'
@@ -721,25 +722,25 @@ export default function CuratedDetailPanel({
               </span>
             </div>
           ) : status === 'rejected' ? (
-            <div className="flex shrink-0 items-center gap-2 border-b border-rose-100 bg-rose-50/70 px-5 py-3 text-xs text-rose-800">
+            <div className="flex shrink-0 items-center gap-2 border-b border-viz-rose-soft bg-viz-rose-soft px-5 py-3 text-xs text-viz-rose">
               <AlertTriangle size={14} className="shrink-0" />
               <span className="font-medium">当前版本已拒绝</span>
-              <span className="text-rose-700/80">以下仅展示被拒绝的审核快照，供审计追溯；不会进入本体或正式数据消费。</span>
+              <span className="text-viz-rose">以下仅展示被拒绝的审核快照，供审计追溯；不会进入本体或正式数据消费。</span>
             </div>
           ) : (
-            <div className="flex shrink-0 items-center gap-2 border-b border-emerald-100 bg-emerald-50/55 px-5 py-3 text-xs text-emerald-800">
+            <div className="flex shrink-0 items-center gap-2 border-b border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] px-5 py-3 text-xs text-[var(--color-success)]">
               <CheckCircle size={14} className="shrink-0" />
               <span className="font-medium">当前没有新数据需要审核</span>
-              <span className="text-emerald-700/75">以下展示当前已批准的数据版本，内容只读；导出不受当前分页限制。</span>
+              <span className="text-[var(--color-success)]">以下展示当前已批准的数据版本，内容只读；导出不受当前分页限制。</span>
             </div>
           )}
 
           {reviewIsStale && (
-            <div className="flex shrink-0 items-start gap-3 border-b border-amber-200 bg-amber-50 px-6 py-3 text-xs text-amber-900">
+            <div className="flex shrink-0 items-start gap-3 border-b border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-6 py-3 text-xs text-[var(--color-warning)]">
               <AlertTriangle size={15} className="mt-0.5 shrink-0" />
               <div className="min-w-0 flex-1">
                 <p className="font-semibold">审核版本已过期，所有审核写操作已禁用</p>
-                <p className="mt-0.5 text-amber-700">
+                <p className="mt-0.5 text-[var(--color-warning)]">
                   当前面板审阅的是 v{diff?.current?.version_no ?? '—'}，数据集最新版本为 v{diff?.review?.latest_version_no ?? '—'}。
                   为避免用旧快照批准新数据，请切换后重新核对变化。
                 </p>
@@ -748,7 +749,7 @@ export default function CuratedDetailPanel({
                 type="button"
                 onClick={handleSwitchToLatestReview}
                 disabled={switchingReview}
-                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-amber-300 bg-white px-3 py-1.5 font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-card px-3 py-1.5 font-medium text-[var(--color-warning)] hover:bg-[var(--color-warning-bg)] disabled:opacity-50"
               >
                 {switchingReview ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                 切换到最新版本
@@ -757,37 +758,37 @@ export default function CuratedDetailPanel({
           )}
 
           {actionError && (
-            <div className="flex shrink-0 items-start gap-2 border-b border-red-100 bg-red-50 px-6 py-2 text-xs text-red-700" role="alert">
+            <div className="flex shrink-0 items-start gap-2 border-b border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-6 py-2 text-xs text-[var(--color-danger)]" role="alert">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
               <span className="flex-1">{actionError}</span>
-              <button type="button" onClick={() => setActionError('')} className="text-red-400 hover:text-red-700" aria-label="关闭错误提示">×</button>
+              <button type="button" onClick={() => setActionError('')} className="text-[var(--color-danger)] hover:text-[var(--color-danger)]" aria-label="关闭错误提示">×</button>
             </div>
           )}
 
           {editMessage && (
-            <div className="flex shrink-0 items-center gap-2 border-b border-emerald-100 bg-emerald-50 px-6 py-2 text-xs text-emerald-700" role="status">
+            <div className="flex shrink-0 items-center gap-2 border-b border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] px-6 py-2 text-xs text-[var(--color-success)]" role="status">
               <CheckCircle size={13} className="shrink-0" />
               <span className="flex-1">{editMessage}</span>
-              <button type="button" onClick={() => setEditMessage('')} className="text-emerald-500 hover:text-emerald-800" aria-label="关闭保存提示">×</button>
+              <button type="button" onClick={() => setEditMessage('')} className="text-[var(--color-success)] hover:text-[var(--color-success)]" aria-label="关闭保存提示">×</button>
             </div>
           )}
 
           {exportMessage && (
-            <div className="mx-5 mt-3 flex shrink-0 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700" role="status">
+            <div className="mx-5 mt-3 flex shrink-0 items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] px-3 py-2 text-xs text-[var(--color-success)]" role="status">
               <CheckCircle size={13} className="shrink-0" />
               <span className="flex-1">{exportMessage}</span>
-              <button type="button" onClick={() => setExportMessage('')} className="text-emerald-500 hover:text-emerald-800" aria-label="关闭导出提示">×</button>
+              <button type="button" onClick={() => setExportMessage('')} className="text-[var(--color-success)] hover:text-[var(--color-success)]" aria-label="关闭导出提示">×</button>
             </div>
           )}
 
           {schemaLoadError && (
-            <div className="flex shrink-0 items-center gap-2 border-b border-amber-100 bg-amber-50 px-6 py-2 text-xs text-amber-700">
+            <div className="flex shrink-0 items-center gap-2 border-b border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-6 py-2 text-xs text-[var(--color-warning)]">
               <AlertTriangle size={13} /> {schemaLoadError}
             </div>
           )}
 
           {!loading && !loadError && diff && reviewPending && primaryKeys.length === 0 && (
-            <div className="flex shrink-0 items-start gap-2 border-b border-sky-100 bg-sky-50/70 px-5 py-2.5 text-xs text-sky-800">
+            <div className="flex shrink-0 items-start gap-2 border-b border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] px-5 py-2.5 text-xs text-[var(--color-info)]">
               <Info size={13} className="mt-0.5 shrink-0" />
               <span>
                 当前流水线采用无主键模式，可以正常审核，但无法安全定位具体行，因此行级修正不可用。
@@ -798,7 +799,7 @@ export default function CuratedDetailPanel({
 
           {/* View switcher */}
           {!loading && !loadError && (
-            <div className="flex shrink-0 items-center gap-1 border-b border-slate-100 bg-white px-5 py-2.5">
+            <div className="flex shrink-0 items-center gap-1 border-b border-border bg-card px-5 py-2.5">
               {reviewPending ? VIEW_TABS.map(([v, label, count]) => (
                 <button
                   key={v}
@@ -809,18 +810,18 @@ export default function CuratedDetailPanel({
                     if (v !== 'changes') setPageOffset(0)
                   }}
                   className={`px-3 py-1 text-xs rounded-full border transition-colors ${
-                    view === v ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                    view === v ? 'bg-accent text-[var(--color-text-inverse)] border-[var(--color-border-hover)]' : 'bg-card text-muted-foreground border-border hover:bg-muted'
                   } disabled:cursor-not-allowed disabled:opacity-45`}>
-                  {label}{count !== null && <span className={`ml-1 ${view === v ? 'text-gray-300' : 'text-gray-400'}`}>{count}</span>}
+                  {label}{count !== null && <span className={`ml-1 ${view === v ? 'text-[var(--color-text-tertiary)]' : 'text-[var(--color-text-tertiary)]'}`}>{count}</span>}
                 </button>
               )) : (
-                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-700">
-                  <Table2 size={13} className={status === 'rejected' ? 'text-rose-600' : 'text-teal-700'} />
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-foreground">
+                  <Table2 size={13} className={status === 'rejected' ? 'text-viz-rose' : 'text-brand-ink'} />
                   {status === 'rejected' ? '已拒绝版本快照' : '已批准全量数据'}
                 </span>
               )}
               {reviewPending && (
-                <span className="ml-2 text-[11px] text-gray-400">
+                <span className="ml-2 text-[11px] text-[var(--color-text-tertiary)]">
                   {view === 'changes' && '审核影响（相对上一已批准版本，含人工修正）'}
                   {view === 'previous' && '上一已批准版本完整数据（分页查看，用于对照）'}
                   {view === 'current' && (
@@ -836,15 +837,15 @@ export default function CuratedDetailPanel({
           {/* Body */}
           <div className={`min-h-0 flex-1 ${reviewPending && view === 'changes' ? 'overflow-auto' : 'overflow-hidden px-5 py-3'}`}>
             {loading ? (
-              <div className="flex h-full items-center justify-center gap-2 text-sm text-gray-400">
+              <div className="flex h-full items-center justify-center gap-2 text-sm text-[var(--color-text-tertiary)]">
                 <Loader2 size={16} className="animate-spin" /> 加载中...
               </div>
             ) : loadError ? (
-              <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-red-600">
+              <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-[var(--color-danger)]">
                 <AlertTriangle size={24} className="opacity-70" />
                 <p className="font-medium">审核数据加载失败</p>
-                <p className="max-w-lg text-xs text-red-500">{loadError}</p>
-                <button type="button" onClick={loadDiff} className="mt-1 inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs hover:bg-red-50">
+                <p className="max-w-lg text-xs text-[var(--color-danger)]">{loadError}</p>
+                <button type="button" onClick={loadDiff} className="mt-1 inline-flex items-center gap-1 rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-card px-3 py-1.5 text-xs hover:bg-[var(--color-danger-bg)]">
                   <RefreshCw size={12} /> 重新加载
                 </button>
               </div>
@@ -861,7 +862,7 @@ export default function CuratedDetailPanel({
                 curNo={diff?.current?.version_no ?? null} primaryKeys={primaryKeys} schemaColumns={schemaColumns} />
             ) : view === 'previous' ? (
               diff?.previous?.version_no == null
-                ? <div className="grid h-full place-items-center rounded-xl border border-slate-200 bg-slate-50/30 text-sm text-gray-400">这是首个待审核版本，没有上一已批准版本可对照。</div>
+                ? <div className="grid h-full place-items-center rounded-xl border border-border bg-muted text-sm text-[var(--color-text-tertiary)]">这是首个待审核版本，没有上一已批准版本可对照。</div>
                 : <ReadonlyTable rows={diff.previous.rows} primaryKeys={primaryKeys} startIndex={diff.previous.offset ?? pageOffset} schemaColumns={schemaColumns} fillAvailable />
             ) : (
               canEditCurrentRows ? (
@@ -889,32 +890,33 @@ export default function CuratedDetailPanel({
 
           {reviewPending ? (
             <div
-              className="flex min-h-16 shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-200 bg-slate-50/90 px-5 py-3"
+              className="flex min-h-16 shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-t border-border bg-muted px-5 py-3"
               data-testid="curated-review-actions"
             >
               <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
                 {view === 'changes' ? (
-                  <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
-                    <Info size={12} className="shrink-0 text-teal-700" />
+                  <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Info size={12} className="shrink-0 text-brand-ink" />
                     审核影响相对上一已批准版本计算，并包含已保存的人工修正；更新前使用红色，更新后使用绿色，具体变更列会单独标出。
                   </span>
                 ) : (
                   <>
-                    <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                    <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                       每页
-                      <select value={pageSize} onChange={event => changePageSize(Number(event.target.value))}
+                      <PageSizeSelect
+                        value={pageSize}
+                        onChange={changePageSize}
+                        sizes={REVIEW_PAGE_SIZES}
+                        ariaLabel="待审核数据每页显示条数"
                         disabled={hasUnsavedEdits}
                         title={hasUnsavedEdits ? '请先保存或还原当前修改' : undefined}
-                        className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500 focus-visible:ring-2 focus-visible:ring-teal-500/20"
-                        aria-label="待审核数据每页显示条数">
-                        {REVIEW_PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}
-                      </select>
+                      />
                       条
                     </label>
-                    <div className="flex items-center gap-1 text-xs text-slate-500">
+                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
                       <button type="button" onClick={() => switchPage(pageOffset - pageSize)} disabled={pageOffset <= 0 || loading || hasUnsavedEdits}
                         aria-label="上一页"
-                        className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-35">
+                        className="grid h-8 w-8 place-items-center rounded-lg border border-border bg-card transition hover:border-brand-line hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:opacity-35">
                         <ChevronLeft size={13} />
                       </button>
                       <span className="min-w-52 text-center tabular-nums">
@@ -922,13 +924,13 @@ export default function CuratedDetailPanel({
                       </span>
                       <button type="button" onClick={() => switchPage(pageOffset + pageSize)} disabled={!pagedView?.has_more || loading || hasUnsavedEdits}
                         aria-label="下一页"
-                        className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-35">
+                        className="grid h-8 w-8 place-items-center rounded-lg border border-border bg-card transition hover:border-brand-line hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:opacity-35">
                         <ChevronRight size={13} />
                       </button>
                     </div>
                     {view === 'current' && canEditCurrentRows && (
                       <div className="flex items-center gap-2">
-                        <span className={`text-xs ${hasUnsavedEdits ? 'font-medium text-amber-700' : 'text-slate-400'}`} role="status">
+                        <span className={`text-xs ${hasUnsavedEdits ? 'font-medium text-[var(--color-warning)]' : 'text-[var(--color-text-tertiary)]'}`} role="status">
                           {hasUnsavedEdits
                             ? `${pendingEdits.length} 处修改尚未保存`
                             : '非主键字段可编辑；主键用于稳定定位且不可修改'}
@@ -938,7 +940,7 @@ export default function CuratedDetailPanel({
                             type="button"
                             onClick={() => void handleSaveEdits()}
                             disabled={savingEdits || Boolean(reviewAction)}
-                            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold text-amber-800 transition hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25 disabled:cursor-not-allowed disabled:opacity-45"
+                            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-card px-3 text-xs font-semibold text-[var(--color-warning)] transition hover:bg-[var(--color-warning-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-warning)] disabled:cursor-not-allowed disabled:opacity-45"
                           >
                             {savingEdits ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
                             保存 {pendingEdits.length} 处修改
@@ -950,40 +952,41 @@ export default function CuratedDetailPanel({
                 )}
               </div>
 
-              <div className="ml-auto flex shrink-0 items-center gap-2 border-l border-slate-200 pl-4">
+              <div className="ml-auto flex shrink-0 items-center gap-2 border-l border-border pl-4">
                 <button type="button" onClick={requestClose}
-                  className="h-9 rounded-lg border border-slate-200 bg-white px-3.5 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98]">
+                  className="h-9 rounded-lg border border-border bg-card px-3.5 text-xs font-medium text-muted-foreground transition hover:border-border hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98]">
                   关闭
                 </button>
                 <button type="button" onClick={handleReject} disabled={Boolean(reviewAction) || reviewIsStale || loading || savingEdits || hasUnsavedEdits}
                   title={reviewIsStale ? '审核版本已过期，请先切换到最新版本' : hasUnsavedEdits ? '请先保存或还原当前修改' : '拒绝当前审核版本'}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3.5 text-xs font-medium text-rose-600 transition hover:border-rose-300 hover:bg-rose-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/25 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45">
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-viz-rose-soft bg-card px-3.5 text-xs font-medium text-viz-rose transition hover:border-viz-rose-soft hover:bg-viz-rose-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-viz-rose active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45">
                   {reviewAction === 'reject' ? <Loader2 size={13} className="animate-spin" /> : <AlertTriangle size={13} />}
                   拒绝本次数据
                 </button>
                 <button type="button" onClick={handleApprove} disabled={Boolean(reviewAction) || reviewIsStale || loading || savingEdits || hasUnsavedEdits}
                   title={reviewIsStale ? '审核版本已过期，请先切换到最新版本' : hasUnsavedEdits ? '请先保存或还原当前修改' : '通过当前审核版本'}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-xs font-semibold text-white shadow-sm shadow-emerald-900/10 transition hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30 focus-visible:ring-offset-1 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45">
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--color-success)] px-4 text-xs font-semibold text-[var(--color-text-inverse)] shadow-sm transition hover:bg-[var(--color-success)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-success)] focus-visible:ring-offset-1 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45">
                   {reviewAction === 'approve' ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
                   通过审核
                 </button>
               </div>
             </div>
           ) : (
-            <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-3">
-              <label className="flex items-center gap-1.5 text-xs text-slate-500">
+            <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-border bg-muted px-5 py-3">
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 每页
-                <select value={pageSize} onChange={event => changePageSize(Number(event.target.value))}
-                  className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
-                  aria-label={status === 'rejected' ? '已拒绝快照每页显示条数' : '已批准数据每页显示条数'}>
-                  {REVIEW_PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}
-                </select>
+                <PageSizeSelect
+                  value={pageSize}
+                  onChange={changePageSize}
+                  sizes={REVIEW_PAGE_SIZES}
+                  ariaLabel={status === 'rejected' ? '已拒绝快照每页显示条数' : '已批准数据每页显示条数'}
+                />
                 条
               </label>
-              <div className="flex items-center gap-1 text-xs text-slate-500">
+              <div className="flex items-center gap-1 text-xs text-muted-foreground">
                 <button type="button" onClick={() => switchPage(pageOffset - pageSize)} disabled={pageOffset <= 0 || loading}
                   aria-label="上一页"
-                  className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-35">
+                  className="grid h-8 w-8 place-items-center rounded-lg border border-border bg-card transition hover:border-brand-line hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:opacity-35">
                   <ChevronLeft size={13} />
                 </button>
                 <span className="min-w-52 text-center tabular-nums">
@@ -991,15 +994,15 @@ export default function CuratedDetailPanel({
                 </span>
                 <button type="button" onClick={() => switchPage(pageOffset + pageSize)} disabled={!diff?.current?.has_more || loading}
                   aria-label="下一页"
-                  className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98] disabled:opacity-35">
+                  className="grid h-8 w-8 place-items-center rounded-lg border border-border bg-card transition hover:border-brand-line hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:opacity-35">
                   <ChevronRight size={13} />
                 </button>
               </div>
-              <span className="inline-flex items-center gap-1 text-xs text-slate-400">
+              <span className="inline-flex items-center gap-1 text-xs text-[var(--color-text-tertiary)]">
                 <LockKeyhole size={11} /> 只读模式，不会修改数据
               </span>
               <button type="button" onClick={requestClose}
-                className="ml-auto h-8 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 active:scale-[0.98]">
+                className="ml-auto h-8 rounded-lg border border-border bg-card px-3 text-xs font-medium text-muted-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98]">
                 关闭
               </button>
             </div>
@@ -1019,7 +1022,7 @@ function ChangesView({ delta, prevNo, curNo, primaryKeys, schemaColumns }: {
   primaryKeys: string[]
   schemaColumns: Record<string, DatasetSchemaColumn>
 }) {
-  if (!delta) return <div className="p-8 text-center text-sm text-gray-400">暂无版本数据</div>
+  if (!delta) return <div className="p-8 text-center text-sm text-[var(--color-text-tertiary)]">暂无版本数据</div>
   const { added_count, updated_count, deleted_count, unchanged_count } = delta
   const noChange = added_count + updated_count + deleted_count === 0
 
@@ -1027,32 +1030,32 @@ function ChangesView({ delta, prevNo, curNo, primaryKeys, schemaColumns }: {
     <div className="p-4 space-y-4">
       {/* 摘要 */}
       <div className="flex items-center gap-3 flex-wrap text-xs">
-        <span className="text-gray-500">
+        <span className="text-muted-foreground">
           {prevNo == null ? '首个版本（全部为新增）' : `v${prevNo} → v${curNo}`}
         </span>
         {primaryKeys.length ? (
-          <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-[10px] text-slate-600">
+          <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-[10px] text-muted-foreground">
             <KeyRound size={9} /> 按主键 {primaryKeys.join('、')} 识别同一行
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1 rounded-md bg-sky-50 px-2 py-1 text-[10px] text-sky-700">
+          <span className="inline-flex items-center gap-1 rounded-md bg-[var(--color-info-bg)] px-2 py-1 text-[10px] text-[var(--color-info)]">
             <Info size={9} /> 无主键 · 按整行比较，不单独识别更新
           </span>
         )}
-        <span className="inline-flex items-center gap-1 text-green-600"><Plus size={12} />新增 {added_count}</span>
-        <span className="inline-flex items-center gap-1 text-amber-600"><Pencil size={11} />更新 {updated_count}</span>
-        <span className="inline-flex items-center gap-1 text-red-500"><Minus size={12} />删除 {deleted_count}</span>
-        <span className="text-gray-400">未变 {unchanged_count}</span>
-        {delta.sample_truncated && <span className="text-gray-400">（每类仅展示部分样本）</span>}
+        <span className="inline-flex items-center gap-1 text-[var(--color-success)]"><Plus size={12} />新增 {added_count}</span>
+        <span className="inline-flex items-center gap-1 text-[var(--color-warning)]"><Pencil size={11} />更新 {updated_count}</span>
+        <span className="inline-flex items-center gap-1 text-[var(--color-danger)]"><Minus size={12} />删除 {deleted_count}</span>
+        <span className="text-[var(--color-text-tertiary)]">未变 {unchanged_count}</span>
+        {delta.sample_truncated && <span className="text-[var(--color-text-tertiary)]">（每类仅展示部分样本）</span>}
       </div>
 
-      {noChange && <div className="p-6 text-center text-sm text-gray-400">与上一已批准版本相比没有数据变化。</div>}
+      {noChange && <div className="p-6 text-center text-sm text-[var(--color-text-tertiary)]">与上一已批准版本相比没有数据变化。</div>}
 
       {updated_count > 0 && (
         <section>
           <div className="mb-1.5 flex items-center justify-between gap-3">
-            <h4 className="flex items-center gap-1 text-xs font-medium text-amber-700"><Pencil size={11} />更新的行（{updated_count}）</h4>
-            <span className="text-[10px] text-slate-400">每条“更新后”紧跟对应“更新前”；绿色单元格为变更值</span>
+            <h4 className="flex items-center gap-1 text-xs font-medium text-[var(--color-warning)]"><Pencil size={11} />更新的行（{updated_count}）</h4>
+            <span className="text-[10px] text-[var(--color-text-tertiary)]">每条“更新后”紧跟对应“更新前”；绿色单元格为变更值</span>
           </div>
           <UpdatedRowsTable updates={delta.updated_sample} primaryKeys={primaryKeys} schemaColumns={schemaColumns} />
         </section>
@@ -1060,20 +1063,20 @@ function ChangesView({ delta, prevNo, curNo, primaryKeys, schemaColumns }: {
 
       {added_count > 0 && (
         <section>
-          <h4 className="text-xs font-medium text-green-700 mb-1.5 flex items-center gap-1"><Plus size={12} />新增的行（{added_count}）</h4>
+          <h4 className="text-xs font-medium text-[var(--color-success)] mb-1.5 flex items-center gap-1"><Plus size={12} />新增的行（{added_count}）</h4>
           <div className="overflow-hidden rounded-lg border"><ReadonlyTable rows={delta.added_sample} highlight="add" primaryKeys={primaryKeys} schemaColumns={schemaColumns} /></div>
         </section>
       )}
 
       {deleted_count > 0 && (
         <section>
-          <h4 className="text-xs font-medium text-red-600 mb-1.5 flex items-center gap-1"><Minus size={12} />删除的行（{deleted_count}）</h4>
+          <h4 className="text-xs font-medium text-[var(--color-danger)] mb-1.5 flex items-center gap-1"><Minus size={12} />删除的行（{deleted_count}）</h4>
           <div className="overflow-hidden rounded-lg border"><ReadonlyTable rows={delta.deleted_sample} highlight="del" primaryKeys={primaryKeys} schemaColumns={schemaColumns} /></div>
         </section>
       )}
 
       {delta.sample_truncated && (
-        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        <div className="flex items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-3 py-2 text-xs text-[var(--color-warning)]">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
           <span>
             本次变化超过接口单次明细上限，当前已完整展示接口返回的明细，但并非全部 {changeCountText(delta)} 行。

@@ -9,6 +9,7 @@ import datasetsApi, {
   type DatasetSchemaColumn,
 } from '@/api/v2/datasets'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import { PageSizeSelect } from './PageSizeSelect'
 
 const PAGE_SIZES = [20, 50, 100, 200, 500, 1000] as const
 const DEFAULT_PAGE_SIZE = 50
@@ -358,63 +359,63 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
   const totalPages = Math.max(1, Math.ceil(totalRows / pageSize))
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-[2px]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-accent p-4 backdrop-blur-[2px]">
       <div
-        className="flex h-[78vh] max-h-[760px] min-h-[520px] w-[min(96vw,1440px)] flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.18)]"
+        className="flex h-[78vh] max-h-[760px] min-h-[520px] w-[min(96vw,1440px)] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-[0_24px_80px_rgba(15,23,42,0.18)]"
         role="dialog"
         aria-modal="true"
         aria-labelledby="dataset-editor-title"
       >
-        <div className="flex shrink-0 items-start gap-3 border-b border-slate-100 px-5 py-4">
-          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-teal-50 text-teal-700">
+        <div className="flex shrink-0 items-start gap-3 border-b border-border px-5 py-4">
+          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand-ink">
             <Pencil size={15} />
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h3 id="dataset-editor-title" className="truncate text-sm font-semibold text-slate-900">{dataset.name}</h3>
-              <span className="text-xs tabular-nums text-slate-400">v{versionNo} · {totalRows} 行</span>
+              <h3 id="dataset-editor-title" className="truncate text-sm font-semibold text-foreground">{dataset.name}</h3>
+              <span className="text-xs tabular-nums text-[var(--color-text-tertiary)]">v{versionNo} · {totalRows} 行</span>
               {pkCols.length ? (
-                <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700" title="现有行的主键值已锁定">
+                <span className="inline-flex items-center gap-1 rounded-md bg-[var(--color-warning-bg)] px-2 py-1 text-[11px] font-medium text-[var(--color-warning)]" title="现有行的主键值已锁定">
                   <LockKeyhole size={10} /> 主键：{pk}
                 </span>
               ) : (
-                <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-500">未声明主键</span>
+                <span className="rounded-md bg-muted px-2 py-1 text-[11px] text-muted-foreground">未声明主键</span>
               )}
             </div>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
               {canEditRows ? '现有行主键不可修改；其他字段可直接编辑，保存后生成可回溯的新版本。' : '请先声明主键以修改或删除现有行；当前仍可新增行。'}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <button type="button" onClick={() => void handleExport('csv')} disabled={Boolean(exporting)}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:opacity-50">
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink disabled:opacity-50">
               {exporting === 'csv' ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />} 导出 CSV
             </button>
             <button type="button" onClick={() => void handleExport('xlsx')} disabled={Boolean(exporting)}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:opacity-50">
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink disabled:opacity-50">
               {exporting === 'xlsx' ? <Loader2 size={12} className="animate-spin" /> : <FileSpreadsheet size={12} />} 导出 Excel
             </button>
             <button type="button" onClick={requestClose} disabled={saving}
-              className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40"
+              className="grid h-8 w-8 place-items-center rounded-lg text-[var(--color-text-tertiary)] transition hover:bg-muted hover:text-foreground disabled:opacity-40"
               aria-label="关闭数据维护窗口"><X size={16} /></button>
           </div>
         </div>
 
         {pkPanelOpen && !pkCols.length && (
-          <div className="shrink-0 border-b border-amber-100 bg-amber-50/60 px-5 py-3">
+          <div className="shrink-0 border-b border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-5 py-3">
             <div className="flex flex-wrap items-center gap-2">
-              <p className="mr-2 text-xs text-slate-600"><KeyRound size={11} className="mr-1 inline text-amber-600" />选择一个或多个列作为主键，声明后主键值将锁定。</p>
+              <p className="mr-2 text-xs text-muted-foreground"><KeyRound size={11} className="mr-1 inline text-[var(--color-warning)]" />选择一个或多个列作为主键，声明后主键值将锁定。</p>
               {columns.map(column => {
                 const selectedIndex = pkDraft.indexOf(column)
                 return (
                   <button key={column} type="button" onClick={() => togglePkCol(column)}
-                    className={`rounded-lg border px-2 py-1 text-xs transition ${selectedIndex >= 0 ? 'border-amber-300 bg-white text-amber-800' : 'border-slate-200 bg-white/70 text-slate-500 hover:border-amber-200'}`}>
+                    className={`rounded-lg border px-2 py-1 text-xs transition ${selectedIndex >= 0 ? 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-card text-[var(--color-warning)]' : 'border-border bg-card text-muted-foreground hover:border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)]'}`}>
                     {selectedIndex >= 0 && <span className="mr-1 font-semibold">{selectedIndex + 1}.</span>}{columnLabel(schemaColumns[column], column)}
                   </button>
                 )
               })}
               <button type="button" onClick={() => void handleDeclare()} disabled={declaring || !pkDraft.length}
-                className="inline-flex h-7 items-center gap-1 rounded-lg bg-teal-700 px-3 text-xs font-medium text-white transition hover:bg-teal-800 disabled:opacity-40">
+                className="inline-flex h-7 items-center gap-1 rounded-lg bg-brand-deep px-3 text-xs font-medium text-[var(--color-text-inverse)] transition hover:bg-brand-deep disabled:opacity-40">
                 {declaring ? <Loader2 size={11} className="animate-spin" /> : <KeyRound size={11} />} 声明主键
               </button>
             </div>
@@ -422,7 +423,7 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
         )}
 
         {(error || info) && (
-          <div className={`mx-5 mt-3 flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs ${error ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+          <div className={`mx-5 mt-3 flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs ${error ? 'border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] text-[var(--color-danger)]' : 'border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] text-[var(--color-success)]'}`}>
             {error ? <XCircle size={13} className="shrink-0" /> : <CheckCircle2 size={13} className="shrink-0" />}
             <span className="flex-1">{error || info}</span>
             <button type="button" onClick={() => { setError(''); setInfo('') }} className="text-current opacity-50 hover:opacity-100"><X size={12} /></button>
@@ -431,47 +432,47 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
 
         <div className="min-h-0 flex-1 overflow-hidden px-5 py-3">
           {loading ? (
-            <div className="flex h-full items-center justify-center text-xs text-slate-400"><Loader2 size={14} className="mr-2 animate-spin" />正在查询数据…</div>
+            <div className="flex h-full items-center justify-center text-xs text-[var(--color-text-tertiary)]"><Loader2 size={14} className="mr-2 animate-spin" />正在查询数据…</div>
           ) : !columns.length ? (
-            <div className="grid h-full place-items-center text-xs text-slate-400">暂无列结构，请通过“上传新版本”导入表格。</div>
+            <div className="grid h-full place-items-center text-xs text-[var(--color-text-tertiary)]">暂无列结构，请通过“上传新版本”导入表格。</div>
           ) : (
             <div
-              className="h-full max-w-full overflow-auto rounded-xl border border-slate-200 bg-white"
+              className="h-full max-w-full overflow-auto rounded-xl border border-border bg-card"
               data-testid="dataset-editor-grid"
             >
               <table className="w-max min-w-full border-separate border-spacing-0 text-xs">
               <thead className="sticky top-0 z-20">
                 <tr>
-                  <th className="sticky left-0 z-30 w-11 border-b border-r border-slate-200 bg-slate-50 px-2 py-2 font-normal text-slate-400">#</th>
+                  <th className="sticky left-0 z-30 w-11 border-b border-r border-border bg-muted px-2 py-2 font-normal text-[var(--color-text-tertiary)]">#</th>
                   {columns.map(column => {
                     const metadata = schemaColumns[column]
                     const isPrimaryKey = pkCols.includes(column)
                     const isRequired = isPrimaryKey || metadata?.nullable === false
                     return (
                       <th key={column} style={{ minWidth: `${columnMinWidths[column]}ch` }}
-                        className="border-b border-slate-200 bg-slate-50 px-3 py-2 text-left font-medium text-slate-700">
+                        className="border-b border-border bg-muted px-3 py-2 text-left font-medium text-foreground">
                         <span className="inline-flex flex-wrap items-center gap-1.5 whitespace-nowrap">
                           {columnLabel(metadata, column)}
-                          {isPrimaryKey && <span className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-700"><KeyRound size={8} />主键</span>}
-                          {!isPrimaryKey && isRequired && <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[9px] font-medium text-rose-600">非空</span>}
-                          {metadata?.type && <span className="rounded bg-slate-200/70 px-1.5 py-0.5 text-[9px] font-normal text-slate-500">{FIELD_TYPE_LABELS[metadata.type] ?? metadata.type}</span>}
+                          {isPrimaryKey && <span className="inline-flex items-center gap-0.5 rounded bg-[var(--color-warning-bg)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--color-warning)]"><KeyRound size={8} />主键</span>}
+                          {!isPrimaryKey && isRequired && <span className="rounded bg-viz-rose-soft px-1.5 py-0.5 text-[9px] font-medium text-viz-rose">非空</span>}
+                          {metadata?.type && <span className="rounded bg-[var(--color-bg-active)] px-1.5 py-0.5 text-[9px] font-normal text-muted-foreground">{FIELD_TYPE_LABELS[metadata.type] ?? metadata.type}</span>}
                         </span>
                       </th>
                     )
                   })}
-                  <th className="sticky right-0 z-30 w-12 border-b border-l border-slate-200 bg-slate-50 px-2 py-2" />
+                  <th className="sticky right-0 z-30 w-12 border-b border-l border-border bg-muted px-2 py-2" />
                 </tr>
               </thead>
               <tbody>
                 {rows.map((row, rowIndex) => (
-                  <tr key={`${offset}-${rowIndex}`} className={row.deleted ? 'opacity-40' : 'hover:bg-slate-50/50'}>
-                    <td className="sticky left-0 z-10 border-b border-r border-slate-100 bg-white px-2 py-1.5 text-center tabular-nums text-slate-300">{offset + rowIndex + 1}</td>
+                  <tr key={`${offset}-${rowIndex}`} className={row.deleted ? 'opacity-40' : 'hover:bg-muted'}>
+                    <td className="sticky left-0 z-10 border-b border-r border-border bg-card px-2 py-1.5 text-center tabular-nums text-[var(--color-text-tertiary)]">{offset + rowIndex + 1}</td>
                     {columns.map(column => {
                       const primaryKey = pkCols.includes(column)
                       const changed = row.cur[column] !== row.orig[column]
                       const validationError = cellErrors[`row:${rowIndex}:${column}`]
                       return (
-                        <td key={column} className={`border-b border-slate-100 p-0 align-top ${changed && !validationError ? 'bg-amber-100/80' : ''}`}>
+                        <td key={column} className={`border-b border-border p-0 align-top ${changed && !validationError ? 'bg-[var(--color-warning-bg)]' : ''}`}>
                           <input
                             value={row.cur[column]}
                             disabled={!canEditRows || primaryKey || row.deleted}
@@ -481,22 +482,22 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
                             style={{ minWidth: `${columnMinWidths[column]}ch` }}
                             className={`min-h-9 w-full px-3 py-2 outline-none transition ${
                               validationError
-                                ? 'bg-red-100 text-red-900 ring-2 ring-inset ring-red-300'
+                                ? 'bg-[var(--color-danger-bg)] text-[var(--color-danger)] ring-2 ring-inset ring-[var(--color-danger)]'
                                 : changed
-                                  ? 'bg-amber-100 font-medium text-amber-950 ring-2 ring-inset ring-amber-300 focus:bg-amber-100'
+                                  ? 'bg-[var(--color-warning-bg)] font-medium text-[var(--color-warning)] ring-2 ring-inset ring-[var(--color-warning)] focus:bg-[var(--color-warning-bg)]'
                                   : primaryKey
-                                    ? 'cursor-not-allowed bg-slate-50/70 font-medium text-slate-500'
-                                    : 'bg-transparent text-slate-700 focus:bg-teal-50/60'
+                                    ? 'cursor-not-allowed bg-muted font-medium text-muted-foreground'
+                                    : 'bg-transparent text-foreground focus:bg-brand-soft'
                             } ${row.deleted ? 'line-through' : ''}`}
                           />
-                          {validationError && <span className="block bg-red-50 px-3 pb-1.5 text-[10px] text-red-600">{validationError}</span>}
+                          {validationError && <span className="block bg-[var(--color-danger-bg)] px-3 pb-1.5 text-[10px] text-[var(--color-danger)]">{validationError}</span>}
                         </td>
                       )
                     })}
-                    <td className="sticky right-0 z-10 border-b border-l border-slate-100 bg-white px-2 text-center">
+                    <td className="sticky right-0 z-10 border-b border-l border-border bg-card px-2 text-center">
                       {canEditRows && (
                         <button type="button" onClick={() => toggleDelete(rowIndex)}
-                          className={`grid h-7 w-7 place-items-center rounded-lg transition ${row.deleted ? 'text-slate-400 hover:bg-slate-100 hover:text-slate-700' : 'text-slate-300 hover:bg-red-50 hover:text-red-600'}`}
+                          className={`grid h-7 w-7 place-items-center rounded-lg transition ${row.deleted ? 'text-[var(--color-text-tertiary)] hover:bg-muted hover:text-foreground' : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-danger-bg)] hover:text-[var(--color-danger)]'}`}
                           title={row.deleted ? '撤销删除' : '删除该行'}>
                           {row.deleted ? <Undo2 size={13} /> : <Trash2 size={13} />}
                         </button>
@@ -505,12 +506,12 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
                   </tr>
                 ))}
                 {inserts.map((row, rowIndex) => (
-                  <tr key={`insert-${rowIndex}`} className="bg-emerald-50/35">
-                    <td className="sticky left-0 z-10 border-b border-r border-emerald-100 bg-emerald-50 px-2 py-1.5 text-center font-medium text-emerald-600">新</td>
+                  <tr key={`insert-${rowIndex}`} className="bg-[var(--color-success-bg)]">
+                    <td className="sticky left-0 z-10 border-b border-r border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] px-2 py-1.5 text-center font-medium text-[var(--color-success)]">新</td>
                     {columns.map(column => {
                       const validationError = cellErrors[`insert:${rowIndex}:${column}`]
                       return (
-                        <td key={column} className="border-b border-emerald-100 p-0 align-top">
+                        <td key={column} className="border-b border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] p-0 align-top">
                           <input
                             value={row[column]}
                             placeholder={(pkCols.includes(column) || schemaColumns[column]?.nullable === false) ? '必填' : ''}
@@ -518,14 +519,14 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
                             title={validationError || row[column]}
                             aria-invalid={Boolean(validationError)}
                             style={{ minWidth: `${columnMinWidths[column]}ch` }}
-                            className={`min-h-9 w-full bg-transparent px-3 py-2 text-slate-700 outline-none transition placeholder:text-amber-500/70 focus:bg-teal-50/70 ${validationError ? 'bg-red-50 ring-1 ring-inset ring-red-300' : ''}`}
+                            className={`min-h-9 w-full bg-transparent px-3 py-2 text-foreground outline-none transition placeholder:text-[var(--color-warning)] focus:bg-brand-soft ${validationError ? 'bg-[var(--color-danger-bg)] ring-1 ring-inset ring-[var(--color-danger)]' : ''}`}
                           />
-                          {validationError && <span className="block bg-red-50 px-3 pb-1.5 text-[10px] text-red-600">{validationError}</span>}
+                          {validationError && <span className="block bg-[var(--color-danger-bg)] px-3 pb-1.5 text-[10px] text-[var(--color-danger)]">{validationError}</span>}
                         </td>
                       )
                     })}
-                    <td className="sticky right-0 z-10 border-b border-l border-emerald-100 bg-emerald-50 px-2 text-center">
-                      <button type="button" onClick={() => removeInsert(rowIndex)} className="grid h-7 w-7 place-items-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600" title="移除新增行"><Trash2 size={13} /></button>
+                    <td className="sticky right-0 z-10 border-b border-l border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] px-2 text-center">
+                      <button type="button" onClick={() => removeInsert(rowIndex)} className="grid h-7 w-7 place-items-center rounded-lg text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-danger-bg)] hover:text-[var(--color-danger)]" title="移除新增行"><Trash2 size={13} /></button>
                     </td>
                   </tr>
                 ))}
@@ -535,40 +536,41 @@ export default function DatasetEditorModal({ dataset, onClose, onSaved }: {
           )}
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-3">
+        <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-border bg-muted px-5 py-3">
           <button type="button" onClick={addInsert} disabled={loading || !columns.length}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:border-teal-200 hover:text-teal-700 disabled:opacity-40">
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs font-medium text-muted-foreground transition hover:border-brand-line hover:text-brand-ink disabled:opacity-40">
             <Plus size={12} /> 新增行
           </button>
-          <label className="flex items-center gap-1.5 text-xs text-slate-500">
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
             每页
-            <select value={pageSize} onChange={event => changePageSize(Number(event.target.value))}
-              className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
-              aria-label="维护数据每页显示条数">
-              {PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}
-            </select>
+            <PageSizeSelect
+              value={pageSize}
+              onChange={changePageSize}
+              sizes={PAGE_SIZES}
+              ariaLabel="维护数据每页显示条数"
+            />
             条
           </label>
-          <div className="flex items-center gap-1 text-xs text-slate-500">
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <button type="button" onClick={() => changePage(offset - pageSize)} disabled={!offset || loading}
-              className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 disabled:opacity-35"><ChevronLeft size={13} /></button>
+              className="grid h-8 w-8 place-items-center rounded-lg border border-border bg-card transition hover:border-brand-line hover:text-brand-ink disabled:opacity-35"><ChevronLeft size={13} /></button>
             <span className="min-w-40 text-center tabular-nums">第 {currentPage} / {totalPages} 页 · {totalRows ? `${offset + 1}–${pageEnd}` : 0} / {totalRows} 行</span>
             <button type="button" onClick={() => changePage(offset + pageSize)} disabled={pageEnd >= totalRows || loading}
-              className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white transition hover:border-teal-200 hover:text-teal-700 disabled:opacity-35"><ChevronRight size={13} /></button>
+              className="grid h-8 w-8 place-items-center rounded-lg border border-border bg-card transition hover:border-brand-line hover:text-brand-ink disabled:opacity-35"><ChevronRight size={13} /></button>
           </div>
           {dirty && (
-            <span className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700" role="status">
+            <span className="rounded-md border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-warning)]" role="status">
               有未保存的修改 · 共改动 {changeSummary.total} 行
-              <span className="ml-1 font-normal text-amber-600">
+              <span className="ml-1 font-normal text-[var(--color-warning)]">
                 （修改 {changeSummary.updated} · 新增 {changeSummary.inserted} · 删除 {changeSummary.deleted}）
               </span>
             </span>
           )}
           <div className="ml-auto flex items-center gap-2">
             <button type="button" onClick={requestClose} disabled={saving}
-              className="h-8 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-40">关闭</button>
+              className="h-8 rounded-lg border border-border bg-card px-3 text-xs font-medium text-muted-foreground transition hover:bg-muted disabled:opacity-40">关闭</button>
             <button type="button" onClick={() => void handleSave()} disabled={saving || !dirty}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 text-xs font-medium text-white transition hover:bg-teal-800 disabled:opacity-40">
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-brand-deep px-3.5 text-xs font-medium text-[var(--color-text-inverse)] transition hover:bg-brand-deep disabled:opacity-40">
               {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} 保存为新版本
             </button>
           </div>

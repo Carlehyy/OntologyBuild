@@ -526,7 +526,10 @@ test('被拒绝的成品版本以审计语义展示且没有普通生产导出',
 
   await expect(page.getByRole('cell', { name: '客户订单成品表' })).toBeVisible()
   await expect(page.getByText('ds-revie')).toHaveCount(0)
-  await expect(page.getByRole('option', { name: '已处理' })).toHaveCount(1)
+  // Radix Select 的选项仅在展开时挂载：打开筛选下拉断言后关闭
+  await page.getByLabel('筛选审核状态').click()
+  await expect(page.getByRole('option', { name: '已处理' })).toBeVisible()
+  await page.keyboard.press('Escape')
   await expect(page.getByRole('cell', { name: '已拒绝' })).toBeVisible()
   const expectedUpdatedAt = await page.evaluate(value => (
     new Date(value).toLocaleString('zh-CN', {
@@ -556,7 +559,7 @@ test('被拒绝的成品版本以审计语义展示且没有普通生产导出',
   await expect(dialog.getByText('订单金额（amount）')).toBeVisible()
   await expect(dialog.getByText('主键 · 非空')).toBeVisible()
   await expect(dialog.getByText('只读模式，不会修改数据')).toBeVisible()
-  await expect(dialog.getByLabel('已拒绝快照每页显示条数')).toHaveValue('50')
+  await expect(dialog.getByLabel('已拒绝快照每页显示条数')).toContainText('50')
   await expect(dialog.getByRole('button', { name: /导出 CSV|导出 Excel/ })).toHaveCount(0)
   await expect(dialog.getByRole('button', { name: /通过审核|拒绝本次数据|撤回/ })).toHaveCount(0)
   await dialog.getByRole('button', { name: '关闭审核详情' }).click()
@@ -621,12 +624,13 @@ test('待审核详情按真实主键保存行级修正，并保留三视角与�
 
   await expect(dialog.getByText('变更列：订单金额（amount）')).toBeVisible()
   await expect(dialog.getByText('绿色为新值')).toBeVisible()
-  await expect(dialog.getByRole('cell', { name: /1280.*已变更/ })).toHaveClass(/bg-emerald-100/)
+  await expect(dialog.getByRole('cell', { name: /1280.*已变更/ })).toHaveClass(/bg-\[var\(--color-success-bg\)\]/)
   await expect(dialog.getByText(/审核影响相对上一已批准版本计算，并包含已保存的人工修正/)).toBeVisible()
 
   await dialog.getByRole('button', { name: /上一已批准版本全量/ }).click()
-  await expect(dialog.getByLabel('待审核数据每页显示条数')).toHaveValue('50')
-  await dialog.getByLabel('待审核数据每页显示条数').selectOption('20')
+  await expect(dialog.getByLabel('待审核数据每页显示条数')).toContainText('50')
+  await dialog.getByLabel('待审核数据每页显示条数').click()
+  await page.getByRole('option', { name: '20', exact: true }).click()
   await expect(dialog.getByText(/第 1 \/ 4 页/)).toBeVisible()
   await dialog.getByRole('button', { name: '下一页' }).click()
   await expect(dialog.getByText(/第 2 \/ 4 页/)).toBeVisible()
