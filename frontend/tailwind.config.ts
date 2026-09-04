@@ -51,6 +51,22 @@ const config: Config = {
           line: 'var(--color-accent-line)',
           ink: 'var(--color-accent-ink)',
         },
+        // 类型编码色（分类数据可视化）：与 tokens.css --color-viz-* 成对，
+        // 取值同 DESIGN.md §5 图表序列，供图例/类型徽章/结构图节点使用
+        viz: {
+          violet: 'var(--color-viz-violet)',
+          'violet-soft': 'var(--color-viz-violet-soft)',
+          fuchsia: 'var(--color-viz-fuchsia)',
+          'fuchsia-soft': 'var(--color-viz-fuchsia-soft)',
+          rose: 'var(--color-viz-rose)',
+          'rose-soft': 'var(--color-viz-rose-soft)',
+          orange: 'var(--color-viz-orange)',
+          'orange-soft': 'var(--color-viz-orange-soft)',
+          indigo: 'var(--color-viz-indigo)',
+          'indigo-soft': 'var(--color-viz-indigo-soft)',
+          cyan: 'var(--color-viz-cyan)',
+          'cyan-soft': 'var(--color-viz-cyan-soft)',
+        },
         destructive: {
           DEFAULT: 'var(--destructive)',
           foreground: 'var(--destructive-foreground)',
