@@ -405,14 +405,14 @@ export default function WorldModelServicesPage() {
           />
         </div>
         <Select
-          value={draftStatus}
-          onValueChange={value => setDraftStatus(value as StatusFilter)}
+          value={draftStatus || '__all__'}
+          onValueChange={value => setDraftStatus((value === '__all__' ? '' : value) as StatusFilter)}
         >
           <SelectTrigger aria-label="按服务状态筛选" className="h-9 w-fit min-w-32 rounded-lg">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">全部状态</SelectItem>
+            <SelectItem value="__all__">全部状态</SelectItem>
             <SelectItem value="online">在线</SelectItem>
             <SelectItem value="offline">已下线</SelectItem>
           </SelectContent>

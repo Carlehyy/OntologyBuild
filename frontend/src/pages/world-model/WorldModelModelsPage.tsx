@@ -394,8 +394,8 @@ export default function WorldModelModelsPage() {
           )}
         </div>
         <Select
-          value={engineFilter}
-          onValueChange={value => setEngineFilter(value)}
+          value={engineFilter || '__all__'}
+          onValueChange={value => setEngineFilter(value === '__all__' ? '' : value)}
         >
           <SelectTrigger aria-label="按引擎类型筛选" className="h-9 w-fit min-w-36 rounded-lg">
             <SelectValue />
