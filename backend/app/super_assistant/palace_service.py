@@ -361,7 +361,18 @@ def run_build(db: Session, owner_id: str, file_id: str) -> SuperAssistantPalaceB
         return running
 
     build = _new_build(db, owner_id, file_id, file_row.sha256)
-    was_built = file_row.status == "built"
+    # 是否剥离旧图谱贡献以「存在任意 hash 的成功 build 记录」为准，而不是
+    # 当前行状态：内容更新/替换路径会把状态重置为 pending，按状态判定会
+    # 漏剥离、新旧实体在图中并存（生产实测发现）。
+    was_built = (
+        db.query(SuperAssistantPalaceBuild.id)
+        .filter(
+            SuperAssistantPalaceBuild.file_id == file_id,
+            SuperAssistantPalaceBuild.status == "success",
+        )
+        .first()
+        is not None
+    )
     file_row.status = "building"
     file_row.error = None
     db.commit()

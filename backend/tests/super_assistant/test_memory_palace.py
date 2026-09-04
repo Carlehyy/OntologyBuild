@@ -208,6 +208,34 @@ def test_run_build_rebuild_strips_old_graph_contribution(env, monkeypatch):
     assert removed == [(row["id"], "知识库.md")]
 
 
+def test_run_build_strips_even_when_status_reset_to_pending(env, monkeypatch):
+    """生产回归：内容更新/替换路径把状态重置为 pending 后重建，仍必须剥离旧图谱。
+
+    旧行为按 status=="built" 判定，pending 时漏剥离导致新旧实体并存。
+    """
+    row = _seed_built_file(env)
+    removed: list[str] = []
+    monkeypatch.setattr(
+        palace_service, "extract_chunk",
+        lambda call_kwargs, chunk: {"entities": [{"name": "张三", "type": "人物", "aliases": []}], "relations": []},
+    )
+    monkeypatch.setattr(palace_service, "_palace_call_kwargs", lambda db: {})
+    monkeypatch.setattr(palace_graph, "merge_extraction", lambda *a, **k: (1, 0))
+    monkeypatch.setattr(
+        palace_graph, "remove_file_graph",
+        lambda owner_id, file_id, filename: removed.append(file_id),
+    )
+    with env.session() as db:
+        palace_service.run_build(db, "user-1", row["id"])  # 首建（无剥离）
+        file_row = db.get(SuperAssistantPalaceFile, row["id"])
+        # 模拟 update_file_content/replace 路径：hash 变化 + 状态重置 pending
+        file_row.sha256 = "edited"
+        file_row.status = "pending"
+        db.commit()
+        palace_service.run_build(db, "user-1", row["id"])
+    assert removed == [row["id"]]
+
+
 def test_run_build_failure_marks_file_failed(env, monkeypatch):
     row = _seed_built_file(env, content="# 空文本将被抽取为空".encode())  # 有文本，走 LLM 失败路径
 
