@@ -4,6 +4,28 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
+import { LEGACY_COLOR_LIMITS } from './scripts/color-gate-manifest.mjs'
+
+// 颜色令牌门禁（DESIGN.md §2.4/§8）：存量硬编码颜色文件从下方 hex/rgba
+// 约束豁免，豁免名单与 check:color-tokens 共用同一份棘轮清单，
+// 存量迁移后收紧 manifest 即自动同步，无需改本文件。
+const legacyColorTsFiles = Object.keys(LEGACY_COLOR_LIMITS)
+  .filter(rel => /\.tsx?$/.test(rel))
+  .map(rel => `src/${rel}`)
+const clipboardRestrictedSelector = {
+  selector: "MemberExpression[object.name='navigator'][property.name='clipboard']",
+  message: 'Use writeTextToClipboard from @/utils/clipboard so copying also works on HTTP deployments.',
+}
+const colorTokenSelectors = [
+  {
+    selector: 'Literal[value=/#[0-9a-fA-F]{3,4}|#[0-9a-fA-F]{6}|#[0-9a-fA-F]{8}/]',
+    message: '界面颜色必须来自 tokens.css 语义 token（Tailwind 语义类或 var(--token)）；图表序列 import @/lib/echartsTheme。存量文件见 scripts/color-gate-manifest.mjs（npm run check:color-tokens）。',
+  },
+  {
+    selector: 'Literal[value=/rgba?\\(|hsla?\\(/]',
+    message: '界面颜色必须来自 tokens.css 语义 token（Tailwind 语义类或 var(--token)）；图表序列 import @/lib/echartsTheme。存量文件见 scripts/color-gate-manifest.mjs（npm run check:color-tokens）。',
+  },
+]
 
 export default defineConfig([
   globalIgnores(['dist']),
@@ -56,10 +78,22 @@ export default defineConfig([
     files: ['src/**/*.{ts,tsx}'],
     ignores: ['src/utils/clipboard.ts', 'src/test/**'],
     rules: {
-      'no-restricted-syntax': ['error', {
-        selector: "MemberExpression[object.name='navigator'][property.name='clipboard']",
-        message: 'Use writeTextToClipboard from @/utils/clipboard so copying also works on HTTP deployments.',
-      }],
+      'no-restricted-syntax': ['error', clipboardRestrictedSelector],
+    },
+  },
+  // 存量硬编码颜色文件：只保留剪贴板约束，颜色约束待迁移完成后由
+  // manifest 移除登记时自动纳入下方全局块。
+  {
+    files: legacyColorTsFiles,
+    rules: {
+      'no-restricted-syntax': ['error', clipboardRestrictedSelector],
+    },
+  },
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/utils/clipboard.ts', 'src/test/**', 'src/lib/echartsTheme.ts', ...legacyColorTsFiles],
+    rules: {
+      'no-restricted-syntax': ['error', clipboardRestrictedSelector, ...colorTokenSelectors],
     },
   },
 ])

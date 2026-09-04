@@ -23,7 +23,10 @@ description: >-
   `pages/ontologies/detail/`、`pages/login/` 及两份待迁移页域主题
   （`pages/ontologies/detail/tabs/chartTheme.ts`、
   `pages/world-model/worldModelChartTheme.ts`，见 5.1/8.2）；这些文件不作为
-  取色参照，触碰时按迁移处理，不得在其上继续扩散。
+  取色参照，触碰时按迁移处理，不得在其上继续扩散。完整存量清单与数量
+  棘轮以 `frontend/scripts/color-gate-manifest.mjs` 为准，由
+  `npm run check:color-tokens` 门禁与 ESLint 同源约束强制：新增即失败，
+  迁移后须同步收紧清单。
 
 ## 1. 设计原则（源自 Supabase 模板）
 

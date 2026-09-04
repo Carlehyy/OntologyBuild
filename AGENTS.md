@@ -199,6 +199,7 @@ npm ci
 npm run test:unit
 npm run check:feature-boundaries
 npm run check:component-convergence
+npm run check:color-tokens
 npm run test:e2e:classification
 npm run lint
 npm run build
