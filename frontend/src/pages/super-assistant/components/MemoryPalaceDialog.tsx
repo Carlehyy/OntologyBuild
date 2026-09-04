@@ -438,7 +438,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
           <aside
             aria-label="记忆宫殿文件库"
             data-testid="super-assistant-palace-files"
-            className="flex min-h-[240px] flex-col rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-base)] lg:min-h-0"
+            className="flex min-h-[240px] flex-col rounded-xl border border-[var(--color-border)] bg-white lg:min-h-0"
           >
             <input
               ref={inputRef}
@@ -540,7 +540,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
           {/* 中：内容阅读/编辑/图片预览 */}
           <section
             aria-label="文档内容"
-            className="flex min-h-[280px] flex-col rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-base)] lg:min-h-0"
+            className="flex min-h-[280px] flex-col rounded-xl border border-[var(--color-border)] bg-white lg:min-h-0"
           >
             {selected ? (
               <>
@@ -655,7 +655,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
           {/* 右：知识图谱 */}
           <aside
             aria-label="记忆宫殿知识图谱面板"
-            className="flex min-h-[360px] flex-col rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-base)] p-2 lg:min-h-0 lg:p-3"
+            className="flex min-h-[360px] flex-col rounded-xl border border-[var(--color-border)] bg-white p-2 lg:min-h-0 lg:p-3"
           >
             <PalaceGraphPanel
               graph={graph}

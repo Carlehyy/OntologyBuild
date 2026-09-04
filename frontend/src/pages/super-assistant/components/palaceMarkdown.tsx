@@ -31,7 +31,7 @@ const components: Components = {
       <table className="w-full border-collapse text-xs" {...p} />
     </div>
   ),
-  thead: p => <thead className="bg-[var(--color-bg-base)]" {...p} />,
+  thead: p => <thead className="bg-[var(--color-bg-elevated)]" {...p} />,
   th: p => (
     <th
       className="whitespace-nowrap border-b border-[var(--color-border)] px-3 py-1.5 text-left font-medium text-[var(--color-text-secondary)]"
