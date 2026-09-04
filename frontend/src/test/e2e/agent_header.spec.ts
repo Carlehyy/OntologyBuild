@@ -443,7 +443,7 @@ test('动态哨兵抽屉只展示后天规则且试跑通过后才能启用', as
 })
 
 
-test('输入栏白色背景、聊天区滚动条隐藏、顶部分割线与侧边栏折叠线水平对齐', async ({ page }) => {
+test('输入栏白色背景、聊天区滚动条隐藏、侧边栏底栏已按需求移除', async ({ page }) => {
   await mockAgentHeader(page)
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/#/agent')
@@ -453,9 +453,7 @@ test('输入栏白色背景、聊天区滚动条隐藏、顶部分割线与侧�
   await expect(inputBar).toHaveCSS('background-color', 'rgb(255, 255, 255)')
   await expect(page.getByTestId('agent-chat-region')).toHaveCSS('scrollbar-width', 'none')
 
-  const sidebarFooter = page.getByRole('button', { name: '折叠起来' }).locator('xpath=..')
-  const barBox = await inputBar.boundingBox()
-  const footerBox = await sidebarFooter.boundingBox()
-  if (!barBox || !footerBox) throw new Error('bounding box missing')
-  expect(Math.abs(barBox.y - footerBox.y)).toBeLessThanOrEqual(1)
+  // 平台侧边栏左下角不再提供「折叠起来」「退出登录」（退出登录保留在右上角用户菜单）
+  await expect(page.getByRole('button', { name: '折叠起来' })).toHaveCount(0)
+  await expect(page.locator('aside').getByRole('button', { name: '退出登录' })).toHaveCount(0)
 })

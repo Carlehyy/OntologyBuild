@@ -394,16 +394,32 @@ test('归档流转：会话移入归档区且 PATCH 携带 status', async ({ pag
   await expect(page.locator('[data-workbench-group="today"] [data-workbench-conversation="c-today"]')).toHaveCount(1)
 })
 
-test('本体治理跳转后台，后台经右下角悬浮助手返回工作台', async ({ page }) => {
+test('本体治理跳转后台：左栏「超级助手」位于「三维场景」上方，可经其或悬浮助手返回工作台', async ({ page }) => {
   await seedAuth(page)
   await mockApis(page)
   await page.goto('/#/super-assistant')
 
   await page.getByRole('link', { name: '本体治理' }).click()
   await page.waitForURL('**/#/overview')
-  // 后台导航不提供 AI 工作台入口，回前台走右下角悬浮助手
-  await expect(page.getByRole('link', { name: 'AI 工作台' })).toHaveCount(0)
 
+  // 后台左侧平台导航提供「超级助手」入口，且位于「三维场景」上方
+  const assistantLink = page.getByRole('link', { name: '超级助手', exact: true })
+  const scenesLink = page.getByRole('link', { name: '三维场景', exact: true })
+  await expect(assistantLink).toBeVisible()
+  await expect(scenesLink).toBeVisible()
+  const assistantBox = await assistantLink.boundingBox()
+  const scenesBox = await scenesLink.boundingBox()
+  if (!assistantBox || !scenesBox) throw new Error('bounding box missing')
+  expect(assistantBox.y).toBeLessThan(scenesBox.y)
+
+  // 经左栏「超级助手」返回工作台
+  await assistantLink.click()
+  await page.waitForURL(/#\/super-assistant/)
+  await expect(page.getByRole('button', { name: '新建任务' })).toBeVisible()
+
+  // 右下角悬浮助手仍是第二条返回路径
+  await page.getByRole('link', { name: '本体治理' }).click()
+  await page.waitForURL('**/#/overview')
   await page.getByTestId('assistant-widget-fab').click()
   await page.getByTestId('assistant-widget-open-full').click()
   await page.waitForURL(/#\/super-assistant/)
@@ -565,6 +581,18 @@ test('会话模型选择器为 ReUI Select，选择后 PATCH 持久化', async (
   expect(JSON.parse(mocks.patchBodies[0])).toMatchObject({ model_config_id: 'model-2' })
 })
 
+test('模型下拉底部「管理模型」为跳转入口：进入模型配置页且不切换会话模型', async ({ page }) => {
+  await seedAuth(page)
+  const mocks = await mockApis(page)
+  await page.goto('/#/super-assistant?conversation=c-today')
+
+  await page.getByRole('combobox', { name: '会话模型' }).click()
+  await page.getByRole('option', { name: '管理模型' }).click()
+  await page.waitForURL('**/#/models')
+  // 哨兵项只做跳转：不发起会话模型切换 PATCH
+  expect(mocks.patchBodies).toHaveLength(0)
+})
+
 test('删除会话走 ReUI 确认弹窗（非 window.confirm）', async ({ page }) => {
   await seedAuth(page)
   const mocks = await mockApis(page)
@@ -619,7 +647,7 @@ test('空态只保留品牌一句话，输入框占位符不混入用户输入',
   await mockApis(page)
   await page.goto('/#/super-assistant?conversation=c-today')
 
-  const hero = page.getByText('SuperAgent 工作空间2.0')
+  const hero = page.getByText('SuperAgent 工作空间 2.0')
   await expect(hero).toBeVisible()
   await expect(page.getByText('有什么可以帮你？')).toHaveCount(0)
   await expect(page.getByText('试试这样问')).toHaveCount(0)

@@ -964,8 +964,8 @@ export default function AgentWorkbenchPage() {
             )}
           </div>
 
-          {/* pt/pb 取 2.5 使输入栏高度精确为 67px：顶部分割线距视口底部 72px，
-              与侧边栏「折叠起来」上方的分割线保持同一水平线。 */}
+          {/* pt/pb 取 2.5 使输入栏高度精确为 67px：顶部分割线距视口底部 72px
+              （历史取值沿用，侧边栏底栏移除后保持输入栏高度不变）。 */}
           <div data-testid="agent-input-bar" className="border-t border-[var(--color-border)] bg-white px-4 pb-2.5 pt-2.5">
             <div className="relative flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-white py-1.5 pl-3 pr-1.5 transition-all focus-within:border-teal-400 focus-within:ring-2 focus-within:ring-teal-100">
               <input
