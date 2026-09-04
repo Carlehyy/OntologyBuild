@@ -9,7 +9,7 @@ import { apiClientV2 } from '@/api/client'
 import { AnimatedNumber } from '@/components/motion-ui/animated-number'
 import { SPRING_LAYOUT } from '@/components/motion-ui/ease'
 import {
-  CHART_AMBER, CHART_AXIS, CHART_BLUE, CHART_INDIGO, CHART_SERIES_PALETTE, CHART_TEAL, CHART_VIOLET,
+  CHART_AMBER, CHART_BLUE, CHART_INDIGO, CHART_SERIES_PALETTE, CHART_TEAL, CHART_VIOLET,
 } from '@/lib/echartsTheme'
 import type { OntologyDetail } from '@/types/ontology'
 import RuntimeTrendChart from './RuntimeTrendChart'
@@ -100,9 +100,8 @@ function KpiCell({ index, reduce, onClick, children }: {
   )
 }
 
-/** KPI 卡构成条：一根分段横条 + 图例合一。分段与图例出自同一个列表，
-   文字即图例，杜绝「图是一套、文字是另一套」的对不上；纯 CSS 实现，
-   高度稳定不依赖画布。值为 0 的段不上条，但图例保留完整口径。 */
+/** KPI 卡构成条（结构卡专用）：一根分段横条 + 图例合一。分段与图例出自同一个列表，
+   文字即图例；纯 CSS 实现，高度稳定不依赖画布。值为 0 的段不上条，但图例保留完整口径。 */
 function ComposeBar({ segments, ariaLabel }: {
   segments: Array<{ label: string; value: number; color: string }>
   ariaLabel: string
@@ -135,6 +134,90 @@ function ComposeBar({ segments, ariaLabel }: {
         ))}
       </ul>
     </div>
+  )
+}
+
+/** KPI 环形占比（实例来源卡）：中心是总数主角，环展示来源构成，右侧竖排图例。
+   conic-gradient 纯 CSS 环，段与图例同源同序。 */
+function DonutStat({ segments, total, unit, side, ariaLabel }: {
+  segments: Array<{ label: string; value: number; color: string }>
+  total: number
+  unit: string
+  side?: string
+  ariaLabel: string
+}) {
+  let acc = 0
+  const stops = segments
+    .filter(seg => seg.value > 0)
+    .map(seg => {
+      const from = acc
+      acc += (seg.value / total) * 100
+      return `${seg.color} ${from}% ${acc}%`
+    })
+  return (
+    <div className="kpi-donut-row" role="img" aria-label={ariaLabel}>
+      <div
+        className={`kpi-donut ${total === 0 ? 'is-empty' : ''}`}
+        style={total > 0 ? { background: `conic-gradient(${stops.join(', ')})` } : undefined}
+      >
+        <span className="kpi-donut-center">
+          <b><AnimatedNumber value={total} duration={0.9} /></b>
+          <small>{unit}</small>
+        </span>
+      </div>
+      <div className="kpi-donut-side">
+        <ul className="kpi-donut-legend">
+          {segments.map(seg => (
+            <li key={seg.label}>
+              <i aria-hidden="true" style={{ background: seg.color }} />
+              <span>{seg.label}</span>
+              <b>{seg.value}</b>
+            </li>
+          ))}
+        </ul>
+        {side && <p className="kpi-donut-sub">{side}</p>}
+      </div>
+    </div>
+  )
+}
+
+/** KPI 覆盖进度（数据映射卡）：绑定覆盖度天然是进度语义，轨道+填充+百分比。 */
+function ProgressStat({ value, total, caption, ariaLabel }: {
+  value: number
+  total: number
+  caption?: string
+  ariaLabel: string
+}) {
+  const pct = total > 0 ? Math.round((value / total) * 100) : 0
+  return (
+    <div className="kpi-progress" role="img" aria-label={ariaLabel}>
+      <div className="kpi-progress-row">
+        <span className="kpi-progress-track"><i style={{ width: `${pct}%` }} /></span>
+        <b className="kpi-progress-pct">{pct}%</b>
+      </div>
+      {caption && <p className="kpi-progress-caption">{caption}</p>}
+    </div>
+  )
+}
+
+/** KPI 条形排行（事实流卡）：长尾分布用横向条形列表最直观，每行自带标签与数值。 */
+function BarList({ items, ariaLabel }: {
+  items: Array<{ label: string; value: number; color: string }>
+  ariaLabel: string
+}) {
+  const max = Math.max(1, ...items.map(item => item.value))
+  return (
+    <ul className="kpi-barlist" role="img" aria-label={ariaLabel}>
+      {items.map(item => (
+        <li key={item.label}>
+          <span className="kpi-barlist-label" title={item.label}>{item.label}</span>
+          <span className="kpi-barlist-track">
+            <i style={{ width: `${Math.max(4, (item.value / max) * 100)}%`, background: item.color }} />
+          </span>
+          <b className="kpi-barlist-value">{item.value}</b>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -236,15 +319,6 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
     value: count,
     color: CHART_SERIES_PALETTE[index % CHART_SERIES_PALETTE.length],
   }))
-  const mappingRest = Math.max(
-    0, ov.data.mappings.total - ov.data.mappings.bound - ov.data.mappings.nameMatch - ov.data.mappings.autoCreate,
-  )
-  const mappingSegments = [
-    { label: '显式绑定', value: ov.data.mappings.bound, color: CHART_TEAL },
-    { label: '名称匹配', value: ov.data.mappings.nameMatch, color: CHART_BLUE },
-    { label: '数据自建', value: ov.data.mappings.autoCreate, color: CHART_VIOLET },
-    { label: '未连接', value: mappingRest, color: CHART_AXIS },
-  ]
   const factSegments = factLegendEntries.map(([kind, value], index) => ({
     label: FACT_KIND_LABEL[kind] || kind,
     value,
@@ -326,18 +400,16 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
           <KpiCell index={1} reduce={reduce} onClick={() => onGoGroup('data')}>
             <span className="kpi-label">当前实例投影</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
-            <strong>
-              <AnimatedNumber value={ov.data.instances} duration={0.9} /><small>对象实例</small>
-              <span className="kpi-side-stat">链接实例 {ov.data.linkInstances}</span>
-            </strong>
-            {sourceSegments.length > 0
-              ? (
-                <ComposeBar
-                  segments={sourceSegments}
-                  ariaLabel={`实例来源构成：${sourceSegments.map(seg => `${seg.label} ${seg.value}`).join('、')}`}
-                />
-              )
-              : <em className="kpi-status is-neutral"><CircleAlert size={15} />暂无实例数据</em>}
+            <DonutStat
+              segments={sourceSegments}
+              total={ov.data.instances}
+              unit="对象实例"
+              side={`链接实例 ${ov.data.linkInstances}`}
+              ariaLabel={`实例来源构成：${sourceSegments.map(seg => `${seg.label} ${seg.value}`).join('、')}${sourceSegments.length > 0 ? '' : '，暂无实例数据'}；链接实例 ${ov.data.linkInstances}`}
+            />
+            {sourceSegments.length === 0 && (
+              <em className="kpi-status is-neutral"><CircleAlert size={15} />暂无实例数据</em>
+            )}
             <em className="kpi-status is-neutral"><Database size={15} />实例与当前结构对账，来源可追</em>
           </KpiCell>
           <KpiCell index={2} reduce={reduce} onClick={() => onGoGroup('data-mapping')}>
@@ -345,9 +417,11 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
             <strong><AnimatedNumber value={ov.data.mappings.bound} duration={0.9} /><small>/ {ov.data.mappings.total} 已显式绑定</small></strong>
             {ov.data.mappings.total > 0 && (
-              <ComposeBar
-                segments={mappingSegments}
-                ariaLabel={`映射连接构成：显式绑定 ${ov.data.mappings.bound}、名称匹配 ${ov.data.mappings.nameMatch}、数据自建 ${ov.data.mappings.autoCreate}、未连接 ${mappingRest}`}
+              <ProgressStat
+                value={ov.data.mappings.bound}
+                total={ov.data.mappings.total}
+                caption={`名称匹配 ${ov.data.mappings.nameMatch} · 数据自建 ${ov.data.mappings.autoCreate}`}
+                ariaLabel={`映射绑定覆盖 ${Math.round((ov.data.mappings.bound / ov.data.mappings.total) * 100)}%：已显式绑定 ${ov.data.mappings.bound}，共 ${ov.data.mappings.total} 条`}
               />
             )}
             <em className={`kpi-status ${ov.data.mappings.total === 0 ? 'is-neutral' : ov.data.mappings.bound === ov.data.mappings.total ? '' : 'is-warning'}`}>
@@ -364,8 +438,8 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             <strong><AnimatedNumber value={ov.facts.total} duration={0.9} /><small>条</small></strong>
             {factSegments.length > 0
               ? (
-                <ComposeBar
-                  segments={factSegments}
+                <BarList
+                  items={factSegments}
                   ariaLabel={`当前版本事实流按类型：${factSegments.map(seg => `${seg.label} ${seg.value}`).join('、')}${factRestCount > 0 ? `等，共 ${ov.facts.total} 条` : ''}`}
                 />
               )
