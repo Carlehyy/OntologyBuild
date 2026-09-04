@@ -312,7 +312,7 @@
   border: 0;
   border-right: 1px solid var(--ov-border);
   background: transparent;
-  padding: clamp(8px, 1.3vh, 18px) 20px clamp(6px, 1vh, 15px);
+  padding: clamp(12px, 1.8vh, 22px) 20px clamp(10px, 1.5vh, 18px);
   text-align: left;
   cursor: pointer;
   transition: background .18s ease;
@@ -332,21 +332,50 @@
 .kpi-cell:last-child { border-right: 0; }
 .kpi-cell:hover { background: #fbfdff; }
 .kpi-label { color: #3d485d; font-size: 14px; font-weight: 700; }
-.kpi-cell strong { display: flex; min-height: clamp(22px, 3.6vh, 40px); align-items: baseline; gap: 8px; margin-top: clamp(4px, 0.9vh, 10px); color: #172033; font-size: clamp(24px, 3.2vh, 34px); font-weight: 730; line-height: 1; }
+.kpi-cell strong { display: flex; min-height: clamp(22px, 3.6vh, 40px); align-items: baseline; gap: 8px; margin-top: clamp(6px, 1.2vh, 14px); color: #172033; font-size: clamp(24px, 3.2vh, 34px); font-weight: 730; line-height: 1; }
 .kpi-cell strong small { color: #47566d; font-size: 14px; font-weight: 600; }
-/* hero 行右侧次级指标（如"链接实例 36"）：不与主数争夺权重，但保持同基线可扫读 */
-.kpi-side-stat { min-width: 0; overflow: hidden; margin-left: auto; color: #667388; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-/* KPI 构成条 + 图例合一：分段条只做形状，文字即图例；紧凑双行，高度与原迷你图相当 */
-.kpi-compose { min-height: clamp(34px, 4.6vh, 50px); margin: clamp(3px, .7vh, 8px) 0 4px; }
-.kpi-compose-bar { display: flex; height: 6px; gap: 2px; }
+/* —— 构成条（结构卡）：分段横条 + 图例合一，文字即图例 —— */
+.kpi-compose { margin: clamp(6px, 1.2vh, 14px) 0 4px; }
+.kpi-compose-bar { display: flex; height: 8px; gap: 2px; }
 .kpi-compose-bar.is-empty { border-radius: 4px; background: #edf1f5; }
 .kpi-compose-bar > i { min-width: 3px; transition: width .3s ease; }
-.kpi-compose-legend { display: flex; flex-wrap: wrap; gap: 3px 12px; margin: 7px 0 0; padding: 0; list-style: none; }
-.kpi-compose-legend li { display: inline-flex; min-width: 0; align-items: center; gap: 5px; font-size: 11px; line-height: 1.5; }
-.kpi-compose-legend li i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 2px; }
+.kpi-compose-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 10px 0 0; padding: 0; list-style: none; }
+.kpi-compose-legend li { display: inline-flex; min-width: 0; align-items: center; gap: 6px; font-size: 11.5px; line-height: 1.5; }
+.kpi-compose-legend li i { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 2.5px; }
 .kpi-compose-legend li span { color: #667388; white-space: nowrap; }
 .kpi-compose-legend li b { color: #33415c; font-weight: 700; font-variant-numeric: tabular-nums; }
-.kpi-status { display: inline-flex; min-height: 20px; width: fit-content; max-width: 100%; align-items: center; gap: 5px; margin-top: auto; color: #15957f; font-size: 11px; font-style: normal; font-weight: 600; }
+/* —— 环形占比（实例卡）：中心总数 + 右侧竖排图例 —— */
+.kpi-donut-row { display: flex; align-items: center; gap: 16px; margin: clamp(6px, 1.2vh, 14px) 0 4px; }
+.kpi-donut { position: relative; width: clamp(52px, 7.6vh, 76px); height: clamp(52px, 7.6vh, 76px); flex: 0 0 auto; border-radius: 50%; }
+.kpi-donut.is-empty { background: #edf1f5; }
+.kpi-donut::after { content: ''; position: absolute; inset: 7px; border-radius: 50%; background: #fff; }
+.kpi-donut-center { position: absolute; inset: 0; z-index: 1; display: grid; place-content: center; text-align: center; }
+.kpi-donut-center b { color: #172033; font-size: clamp(18px, 2.4vh, 24px); font-weight: 730; line-height: 1; }
+.kpi-donut-center small { margin-top: 3px; color: #667388; font-size: 10px; }
+.kpi-donut-side { display: flex; min-width: 0; flex: 1 1 auto; flex-direction: column; }
+.kpi-donut-legend { display: flex; flex-direction: column; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.kpi-donut-legend li { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: 11.5px; }
+.kpi-donut-legend li i { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 2.5px; }
+.kpi-donut-legend li span { min-width: 0; overflow: hidden; color: #667388; text-overflow: ellipsis; white-space: nowrap; }
+.kpi-donut-legend li b { margin-left: auto; color: #33415c; font-weight: 700; font-variant-numeric: tabular-nums; }
+.kpi-donut-sub { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid #edf1f5; color: #667388; font-size: 11px; }
+/* —— 覆盖进度（映射卡）：轨道+填充+百分比，绑定覆盖天然是进度语义 —— */
+.kpi-progress { margin: clamp(6px, 1.2vh, 14px) 0 4px; }
+.kpi-progress-row { display: flex; align-items: center; gap: 10px; }
+.kpi-progress-track { position: relative; height: 8px; flex: 1 1 auto; overflow: hidden; border-radius: 999px; background: #edf1f5; }
+.kpi-progress-track i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--ov-teal); transition: width .3s ease; }
+.kpi-progress-pct { min-width: 36px; color: #0e7c6d; font-size: 12.5px; font-weight: 700; text-align: right; }
+.kpi-progress-caption { margin: 9px 0 0; color: #667388; font-size: 11px; }
+/* —— 条形排行（事实流卡）：长尾分布逐行条形，标签与数值同行可扫读 —— */
+.kpi-barlist { display: flex; flex-direction: column; gap: clamp(5px, .9vh, 8px); margin: clamp(6px, 1.2vh, 14px) 0 4px; padding: 0; list-style: none; }
+.kpi-barlist li { display: grid; min-width: 0; grid-template-columns: 36px minmax(0, 1fr) 30px; align-items: center; gap: 8px; }
+.kpi-barlist-label { overflow: hidden; color: #667388; font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.kpi-barlist-track { position: relative; height: 8px; border-radius: 999px; background: #f1f5f8; }
+.kpi-barlist-track i { position: absolute; inset: 0 auto 0 0; min-width: 3px; border-radius: inherit; }
+.kpi-barlist .kpi-barlist-value { color: #33415c; font-size: 11.5px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+.kpi-status { display: inline-flex; min-height: 20px; width: fit-content; max-width: 100%; align-items: center; gap: 5px; margin-top: clamp(8px, 1.4vh, 14px); color: #15957f; font-size: 11px; font-style: normal; font-weight: 600; }
+/* 末行脚注钉在卡底；前面的状态行紧跟内容 */
+.kpi-status:last-child { margin-top: auto; }
 .kpi-status.is-warning { color: #ef8b17; }
 .kpi-status.is-neutral { color: #607086; font-weight: 500; }
 /* 状态行 + 释义脚注两行并存时：脚注（末行）仍钉在卡底，状态行紧随内容之后 */
@@ -379,7 +408,7 @@
 .runtime-trend { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; margin-top: clamp(6px, 1.2vh, 10px); padding: 9px 12px 8px; border: 1px solid #e8edf2; border-radius: 11px; background-color: #fbfcfd; background-image: radial-gradient(circle at 88% -20%, rgba(52, 120, 238, .08), transparent 42%), radial-gradient(circle at 5% 120%, rgba(9, 155, 136, .08), transparent 38%); }
 .runtime-trend-heading { display: flex; min-height: 20px; align-items: center; justify-content: space-between; gap: 12px; }
 .runtime-trend-heading > span { color: #526076; font-size: 10px; font-weight: 700; }
-.runtime-trend-chart { position: relative; min-height: clamp(96px, 13vh, 212px); flex: 1 1 auto; margin-top: 6px; }
+.runtime-trend-chart { position: relative; min-height: clamp(88px, 13vh, 212px); flex: 1 1 auto; margin-top: 6px; }
 /* ECharts 根节点用绝对定位填充层：百分比高度容器在内容尺寸计算中会被画布
    内联高度反哺成 max-content，导致网格行高失控出现整页滚动；
    绝对定位让图表只从 flex 剩余空间取高（同 mapping-overview 的做法）。 */
@@ -420,6 +449,19 @@
 .overview-error { color: #c75858; }
 .spin { animation: overview-spin 1s linear infinite; }
 @keyframes overview-spin { to { transform: rotate(360deg); } }
+
+/* 矮屏（高度受限）档：KPI 卡上下内边距与运行汇总的图表下限/间距同步收缩，
+   保证四卡新形态与健康横幅同屏不滚动；正常高度档不受影响 */
+@media (max-height: 760px) {
+  .overview-dashboard { --ov-gap: 10px; }
+  .kpi-cell { padding-top: clamp(8px, 1.4vh, 14px); padding-bottom: 9px; }
+  .runtime-summary { min-height: 0; padding: 10px 24px; }
+  .runtime-highlights { margin-top: 4px; gap: 8px; }
+  .runtime-highlight { padding: 5px 10px; grid-template-columns: 30px minmax(56px, .7fr) minmax(100px, 1fr); }
+  .runtime-highlight-icon { width: 30px; height: 30px; }
+  .runtime-trend { margin-top: 4px; padding: 6px 12px 6px; }
+  .runtime-trend-chart { min-height: 70px; }
+}
 
 @media (max-width: 1550px) {
   .overview-hero-grid { grid-template-columns: minmax(380px, var(--ov-side-width)) minmax(0, 1fr); }

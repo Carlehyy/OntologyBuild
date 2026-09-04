@@ -45,6 +45,7 @@ celerybeat-schedule
 test-results/
 /.artifacts/
 /artifacts/
+/frontend/.artifacts/
 
 # Local agent state (不进行 git 同步)
 CLAUDE.md
