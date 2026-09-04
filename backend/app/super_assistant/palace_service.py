@@ -766,6 +766,22 @@ def _batch_candidates(names: list[str]) -> list[str]:
     return candidates
 
 
+def _decode_zip_names(infos: list[zipfile.ZipInfo]) -> list[str]:
+    """修正 zip 条目名编码：未打 UTF-8 标志位的条目 zipfile 按 CP437 解码，
+    中文 Windows/macOS 产出的 zip 实际多为 GBK——按 CP437 还原字节后尝试
+    GBK，失败保持原名（生产实测中文名乱码为 τö_.md 之类）。"""
+    names: list[str] = []
+    for info in infos:
+        name = info.filename
+        if not info.flag_bits & 0x800:
+            try:
+                name = info.filename.encode("cp437").decode("gbk")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
+        names.append(name)
+    return names
+
+
 def batch_import_files(db: Session, current_user: User, archive: UploadFile) -> dict:
     """ZIP 批量导入：逐条走与 upload 相同的落盘+DB+投递流程，受配额约束。"""
     if _extension_of(archive.filename) != "zip":
@@ -784,7 +800,7 @@ def batch_import_files(db: Session, current_user: User, archive: UploadFile) -> 
     accepted = 0
     quota_reason: str | None = None
     with zf:
-        for name in _batch_candidates(zf.namelist()):
+        for name in _batch_candidates(_decode_zip_names(zf.infolist())):
             display = Path(name).name or name
             if quota_reason is not None:  # 配额超限后剩余条目全部跳过
                 skipped.append({"filename": display, "reason": quota_reason})

@@ -734,6 +734,19 @@ def test_batch_import_mixed_zip(env, monkeypatch):
     assert len(dispatched) == 2  # 只有有效条目触发抽取派发
 
 
+def test_decode_zip_names_recovers_gbk_filenames():
+    """生产回归：未打 UTF-8 标志位的中文名 zip（中文 Windows/macOS 产出）
+    按 CP437 还原字节后 GBK 解码，恢复正确文件名。"""
+    mojibake = "甲文档.md".encode("gbk").decode("cp437")
+    legacy = zipfile.ZipInfo(mojibake)  # flag_bits 默认 0（无 UTF-8 标志）
+    utf8 = zipfile.ZipInfo("乙文档.md")
+    utf8.flag_bits |= 0x800
+    ascii_only = zipfile.ZipInfo("plain.md")
+
+    names = palace_service._decode_zip_names([legacy, utf8, ascii_only])
+    assert names == ["甲文档.md", "乙文档.md", "plain.md"]
+
+
 def test_batch_import_count_cap(env, monkeypatch):
     monkeypatch.setattr(settings, "super_assistant_palace_batch_max_files", 1)
     archive = _zip_bytes({"one.md": "1", "two.md": "2", "three.md": "3"})
