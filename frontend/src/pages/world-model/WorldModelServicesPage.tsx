@@ -408,7 +408,7 @@ export default function WorldModelServicesPage() {
           value={draftStatus}
           onValueChange={value => setDraftStatus(value as StatusFilter)}
         >
-          <SelectTrigger aria-label="按服务状态筛选" className="h-9 rounded-lg">
+          <SelectTrigger aria-label="按服务状态筛选" className="h-9 w-fit min-w-32 rounded-lg">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

@@ -255,7 +255,7 @@ export default function WorldModelCallsPage() {
           value={draftResult}
           onValueChange={value => setDraftResult(value as ResultFilter)}
         >
-          <SelectTrigger aria-label="按调用结果筛选" className="h-9 rounded-lg">
+          <SelectTrigger aria-label="按调用结果筛选" className="h-9 w-fit min-w-32 rounded-lg">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
