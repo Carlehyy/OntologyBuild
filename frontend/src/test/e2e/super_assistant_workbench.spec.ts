@@ -41,13 +41,13 @@ const conversationsFixture = [
 const palaceGraphFixture = {
   available: true,
   nodes: [
-    { id: 'e-1', name: '张三', type: '人物', aliases: [], source_files: ['个人知识库.md'], mention_count: 5, match_count: 2 },
-    { id: 'e-2', name: 'ACME', type: '组织', aliases: [], source_files: ['个人知识库.md'], mention_count: 3, match_count: 1 },
-    { id: 'e-3', name: '知识图谱', type: '技术', aliases: [], source_files: ['行业研究.pdf'], mention_count: 2, match_count: 0 },
+    { id: 'e-1', name: '张三', type: '人物', aliases: [], source_files: ['个人知识库.md'], file_ids: ['pf-1'], mention_count: 5, match_count: 2 },
+    { id: 'e-2', name: 'ACME', type: '组织', aliases: [], source_files: ['个人知识库.md', '行业研究.pdf'], file_ids: ['pf-1', 'pf-2'], mention_count: 3, match_count: 1 },
+    { id: 'e-3', name: '知识图谱', type: '技术', aliases: [], source_files: ['行业研究.pdf'], file_ids: ['pf-2'], mention_count: 2, match_count: 0 },
   ],
   edges: [
-    { source: 'e-1', target: 'e-2', name: '任职', source_files: ['个人知识库.md'] },
-    { source: 'e-2', target: 'e-3', name: '使用', source_files: ['行业研究.pdf'] },
+    { source: 'e-1', target: 'e-2', name: '任职', source_files: ['个人知识库.md'], file_ids: ['pf-1'] },
+    { source: 'e-2', target: 'e-3', name: '使用', source_files: ['行业研究.pdf'], file_ids: ['pf-2'] },
   ],
   totals: { entities: 3, relations: 2 },
   truncated: false,
@@ -89,14 +89,19 @@ async function mockApis(page: Page, options: MockOptions = {}) {
   }
   const palaceFiles: Array<Record<string, unknown>> = [
     {
-      id: 'pf-1', filename: '个人知识库.md', mimeType: 'text/markdown', size: 2048,
+      id: 'pf-1', filename: '个人知识库.md', path: '', mimeType: 'text/markdown', size: 2048,
       sha256: 'pf-1-hash', extractedChars: 1800, status: 'built', error: null,
-      entityCount: 3, relationCount: 2, editable: true, createdAt: at(0, 8), updatedAt: at(0, 8),
+      entityCount: 3, relationCount: 2, editable: true, isImage: false, createdAt: at(0, 8), updatedAt: at(0, 8),
     },
     {
-      id: 'pf-2', filename: '行业研究.pdf', mimeType: 'application/pdf', size: 40960,
+      id: 'pf-2', filename: '行业研究.pdf', path: '', mimeType: 'application/pdf', size: 40960,
       sha256: 'pf-2-hash', extractedChars: 12000, status: 'building', error: null,
-      entityCount: 0, relationCount: 0, editable: false, createdAt: at(0, 9), updatedAt: at(0, 9),
+      entityCount: 0, relationCount: 0, editable: false, isImage: false, createdAt: at(0, 9), updatedAt: at(0, 9),
+    },
+    {
+      id: 'pf-img', filename: '架构图.png', path: '设计图', mimeType: 'image/png', size: 8192,
+      sha256: 'pf-img-hash', extractedChars: 0, status: 'built', error: null,
+      entityCount: 0, relationCount: 0, editable: false, isImage: true, createdAt: at(0, 7), updatedAt: at(0, 7),
     },
   ]
   const palaceUploads: string[] = []
@@ -106,6 +111,7 @@ async function mockApis(page: Page, options: MockOptions = {}) {
   const palaceReplaces: string[] = []
   const palaceBatchImports: string[] = []
   const palaceGraphSearches: string[] = []
+  const palaceRaws: string[] = []
   await page.route('**/api/**', route => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -152,11 +158,14 @@ async function mockApis(page: Page, options: MockOptions = {}) {
       if (request.method() === 'GET') return json(route, palaceFiles)
       if (request.method() === 'POST') {
         const filename = /filename="([^"]+)"/.exec(request.postData() || '')?.[1] || 'palace.bin'
+        const isImage = /\.(png|jpe?g|gif|webp)$/i.test(filename)
         palaceUploads.push(filename)
         palaceFiles.unshift({
-          id: `pf-new-${palaceUploads.length}`, filename, mimeType: 'text/markdown', size: 64,
-          sha256: 'new-hash', extractedChars: 10, status: 'pending', error: null,
-          entityCount: 0, relationCount: 0, editable: true, createdAt: at(0, 10), updatedAt: at(0, 10),
+          id: `pf-new-${palaceUploads.length}`, filename, path: '',
+          mimeType: isImage ? 'image/png' : 'text/markdown', size: 64,
+          sha256: 'new-hash', extractedChars: 10, status: isImage ? 'built' : 'pending', error: null,
+          entityCount: 0, relationCount: 0, editable: !isImage, isImage,
+          createdAt: at(0, 10), updatedAt: at(0, 10),
         })
         return json(route, palaceFiles[0], 201)
       }
@@ -176,16 +185,28 @@ async function mockApis(page: Page, options: MockOptions = {}) {
     if (path === '/api/v2/super-assistant/palace/files/batch' && request.method() === 'POST') {
       const filename = /filename="([^"]+)"/.exec(request.postData() || '')?.[1] || 'import.zip'
       palaceBatchImports.push(filename)
+      const root = filename.replace(/\.zip$/i, '')
       const created = {
-        id: 'pf-zip-1', filename: '导入笔记.md', mimeType: 'text/markdown', size: 128,
+        id: 'pf-zip-1', filename: '导入笔记.md', path: root, mimeType: 'text/markdown', size: 128,
         sha256: 'pf-zip-1-hash', extractedChars: 0, status: 'pending', error: null,
-        entityCount: 0, relationCount: 0, editable: true, createdAt: at(0, 10), updatedAt: at(0, 10),
+        entityCount: 0, relationCount: 0, editable: true, isImage: false, createdAt: at(0, 10), updatedAt: at(0, 10),
       }
       palaceFiles.unshift(created)
       return json(route, {
         created: [created],
         skipped: [{ filename: '重复笔记.md', reason: '同名文件已存在' }],
       }, 201)
+    }
+    const palaceRawMatch = path.match(/^\/api\/v2\/super-assistant\/palace\/files\/([^/]+)\/raw$/)
+    if (palaceRawMatch && request.method() === 'GET') {
+      const row = palaceFiles.find(item => item.id === palaceRawMatch[1])
+      if (!row) return json(route, { detail: '文件不存在' }, 404)
+      palaceRaws.push(palaceRawMatch[1])
+      return route.fulfill({
+        status: 200,
+        headers: { 'content-type': String(row.mimeType) },
+        body: Buffer.from('89504e470d0a1a0a-png-fake-bytes'),
+      })
     }
     const palacePreviewMatch = path.match(/^\/api\/v2\/super-assistant\/palace\/files\/([^/]+)\/preview$/)
     if (palacePreviewMatch && request.method() === 'GET') {
@@ -230,7 +251,7 @@ async function mockApis(page: Page, options: MockOptions = {}) {
         entities: [palaceGraphFixture.nodes[0], palaceGraphFixture.nodes[1]],
         relations: [{
           source: 'e-1', target: 'e-2', source_name: '张三', target_name: 'ACME',
-          name: '任职', source_files: ['个人知识库.md'],
+          name: '任职', source_files: ['个人知识库.md'], file_ids: ['pf-1'],
         }],
       })
     }
@@ -337,6 +358,7 @@ async function mockApis(page: Page, options: MockOptions = {}) {
     palaceReplaces,
     palaceBatchImports,
     palaceGraphSearches,
+    palaceRaws,
     isChatDone: () => chatDone,
   }
 }
@@ -696,7 +718,7 @@ test('重命名会话：点击其它处自动取消，Enter 仍可保存', async
   expect(JSON.parse(mocks.patchBodies[0])).toMatchObject({ title: '新名称' })
 })
 
-test('记忆宫殿：文件库/知识图谱页签与上传删除联动，外部集成为如实占位', async ({ page }) => {
+test('记忆宫殿：三栏工作台（文件树|内容|图谱），上传删除联动，外部集成为如实占位', async ({ page }) => {
   await seedAuth(page)
   const mocks = await mockApis(page)
   await page.goto('/#/super-assistant')
@@ -706,35 +728,37 @@ test('记忆宫殿：文件库/知识图谱页签与上传删除联动，外部�
   await expect(dialog).toBeVisible()
   await expect(dialog.getByRole('heading', { name: '记忆宫殿' })).toBeVisible()
 
-  // 页签骨架：默认落在文件库，知识图谱需切换
-  await expect(dialog.getByRole('tab', { name: '文件库' })).toHaveAttribute('aria-selected', 'true')
-  const filesSection = dialog.getByTestId('super-assistant-palace-files')
-  await expect(filesSection).toBeVisible()
-  await expect(filesSection.getByText('个人知识库.md')).toBeVisible()
-  await expect(filesSection.getByText('已建图')).toBeVisible()
-  await expect(filesSection.getByText('抽取中')).toBeVisible()
-  await expect(dialog.getByTestId('super-assistant-palace-graph')).toHaveCount(0)
-
-  // 图谱页签：实体/关系计数 + ECharts canvas 渲染
-  await dialog.getByRole('tab', { name: '知识图谱' }).click()
+  // 三栏同时可见：左树（含目录「设计图」）、中栏空态、右侧图谱画布
+  const filesPane = dialog.getByTestId('super-assistant-palace-files')
+  const contentPane = dialog.locator('section[aria-label="文档内容"]')
   const graphSection = dialog.getByTestId('super-assistant-palace-graph')
-  await expect(graphSection).toBeVisible()
-  await expect(graphSection.getByText(/3 实体 \/ 2 关系/)).toBeVisible()
+  await expect(filesPane).toBeVisible()
+  await expect(filesPane.getByTestId('palace-file-tree')).toBeVisible()
+  await expect(filesPane.getByText('设计图')).toBeVisible()
+  await expect(filesPane.getByText('个人知识库.md')).toBeVisible()
+  await expect(filesPane.getByText('架构图.png')).toBeVisible()
+  await expect(contentPane.getByText(/在左侧选择一个文档/)).toBeVisible()
   await expect(graphSection.locator('canvas').first()).toBeVisible()
+  await expect(graphSection.getByText(/3 实体 \/ 2 关系/)).toBeVisible()
 
-  // 回到文件库上传：隐藏 input 接线到 palace 上传端点，列表即时刷新
-  await dialog.getByRole('tab', { name: '文件库' }).click()
+  // 上传：隐藏 input 接线到 palace 上传端点，树即时刷新并自动选中新文件
   await dialog.getByTestId('palace-file-input').setInputFiles({
     name: '新文档.md', mimeType: 'text/markdown', buffer: Buffer.from('# 新文档\n张三 任职 ACME'),
   })
   await expect.poll(() => mocks.palaceUploads.length).toBe(1)
   expect(mocks.palaceUploads[0]).toBe('新文档.md')
-  await expect(filesSection.getByText('新文档.md')).toBeVisible()
+  await expect(filesPane.getByText('新文档.md')).toBeVisible()
+  // 文件名同时出现在中栏标题与预览正文，取首个（标题）
+  await expect(contentPane.getByText('新文档.md').first()).toBeVisible()
+  await expect(contentPane.getByText('待抽取')).toBeVisible()
 
-  // 删除：行内删除按钮联动 DELETE 端点并从列表消失
-  await filesSection.locator('[data-palace-file="pf-2"]').getByRole('button', { name: '删除 行业研究.pdf' }).click()
+  // 选中行业研究.pdf：中栏展示元信息（抽取中状态徽标），删除后从树中消失
+  await filesPane.locator('[data-palace-file="pf-2"]').click()
+  await expect(contentPane.getByText('行业研究.pdf')).toBeVisible()
+  await expect(contentPane.getByText('抽取中')).toBeVisible()
+  await contentPane.getByRole('button', { name: '删除 行业研究.pdf' }).click()
   await expect.poll(() => mocks.palaceDeletes.length).toBe(1)
-  await expect(filesSection.getByText('行业研究.pdf')).toHaveCount(0)
+  await expect(filesPane.getByText('行业研究.pdf')).toHaveCount(0)
 
   await page.keyboard.press('Escape')
   await expect(dialog).toHaveCount(0)
@@ -746,51 +770,62 @@ test('记忆宫殿：文件库/知识图谱页签与上传删除联动，外部�
   await expect(page.getByRole('dialog').getByText(/邮箱、GitHub/)).toBeVisible()
 })
 
-test('记忆宫殿：文本文件内嵌预览，md 在线编辑保存触发 PUT content', async ({ page }) => {
+test('记忆宫殿：选中即预览，md 在线编辑保存触发 PUT content，图片走原图预览', async ({ page }) => {
   await seedAuth(page)
   const mocks = await mockApis(page)
   await page.goto('/#/super-assistant')
 
   await page.getByRole('button', { name: '记忆宫殿' }).click()
   const dialog = page.getByRole('dialog')
-  const filesSection = dialog.getByTestId('super-assistant-palace-files')
+  const filesPane = dialog.getByTestId('super-assistant-palace-files')
+  const contentPane = dialog.locator('section[aria-label="文档内容"]')
 
-  // 预览：Eye 图标 → 内嵌展开区显示 preview.content
-  await filesSection.locator('[data-palace-file="pf-1"]').getByRole('button', { name: '预览 个人知识库.md' }).click()
+  // 树中点击 md：中栏自动加载抽取文本预览
+  await filesPane.locator('[data-palace-file="pf-1"]').click()
   await expect.poll(() => mocks.palacePreviews.length).toBe(1)
+  expect(mocks.palacePreviews[0]).toBe('pf-1')
   const previewPanel = dialog.getByTestId('palace-file-preview')
   await expect(previewPanel).toBeVisible()
   await expect(previewPanel.getByText('张三 任职 ACME，正在研究知识图谱。')).toBeVisible()
 
-  // pdf 不可预览：previewable=false 时如实提示；且非 editable 文件不渲染编辑按钮
-  await filesSection.locator('[data-palace-file="pf-2"]').getByRole('button', { name: '预览 行业研究.pdf' }).click()
-  await expect(dialog.getByTestId('palace-file-preview')).toContainText('该格式暂不支持预览')
-  await expect(filesSection.locator('[data-palace-file="pf-2"]').getByRole('button', { name: '编辑 行业研究.pdf' })).toHaveCount(0)
+  // pdf：previewable=false 时如实提示；且非 editable 文件不渲染编辑按钮
+  await filesPane.locator('[data-palace-file="pf-2"]').click()
+  await expect.poll(() => mocks.palacePreviews.length).toBe(2)
+  await expect(dialog.getByTestId('palace-file-preview')).toContainText('该格式暂不支持文本预览')
+  await expect(contentPane.getByRole('button', { name: '编辑 行业研究.pdf' })).toHaveCount(0)
 
-  // 编辑：md 文件经 preview 端点取初稿，改写后显式保存
-  await filesSection.locator('[data-palace-file="pf-1"]').getByRole('button', { name: '编辑 个人知识库.md' }).click()
+  // 图片：经鉴权 raw 端点拉取 blob 并渲染 img（不参与图谱抽取）
+  await filesPane.locator('[data-palace-file="pf-img"]').click()
+  await expect.poll(() => mocks.palaceRaws.length).toBe(1)
+  expect(mocks.palaceRaws[0]).toBe('pf-img')
+  await expect(dialog.getByTestId('palace-file-image').locator('img')).toBeVisible()
+  await expect(contentPane.getByText('已建图')).toBeVisible()
+
+  // 编辑：md 经 preview 端点取初稿，改写后显式保存
+  await filesPane.locator('[data-palace-file="pf-1"]').click()
+  await contentPane.getByRole('button', { name: '编辑 个人知识库.md' }).click()
   const editorPanel = dialog.getByTestId('palace-file-editor')
   await expect(editorPanel).toBeVisible()
-  await expect.poll(() => mocks.palacePreviews.length).toBe(3)
   const textarea = editorPanel.locator('textarea')
   await expect(textarea).toHaveValue(/张三 任职 ACME/)
   await textarea.fill('# 更新后的知识库\n\n张三 任职 ACME。')
   await editorPanel.getByRole('button', { name: '保存并重建图谱' }).click()
   await expect.poll(() => mocks.palaceContentPuts.length).toBe(1)
   expect(JSON.parse(mocks.palaceContentPuts[0])).toMatchObject({ content: '# 更新后的知识库\n\n张三 任职 ACME。' })
-  // toast 提示（渲染在弹窗外层的 ToastProvider）+ 编辑器关闭
+  // toast 提示（渲染在弹窗外层的 ToastProvider）+ 编辑器关闭回到预览
   await expect(page.getByText('已保存，图谱重建已排队')).toBeVisible()
   await expect(editorPanel).toHaveCount(0)
+  await expect(dialog.getByTestId('palace-file-preview')).toBeVisible()
 })
 
-test('记忆宫殿：ZIP 批量导入展示「导入 N 个，跳过 M 个」与跳过原因', async ({ page }) => {
+test('记忆宫殿：ZIP 导入按压缩包名建顶层目录并展示跳过原因', async ({ page }) => {
   await seedAuth(page)
   const mocks = await mockApis(page)
   await page.goto('/#/super-assistant')
 
   await page.getByRole('button', { name: '记忆宫殿' }).click()
   const dialog = page.getByRole('dialog')
-  const filesSection = dialog.getByTestId('super-assistant-palace-files')
+  const filesPane = dialog.getByTestId('super-assistant-palace-files')
 
   // mock 端点不校验真实 zip 字节：普通 buffer + .zip 文件名即可断言 batch 请求
   await dialog.getByTestId('palace-zip-input').setInputFiles({
@@ -804,17 +839,23 @@ test('记忆宫殿：ZIP 批量导入展示「导入 N 个，跳过 M 个」与�
   await expect(banner.getByText('导入 1 个，跳过 1 个')).toBeVisible()
   await banner.getByRole('button', { name: '查看跳过原因' }).click()
   await expect(banner.getByText('重复笔记.md：同名文件已存在')).toBeVisible()
-  await expect(filesSection.getByText('导入笔记.md')).toBeVisible()
+
+  // 新目录自动展开，导入的文件落在压缩包名目录下
+  await expect(filesPane.getByText('知识库备份')).toBeVisible()
+  await expect(filesPane.getByText('导入笔记.md')).toBeVisible()
+  const tree = filesPane.getByTestId('palace-file-tree')
+  await expect(tree.locator('[data-palace-file="pf-zip-1"]')).toBeVisible()
 })
 
-test('记忆宫殿：图谱关键词过滤、节点详情面板与邻域检索高亮', async ({ page }) => {
+test('记忆宫殿：图谱过滤、节点详情、点节点定位来源文档与聚焦联动', async ({ page }) => {
   await seedAuth(page)
   const mocks = await mockApis(page)
   await page.goto('/#/super-assistant')
 
   await page.getByRole('button', { name: '记忆宫殿' }).click()
   const dialog = page.getByRole('dialog')
-  await dialog.getByRole('tab', { name: '知识图谱' }).click()
+  const filesPane = dialog.getByTestId('super-assistant-palace-files')
+  const contentPane = dialog.locator('section[aria-label="文档内容"]')
   const graphSection = dialog.getByTestId('super-assistant-palace-graph')
   await expect(graphSection.locator('canvas').first()).toBeVisible()
 
@@ -835,11 +876,29 @@ test('记忆宫殿：图谱关键词过滤、节点详情面板与邻域检索�
   await expect(detail.getByText(/人物 · 提及 5 次 · 被引用 2 次/)).toBeVisible()
   await expect(detail.getByText('ACME（任职）')).toBeVisible()
 
+  // 节点↔文档联动：张三唯一来源 pf-1，点节点直接在中栏定位该文档
+  await expect(contentPane.getByText('个人知识库.md').first()).toBeVisible()
+  await expect(contentPane.getByText(/解析 1800 字符/)).toBeVisible()
+  // 来源文档 chips 可再定位
+  await expect(detail.getByTestId('palace-node-source-file').getByText('个人知识库.md')).toBeVisible()
+
+  // 选中文件后图谱默认聚焦其贡献节点，可一键切回全图
+  const focusChip = graphSection.getByTestId('palace-graph-file-focus')
+  await expect(focusChip).toBeVisible()
+  await expect(focusChip).toHaveAttribute('aria-pressed', 'true')
+  await focusChip.click()
+  await expect(focusChip).toHaveAttribute('aria-pressed', 'false')
+
   // 邻域检索：返回实体 id 集合成为高亮集，非命中节点静态降透明
   await detail.getByRole('button', { name: '在图谱中检索邻域' }).click()
   await expect.poll(() => mocks.palaceGraphSearches.length).toBe(1)
   expect(mocks.palaceGraphSearches[0]).toBe('张三')
   await expect(graphSection.getByTestId('palace-graph-highlight-count')).toContainText('2 个实体已高亮')
+
+  // 树侧再切换到 pdf：中栏联动，图谱聚焦文案随之更新
+  await filesPane.locator('[data-palace-file="pf-2"]').click()
+  await expect(contentPane.getByText('行业研究.pdf')).toBeVisible()
+  await expect(graphSection.getByTestId('palace-graph-file-focus')).toContainText('行业研究.pdf')
 })
 
 test('⌘K / Ctrl+K 唤起全局搜索面板', async ({ page }) => {

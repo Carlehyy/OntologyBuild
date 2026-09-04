@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 
 import {
   filterPalaceGraph,
+  palaceFileNodeIds,
   palaceOneHopNeighbors,
 } from '../../pages/super-assistant/components/palaceGraphFilter.ts'
 import type { PalaceGraph } from '../../api/superAssistant'
@@ -13,21 +14,21 @@ function makeGraph(): PalaceGraph {
     nodes: [
       {
         id: 'e-1', name: '张三', type: '人物', aliases: ['老张', 'San Zhang'],
-        source_files: ['简历.md'], mention_count: 4, match_count: 1,
+        source_files: ['简历.md'], file_ids: ['f-1'], mention_count: 4, match_count: 1,
       },
       {
         id: 'e-2', name: 'ACME Corp', type: '组织', aliases: [],
-        source_files: ['简历.md'], mention_count: 2, match_count: 0,
+        source_files: ['简历.md'], file_ids: ['f-1'], mention_count: 2, match_count: 0,
       },
       {
         id: 'e-3', name: '语义网', type: '技术', aliases: [],
-        source_files: ['资料.md'], mention_count: 1, match_count: 0,
+        source_files: ['资料.md'], file_ids: ['f-2', 'f-1'], mention_count: 1, match_count: 0,
       },
     ],
     edges: [
-      { source: 'e-1', target: 'e-2', name: '任职', source_files: ['简历.md'] },
-      { source: 'e-2', target: 'e-3', name: '使用', source_files: ['资料.md'] },
-      { source: 'e-1', target: 'e-404', name: '悬空', source_files: [] },
+      { source: 'e-1', target: 'e-2', name: '任职', source_files: ['简历.md'], file_ids: ['f-1'] },
+      { source: 'e-2', target: 'e-3', name: '使用', source_files: ['资料.md'], file_ids: ['f-2'] },
+      { source: 'e-1', target: 'e-404', name: '悬空', source_files: [], file_ids: [] },
     ],
     totals: { entities: 3, relations: 2 },
     truncated: false,
@@ -86,5 +87,16 @@ describe('palaceOneHopNeighbors', () => {
     ])
     assert.deepEqual(palaceOneHopNeighbors(makeGraph(), 'e-404'), [])
     assert.deepEqual(palaceOneHopNeighbors(makeGraph(), 'e-missing'), [])
+  })
+})
+
+describe('palaceFileNodeIds', () => {
+  it('返回溯源命中该文件的全部节点 id（含多来源节点）', () => {
+    assert.deepEqual([...palaceFileNodeIds(makeGraph(), 'f-1')].sort(), ['e-1', 'e-2', 'e-3'])
+    assert.deepEqual([...palaceFileNodeIds(makeGraph(), 'f-2')], ['e-3'])
+  })
+
+  it('无命中（图片/未建图文件）返回空集，调用方据此不做淡化', () => {
+    assert.deepEqual(palaceFileNodeIds(makeGraph(), 'f-img'), new Set())
   })
 })
