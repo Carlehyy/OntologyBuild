@@ -238,7 +238,7 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
             {current.http_enabled && <Button variant="ghost" onClick={() => void disable()} disabled={busy} className="mr-auto text-muted-foreground">停止 HTTP 发布</Button>}
             <Button variant="outline" onClick={() => setConfiguration(suggestedPublicationDraft(current))} disabled={busy}><RefreshCw size={14} />恢复推荐选择</Button>
             <Button variant="outline" onClick={() => void savePublication(false)} loading={busy}>保存 HTTP 配置</Button>
-            <Button onClick={() => void savePublication(true)} loading={busy}><Share2 size={14} />{current.http_enabled ? '保存并生成调用包' : '发布并生成调用包'}</Button>
+            <Button onClick={() => void savePublication(true)} loading={busy}>{!busy && <Share2 size={14} />}{current.http_enabled ? '保存并生成调用包' : '发布并生成调用包'}</Button>
           </DialogFooter>
         )}
       </DialogContent>
