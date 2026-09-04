@@ -793,7 +793,19 @@ export default function DataMappingOverview({ ontologyId }: { ontologyId: string
     return <div className="dmo-loading"><Loader2 className="animate-spin" size={20} />正在整理映射状态…</div>
   }
   if (data.isError) {
-    return <div className="dmo-loading dmo-loading--error"><AlertCircle size={20} />映射状态加载失败，请稍后重试。</div>
+    return (
+      <div className="dmo-loading dmo-loading--error">
+        <AlertCircle size={20} />
+        <span>映射状态加载失败，请稍后重试。</span>
+        <button
+          type="button"
+          onClick={() => void data.refetch()}
+          className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
+        >
+          重新加载
+        </button>
+      </div>
+    )
   }
 
   return (
