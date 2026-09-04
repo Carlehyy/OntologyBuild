@@ -1,8 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion, useReducedMotion } from 'motion/react'
-import ReactECharts from 'echarts-for-react'
-import type { EChartsOption } from 'echarts'
 import {
   Activity, CheckCircle2, ChevronRight, CircleAlert, Database,
   GitBranch, Layers, Loader2, Sparkles, Workflow, Zap,
@@ -11,14 +9,11 @@ import { apiClientV2 } from '@/api/client'
 import { AnimatedNumber } from '@/components/motion-ui/animated-number'
 import { SPRING_LAYOUT } from '@/components/motion-ui/ease'
 import {
-  CHART_AMBER, CHART_AXIS, CHART_BLUE, CHART_SERIES_PALETTE, CHART_TEAL, CHART_VIOLET,
+  CHART_AMBER, CHART_AXIS, CHART_BLUE, CHART_INDIGO, CHART_SERIES_PALETTE, CHART_TEAL, CHART_VIOLET,
 } from '@/lib/echartsTheme'
 import type { OntologyDetail } from '@/types/ontology'
 import RuntimeTrendChart from './RuntimeTrendChart'
 import VersionEvolutionCard from './VersionEvolutionCard'
-import {
-  buildMiniBarOption, buildMiniCategoryBarOption, buildMiniDonutOption, buildMiniSegmentBarOption,
-} from '../governance/charts'
 import {
   describeRuntimeRange, normalizeRuntimeRange,
   resolveRuntimeRange, RUNTIME_DIMENSION_DEFAULT, RUNTIME_DIMENSION_OPTIONS,
@@ -105,10 +100,40 @@ function KpiCell({ index, reduce, onClick, children }: {
   )
 }
 
-function KpiSpark({ option, label }: { option: EChartsOption; label: string }) {
+/** KPI 卡构成条：一根分段横条 + 图例合一。分段与图例出自同一个列表，
+   文字即图例，杜绝「图是一套、文字是另一套」的对不上；纯 CSS 实现，
+   高度稳定不依赖画布。值为 0 的段不上条，但图例保留完整口径。 */
+function ComposeBar({ segments, ariaLabel }: {
+  segments: Array<{ label: string; value: number; color: string }>
+  ariaLabel: string
+}) {
+  const total = segments.reduce((sum, seg) => sum + seg.value, 0)
   return (
-    <div className="kpi-spark" role="img" aria-label={label}>
-      <ReactECharts option={option} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} notMerge />
+    <div className="kpi-compose" role="img" aria-label={ariaLabel}>
+      <div className={`kpi-compose-bar ${total === 0 ? 'is-empty' : ''}`}>
+        {total > 0 && segments.filter(seg => seg.value > 0).map((seg, index, list) => (
+          <i
+            key={seg.label}
+            style={{
+              background: seg.color,
+              width: `${(seg.value / total) * 100}%`,
+              borderTopLeftRadius: index === 0 ? 4 : 0,
+              borderBottomLeftRadius: index === 0 ? 4 : 0,
+              borderTopRightRadius: index === list.length - 1 ? 4 : 0,
+              borderBottomRightRadius: index === list.length - 1 ? 4 : 0,
+            }}
+          />
+        ))}
+      </div>
+      <ul className="kpi-compose-legend">
+        {segments.map(seg => (
+          <li key={seg.label}>
+            <i aria-hidden="true" style={{ background: seg.color }} />
+            <span>{seg.label}</span>
+            <b>{seg.value}</b>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -191,37 +216,40 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
   const ov = overviewQuery.data
   // 只把"需要用户处理"的建议（warn/action）摆上总览；info 级属于常规引导，不打扰。
   const healthItems = (ov.health ?? []).filter(item => item.level !== 'info')
-  const factParts = Object.entries(ov.facts.byKind)
-    .filter(([, value]) => value > 0)
-    .sort(([a], [b]) => (FACT_KIND_LABEL[a] ? 0 : 1) - (FACT_KIND_LABEL[b] ? 0 : 1))
+  // 构成条与图例同源同序：一个列表同时生成条与图例，杜绝口径不一致。
   const sourceEntries = Object.entries(ov.data.instancesBySource).sort((a, b) => b[1] - a[1])
-  // KPI 迷你图：数据全部来自 overview 现有只读字段；空数据不渲染图表，卡片保持收敛。
-  const structureSpark = buildMiniCategoryBarOption([
-    { value: ov.model.objectTypes, color: CHART_TEAL },
-    { value: ov.model.linkTypes, color: CHART_BLUE },
-    { value: ov.model.actions, color: CHART_VIOLET },
-    { value: ov.model.functions, color: CHART_AMBER },
-  ])
-  const sourceSpark = ov.data.instances > 0
-    ? buildMiniDonutOption(sourceEntries.map(([, count], index) => ({
-      value: count, color: CHART_SERIES_PALETTE[index % CHART_SERIES_PALETTE.length],
-    })))
-    : null
+  const factEntries = Object.entries(ov.facts.byKind)
+    .filter(([, value]) => value > 0)
+    .sort((a, b) => b[1] - a[1])
+  const factLegendEntries = factEntries.slice(0, 4)
+  const factRestCount = Math.max(0, factEntries.length - factLegendEntries.length)
+  // KPI 构成条：数据全部来自 overview 现有只读字段。
+  const structureSegments = [
+    { label: '对象', value: ov.model.objectTypes, color: CHART_TEAL },
+    { label: '关系', value: ov.model.linkTypes, color: CHART_BLUE },
+    { label: '动作', value: ov.model.actions, color: CHART_VIOLET },
+    { label: '函数', value: ov.model.functions, color: CHART_AMBER },
+    { label: '哨兵', value: ov.model.sentinels.total, color: CHART_INDIGO },
+  ]
+  const sourceSegments = sourceEntries.map(([source, count], index) => ({
+    label: SOURCE_LABEL[source] || source,
+    value: count,
+    color: CHART_SERIES_PALETTE[index % CHART_SERIES_PALETTE.length],
+  }))
   const mappingRest = Math.max(
     0, ov.data.mappings.total - ov.data.mappings.bound - ov.data.mappings.nameMatch - ov.data.mappings.autoCreate,
   )
-  const mappingSpark = ov.data.mappings.total > 0
-    ? buildMiniSegmentBarOption([
-      { value: ov.data.mappings.bound, color: CHART_TEAL },
-      { value: ov.data.mappings.nameMatch, color: CHART_BLUE },
-      { value: ov.data.mappings.autoCreate, color: CHART_VIOLET },
-      { value: mappingRest, color: CHART_AXIS },
-    ])
-    : null
-  const factTopEntries = [...factParts].sort(([, a], [, b]) => b - a).slice(0, 4)
-  const factsSpark = ov.facts.total > 0
-    ? buildMiniBarOption(factTopEntries.map(([, value]) => value), CHART_VIOLET)
-    : null
+  const mappingSegments = [
+    { label: '显式绑定', value: ov.data.mappings.bound, color: CHART_TEAL },
+    { label: '名称匹配', value: ov.data.mappings.nameMatch, color: CHART_BLUE },
+    { label: '数据自建', value: ov.data.mappings.autoCreate, color: CHART_VIOLET },
+    { label: '未连接', value: mappingRest, color: CHART_AXIS },
+  ]
+  const factSegments = factLegendEntries.map(([kind, value], index) => ({
+    label: FACT_KIND_LABEL[kind] || kind,
+    value,
+    color: CHART_SERIES_PALETTE[index % CHART_SERIES_PALETTE.length],
+  }))
   // 近7天用 overview 自带的 daily7d 桶；其余维度信 runtime-summary 的显式时间窗，
   // 两者都只呈现后端按日返回的数据，没有就如实呈现空态，绝不把汇总堆到某一天。
   const runtimeDays = runtimeDimension === 'last7'
@@ -286,33 +314,41 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             <span className="kpi-label">当前发布结构</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
             <strong><AnimatedNumber value={ov.model.objectTypes} duration={0.9} /><small>对象实体</small></strong>
-            <p>关系 {ov.model.linkTypes} · 动作 {ov.model.actions} · 函数 {ov.model.functions} · 哨兵 {ov.model.sentinels.total}</p>
-            <KpiSpark option={structureSpark} label="当前发布结构构成迷你柱状图：对象、关系、动作、函数数量" />
+            <ComposeBar
+              segments={structureSegments}
+              ariaLabel={`当前发布结构构成：对象 ${ov.model.objectTypes}、关系 ${ov.model.linkTypes}、动作 ${ov.model.actions}、函数 ${ov.model.functions}、哨兵 ${ov.model.sentinels.total}`}
+            />
             {ov.model.actions === 0 && (
               <em className="kpi-status is-neutral"><CircleAlert size={15} />暂无动作类型</em>
             )}
-            <em className="kpi-status is-blue"><Layers size={15} />结构冻结于版本，演进可对照</em>
+            <em className="kpi-status is-neutral"><Layers size={15} />结构冻结于版本，演进可对照</em>
           </KpiCell>
           <KpiCell index={1} reduce={reduce} onClick={() => onGoGroup('data')}>
             <span className="kpi-label">当前实例投影</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
-            <strong><AnimatedNumber value={ov.data.instances} duration={0.9} /><small>对象实例</small></strong>
-            <p>链接实例 {ov.data.linkInstances}</p>
-            {sourceSpark && (
-              <KpiSpark option={sourceSpark} label={`实例来源占比迷你环形图：${sourceEntries.map(([source, count]) => `${SOURCE_LABEL[source] || source} ${count}`).join('、')}`} />
-            )}
-            <em className="kpi-status is-neutral">
-              {sourceEntries.map(([source, count]) => `${SOURCE_LABEL[source] || source} ${count}`).join(' · ') || '暂无实例数据'}
-            </em>
-            <em className="kpi-status is-teal"><Database size={15} />实例与当前结构对账，来源可追</em>
+            <strong>
+              <AnimatedNumber value={ov.data.instances} duration={0.9} /><small>对象实例</small>
+              <span className="kpi-side-stat">链接实例 {ov.data.linkInstances}</span>
+            </strong>
+            {sourceSegments.length > 0
+              ? (
+                <ComposeBar
+                  segments={sourceSegments}
+                  ariaLabel={`实例来源构成：${sourceSegments.map(seg => `${seg.label} ${seg.value}`).join('、')}`}
+                />
+              )
+              : <em className="kpi-status is-neutral"><CircleAlert size={15} />暂无实例数据</em>}
+            <em className="kpi-status is-neutral"><Database size={15} />实例与当前结构对账，来源可追</em>
           </KpiCell>
           <KpiCell index={2} reduce={reduce} onClick={() => onGoGroup('data-mapping')}>
             <span className="kpi-label">数据映射</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
             <strong><AnimatedNumber value={ov.data.mappings.bound} duration={0.9} /><small>/ {ov.data.mappings.total} 已显式绑定</small></strong>
-            <p>名称匹配 {ov.data.mappings.nameMatch} · 数据自建 {ov.data.mappings.autoCreate}</p>
-            {mappingSpark && (
-              <KpiSpark option={mappingSpark} label="数据映射绑定状态迷你分段条：已绑定、名称匹配、数据自建与余量" />
+            {ov.data.mappings.total > 0 && (
+              <ComposeBar
+                segments={mappingSegments}
+                ariaLabel={`映射连接构成：显式绑定 ${ov.data.mappings.bound}、名称匹配 ${ov.data.mappings.nameMatch}、数据自建 ${ov.data.mappings.autoCreate}、未连接 ${mappingRest}`}
+              />
             )}
             <em className={`kpi-status ${ov.data.mappings.total === 0 ? 'is-neutral' : ov.data.mappings.bound === ov.data.mappings.total ? '' : 'is-warning'}`}>
               {ov.data.mappings.total === 0
@@ -326,11 +362,18 @@ export default function OverviewDashboard({ ontologyId, ontology, onGoGroup }: {
             <span className="kpi-label">当前版本事实流</span>
             <ChevronRight size={13} className="kpi-go" aria-hidden="true" />
             <strong><AnimatedNumber value={ov.facts.total} duration={0.9} /><small>条</small></strong>
-            <p>{factParts.slice(0, 3).map(([kind, value]) => `${FACT_KIND_LABEL[kind] || kind} ${value}`).join(' · ') || '尚无事实记录'}</p>
-            {factsSpark && (
-              <KpiSpark option={factsSpark} label="当前版本事实流按类型迷你柱状图" />
+            {factSegments.length > 0
+              ? (
+                <ComposeBar
+                  segments={factSegments}
+                  ariaLabel={`当前版本事实流按类型：${factSegments.map(seg => `${seg.label} ${seg.value}`).join('、')}${factRestCount > 0 ? `等，共 ${ov.facts.total} 条` : ''}`}
+                />
+              )
+              : <em className="kpi-status is-neutral"><CircleAlert size={15} />尚无事实记录</em>}
+            {factRestCount > 0 && (
+              <em className="kpi-status is-neutral">另有 {factRestCount} 个类型未列出，合计 {ov.facts.total} 条</em>
             )}
-            <em className="kpi-status is-purple"><GitBranch size={15} />追加式留痕，可回放与追溯</em>
+            <em className="kpi-status is-neutral"><GitBranch size={15} />追加式留痕，可回放与追溯</em>
           </KpiCell>
         </section>
 

@@ -1,15 +1,10 @@
-/* 治理页与详情总览页共用的 echarts 纯 option 构建:与组件解耦,可在 node:test 中验证。
+/* 治理页 KPI 卡共用的 echarts 纯 option 构建:与组件解耦,可在 node:test 中验证。
    - buildMiniBarOption / buildMiniLineOption:KPI 卡近 7 日迷你图(无轴火花线)
-   - buildMiniCategoryBarOption / buildMiniDonutOption / buildMiniSegmentBarOption:
-     详情总览 KPI 卡的构成/占比迷你图(无轴无提示,供固定浅色作用域使用)
    - buildKpiSparkSeries:四个 KPI 卡的近 7 日序列装配(全部来自现有只读数据)
-   近 7 日运行趋势主图已与总览页统一复用 tabs/RuntimeTrendChart,不再另有组合图。 */
+   总览页 KPI 卡已改为纯 CSS 构成条+图例(tabs/OverviewDashboard 的 ComposeBar),
+   原分类柱/环形/分段条 builder 随之退役。 */
 import type { EChartsOption } from 'echarts'
 import type { DailySparkDatum } from './storyModel.ts'
-import {
-  CHART_AXIS,
-  CHART_SPLIT,
-} from '../../../../lib/echartsTheme.ts'
 
 /** KPI 卡迷你柱状火花线:无轴无网格,只看 7 天起伏。 */
 export function buildMiniBarOption(values: number[], color: string): EChartsOption {
@@ -53,76 +48,6 @@ export function buildMiniLineOption(values: Array<number | null>, color: string)
       },
       data: values,
     }],
-  }
-}
-
-/** KPI 卡迷你分类柱:每根柱独立取色(结构构成等),无轴无提示。 */
-export function buildMiniCategoryBarOption(entries: Array<{ value: number; color: string }>): EChartsOption {
-  return {
-    animation: false,
-    grid: { left: 0, right: 0, top: 2, bottom: 0 },
-    xAxis: { type: 'category', show: false, data: entries.map((_, index) => index) },
-    yAxis: { type: 'value', show: false, min: 0 },
-    tooltip: { show: false },
-    series: [{
-      type: 'bar',
-      barMaxWidth: 10,
-      silent: true,
-      data: entries.map(entry => ({
-        value: entry.value,
-        itemStyle: { color: entry.color, borderRadius: [1.5, 1.5, 0, 0], opacity: 0.85 },
-      })),
-    }],
-  }
-}
-
-/** KPI 卡迷你环形占比图:中心镂空,用于实例来源/构成占比;空数据画灰环占位。 */
-export function buildMiniDonutOption(entries: Array<{ value: number; color: string }>): EChartsOption {
-  const total = entries.reduce((sum, entry) => sum + entry.value, 0)
-  return {
-    animation: false,
-    grid: { left: 0, right: 0, top: 0, bottom: 0 },
-    tooltip: { show: false },
-    series: [{
-      type: 'pie',
-      radius: ['64%', '100%'],
-      center: ['50%', '50%'],
-      avoidLabelOverlap: false,
-      label: { show: false },
-      labelLine: { show: false },
-      silent: true,
-      data: total > 0
-        ? entries.map(entry => ({ value: entry.value, itemStyle: { color: entry.color } }))
-        : [{ value: 1, itemStyle: { color: CHART_SPLIT } }],
-    }],
-  }
-}
-
-/** KPI 卡迷你横向分段条:单行堆叠占比(绑定状态/覆盖度),余量建议传中性灰。
-   首尾分段做圆角端点;空数据画整条灰占位。 */
-export function buildMiniSegmentBarOption(segments: Array<{ value: number; color: string }>): EChartsOption {
-  const total = segments.reduce((sum, segment) => sum + segment.value, 0)
-  const active = segments.filter(segment => segment.value > 0)
-  return {
-    animation: false,
-    grid: { left: 0, right: 0, top: 0, bottom: 0 },
-    xAxis: { type: 'value', show: false, min: 0, max: Math.max(total, 1) },
-    yAxis: { type: 'category', show: false, data: [''] },
-    tooltip: { show: false },
-    series: (total > 0 ? active : [{ value: 1, color: CHART_AXIS }]).map((segment, index, list) => ({
-      type: 'bar' as const,
-      stack: 'segment',
-      barWidth: 8,
-      silent: true,
-      data: [segment.value],
-      itemStyle: {
-        color: segment.color,
-        borderRadius: list.length === 1 ? 4
-          : index === 0 ? [4, 0, 0, 4]
-          : index === list.length - 1 ? [0, 4, 4, 0]
-          : 0,
-      },
-    })),
   }
 }
 
