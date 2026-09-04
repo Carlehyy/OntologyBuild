@@ -768,16 +768,24 @@ def _batch_candidates(names: list[str]) -> list[str]:
 
 def _decode_zip_names(infos: list[zipfile.ZipInfo]) -> list[str]:
     """修正 zip 条目名编码：未打 UTF-8 标志位的条目 zipfile 按 CP437 解码，
-    中文 Windows/macOS 产出的 zip 实际多为 GBK——按 CP437 还原字节后尝试
-    GBK，失败保持原名（生产实测中文名乱码为 τö_.md 之类）。"""
+    而实际字节可能是 GBK（中文 Windows）也可能是 UTF-8（macOS Info-ZIP 不打
+    标志位）。按 CP437 还原字节后先试 UTF-8 再试 GBK——两类字节串对另一种
+    编码严格解码均失败，顺序无歧义（生产实测两种平台的中文名都会乱码）。"""
     names: list[str] = []
     for info in infos:
         name = info.filename
         if not info.flag_bits & 0x800:
             try:
-                name = info.filename.encode("cp437").decode("gbk")
-            except (UnicodeEncodeError, UnicodeDecodeError):
-                pass
+                raw = info.filename.encode("cp437")
+            except UnicodeEncodeError:
+                raw = None
+            if raw is not None:
+                for encoding in ("utf-8", "gbk"):
+                    try:
+                        name = raw.decode(encoding)
+                        break
+                    except UnicodeDecodeError:
+                        continue
         names.append(name)
     return names
 
