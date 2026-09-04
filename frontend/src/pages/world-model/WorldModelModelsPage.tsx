@@ -401,7 +401,7 @@ export default function WorldModelModelsPage() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">全部引擎类型</SelectItem>
+            <SelectItem value="__all__">全部引擎类型</SelectItem>
             {ENGINE_TYPE_OPTIONS.map(item => (
               <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
             ))}
