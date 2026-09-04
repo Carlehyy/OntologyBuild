@@ -72,6 +72,8 @@ export interface PalaceFile {
   error: string | null
   entityCount: number
   relationCount: number
+  /** md/txt 纯文本文件支持在线编辑（PUT content），其余格式只读 */
+  editable: boolean
   createdAt: string
   updatedAt: string
 }
@@ -83,6 +85,8 @@ export interface PalaceGraphNode {
   aliases: string[]
   source_files: string[]
   mention_count: number
+  /** 检索/对话中被引用命中的次数（graph/search 与图谱详情展示口径） */
+  match_count: number
 }
 
 export interface PalaceGraphEdge {
@@ -99,6 +103,37 @@ export interface PalaceGraph {
   edges: PalaceGraphEdge[]
   totals: { entities: number; relations: number }
   truncated: boolean
+}
+
+/** 单文件预览（GET preview）：previewable=false 表示该格式不支持预览 */
+export interface PalaceFilePreview {
+  file: PalaceFile
+  content: string
+  truncated: boolean
+  previewable: boolean
+}
+
+/** ZIP 批量导入结果（POST files/batch）：created 为新建文件，skipped 为跳过项及原因 */
+export interface PalaceImportResult {
+  created: PalaceFile[]
+  skipped: Array<{ filename: string; reason: string }>
+}
+
+/** 图谱邻域检索返回的关系边（自带两端实体名，供高亮与邻域展示） */
+export interface PalaceGraphSearchEdge {
+  source: string
+  target: string
+  source_name: string
+  target_name: string
+  name: string
+  source_files: string[]
+}
+
+/** 图谱邻域检索（GET graph/search）：available=false 表示图谱服务暂不可用 */
+export interface PalaceGraphSearchResult {
+  available: boolean
+  entities: PalaceGraphNode[]
+  relations: PalaceGraphSearchEdge[]
 }
 
 export interface SkillFile {
@@ -324,7 +359,23 @@ export const superAssistantApi = {
     apiClientV2.delete(`/super-assistant/palace/files/${fileId}`),
   rebuildPalaceFile: (fileId: string) =>
     apiClientV2.post<{ dispatched: boolean }>(`/super-assistant/palace/files/${fileId}/rebuild`),
+  palaceFilePreview: (fileId: string, maxChars = 60000) =>
+    apiClientV2.get<PalaceFilePreview>(`/super-assistant/palace/files/${fileId}/preview`, { params: { max_chars: maxChars } }),
+  updatePalaceFileContent: (fileId: string, content: string) =>
+    apiClientV2.put<PalaceFile>(`/super-assistant/palace/files/${fileId}/content`, { content }),
+  replacePalaceFile: (fileId: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return apiClientV2.post<PalaceFile>(`/super-assistant/palace/files/${fileId}/replace`, form)
+  },
+  importPalaceZip: (archive: File) => {
+    const form = new FormData()
+    form.append('archive', archive)
+    return apiClientV2.post<PalaceImportResult>('/super-assistant/palace/files/batch', form)
+  },
   palaceGraph: () => apiClientV2.get<PalaceGraph>('/super-assistant/palace/graph'),
+  palaceGraphSearch: (q: string) =>
+    apiClientV2.get<PalaceGraphSearchResult>('/super-assistant/palace/graph/search', { params: { q } }),
   streamChat,
   cancel: (id: string) => apiClientV2.post(`/super-assistant/conversations/${id}/cancel`),
   decideToolRun: (id: string, decision: 'approve' | 'deny') =>

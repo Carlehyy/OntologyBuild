@@ -27,6 +27,7 @@ SUPER_ASSISTANT_REFLECT_MICRO_SUBJECT = "super_assistant.reflect.micro"
 SUPER_ASSISTANT_REFLECT_FULL_SUBJECT = "super_assistant.reflect.full"
 SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT = "super_assistant.reflect.focused"
 SUPER_ASSISTANT_PALACE_EXTRACT_SUBJECT = "super_assistant.palace.extract"
+SUPER_ASSISTANT_PALACE_CONSOLIDATE_SUBJECT = "super_assistant.palace.consolidate"
 ASSISTANT_EVAL_AUTOPILOT_SUBJECT = "assistant_evaluation.autopilot.cycle"
 # 流的全部订阅主题：扩容只能追加，旧 subject 与旧 durable 保持不变
 PIPELINE_STREAM_SUBJECTS = (
@@ -41,6 +42,8 @@ PIPELINE_STREAM_SUBJECTS = (
     ASSISTANT_EVAL_AUTOPILOT_SUBJECT,
     # 只能追加：记忆宫殿图谱抽取（超级助手）
     SUPER_ASSISTANT_PALACE_EXTRACT_SUBJECT,
+    # 只能追加：记忆宫殿图谱定期聚类合并（超级助手）
+    SUPER_ASSISTANT_PALACE_CONSOLIDATE_SUBJECT,
 )
 
 # 进程内缓存：每个进程只在首次派发时确保一次 Stream
@@ -192,6 +195,17 @@ def dispatch_super_assistant_palace_extract(owner_id: str, file_id: str) -> None
     dispatch_task(SUPER_ASSISTANT_PALACE_EXTRACT_SUBJECT, {
         "owner_id": owner_id,
         "file_id": file_id,
+    })
+
+
+def dispatch_super_assistant_palace_consolidate(owner_id: str) -> None:
+    """记忆宫殿聚类合并派发入口（每日调度 / 手动触发共用）。
+
+    payload 约定：owner_id 必填。合并本身幂等（重复实体已收敛时候选
+    检测为空，直接空跑）；失败等下一调度周期重试，无需 Msg-Id 级防重。
+    """
+    dispatch_task(SUPER_ASSISTANT_PALACE_CONSOLIDATE_SUBJECT, {
+        "owner_id": owner_id,
     })
 
 

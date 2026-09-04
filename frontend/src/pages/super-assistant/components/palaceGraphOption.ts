@@ -1,9 +1,10 @@
 /**
- * 记忆宫殿知识图谱的 ECharts option 组装（纯函数，单测见 test/unit/superAssistant/）。
+ * 记忆宫殿知识图谱的 ECharts option 组装（纯函数，单测见 test/unit/）。
  *
  * 颜色与动效一律取 platform echartsTheme；图类型写法对齐 ontology-model 的
  * networkGraphOption 先例（graph series + 邻接高亮 + hideOverlap），差异是
  * 记忆图谱无预计算坐标，采用力导向布局（layout:'force'，仓库首例）。
+ * highlightIds 邻域检索命中集以静态样式降透明呈现（非命中 0.15 + label 隐藏）。
  */
 import type { EChartsOption } from 'echarts'
 
@@ -29,39 +30,56 @@ export function palaceGraphCategories(): { name: string }[] {
   return KNOWN_TYPES.map(name => ({ name }))
 }
 
-export function palaceGraphOption(graph: PalaceGraph): EChartsOption {
+/**
+ * 组装图谱 option。highlightIds 提供时进入「邻域高亮」静态样式：
+ * 命中节点保持正常样式，其余节点 itemStyle opacity 0.15 且 label 隐藏，
+ * 两端未全部命中的边降透明（参考 blur 配置，但作为静态样式实现，不依赖 emphasis）。
+ */
+export function palaceGraphOption(graph: PalaceGraph, highlightIds?: Set<string> | string[]): EChartsOption {
   const base = baseChartOption()
-  const nodeData = graph.nodes.map(node => ({
-    id: node.id,
-    name: node.name,
-    category: categoryIndexOf(node.type),
-    value: node.mention_count,
-    symbolSize: Math.min(46, 14 + Math.sqrt(Math.max(1, node.mention_count)) * 6),
-    nodeType: node.type,
-    nodeSources: (node.source_files || []).slice(0, 4).join('、'),
-  }))
+  const highlight = highlightIds
+    ? (highlightIds instanceof Set ? highlightIds : new Set(highlightIds))
+    : null
+  const hasHighlight = highlight !== null && highlight.size > 0
+  const nodeData = graph.nodes.map(node => {
+    const dimmed = hasHighlight && !highlight.has(node.id)
+    return {
+      id: node.id,
+      name: node.name,
+      category: categoryIndexOf(node.type),
+      value: node.mention_count,
+      matchCount: node.match_count,
+      symbolSize: Math.min(46, 14 + Math.sqrt(Math.max(1, node.mention_count)) * 6),
+      nodeType: node.type,
+      nodeSources: (node.source_files || []).slice(0, 4).join('、'),
+      ...(dimmed ? { itemStyle: { opacity: 0.15 }, label: { show: false } } : {}),
+    }
+  })
   const idSet = new Set(graph.nodes.map(node => node.id))
   const linkData = graph.edges
     .filter(edge => idSet.has(edge.source) && idSet.has(edge.target))
-    .map(edge => ({
-      source: edge.source,
-      target: edge.target,
-      lineStyle: { width: 1.4, opacity: 0.55, curveness: 0.12 },
-      edgeLabel: edge.name,
-      edgeSources: (edge.source_files || []).slice(0, 4).join('、'),
-      label: {
-        show: false,
-        formatter: edge.name,
-        fontSize: 9,
-        color: CHART_TEXT,
-        backgroundColor: CHART_TOOLTIP_BG,
-        borderColor: CHART_TOOLTIP_BORDER,
-        borderWidth: 0.8,
-        borderRadius: 999,
-        padding: [2, 5] as [number, number],
-      },
-      emphasis: { label: { show: true } },
-    }))
+    .map(edge => {
+      const dimmed = hasHighlight && !(highlight.has(edge.source) && highlight.has(edge.target))
+      return {
+        source: edge.source,
+        target: edge.target,
+        lineStyle: { width: 1.4, opacity: dimmed ? 0.08 : 0.55, curveness: 0.12 },
+        edgeLabel: edge.name,
+        edgeSources: (edge.source_files || []).slice(0, 4).join('、'),
+        label: {
+          show: false,
+          formatter: edge.name,
+          fontSize: 9,
+          color: CHART_TEXT,
+          backgroundColor: CHART_TOOLTIP_BG,
+          borderColor: CHART_TOOLTIP_BORDER,
+          borderWidth: 0.8,
+          borderRadius: 999,
+          padding: [2, 5] as [number, number],
+        },
+        emphasis: { label: { show: true } },
+      }
+    })
 
   const option = {
     ...base,
@@ -86,8 +104,10 @@ export function palaceGraphOption(graph: PalaceGraph): EChartsOption {
         if (params.dataType === 'edge') {
           return `${data.edgeLabel || ''}${data.edgeSources ? `<br/>来源：${data.edgeSources}` : ''}`
         }
+        const mentions = typeof data.value === 'number' ? `<br/>提及 ${data.value} 次` : ''
+        const matches = typeof data.matchCount === 'number' ? `<br/>被引用 ${data.matchCount} 次` : ''
         const sources = data.nodeSources ? `<br/>来源：${data.nodeSources}` : ''
-        return `${data.name || ''}（${data.nodeType || '其他'}）${sources}`
+        return `${data.name || ''}（${data.nodeType || '其他'}）${mentions}${matches}${sources}`
       },
     },
     color: CHART_SERIES_PALETTE,

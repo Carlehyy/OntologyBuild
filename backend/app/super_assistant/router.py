@@ -22,8 +22,10 @@ from app.super_assistant import (
 )
 from app.super_assistant import mcp_server_service
 from app.super_assistant import memory_service
+from app.super_assistant import palace_consolidate
 from app.super_assistant import palace_service
 from app.super_assistant import reflection_service
+from app.super_assistant.palace_service import PalaceContentUpdate
 from app.super_assistant import skill_service as _skill_service
 from app.super_assistant.models import (
     SuperAssistantConversation,
@@ -276,6 +278,26 @@ async def upload_palace_file(file: UploadFile = File(...),
                              db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return palace_service.upload_file(db, current_user, file)
 
+@router.post("/palace/files/batch", status_code=201)
+def batch_import_palace_files(archive: UploadFile = File(...),
+                              db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return palace_service.batch_import_files(db, current_user, archive)
+
+@router.put("/palace/files/{file_id}/content")
+def update_palace_file_content(file_id: str, body: PalaceContentUpdate,
+                               db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return palace_service.update_file_content(db, current_user.id, file_id, body.content)
+
+@router.post("/palace/files/{file_id}/replace")
+def replace_palace_file(file_id: str, file: UploadFile = File(...),
+                        db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return palace_service.replace_file(db, current_user.id, file_id, file)
+
+@router.get("/palace/files/{file_id}/preview")
+def preview_palace_file(file_id: str, max_chars: int = Query(60000, le=200000),
+                        db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return palace_service.preview_file(db, current_user.id, file_id, max_chars)
+
 @router.delete("/palace/files/{file_id}", status_code=204)
 def delete_palace_file(file_id: str, db: Session = Depends(get_db),
                        current_user: User = Depends(get_current_user)):
@@ -290,6 +312,16 @@ def rebuild_palace_file(file_id: str, db: Session = Depends(get_db),
 def palace_graph_view(db: Session = Depends(get_db),
                       current_user: User = Depends(get_current_user)):
     return palace_service.graph_overview(db, current_user.id)
+
+@router.get("/palace/graph/search")
+def search_palace_graph(q: str = Query(...), db: Session = Depends(get_db),
+                        current_user: User = Depends(get_current_user)):
+    return palace_service.search_graph(db, current_user.id, q)
+
+@router.post("/palace/graph/consolidate")
+def consolidate_palace_graph(db: Session = Depends(get_db),
+                             current_user: User = Depends(get_current_user)):
+    return palace_consolidate.run_consolidation(db, current_user.id)
 
 
 @router.post("/tool-runs/{tool_run_id}/decision")

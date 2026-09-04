@@ -147,6 +147,19 @@ class Settings(BaseSettings):
     # reuses the same workspace implementation with its own root. Empty root
     # resolves to <uploads_dir>/super-assistant-palace.
     super_assistant_palace_workspace_root: str = ""
+    # 记忆宫殿配额与保护（均可经环境变量覆盖）：单用户文件数上限、总存储
+    # 上限（MB）、在途抽取数上限（owner 的 pending+building 文件数）、每小时
+    # 抽取次数上限（palace builds 表最近 1 小时行数）、单次 ZIP 批量导入的
+    # 文件数上限。超限统一在 palace_service._check_quotas 抛 429。
+    super_assistant_palace_max_files_per_user: int = 500
+    super_assistant_palace_max_total_mb: int = 2048
+    super_assistant_palace_max_in_flight: int = 20
+    super_assistant_palace_max_builds_per_hour: int = 60
+    super_assistant_palace_batch_max_files: int = 100
+    # 图谱抽取并发（进程级，与 executor 全局信号量隔离，reflect 始终有保底名额）
+    super_assistant_palace_extract_concurrency: int = 1
+    # 每天 03:00 的实体聚类合并定时任务开关（手动触发端点不受此开关影响）
+    super_assistant_palace_consolidate_enabled: bool = True
     steward_browser_cdp_url: str = "http://localhost:9222"
     steward_browser_timeout_seconds: int = 30
     steward_browser_max_captures: int = 300

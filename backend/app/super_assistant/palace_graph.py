@@ -33,6 +33,12 @@ def normalize_name(name: str) -> str:
     return cleaned.casefold()
 
 
+def _dedupe_str_list(items: Any) -> list[str]:
+    """读取侧列表去重（保序）：merge_entities 合并允许列表内重复条目，
+    owner_graph/search 返回前在 Python 侧收敛，前端不做去重逻辑。"""
+    return list(dict.fromkeys(str(item) for item in items or [] if str(item)))
+
+
 def entity_key(owner_id: str, name: str) -> str:
     return f"{owner_id}:{normalize_name(name)}"
 
@@ -153,6 +159,108 @@ def remove_file_graph(owner_id: str, file_id: str, filename: str) -> None:
         service.close()
 
 
+def record_match_counts(owner_id: str, keys: list[str]) -> None:
+    """检索命中计数：被选为锚点的实体 match_count +1（效果闭环信号）。
+
+    merge_key 本身携带 owner 前缀，Cypher 无需再按 owner 过滤；调用方
+    （search）须自行消化异常——计数失败只记日志，不得影响检索结果。
+    """
+    if not keys:
+        return
+    service = _service()
+    try:
+        service.run_cypher(
+            f"""
+            UNWIND $keys AS k
+            MATCH (n:{_NODE_LABEL} {{merge_key: k}})
+            SET n.match_count = coalesce(n.match_count, 0) + 1
+            """,
+            {"keys": list(keys)},
+        )
+    finally:
+        service.close()
+    logger.debug("记忆宫殿命中计数完成（owner=%s，锚点 %d 个）", owner_id, len(keys))
+
+
+def owner_entities(owner_id: str, limit: int = 2000) -> list[dict[str, Any]]:
+    """该用户全部实体的精简行（merge_key/name/type/aliases/计数），供
+    consolidate 候选检测离线拉取；按提及数降序，limit 保护超大图。"""
+    service = _service()
+    try:
+        return service.run_cypher(
+            f"""
+            MATCH (n:{_NODE_LABEL} {{owner_id: $owner_id}})
+            WITH n ORDER BY coalesce(n.mention_count, 0) DESC, n.name ASC
+            LIMIT $limit
+            RETURN n.merge_key AS merge_key, n.name AS name, n.type AS type,
+                   coalesce(n.aliases, []) AS aliases,
+                   coalesce(n.source_files, []) AS source_files,
+                   coalesce(n.mention_count, 0) AS mention_count
+            """,
+            {"owner_id": owner_id, "limit": int(limit)},
+        )
+    finally:
+        service.close()
+
+
+def merge_entities(owner_id: str, canonical_key: str, absorbed_keys: list[str]) -> int:
+    """把 absorbed 实体并入 canonical 实体；返回实际吸收的实体数。
+
+    semantica EntityMerger 的 Neo4j 简化契约，三条语句按序执行：
+
+    1. 属性合并：absorbed 的 name 入 aliases、mention/match 计数累加、
+       溯源列表（file_ids/source_files）拼接——列表内允许重复条目，
+       读取侧（owner_graph/search）由 _dedupe_str_list 收敛；
+    2. 边重定向：absorbed 上的 RELATED 复制为 canonical 出边（SET nr =
+       properties(r) 保留全部属性）；与已有边重复可接受，查询侧 DISTINCT；
+    3. DETACH DELETE absorbed 节点。
+    """
+    keys = [key for key in absorbed_keys if key and key != canonical_key]
+    if not keys:
+        return 0
+    params = {"owner_id": owner_id, "canonical": canonical_key, "absorbed": keys}
+    service = _service()
+    try:
+        merged = service.run_cypher(
+            f"""
+            MATCH (a:{_NODE_LABEL} {{merge_key: $canonical}})
+            MATCH (b:{_NODE_LABEL}) WHERE b.merge_key IN $absorbed
+            SET a.aliases = [x IN coalesce(a.aliases, []) + [b.name] + coalesce(b.aliases, [])
+                             WHERE x IS NOT NULL AND x <> a.name],
+                a.mention_count = coalesce(a.mention_count, 0) + coalesce(b.mention_count, 0),
+                a.match_count = coalesce(a.match_count, 0) + coalesce(b.match_count, 0),
+                a.file_ids = [x IN coalesce(a.file_ids, []) + coalesce(b.file_ids, [])
+                              WHERE x IS NOT NULL],
+                a.source_files = [x IN coalesce(a.source_files, []) + coalesce(b.source_files, [])
+                                  WHERE x IS NOT NULL],
+                a.updated_at = datetime()
+            RETURN count(b) AS c
+            """,
+            params,
+        )
+        service.run_cypher(
+            f"""
+            MATCH (a:{_NODE_LABEL} {{merge_key: $canonical}})
+            MATCH (b:{_NODE_LABEL}) WHERE b.merge_key IN $absorbed
+            MATCH (b)-[r:{_REL_TYPE}]-(other:{_NODE_LABEL})
+            WHERE other.merge_key <> $canonical
+            CREATE (a)-[nr:{_REL_TYPE}]->(other)
+            SET nr = properties(r)
+            """,
+            params,
+        )
+        service.run_cypher(
+            f"""
+            MATCH (b:{_NODE_LABEL}) WHERE b.merge_key IN $absorbed
+            DETACH DELETE b
+            """,
+            params,
+        )
+    finally:
+        service.close()
+    return int((merged or [{}])[0].get("c") or 0)
+
+
 def owner_graph(owner_id: str, *, node_limit: int = 300) -> dict[str, Any]:
     """图谱可视化数据：按提及数取前 N 节点，再取这些节点之间的边。"""
     service = _service()
@@ -165,7 +273,8 @@ def owner_graph(owner_id: str, *, node_limit: int = 300) -> dict[str, Any]:
             RETURN n.merge_key AS id, n.name AS name, n.type AS type,
                    coalesce(n.aliases, []) AS aliases,
                    coalesce(n.source_files, []) AS source_files,
-                   coalesce(n.mention_count, 0) AS mention_count
+                   coalesce(n.mention_count, 0) AS mention_count,
+                   coalesce(n.match_count, 0) AS match_count
             """,
             {"owner_id": owner_id, "limit": int(node_limit)},
         )
@@ -192,6 +301,8 @@ def owner_graph(owner_id: str, *, node_limit: int = 300) -> dict[str, Any]:
             )
     finally:
         service.close()
+    for node in nodes:
+        node["source_files"] = _dedupe_str_list(node.get("source_files"))
     return {
         "nodes": nodes,
         "edges": edges,
@@ -224,12 +335,15 @@ def search(
             LIMIT $limit
             RETURN n.merge_key AS id, n.name AS name, n.type AS type,
                    coalesce(n.aliases, []) AS aliases,
-                   coalesce(n.source_files, []) AS source_files
+                   coalesce(n.source_files, []) AS source_files,
+                   coalesce(n.match_count, 0) AS match_count
             """,
             {"owner_id": owner_id, "limit": int(max_scan)},
         )
     finally:
         service.close()
+    for row in rows:
+        row["source_files"] = _dedupe_str_list(row.get("source_files"))
 
     def score(row: dict[str, Any]) -> int:
         name = str(row.get("name") or "").casefold()
@@ -250,7 +364,13 @@ def search(
     if not anchors:
         return {"entities": [], "relations": []}
 
+    # 命中计数是效果闭环信号，属尽力而为：失败只记日志，绝不影响检索结果
     anchor_ids = [row["id"] for row in anchors]
+    try:
+        record_match_counts(owner_id, anchor_ids)
+    except Exception:
+        logger.warning("记忆宫殿检索命中计数失败（owner=%s）", owner_id, exc_info=True)
+
     service = _service()
     try:
         relations = service.run_cypher(
@@ -266,6 +386,8 @@ def search(
         )
     finally:
         service.close()
+    for relation in relations:
+        relation["source_files"] = _dedupe_str_list(relation.get("source_files"))
     neighbor_ids = list(dict.fromkeys(
         [item["source"] for item in relations] + [item["target"] for item in relations]
     ))

@@ -13,19 +13,25 @@
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
 import threading
+import zipfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException, UploadFile
+from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.auth.models import User
 from app.data_channel.pipeline_tasks.dispatch import dispatch_super_assistant_palace_extract
-from app.data_channel.steward.workspace import WorkspaceError
+from app.data_channel.steward.workspace import SessionWorkspace, WorkspaceError
+from app.model_configs.selector import llm_call_kwargs, select_llm_model_config, usage_tags
 from app.shared.config import settings
 from app.shared.database import SessionLocal
 from app.super_assistant import palace_graph, palace_workspace, provider, reflection_service
@@ -163,6 +169,102 @@ def extract_chunk(call_kwargs: dict, chunk: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 别名级实体归一（抽取路径内，semantica DuplicateDetector 的最小实现）
+# ---------------------------------------------------------------------------
+
+
+def _alias_host(entity: dict, candidates: list[dict], alive: set[str]) -> dict | None:
+    """为 entity 寻找并入目标：alias 规范名命中对方的 name 或 alias 规范名。"""
+    alias_names = {
+        normalized
+        for alias in (entity.get("aliases") or [])
+        if (normalized := palace_graph.normalize_name(alias))
+    }
+    if not alias_names:
+        return None
+    for candidate in candidates:
+        if candidate is entity or candidate["key"] not in alive:
+            continue
+        names = {palace_graph.normalize_name(candidate.get("name") or "")}
+        names.update(
+            palace_graph.normalize_name(alias) for alias in (candidate.get("aliases") or [])
+        )
+        if alias_names & names:
+            return candidate
+    return None
+
+
+def _absorb_entity(host: dict, absorbed: dict) -> None:
+    """把 absorbed 并入 host（就地变更）：mentions 相加、name 保留更长者、
+    aliases 并集去重——被并入者的 name 一并记为别名，保住其可检索性，
+    也让关系端点的归一重定向有据可查。
+    """
+    absorbed_name = str(absorbed.get("name") or "")
+    if len(absorbed_name) > len(str(host.get("name") or "")):
+        host["name"] = absorbed_name
+    host["mentions"] = int(host.get("mentions") or 0) + int(absorbed.get("mentions") or 0)
+    seen: set[str] = set()
+    final_name = palace_graph.normalize_name(host.get("name"))
+    aliases: list[str] = []
+    for value in [*(host.get("aliases") or []), absorbed_name, *(absorbed.get("aliases") or [])]:
+        text = str(value or "").strip()
+        normalized = palace_graph.normalize_name(text)
+        if not text or not normalized or normalized == final_name or normalized in seen:
+            continue
+        seen.add(normalized)
+        aliases.append(text)
+    host["aliases"] = aliases
+
+
+def _merge_alias_entities(entities: list[dict]) -> list[dict]:
+    """别名级实体归一（纯函数）：A 的某个 alias 规范名 == B 的 name（或 B 的
+    alias）规范名时把 A 并入 B。单遍扫描存活者，迭代至收敛，至多 3 轮防环。
+    """
+    merged = [dict(item) for item in entities if isinstance(item, dict) and item.get("key")]
+    for _ in range(3):
+        alive = {item["key"] for item in merged}
+        changed = False
+        for entity in merged:
+            if entity["key"] not in alive:
+                continue
+            host = _alias_host(entity, merged, alive)
+            if host is None:
+                continue
+            _absorb_entity(host, entity)
+            alive.discard(entity["key"])
+            changed = True
+        if not changed:
+            break
+        merged = [item for item in merged if item["key"] in alive]
+    return merged
+
+
+def _redirect_relation_endpoints(
+    owner_id: str,
+    raw_relations: list[dict],
+    entity_map: dict[str, dict],
+) -> list[dict]:
+    """归一后被并入实体的旧名出现在关系端点时，改写为幸存者的规范名。"""
+    lookup: dict[str, str] = {}
+    for entity in entity_map.values():
+        display = str(entity.get("name") or "")
+        for token in [display, *(entity.get("aliases") or [])]:
+            normalized = palace_graph.normalize_name(token)
+            if normalized and normalized not in lookup:
+                lookup[normalized] = display
+    rewritten: list[dict] = []
+    for item in raw_relations:
+        source = _clip_str(item.get("source"), 80)
+        target = _clip_str(item.get("target"), 80)
+        if source and palace_graph.entity_key(owner_id, source) not in entity_map:
+            source = lookup.get(palace_graph.normalize_name(source), source)
+        if target and palace_graph.entity_key(owner_id, target) not in entity_map:
+            target = lookup.get(palace_graph.normalize_name(target), target)
+        rewritten.append({**item, "source": source, "target": target})
+    return rewritten
+
+
+# ---------------------------------------------------------------------------
 # 幂等锚点（与 reflection_runs 同一模式）
 # ---------------------------------------------------------------------------
 
@@ -220,6 +322,32 @@ def _new_build(db: Session, owner_id: str, file_id: str, content_hash: str) -> S
 # 抽取执行（NATS handler / 内联降级共用）
 # ---------------------------------------------------------------------------
 
+_PALACE_MODEL_TAG = "super_assistant_palace"
+
+
+def _palace_call_kwargs(db: Session) -> dict:
+    """记忆宫殿抽取的模型选型：super_assistant_palace 专用 tag 优先。
+
+    selector 的 purpose_tags 只是偏好而非硬过滤——tag 未命中时返回默认
+    文本模型，仅在没有任何启用中的文本模型时返回 None；因此命中判定必须
+    校验返回配置确实携带 palace tag。未命中回退 super_assistant tag（与
+    反思链路共用语义），两者都无可用配置时抛 ProviderError。
+    """
+    palace_config = select_llm_model_config(
+        db=db, purpose_tags=(_PALACE_MODEL_TAG,), allow_vlm=False,
+    )
+    if palace_config is not None and _PALACE_MODEL_TAG in usage_tags(palace_config):
+        call_kwargs = llm_call_kwargs(palace_config)
+        if call_kwargs:
+            return call_kwargs
+    model_config = select_llm_model_config(
+        db=db, purpose_tags=("super_assistant",), allow_vlm=False,
+    )
+    call_kwargs = llm_call_kwargs(model_config)
+    if not call_kwargs:
+        raise provider.ProviderError("没有可用的文本模型，请先到“模型配置”启用一个 LLM")
+    return call_kwargs
+
 
 def run_build(db: Session, owner_id: str, file_id: str) -> SuperAssistantPalaceBuild:
     """执行一次图谱抽取；异常记入 build/file 行，不向上抛。"""
@@ -246,7 +374,7 @@ def run_build(db: Session, owner_id: str, file_id: str) -> SuperAssistantPalaceB
         chunks = split_chunks(text)
         if not chunks:
             raise ValueError("文件没有可抽取的文本（解析结果为空）")
-        call_kwargs = reflection_service._reflection_call_kwargs(db)
+        call_kwargs = _palace_call_kwargs(db)
         entity_map: dict[str, dict] = {}
         raw_relations: list[dict] = []
         parsed_chunks = 0
@@ -270,6 +398,15 @@ def run_build(db: Session, owner_id: str, file_id: str) -> SuperAssistantPalaceB
             )
         if parsed_chunks == 0:
             raise ValueError(f"全部文档片段抽取失败：{last_chunk_error or '模型输出无法解析'}")
+        # 别名级归一：跨块累计完成后、关系解析之前；幸存者按最终 name 重算
+        # merge key（key 与展示名一致），被并入实体的旧名出现在关系端点时
+        # 重定向到幸存者，避免关系被累计实体集丢弃
+        merged_map: dict[str, dict] = {}
+        for entity in _merge_alias_entities(list(entity_map.values())):
+            entity["key"] = palace_graph.entity_key(owner_id, str(entity.get("name") or ""))
+            merged_map[entity["key"]] = entity
+        entity_map = merged_map
+        raw_relations = _redirect_relation_endpoints(owner_id, raw_relations, entity_map)
         relations = _resolve_relations(owner_id, entity_map, raw_relations)
 
         # 增量重建：仅此前建过图的文件需要先剥离旧贡献（首建为无操作跳过）
@@ -333,6 +470,91 @@ def request_build(file_row: SuperAssistantPalaceFile) -> dict:
 # HTTP service 层
 # ---------------------------------------------------------------------------
 
+# 在线编辑只放开纯文本类（md/txt），其余类型走替换上传
+_EDITABLE_EXTENSIONS = ("md", "txt")
+
+
+class PalaceContentUpdate(BaseModel):
+    content: str = Field(max_length=5_000_000)
+
+
+def _extension_of(filename: str | None) -> str:
+    return os.path.splitext(str(filename or ""))[1].lower().lstrip(".")
+
+
+def _is_editable(filename: str | None) -> bool:
+    return _extension_of(filename) in _EDITABLE_EXTENSIONS
+
+
+def _allowed_extensions() -> set[str]:
+    return {
+        item.strip().lower()
+        for item in settings.allowed_upload_extensions.split(",")
+        if item.strip()
+    }
+
+
+def _validate_upload_extension(filename: str | None) -> None:
+    extension = _extension_of(filename)
+    if extension not in _allowed_extensions():
+        raise HTTPException(
+            400,
+            (
+                f"不支持的文件类型 .{extension}"
+                f"（允许: {settings.allowed_upload_extensions}）"
+            ),
+        )
+
+
+def _check_quotas(db: Session, owner_id: str, *, extra_bytes: int = 0, extra_files: int = 0) -> None:
+    """上传/替换/在线编辑/重建/批量入口的统一配额闸，超限抛 429。
+
+    extra_files/extra_bytes 是本次操作将新增的文件数与字节数（批量导入逐条
+    调用，DB 计数随提交实时增长）。每个调用方都会触发新的抽取，在途与
+    每小时配额按本次 +1 预留；PUT 内容未变的幂等路径不经过本闸。
+    """
+    max_files = int(settings.super_assistant_palace_max_files_per_user)
+    if extra_files > 0:
+        current = (
+            db.query(SuperAssistantPalaceFile)
+            .filter(SuperAssistantPalaceFile.owner_id == owner_id)
+            .count()
+        )
+        if current + extra_files > max_files:
+            raise HTTPException(429, f"记忆宫殿文件数已达上限（{max_files}），请删除部分文件后再试")
+    if extra_bytes > 0:
+        total = int(
+            db.query(func.coalesce(func.sum(SuperAssistantPalaceFile.size), 0))
+            .filter(SuperAssistantPalaceFile.owner_id == owner_id)
+            .scalar()
+            or 0
+        )
+        max_total_mb = int(settings.super_assistant_palace_max_total_mb)
+        if total + extra_bytes > max_total_mb * 1024 * 1024:
+            raise HTTPException(429, f"记忆宫殿存储已达上限（{max_total_mb} MB）")
+    max_in_flight = int(settings.super_assistant_palace_max_in_flight)
+    in_flight = (
+        db.query(SuperAssistantPalaceFile)
+        .filter(
+            SuperAssistantPalaceFile.owner_id == owner_id,
+            SuperAssistantPalaceFile.status.in_(("pending", "building")),
+        )
+        .count()
+    )
+    if in_flight + max(1, extra_files) > max_in_flight:
+        raise HTTPException(429, f"抽取队列已满（{max_in_flight} 个进行中），请等待完成后再提交")
+    max_builds = int(settings.super_assistant_palace_max_builds_per_hour)
+    recent_builds = (
+        db.query(SuperAssistantPalaceBuild)
+        .filter(
+            SuperAssistantPalaceBuild.owner_id == owner_id,
+            SuperAssistantPalaceBuild.created_at >= datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+        .count()
+    )
+    if recent_builds >= max_builds:
+        raise HTTPException(429, f"抽取任务过于频繁（每小时上限 {max_builds} 次），请稍后再试")
+
 
 def _file_dict(row: SuperAssistantPalaceFile) -> dict:
     return {
@@ -346,6 +568,7 @@ def _file_dict(row: SuperAssistantPalaceFile) -> dict:
         "error": row.error,
         "entityCount": row.entity_count,
         "relationCount": row.relation_count,
+        "editable": _is_editable(row.filename),
         "createdAt": row.created_at,
         "updatedAt": row.updated_at,
     }
@@ -368,36 +591,18 @@ def _owned_file(db: Session, owner_id: str, file_id: str) -> SuperAssistantPalac
     return row
 
 
-def upload_file(db: Session, current_user: User, upload: UploadFile) -> dict:
-    extension = os.path.splitext(upload.filename or "")[1].lower().lstrip(".")
-    allowed = {
-        item.strip().lower()
-        for item in settings.allowed_upload_extensions.split(",")
-        if item.strip()
-    }
-    if extension not in allowed:
-        raise HTTPException(
-            400,
-            (
-                f"不支持的文件类型 .{extension}"
-                f"（允许: {settings.allowed_upload_extensions}）"
-            ),
-        )
-    owner_id = current_user.id
-    workspace = palace_workspace.user_workspace(owner_id)
+def _discard_artifact(workspace: SessionWorkspace, dir_id: str, artifact_id: str) -> None:
+    """配额拒绝后回滚工作区文件，尽量不留孤儿 artifact。"""
     try:
-        artifact = workspace.save_stream(
-            palace_workspace.user_dir_id(owner_id),
-            upload.filename or "palace-file",
-            upload.file,
-            source="palace-upload",
-            mime_type=upload.content_type,
-        )
-    except WorkspaceError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        workspace.delete_file(dir_id, artifact_id)
+    except WorkspaceError:
+        logger.warning("记忆宫殿配额回滚删除工作区文件失败（artifact=%s）", artifact_id)
+
+
+def _create_file_row(db: Session, owner_id: str, artifact: dict, *, fallback_name: str) -> SuperAssistantPalaceFile:
     row = SuperAssistantPalaceFile(
         owner_id=owner_id,
-        filename=str(artifact.get("filename") or upload.filename or "palace-file"),
+        filename=str(artifact.get("filename") or fallback_name),
         artifact_id=str(artifact.get("id")),
         mime_type=str(artifact.get("mimeType") or "application/octet-stream"),
         size=int(artifact.get("size") or 0),
@@ -409,7 +614,206 @@ def upload_file(db: Session, current_user: User, upload: UploadFile) -> dict:
     db.commit()
     db.refresh(row)
     request_build(row)
+    return row
+
+
+def upload_file(db: Session, current_user: User, upload: UploadFile) -> dict:
+    _validate_upload_extension(upload.filename)
+    owner_id = current_user.id
+    dir_id = palace_workspace.user_dir_id(owner_id)
+    workspace = palace_workspace.user_workspace(owner_id)
+    try:
+        artifact = workspace.save_stream(
+            dir_id,
+            upload.filename or "palace-file",
+            upload.file,
+            source="palace-upload",
+            mime_type=upload.content_type,
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    try:
+        _check_quotas(db, owner_id, extra_bytes=int(artifact.get("size") or 0), extra_files=1)
+    except HTTPException:
+        _discard_artifact(workspace, dir_id, str(artifact.get("id")))
+        raise
+    return _file_dict(_create_file_row(
+        db, owner_id, artifact, fallback_name=upload.filename or "palace-file",
+    ))
+
+
+def _replace_artifact_and_rebuild(
+    db: Session,
+    row: SuperAssistantPalaceFile,
+    data: bytes,
+    *,
+    filename: str,
+    source: str,
+    mime_type: str | None,
+) -> None:
+    """workspace 侧删旧存新 + DB 行重置为 pending + 投递抽取。"""
+    # 先卡大小再删旧 artifact，避免落盘失败把文件行留在坏状态
+    if len(data) > int(settings.max_upload_mb) * 1024 * 1024:
+        raise HTTPException(422, f"文件超过大小限制 {settings.max_upload_mb}MB")
+    workspace = palace_workspace.user_workspace(row.owner_id)
+    dir_id = palace_workspace.user_dir_id(row.owner_id)
+    try:
+        workspace.delete_file(dir_id, row.artifact_id)
+        artifact = workspace.save_bytes(dir_id, filename, data, source=source, mime_type=mime_type)
+    except WorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    row.filename = str(artifact.get("filename") or filename)
+    row.artifact_id = str(artifact.get("id"))
+    row.mime_type = str(artifact.get("mimeType") or row.mime_type or "application/octet-stream")
+    row.size = int(artifact.get("size") or 0)
+    row.sha256 = str(artifact.get("sha256") or "")
+    row.extracted_chars = int(artifact.get("extractedChars") or 0)
+    row.status = "pending"
+    row.error = None
+    db.commit()
+    db.refresh(row)
+    request_build(row)
+
+
+def update_file_content(db: Session, owner_id: str, file_id: str, content: str) -> dict:
+    """在线编辑（仅 md/txt）：内容未变时幂等返回，不重建也不消耗配额。"""
+    row = _owned_file(db, owner_id, file_id)
+    if not _is_editable(row.filename):
+        raise HTTPException(400, "该文件类型不支持在线编辑，请使用替换上传")
+    data = content.encode("utf-8")
+    if hashlib.sha256(data).hexdigest() == row.sha256:
+        return _file_dict(row)
+    _check_quotas(db, owner_id, extra_bytes=len(data) - row.size)
+    _replace_artifact_and_rebuild(
+        db, row, data, filename=row.filename, source="palace-edit", mime_type=row.mime_type,
+    )
     return _file_dict(row)
+
+
+def _read_capped(stream, *, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = stream.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(422, f"文件超过大小限制 {settings.max_upload_mb}MB")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def replace_file(db: Session, owner_id: str, file_id: str, upload: UploadFile) -> dict:
+    """替换上传（任意白名单类型）：保留文件行身份，重置抽取状态。"""
+    row = _owned_file(db, owner_id, file_id)
+    _validate_upload_extension(upload.filename)
+    data = _read_capped(upload.file, max_bytes=int(settings.max_upload_mb) * 1024 * 1024)
+    _check_quotas(db, owner_id, extra_bytes=len(data) - row.size)
+    _replace_artifact_and_rebuild(
+        db, row, data,
+        filename=upload.filename or row.filename,
+        source="palace-replace",
+        mime_type=upload.content_type,
+    )
+    return _file_dict(row)
+
+
+def preview_file(db: Session, owner_id: str, file_id: str, max_chars: int) -> dict:
+    """内容预览：口径与会话附件 preview 一致（截断标记 + previewable）。"""
+    row = _owned_file(db, owner_id, file_id)
+    try:
+        content = palace_workspace.user_workspace(owner_id).extracted_text(
+            palace_workspace.user_dir_id(owner_id), row.artifact_id, max_chars,
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {
+        "file": _file_dict(row),
+        "content": content,
+        "truncated": len(content) >= max_chars,
+        "previewable": bool(content),
+    }
+
+
+def _batch_candidates(names: list[str]) -> list[str]:
+    """过滤批量导入条目：跳过目录、__MACOSX/、隐藏文件与重名条目。"""
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        cleaned = str(name or "").replace("\\", "/").strip()
+        if not cleaned or cleaned.endswith("/"):
+            continue
+        parts = [part for part in cleaned.split("/") if part]
+        if not parts or parts[0].upper() == "__MACOSX":
+            continue
+        if any(part.startswith(".") for part in parts):
+            continue
+        if cleaned not in seen:
+            seen.add(cleaned)
+            candidates.append(cleaned)
+    return candidates
+
+
+def batch_import_files(db: Session, current_user: User, archive: UploadFile) -> dict:
+    """ZIP 批量导入：逐条走与 upload 相同的落盘+DB+投递流程，受配额约束。"""
+    if _extension_of(archive.filename) != "zip":
+        raise HTTPException(400, "仅支持 .zip 压缩包")
+    owner_id = current_user.id
+    dir_id = palace_workspace.user_dir_id(owner_id)
+    workspace = palace_workspace.user_workspace(owner_id)
+    try:
+        zf = zipfile.ZipFile(archive.file)
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise HTTPException(400, "压缩包解析失败，请确认上传的是有效的 .zip 文件") from exc
+    max_entry_bytes = int(settings.max_upload_mb) * 1024 * 1024
+    max_batch_files = int(settings.super_assistant_palace_batch_max_files)
+    created: list[dict] = []
+    skipped: list[dict] = []
+    accepted = 0
+    quota_reason: str | None = None
+    with zf:
+        for name in _batch_candidates(zf.namelist()):
+            display = Path(name).name or name
+            if quota_reason is not None:  # 配额超限后剩余条目全部跳过
+                skipped.append({"filename": display, "reason": quota_reason})
+                continue
+            extension = _extension_of(display)
+            if extension not in _allowed_extensions():
+                skipped.append({
+                    "filename": display,
+                    "reason": f"不支持的类型 .{extension}（允许: {settings.allowed_upload_extensions}）",
+                })
+                continue
+            if accepted >= max_batch_files:
+                skipped.append({"filename": display, "reason": f"超出单次导入数量上限（{max_batch_files}）"})
+                continue
+            info = zf.getinfo(name)
+            try:
+                _check_quotas(db, owner_id, extra_bytes=int(info.file_size), extra_files=1)
+            except HTTPException as exc:
+                quota_reason = str(exc.detail)
+                skipped.append({"filename": display, "reason": quota_reason})
+                continue
+            try:
+                # 按流读取并设上限，阻断声明尺寸造假的 zip 炸弹
+                data = _read_capped(zf.open(info), max_bytes=max_entry_bytes)
+            except HTTPException:
+                skipped.append({"filename": display, "reason": f"超过大小限制（{settings.max_upload_mb}MB）"})
+                continue
+            except (RuntimeError, OSError, zipfile.BadZipFile) as exc:
+                skipped.append({"filename": display, "reason": f"条目读取失败：{exc}"})
+                continue
+            try:
+                artifact = workspace.save_bytes(
+                    dir_id, display, data, source="palace-batch", mime_type=None,
+                )
+            except WorkspaceError as exc:
+                skipped.append({"filename": display, "reason": str(exc)})
+                continue
+            created.append(_file_dict(_create_file_row(db, owner_id, artifact, fallback_name=display)))
+            accepted += 1
+    return {"created": created, "skipped": skipped}
 
 
 def delete_palace_file(db: Session, owner_id: str, file_id: str) -> None:
@@ -433,8 +837,40 @@ def rebuild_file(db: Session, owner_id: str, file_id: str) -> dict:
     row = _owned_file(db, owner_id, file_id)
     if row.status in {"pending", "building"}:
         raise HTTPException(409, "该文件正在抽取队列中，请稍候")
+    _check_quotas(db, owner_id)
     result = request_build(row)
     return result
+
+
+def search_graph(db: Session, owner_id: str, query: str) -> dict:
+    """图谱检索：无已建图文件或无关键词时返回空集；Neo4j 不可用降级
+    available=False（同 graph_overview 语义，不 5xx）。"""
+    built = (
+        db.query(SuperAssistantPalaceFile)
+        .filter(
+            SuperAssistantPalaceFile.owner_id == owner_id,
+            SuperAssistantPalaceFile.status == "built",
+        )
+        .count()
+    )
+    empty = {"entities": [], "relations": []}
+    if not built:
+        return {"available": True, **empty}
+    from app.data_channel.steward.workspace import _context_terms
+
+    terms = _context_terms(query)
+    if not terms:
+        return {"available": True, **empty}
+    try:
+        payload = palace_graph.search(owner_id, terms)
+    except palace_graph.PalaceGraphUnavailable:
+        logger.warning("记忆宫殿图谱检索失败：Neo4j 不可用（owner=%s）", owner_id)
+        return {"available": False, **empty}
+    return {
+        "available": True,
+        "entities": payload.get("entities") or [],
+        "relations": payload.get("relations") or [],
+    }
 
 
 def graph_overview(db: Session, owner_id: str) -> dict:

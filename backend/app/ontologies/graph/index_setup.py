@@ -22,6 +22,10 @@ INDEXES = [
     "CREATE INDEX palace_entity_merge_key IF NOT EXISTS FOR (n:PalaceEntity) ON (n.merge_key)",
     "CREATE INDEX palace_entity_owner_id IF NOT EXISTS FOR (n:PalaceEntity) ON (n.owner_id)",
     "CREATE INDEX palace_entity_name IF NOT EXISTS FOR (n:PalaceEntity) ON (n.name)",
+    # 检索热路径复合索引：加速 search/owner_graph 按 owner 圈定后
+    # ORDER BY mention_count DESC LIMIT 的扫描（mention 单列索引无法
+    # 覆盖 owner 过滤，复合索引一次定位）。
+    "CREATE INDEX palace_entity_owner_mention IF NOT EXISTS FOR (n:PalaceEntity) ON (n.owner_id, n.mention_count)",
 ]
 
 # Neo4j 的属性范围索引必须指定节点标签。不能用
