@@ -334,17 +334,21 @@
 .kpi-label { color: #3d485d; font-size: 14px; font-weight: 700; }
 .kpi-cell strong { display: flex; min-height: clamp(22px, 3.6vh, 40px); align-items: baseline; gap: 8px; margin-top: clamp(4px, 0.9vh, 10px); color: #172033; font-size: clamp(24px, 3.2vh, 34px); font-weight: 730; line-height: 1; }
 .kpi-cell strong small { color: #47566d; font-size: 14px; font-weight: 600; }
-.kpi-cell p { min-height: clamp(14px, 2.4vh, 32px); margin: 2px 0 6px; color: #667388; font-size: 11px; line-height: 1.55; }
-/* KPI 卡内迷你图：固定高度通栏，ECharts 根节点绝对定位填充（同 runtime-trend
-   的做法，避免画布内联高度反哺内容尺寸）。矮屏档位压缩，保证总览单页呈现。 */
-.kpi-spark { position: relative; height: clamp(30px, 4.2vh, 44px); margin: 1px 0 5px; }
-.kpi-spark > div:first-child { position: absolute; inset: 0; }
+/* hero 行右侧次级指标（如"链接实例 36"）：不与主数争夺权重，但保持同基线可扫读 */
+.kpi-side-stat { min-width: 0; overflow: hidden; margin-left: auto; color: #667388; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+/* KPI 构成条 + 图例合一：分段条只做形状，文字即图例；紧凑双行，高度与原迷你图相当 */
+.kpi-compose { min-height: clamp(34px, 4.6vh, 50px); margin: clamp(3px, .7vh, 8px) 0 4px; }
+.kpi-compose-bar { display: flex; height: 6px; gap: 2px; }
+.kpi-compose-bar.is-empty { border-radius: 4px; background: #edf1f5; }
+.kpi-compose-bar > i { min-width: 3px; transition: width .3s ease; }
+.kpi-compose-legend { display: flex; flex-wrap: wrap; gap: 3px 12px; margin: 7px 0 0; padding: 0; list-style: none; }
+.kpi-compose-legend li { display: inline-flex; min-width: 0; align-items: center; gap: 5px; font-size: 11px; line-height: 1.5; }
+.kpi-compose-legend li i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 2px; }
+.kpi-compose-legend li span { color: #667388; white-space: nowrap; }
+.kpi-compose-legend li b { color: #33415c; font-weight: 700; font-variant-numeric: tabular-nums; }
 .kpi-status { display: inline-flex; min-height: 20px; width: fit-content; max-width: 100%; align-items: center; gap: 5px; margin-top: auto; color: #15957f; font-size: 11px; font-style: normal; font-weight: 600; }
 .kpi-status.is-warning { color: #ef8b17; }
 .kpi-status.is-neutral { color: #607086; font-weight: 500; }
-.kpi-status.is-purple { color: #755bd3; }
-.kpi-status.is-blue { color: var(--ov-blue); }
-.kpi-status.is-teal { color: var(--ov-teal); }
 /* 状态行 + 释义脚注两行并存时：脚注（末行）仍钉在卡底，状态行紧随内容之后 */
 .kpi-status:not(:last-child) { margin-top: 0; margin-bottom: 6px; }
 

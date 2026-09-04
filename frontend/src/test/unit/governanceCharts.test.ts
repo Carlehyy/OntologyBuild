@@ -4,10 +4,7 @@ import { describe, it } from 'node:test'
 import {
   buildKpiSparkSeries,
   buildMiniBarOption,
-  buildMiniCategoryBarOption,
-  buildMiniDonutOption,
   buildMiniLineOption,
-  buildMiniSegmentBarOption,
 } from '../../pages/ontologies/detail/governance/charts.ts'
 
 const daily7d = [
@@ -32,53 +29,6 @@ describe('buildMiniBarOption / buildMiniLineOption', () => {
     assert.equal(option.series[0].connectNulls, false)
     assert.deepEqual(option.series[0].data, [0.5, null, 1])
     assert.equal(option.yAxis.max, 1)
-  })
-})
-
-describe('buildMiniCategoryBarOption / buildMiniDonutOption / buildMiniSegmentBarOption', () => {
-  it('迷你分类柱逐柱取色,无轴无提示', () => {
-    const option = buildMiniCategoryBarOption([
-      { value: 3, color: '#059669' },
-      { value: 1, color: '#3B82F6' },
-    ]) as any
-    assert.equal(option.series[0].type, 'bar')
-    assert.deepEqual(option.series[0].data, [
-      { value: 3, itemStyle: { color: '#059669', borderRadius: [1.5, 1.5, 0, 0], opacity: 0.85 } },
-      { value: 1, itemStyle: { color: '#3B82F6', borderRadius: [1.5, 1.5, 0, 0], opacity: 0.85 } },
-    ])
-    assert.equal(option.xAxis.show, false)
-    assert.equal(option.tooltip.show, false)
-  })
-
-  it('迷你环形按值出扇区,空数据退化为灰环占位', () => {
-    const option = buildMiniDonutOption([{ value: 2, color: '#059669' }, { value: 1, color: '#3B82F6' }]) as any
-    assert.equal(option.series[0].type, 'pie')
-    assert.deepEqual(option.series[0].data, [
-      { value: 2, itemStyle: { color: '#059669' } },
-      { value: 1, itemStyle: { color: '#3B82F6' } },
-    ])
-    const empty = buildMiniDonutOption([]) as any
-    assert.equal(empty.series[0].data.length, 1)
-    assert.equal(empty.series[0].data[0].itemStyle.color, '#F1F5F9')
-  })
-
-  it('迷你分段条按序堆叠且首尾圆角,空数据整条灰占位', () => {
-    const option = buildMiniSegmentBarOption([
-      { value: 2, color: '#059669' },
-      { value: 0, color: '#3B82F6' },
-      { value: 1, color: '#CBD5E1' },
-    ]) as any
-    // 零值分段被过滤,只保留 2 段
-    assert.equal(option.series.length, 2)
-    assert.ok(option.series.every((series: any) => series.stack === 'segment'))
-    assert.deepEqual(option.series[0].data, [2])
-    assert.deepEqual(option.series[0].itemStyle.borderRadius, [4, 0, 0, 4])
-    assert.deepEqual(option.series[1].itemStyle.borderRadius, [0, 4, 4, 0])
-    assert.equal(option.xAxis.max, 3)
-    const empty = buildMiniSegmentBarOption([]) as any
-    assert.equal(empty.series.length, 1)
-    assert.deepEqual(empty.series[0].data, [1])
-    assert.equal(empty.series[0].itemStyle.color, '#CBD5E1')
   })
 })
 
