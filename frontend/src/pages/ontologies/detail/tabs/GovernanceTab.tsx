@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
 import { apiClientV2 } from '@/api/client'
 import { sentinelApi, type Sentinel, type SentinelFiring } from '@/api/sentinelApi'
 import pipelinesApi from '@/api/v2/pipelines'
@@ -94,6 +93,8 @@ interface GovernanceTabProps {
   ontologyId: string
   currentReleaseId?: string | null
   currentReleaseVersion: string
+  /** 打开历史版本弹窗(由详情页壳层提供,保持当前治理现场不跳走)。 */
+  onOpenVersions: () => void
 }
 
 const BACKGROUND_REFRESH_INTERVAL_MS = 12_000
@@ -127,10 +128,9 @@ function errorMessage(error: unknown, fallback = '治理数据加载失败'): st
 }
 
 export default function GovernanceTab({
-  ontologyId, currentReleaseId, currentReleaseVersion,
+  ontologyId, currentReleaseId, currentReleaseVersion, onOpenVersions,
 }: GovernanceTabProps) {
   const qc = useQueryClient()
-  const navigate = useNavigate()
   const role = useAuthStore(state => state.user?.role)
   const canDecide = role === 'admin'
   const [busy, setBusy] = useState<string | null>(null)
@@ -265,6 +265,16 @@ export default function GovernanceTab({
 
   const overview = overviewQuery.data
   const dailySpark = buildDailySpark(overview?.runtime?.daily7d)
+  // 与总览页"运行汇总"同一张趋势图:直接吃 daily7d 按日桶(空值归零),
+  // 命中/错误/成功/失败四序列口径与总览完全一致。
+  const runtimeDays = useMemo(
+    () => (overview?.runtime?.daily7d ?? []).map(day => ({
+      date: day.date,
+      firings: { fired: day.firings?.fired ?? 0, error: day.firings?.error ?? 0 },
+      actionRuns: { success: day.actionRuns?.success ?? 0, failed: day.actionRuns?.failed ?? 0 },
+    })),
+    [overview?.runtime?.daily7d],
+  )
   // 四个 KPI 卡的近 7 日迷你图序列(决策/批准率从执行日志按日归桶)。
   const kpiSparks = useMemo(
     () => buildKpiSparkSeries({ daily7d: dailySpark, logs: releaseLogs }),
@@ -337,6 +347,14 @@ export default function GovernanceTab({
 
   const scrollToBoard = () => {
     boardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  // 待审批卡的直达路径:有待审批直接打开第一条的前因后果弹窗,免一跳;
+  // 没有待审批则照旧滚动到工作台。
+  const openFirstPendingStory = () => {
+    const log = pending[0]
+    if (log) setStoryTarget(log)
+    else scrollToBoard()
   }
 
   const refreshAll = useCallback(() => Promise.all([
@@ -518,10 +536,11 @@ export default function GovernanceTab({
 
       <KpiOverviewGrid
         kpis={kpis}
-        dailySpark={dailySpark}
+        runtimeDays={runtimeDays}
         sparks={kpiSparks}
         isRefreshing={isRefreshing}
         onNavigate={scrollToBoard}
+        onOpenFirstPending={openFirstPendingStory}
       />
 
       {/* ① 链路全景:七段链路真实节点,待审批即当前瓶颈,点开看前因后果(点击不跳转) */}
@@ -530,6 +549,10 @@ export default function GovernanceTab({
         edges={chain.edges}
         guides={chain.guides}
         isRefreshing={isRefreshing}
+        isChainLoading={
+          workspaceQuery.isPending || curatedQuery.isPending
+          || manualDatasetsQuery.isPending || pipelinesQuery.isPending
+        }
         onOpenPending={logId => {
           const log = pending.find(item => item.id === logId)
           if (log) setStoryTarget(log)
@@ -545,14 +568,14 @@ export default function GovernanceTab({
             </span>
           )}
           sub="待审批 · 自治等级 · 哨兵以动作为中心一表汇总 · 点击待审批条目看前因后果"
-          extra={<button onClick={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
+          extra={<button onClick={onOpenVersions}
             className="inline-flex items-center gap-1 text-xs text-teal-600 hover:underline">
             在版本草稿中调整</button>} />
         <OperationsBoard
           rows={boardRows}
           timelines={boardTimelines}
           onOpenPending={log => setStoryTarget(log)}
-          onGoVersions={() => navigate(`/ontologies/${ontologyId}?tab=versions`)}
+          onGoVersions={onOpenVersions}
         />
       </div>
 

@@ -163,23 +163,36 @@ export default function OntologyDetailPage() {
 
   return (
     <div className={`onto-glass-root onto-glass-root--flat flex flex-col gap-4 ${
-      // 「实例数据」tab 回归自然文档流：内容撑多高就展示多高,由外层容器滚动;
-      // 治理/映射页为页内自然文档流(头部吸附保持可达);其余 tab 固定视口+内容区内滚。
-      activeGroup === 'data'
-        ? 'min-h-full'
-        : `h-full min-h-0 ${
-          activeGroup === 'governance' || activeGroup === 'data-mapping'
-            // overflow-y 单独设 auto 时 overflow-x 会被计算成 auto，真实数据下的
-            // 行内溢出即变成页面横向滚动条；映射页要求严格单页，显式关掉横向。
-            ? activeGroup === 'data-mapping' ? 'overflow-y-auto overflow-x-hidden' : 'overflow-y-auto'
-            : 'overflow-hidden'
-        }`
+      // 滚动模型两档:总览目标单屏、结构为画布式,二者固定视口+内容区内滚;
+      // 治理/映射/实例为自然文档流,装进页内滚动容器(页头吸附保持可达)。
+      // overflow-y 单独设 auto 时 overflow-x 会被计算成 auto,行内溢出会变成
+      // 页面横向滚动条,文档流页统一显式 overflow-x-hidden。
+      activeGroup === 'overview' || activeGroup === 'design'
+        // 总览与结构:固定视口+内容区内滚(总览目标单屏,结构为画布式)
+        ? 'h-full min-h-0 overflow-hidden'
+        // 治理/映射/实例:自然文档流装进页内滚动容器,页头吸附保持可达(吸顶条件见头部)
+        : 'h-full min-h-0 overflow-y-auto overflow-x-hidden'
     }`}>
-      {/* ═══ 功能导航与低频操作(治理页为自然文档流,头部吸附保持可达) ═══ */}
+      {/* ═══ 功能导航与低频操作(文档流页签下头部吸附保持可达) ═══ */}
       <div data-testid="ontology-detail-header" className={`onto-glass-header flex shrink-0 items-center justify-between gap-3 px-5 py-4 ${
-        activeGroup === 'governance' ? 'onto-glass-header--sticky sticky top-0 z-30' : ''
+        activeGroup === 'governance' || activeGroup === 'data' || activeGroup === 'data-mapping'
+          ? 'onto-glass-header--sticky sticky top-0 z-30'
+          : ''
       }`}>
-        <div className="relative min-w-0">
+        <div className="flex min-w-0 items-center gap-3">
+          {/* 本体名常驻页头:治理者多本体切换时先确认"在治理谁",点击回到总览 */}
+          <button
+            type="button"
+            data-testid="ontology-detail-name"
+            onClick={() => selectGroup('overview')}
+            className="flex min-w-0 shrink-[2] flex-col items-start rounded-lg px-1 py-0.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+            title={`${ontology.name} · 点击返回本体总览`}
+          >
+            <span className="max-w-[220px] truncate text-[15px] font-semibold leading-5 text-slate-800">{ontology.name}</span>
+            <span className="text-[11px] leading-4 text-slate-400">本体详情 · 点击返回总览</span>
+          </button>
+          <span aria-hidden="true" className="hidden h-6 w-px shrink-0 bg-slate-200 sm:block" />
+          <div className="relative min-w-0">
           {tabsMoreRight && (
             <div
               aria-hidden="true"
@@ -226,6 +239,7 @@ export default function OntologyDetailPage() {
                 </button>
               )
             })}
+          </div>
           </div>
           </div>
         </div>
@@ -310,6 +324,7 @@ export default function OntologyDetailPage() {
             ontologyId={id!}
             currentReleaseId={ontology.current_release_id}
             currentReleaseVersion={ontology.current_release_version || ontology.version}
+            onOpenVersions={() => setShowVersionModal(true)}
           />
         </div>
       )}

@@ -243,6 +243,20 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
     el.scrollTop = el.scrollHeight
   }, [nodes])
 
+  // 「草稿→试跑→发布」三段式说明只在学习期有用:收起后记住选择(localStorage),
+  // 后续打开不再占掉弹窗约四分之一的首屏高度;需要时可随时展开。
+  const [guideExpanded, setGuideExpanded] = useState(
+    () => localStorage.getItem('ontology-versions-guide-collapsed') !== '1')
+  const toggleGuide = () => {
+    setGuideExpanded(current => {
+      const next = !current
+      try {
+        localStorage.setItem('ontology-versions-guide-collapsed', next ? '0' : '1')
+      } catch { /* 隐私模式等场景下静默降级为会话内记忆 */ }
+      return next
+    })
+  }
+
   const refresh = () => qc.invalidateQueries({ queryKey: ['version-tree', ontologyId] })
   const refreshReleasedProjection = async () => {
     const keys = [
@@ -575,27 +589,40 @@ export default function VersionsTab({ ontologyId, onClose }: { ontologyId: strin
             </h3>
             <p className="mt-0.5 text-xs text-slate-500">每次新建版本都会复制一份完整快照，互不干扰。</p>
           </div>
-          <div className="flex items-center gap-2 rounded-full bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-700">
-            <ShieldCheck size={14} /> 当前正式运行：{treeQuery.data?.current_release_version}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 rounded-full bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-700">
+              <ShieldCheck size={14} /> 当前正式运行：{treeQuery.data?.current_release_version}
+            </div>
+            <button
+              type="button"
+              onClick={toggleGuide}
+              aria-expanded={guideExpanded}
+              data-testid="versions-guide-toggle"
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-500 transition hover:border-slate-300 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+            >
+              {guideExpanded ? <>收起说明 <ChevronDown size={13} className="rotate-180" /></> : <>展开说明 <ChevronDown size={13} /></>}
+            </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-stretch px-4 py-3" aria-label="版本状态递进关系">
-          <div className="rounded-xl border border-sky-100 bg-sky-50/70 p-3">
-            <div className="flex items-center gap-2 text-sm font-semibold text-sky-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-sky-600 text-[11px] text-white">1</span>草稿态</div>
-            <p className="mt-1.5 text-xs leading-5 text-sky-700">自由编辑结构与映射，不产生任何运行数据。</p>
+        {guideExpanded && (
+          <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-stretch px-4 py-3" aria-label="版本状态递进关系">
+            <div className="rounded-xl border border-sky-100 bg-sky-50/70 p-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-sky-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-sky-600 text-[11px] text-white">1</span>草稿态</div>
+              <p className="mt-1.5 text-xs leading-5 text-sky-700">自由编辑结构与映射，不产生任何运行数据。</p>
+            </div>
+            <div className="flex w-9 items-center justify-center text-slate-300"><ArrowRight size={18} /></div>
+            <div className="rounded-xl border border-amber-100 bg-amber-50/70 p-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-[11px] text-white">2</span>试跑态</div>
+              <p className="mt-1.5 text-xs leading-5 text-amber-700">用真实数据在隔离环境验证，不影响正式运行；全部通过后才允许发布。</p>
+            </div>
+            <div className="flex w-9 items-center justify-center text-slate-300"><ArrowRight size={18} /></div>
+            <div className="rounded-xl border border-teal-100 bg-teal-50/70 p-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-teal-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-teal-600 text-[11px] text-white"><Check size={12} /></span>发布态</div>
+              <p className="mt-1.5 text-xs leading-5 text-teal-700">验证通过后发布。全平台只按最新发布运行，发布后内容只读。</p>
+            </div>
           </div>
-          <div className="flex w-9 items-center justify-center text-slate-300"><ArrowRight size={18} /></div>
-          <div className="rounded-xl border border-amber-100 bg-amber-50/70 p-3">
-            <div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-[11px] text-white">2</span>试跑态</div>
-            <p className="mt-1.5 text-xs leading-5 text-amber-700">用真实数据在隔离环境验证，不影响正式运行；全部通过后才允许发布。</p>
-          </div>
-          <div className="flex w-9 items-center justify-center text-slate-300"><ArrowRight size={18} /></div>
-          <div className="rounded-xl border border-teal-100 bg-teal-50/70 p-3">
-            <div className="flex items-center gap-2 text-sm font-semibold text-teal-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-teal-600 text-[11px] text-white"><Check size={12} /></span>发布态</div>
-            <p className="mt-1.5 text-xs leading-5 text-teal-700">验证通过后发布。全平台只按最新发布运行，发布后内容只读。</p>
-          </div>
-        </div>
+        )}
       </Card>
 
       {notice && (
