@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import {
-  Network, Settings, LogOut, ChevronLeft, ChevronRight, ChevronDown,
+  Network, Settings, LogOut, ChevronDown,
   UserCircle, User, Menu, X,
 } from 'lucide-react'
 import FloatingAssistantWidget from '@/components/assistant-widget/FloatingAssistantWidget'
@@ -79,7 +79,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     const fullItem = PLATFORM_NAV_ITEMS.find(candidate => candidate.key === item.key)
     return fullItem?.subItems?.some(sub => isActive(sub.to)) ?? false
   }
-  // 点击 Logo 与“折叠起来”共用同一套开关：桌面端收起/展开侧边栏，移动端关闭抽屉
+  // 点击 Logo 收起/展开侧边栏：桌面端切换折叠态，移动端关闭抽屉
   const toggleSidebar = () => {
     if (window.innerWidth < 768) {
       setMobileNavOpen(false)
@@ -117,7 +117,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         />
       )}
       {/* Sidebar */}
-      <aside className={`${mobileNavOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-50 flex w-56 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-all ${SIDEBAR_EASE} md:static md:z-auto md:translate-x-0 ${collapsed ? 'md:w-16' : 'md:w-56'}`}>
+      <aside className={`${mobileNavOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-50 flex w-56 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-sidebar)] transition-all ${SIDEBAR_EASE} md:static md:z-auto md:translate-x-0 ${collapsed ? 'md:w-16' : 'md:w-56'}`}>
         {/* Logo：点击同样收起/展开侧边栏。图标左偏移恒为 px-4（折叠态 64px 侧栏内
             恰好视觉居中）：不随折叠切换 justify/padding，避免布局属性跳变导致 logo 闪动 */}
         <div className="h-14 border-b border-[var(--color-border)] flex items-center px-4">
@@ -220,27 +220,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             )
           })}
         </nav>
-
-        {/* Footer */}
-        <div className="border-t border-[var(--color-border)]">
-          <button onClick={() => setCollapsed(!collapsed)}
-            className={`hidden md:flex items-center px-4 h-9 text-sm text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-all ${SIDEBAR_EASE} w-full ${collapsed ? 'justify-center gap-0' : 'gap-2'}`}>
-            {collapsed ? <ChevronRight size={16} className="shrink-0" /> : <ChevronLeft size={16} className="shrink-0" />}
-            <span className={labelAnim}>折叠起来</span>
-          </button>
-          <button onClick={() => { logout(); navigate('/login') }}
-            className={`flex items-center px-4 h-9 text-sm text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] hover:bg-[var(--color-bg-hover)] transition-all ${SIDEBAR_EASE} w-full ${collapsed ? 'justify-center gap-0' : 'gap-2'}`}>
-            <LogOut size={16} className="shrink-0" />
-            <span className={labelAnim}>退出登录</span>
-          </button>
-        </div>
       </aside>
 
       {/* Main Content */}
       <main className="min-w-0 flex-1 flex flex-col overflow-hidden">
         {/* 通用标签栏 */}
         {showTopTabBar && (
-          <div className="h-14 shrink-0 flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4">
+          <div className="h-14 shrink-0 flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-sidebar)] px-4">
             {/* 左侧：移动端菜单按钮 + 多标签页 */}
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <button

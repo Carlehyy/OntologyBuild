@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ElementRef } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Sender } from '@ant-design/x'
 import { ConfigProvider, theme as antdTheme } from 'antd'
 import {
-  Check, List, Loader2, Menu, Paperclip, Pencil,
+  Check, Cpu, List, Loader2, Menu, Paperclip, Pencil,
   Send, Settings2, Square, X,
 } from 'lucide-react'
 
@@ -23,6 +23,8 @@ import {
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/Toast'
 import { pickInitialConversationId } from '@/components/assistant-widget/logic'
+import { hasMenuAccess } from '@/config/navigation'
+import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import ConfigurationPanel, { errorText } from './components/AssistantConfiguration'
 import ConfirmActionDialog from './components/ConfirmActionDialog'
@@ -35,6 +37,9 @@ import {
 import type { ModelConfig } from '@/types/ontology'
 
 const ATTACH_ACCEPT = '.csv,.xlsx,.xls,.json,.xml,.pdf,.docx,.doc,.pptx,.ppt,.md,.txt'
+
+/** 模型下拉底部「管理模型」项的哨兵值：不落库、不切换会话模型，仅触发跳转 */
+const MANAGE_MODELS_VALUE = '__manage_models__'
 
 /** 进行中的流式回复按会话隔离的运行时缓冲：切走再切回时，已生成内容经缓冲续看 */
 interface StreamBuffer {
@@ -54,6 +59,8 @@ function formatFileSize(size: number): string {
 export default function SuperAssistantPage() {
   const { toast } = useToast()
   const dark = useThemeStore(state => state.theme === 'dark')
+  const navigate = useNavigate()
+  const user = useAuthStore(state => state.user)
   const [searchParams] = useSearchParams()
   // 悬浮窗跳转携带的 ?conversation=：初次加载时优先选中，后续参数变化继续跟随
   const initialRequestedIdRef = useRef(searchParams.get('conversation'))
@@ -730,10 +737,18 @@ export default function SuperAssistantPage() {
           {!loading && selectedConversation && <ContextUsage messages={messages} model={selectedModel} />}
           <Select
             value={selectedModelId}
-            onValueChange={value => void changeModel(value)}
+            onValueChange={value => {
+              // 「管理模型」仅作跳转入口：不切换会话模型，直接进入模型配置页
+              if (value === MANAGE_MODELS_VALUE) { navigate('/models'); return }
+              void changeModel(value)
+            }}
             disabled={!selectedId || runningHere}
           >
-            <SelectTrigger aria-label="会话模型" className="h-9 w-48 text-xs sm:w-64 xl:w-80">
+            {/* 与左侧「上下文」框同一语言：1px 绿色细边框、浅绿底、无阴影 */}
+            <SelectTrigger
+              aria-label="会话模型"
+              className="h-9 w-48 border-teal-200 bg-teal-50/80 text-xs shadow-none hover:border-teal-300 focus:border-teal-400 sm:w-64 xl:w-80"
+            >
               <SelectValue placeholder={models.length === 0 ? '无可用模型' : '选择模型'} />
             </SelectTrigger>
             <SelectContent>
@@ -742,6 +757,11 @@ export default function SuperAssistantPage() {
                   {model.name} · {model.models?.[0]}
                 </SelectItem>
               ))}
+              {hasMenuAccess(user, 'models') && (
+                <SelectItem value={MANAGE_MODELS_VALUE} className="mt-1 border-t border-border pt-1.5 text-xs">
+                  <span className="flex items-center gap-1.5"><Cpu size={13} className="shrink-0 text-teal-700" /> 管理模型</span>
+                </SelectItem>
+              )}
             </SelectContent>
           </Select>
           <button
@@ -750,9 +770,9 @@ export default function SuperAssistantPage() {
             aria-label={configOpen ? '关闭助手配置' : '打开助手配置'}
             aria-expanded={configOpen}
             title="助手配置"
-            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 ${configOpen
-              ? 'border-amber-400 bg-amber-100 text-amber-800'
-              : 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100 hover:text-amber-800'}`}
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${configOpen
+              ? 'border-teal-300 bg-teal-50 text-teal-700'
+              : 'border-slate-200 bg-white text-slate-500 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700'}`}
           >
             <Settings2 size={15} />
           </button>
@@ -769,9 +789,9 @@ export default function SuperAssistantPage() {
               <div className="flex flex-1 items-center justify-center"><Loader2 size={22} className="animate-spin text-teal-600" /></div>
             ) : !hasMessages ? (
               <div className="flex flex-1 items-center justify-center px-4 sm:px-8">
-                <div className="relative w-full max-w-3xl -translate-y-10 sm:-translate-y-14">
+                <div className="relative w-full max-w-3xl -translate-y-14 sm:-translate-y-20">
                   <p className="absolute inset-x-0 bottom-full mb-8 text-center text-3xl font-semibold tracking-tight text-[var(--color-text-primary)] sm:text-4xl">
-                    SuperAgent 工作空间2.0
+                    SuperAgent 工作空间 2.0
                   </p>
                   {renderComposer(true)}
                 </div>
