@@ -80,7 +80,6 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
   const [graph, setGraph] = useState<PalaceGraph | null>(null)
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null)
   const [preview, setPreview] = useState<PalacePreviewState | null>(null)
   const [editor, setEditor] = useState<PalaceEditorState | null>(null)
@@ -95,6 +94,11 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
   const zipInputRef = useRef<HTMLInputElement>(null)
   const replaceInputRef = useRef<HTMLInputElement>(null)
 
+  /** 错误统一走 toast（error 音调自动 6s 消失）：内联横幅插拔会把三栏顶得上下跳动 */
+  const showError = useCallback((err: unknown, fallback: string) => {
+    toast({ tone: 'error', title: fallback, description: palaceError(err, '') || undefined })
+  }, [toast])
+
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
@@ -104,13 +108,12 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
       ])
       setFiles(fileRows)
       setGraph(graphData)
-      setError(null)
     } catch (err) {
-      setError(palaceError(err, '记忆宫殿加载失败'))
+      showError(err, '记忆宫殿加载失败')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [showError])
 
   useEffect(() => {
     if (open) void refresh()
@@ -119,7 +122,6 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
   // 弹窗关闭时清掉一次性视图状态，重开时重新开始
   useEffect(() => {
     if (!open) {
-      setError(null)
       setSelectedFileId(null)
       setPreview(null)
       setEditor(null)
@@ -154,10 +156,6 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
     onOpenChange(next)
   }
 
-  const handlePanelError = useCallback((err: unknown, fallback: string) => {
-    setError(palaceError(err, fallback))
-  }, [])
-
   /** 选中文件（树点击 / 图谱节点定位 / 上传后自动选中）；切换前守住未保存编辑 */
   const handleSelectFile = useCallback((file: PalaceFile) => {
     if (editor && editor.fileId !== file.id && !requestLeaveEditor()) return
@@ -175,8 +173,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
       await refresh()
       if (last) setSelectedFileId(last.id)
     } catch (err) {
-      setError(palaceError(err, '上传失败'))
-    } finally {
+      showError(err, '上传失败')    } finally {
       setBusy(false)
       if (inputRef.current) inputRef.current.value = ''
     }
@@ -192,8 +189,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
       setShowSkipped(false)
       await refresh()
     } catch (err) {
-      setError(palaceError(err, 'ZIP 导入失败'))
-    } finally {
+      showError(err, 'ZIP 导入失败')    } finally {
       setBusy(false)
       if (zipInputRef.current) zipInputRef.current.value = ''
     }
@@ -209,8 +205,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
       toast({ tone: 'success', title: '文件已替换', description: '新文件将自动重新抽取实体与关系。' })
       await refresh()
     } catch (err) {
-      setError(palaceError(err, '替换失败'))
-    } finally {
+      showError(err, '替换失败')    } finally {
       setBusy(false)
       setReplaceTarget(null)
       if (replaceInputRef.current) replaceInputRef.current.value = ''
@@ -224,8 +219,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
       if (selectedFileId === fileId) setSelectedFileId(null)
       await refresh()
     } catch (err) {
-      setError(palaceError(err, '删除失败'))
-    } finally {
+      showError(err, '删除失败')    } finally {
       setBusy(false)
     }
   }
@@ -236,8 +230,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
       await superAssistantApi.rebuildPalaceFile(fileId)
       await refresh()
     } catch (err) {
-      setError(palaceError(err, '重建失败'))
-    } finally {
+      showError(err, '重建失败')    } finally {
       setBusy(false)
     }
   }
@@ -270,8 +263,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
       await refresh()
     } catch (err) {
       setEditor(prev => prev ? { ...prev, saving: false } : prev)
-      setError(palaceError(err, '保存失败'))
-    }
+      showError(err, '保存失败')    }
   }
 
   // 选中文档（非图片、非编辑态）时自动加载抽取文本预览
@@ -285,7 +277,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
       .catch(err => {
         if (stale) return
         setPreview(null)
-        setError(palaceError(err, '预览加载失败'))
+        showError(err, '预览加载失败')
       })
     return () => { stale = true }
   }, [open, selected?.id, selected?.isImage, editor?.fileId])
@@ -303,7 +295,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
         if (revoked) URL.revokeObjectURL(url)
         else setImageUrl({ fileId: selected.id, url })
       })
-      .catch(err => setError(palaceError(err, '图片加载失败')))
+      .catch(err => showError(err, '图片加载失败'))
       .finally(() => { if (!revoked) setImageLoading(false) })
     return () => {
       revoked = true
@@ -426,7 +418,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
 
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
-      <DialogContent className="flex h-[min(88dvh,880px)] w-[min(96vw,76rem)] flex-col overflow-hidden">
+      <DialogContent className="flex h-[min(88dvh,880px)] w-[min(96vw,80rem)] flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Brain size={16} className="text-teal-700" /> 记忆宫殿
@@ -441,49 +433,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
           上传的文档沉淀为跨会话长期知识：自动抽取实体关系构建图谱，选中文件可阅读编辑，图谱与文档双向联动。
         </p>
 
-        {error && (
-          <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>
-        )}
-
-        {importResult && (
-          <div
-            role="status"
-            data-testid="palace-import-result"
-            className="flex flex-col gap-1 rounded-lg bg-teal-50 px-3 py-2 text-xs text-teal-800"
-          >
-            <div className="flex items-center gap-2">
-              <CheckCircle2 size={13} className="shrink-0" />
-              <span className="flex-1">导入 {importResult.created.length} 个，跳过 {importResult.skipped.length} 个（目录结构已按压缩包保留）</span>
-              {importResult.skipped.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setShowSkipped(value => !value)}
-                  aria-expanded={showSkipped}
-                  className="rounded-md px-1.5 py-0.5 text-[11px] text-teal-700 transition-colors hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-                >
-                  {showSkipped ? '收起跳过原因' : '查看跳过原因'}
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setImportResult(null)}
-                aria-label="关闭导入结果"
-                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-teal-600 transition-colors hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
-              >
-                <X size={12} />
-              </button>
-            </div>
-            {showSkipped && importResult.skipped.length > 0 && (
-              <ul className="ml-5 list-disc space-y-0.5 text-[11px] text-teal-700">
-                {importResult.skipped.map(item => (
-                  <li key={item.filename}>{item.filename}：{item.reason}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto lg:grid-cols-[minmax(210px,250px)_minmax(0,1fr)_minmax(320px,36%)] lg:overflow-hidden">
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto lg:grid-cols-[248px_minmax(0,1fr)_384px] lg:overflow-hidden">
           {/* 左：文件树 */}
           <aside
             aria-label="记忆宫殿文件库"
@@ -534,6 +484,43 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
               </Button>
               <span className="ml-auto text-[10px] tabular-nums text-[var(--color-text-tertiary)]">{files.length} 个文件</span>
             </div>
+            {importResult && (
+              <div
+                role="status"
+                data-testid="palace-import-result"
+                className="flex flex-col gap-1 border-b border-[var(--color-border)] bg-teal-50 px-3 py-2 text-xs text-teal-800"
+              >
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 size={13} className="shrink-0" />
+                  <span className="flex-1">导入 {importResult.created.length} 个，跳过 {importResult.skipped.length} 个（目录已按压缩包保留）</span>
+                  {importResult.skipped.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowSkipped(value => !value)}
+                      aria-expanded={showSkipped}
+                      className="rounded-md px-1.5 py-0.5 text-[11px] text-teal-700 transition-colors hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                    >
+                      {showSkipped ? '收起跳过原因' : '查看跳过原因'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setImportResult(null)}
+                    aria-label="关闭导入结果"
+                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-teal-600 transition-colors hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+                {showSkipped && importResult.skipped.length > 0 && (
+                  <ul className="ml-5 list-disc space-y-0.5 text-[11px] text-teal-700">
+                    {importResult.skipped.map(item => (
+                      <li key={item.filename}>{item.filename}：{item.reason}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
             {files.length === 0 ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-1 px-3 py-6 text-center">
                 <FileText size={18} className="text-[var(--color-text-tertiary)]" />
@@ -567,7 +554,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
                     <p className="truncate text-sm text-[var(--color-text-primary)]" title={selected.error || selected.filename}>
                       {selected.filename}
                     </p>
-                    <p className="text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
+                    <p className="truncate text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
                       {selected.path ? `${selected.path} · ` : ''}{formatSize(selected.size)} · 解析 {selected.extractedChars} 字符
                       {selected.status === 'built' && !selected.isImage && ` · ${selected.entityCount} 实体 / ${selected.relationCount} 关系`}
                       {selected.status === 'failed' && ' · 抽取失败，可重建'}
@@ -681,7 +668,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
                 if (file) handleSelectFile(file)
               }}
               onRefresh={() => { void refresh() }}
-              onError={handlePanelError}
+              onError={showError}
             />
           </aside>
         </div>
