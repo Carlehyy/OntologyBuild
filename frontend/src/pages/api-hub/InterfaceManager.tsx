@@ -449,10 +449,10 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
             {draft.id && <Button variant="ghost" size="icon-sm" title="复制为新接口" onClick={() => { setSelectedId(null); setBaseline(emptyHubInterface()); setDraft({ ...structuredClone(draft), id: null, name: `${draft.name} 副本`, mcp_enabled: false, open_enabled: false, http_enabled: false, proxy_slug: '', proxy_query_keys: [], proxy_header_keys: [], proxy_body_enabled: false, proxy_body_keys: [] }); setResult(null); setResultFingerprint(''); setSelectedFiles([]) }}><Copy size={14} /></Button>}
             {draft.id && <Button variant="ghost" size="icon-sm" title="删除接口" className="text-[var(--color-danger)]" onClick={() => setDeleteOpen(true)}><Trash2 size={14} /></Button>}
-            {draft.id && <Button variant="outline" size="sm" className="border-brand-line text-brand-ink hover:bg-brand-soft" onClick={() => setPublicationTarget(structuredClone(baseline))}><Share2 size={14} />HTTP 发布</Button>}
-            {draft.id && draft.http_enabled && <Button variant="outline" size="sm" className="border-brand-line text-brand-ink hover:bg-brand-soft" loading={publicationCopying} onClick={copyPublishedExample} aria-label={'复制“' + draft.name + '”的 HTTP 调用示例'}>{!publicationCopying && (publicationCopied ? <Check size={14} /> : <Copy size={14} />)}{publicationCopied ? '已复制' : '复制 HTTP 示例'}<span className="sr-only" aria-live="polite">{publicationCopied ? 'HTTP 调用示例复制成功' : ''}</span></Button>}
+            {draft.id && <Button variant="outline" size="sm" onClick={() => setPublicationTarget(structuredClone(baseline))}><Share2 size={14} />HTTP 发布</Button>}
+            {draft.id && draft.http_enabled && <Button variant="outline" size="sm" loading={publicationCopying} onClick={copyPublishedExample} aria-label={'复制“' + draft.name + '”的 HTTP 调用示例'}>{!publicationCopying && (publicationCopied ? <Check size={14} /> : <Copy size={14} />)}{publicationCopied ? '已复制' : '复制 HTTP 示例'}<span className="sr-only" aria-live="polite">{publicationCopied ? 'HTTP 调用示例复制成功' : ''}</span></Button>}
             {/* 桥接接口由平台进程内分发，外部 cURL 无法触达，不提供调试示例 */}
-            {!draft.url.trim().startsWith('mcp-bridge://') && <Button variant="outline" size="sm" className="border-brand-line text-brand-ink hover:bg-brand-soft" onClick={() => void showCallExample()}><FileCode2 size={14} />上游调试 cURL</Button>}
+            {!draft.url.trim().startsWith('mcp-bridge://') && <Button variant="outline" size="sm" onClick={() => void showCallExample()}><FileCode2 size={14} />上游调试 cURL</Button>}
           </div>
         </div>
 
