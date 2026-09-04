@@ -11,20 +11,20 @@ function makeGraph(overrides: Partial<PalaceGraph> = {}): PalaceGraph {
     nodes: [
       {
         id: 'e-1', name: '张三', type: '人物', aliases: ['老张'],
-        source_files: ['简历.md'], mention_count: 4, match_count: 1,
+        source_files: ['简历.md'], file_ids: ['f-1'], mention_count: 4, match_count: 1,
       },
       {
         id: 'e-2', name: 'ACME', type: '组织', aliases: [],
-        source_files: ['简历.md', '项目说明.md'], mention_count: 1, match_count: 0,
+        source_files: ['简历.md', '项目说明.md'], file_ids: ['f-1', 'f-2'], mention_count: 1, match_count: 0,
       },
       {
         id: 'e-3', name: '语义网', type: '未知类别', aliases: [],
-        source_files: ['资料.md'], mention_count: 1, match_count: 0,
+        source_files: ['资料.md'], file_ids: ['f-2'], mention_count: 1, match_count: 0,
       },
     ],
     edges: [
-      { source: 'e-1', target: 'e-2', name: '任职', source_files: ['简历.md'] },
-      { source: 'e-1', target: 'e-404', name: '悬空', source_files: [] },
+      { source: 'e-1', target: 'e-2', name: '任职', source_files: ['简历.md'], file_ids: ['f-1'] },
+      { source: 'e-1', target: 'e-404', name: '悬空', source_files: [], file_ids: [] },
     ],
     totals: { entities: 3, relations: 1 },
     truncated: false,

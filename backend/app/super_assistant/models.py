@@ -268,6 +268,9 @@ class SuperAssistantPalaceFile(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     owner_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    # 目录层级（"/" 分隔，根目录为空串）：单文件上传落根目录，ZIP 导入以
+    # 压缩包名为顶层目录、保留包内相对层级；仅作展示分组，不参与图谱语义
+    folder_path: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     artifact_id: Mapped[str] = mapped_column(String(64), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
     size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

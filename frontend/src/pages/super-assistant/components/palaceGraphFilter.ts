@@ -47,3 +47,12 @@ export function palaceOneHopNeighbors(graph: PalaceGraph, nodeId: string): Palac
   }
   return neighbors
 }
+
+/** 选中文件在图中的贡献节点 id 集（节点溯源 file_ids 命中），供“仅看本文档”高亮。 */
+export function palaceFileNodeIds(graph: PalaceGraph, fileId: string): Set<string> {
+  return new Set(
+    graph.nodes
+      .filter(node => (node.file_ids || []).includes(fileId))
+      .map(node => node.id),
+  )
+}

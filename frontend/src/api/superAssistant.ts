@@ -64,6 +64,8 @@ export interface SuperSearchResult {
 export interface PalaceFile {
   id: string
   filename: string
+  /** 目录层级（"/" 分隔，根目录为空串）：单传文件落根目录，ZIP 导入保留包内结构 */
+  path: string
   mimeType: string
   size: number
   sha256: string
@@ -74,6 +76,8 @@ export interface PalaceFile {
   relationCount: number
   /** md/txt 纯文本文件支持在线编辑（PUT content），其余格式只读 */
   editable: boolean
+  /** 图片只入库+预览（/raw 原图），不参与图谱抽取，状态直接定格 built */
+  isImage: boolean
   createdAt: string
   updatedAt: string
 }
@@ -84,6 +88,8 @@ export interface PalaceGraphNode {
   type: string
   aliases: string[]
   source_files: string[]
+  /** 溯源文件行 id：与文件库列表联动（选中文件高亮 / 点节点定位文档） */
+  file_ids: string[]
   mention_count: number
   /** 检索/对话中被引用命中的次数（graph/search 与图谱详情展示口径） */
   match_count: number
@@ -94,6 +100,7 @@ export interface PalaceGraphEdge {
   target: string
   name: string
   source_files: string[]
+  file_ids: string[]
 }
 
 /** 记忆宫殿图谱视图：available=false 表示 Neo4j 暂不可用（非 5xx） */
@@ -127,6 +134,7 @@ export interface PalaceGraphSearchEdge {
   target_name: string
   name: string
   source_files: string[]
+  file_ids: string[]
 }
 
 /** 图谱邻域检索（GET graph/search）：available=false 表示图谱服务暂不可用 */
@@ -361,6 +369,9 @@ export const superAssistantApi = {
     apiClientV2.post<{ dispatched: boolean }>(`/super-assistant/palace/files/${fileId}/rebuild`),
   palaceFilePreview: (fileId: string, maxChars = 60000) =>
     apiClientV2.get<PalaceFilePreview>(`/super-assistant/palace/files/${fileId}/preview`, { params: { max_chars: maxChars } }),
+  /** 原始字节（图片原图预览）：Bearer 鉴权走 axios blob，消费方自行 createObjectURL 并释放 */
+  palaceFileRaw: (fileId: string) =>
+    apiClientV2.get<Blob>(`/super-assistant/palace/files/${fileId}/raw`, { responseType: 'blob' }),
   updatePalaceFileContent: (fileId: string, content: string) =>
     apiClientV2.put<PalaceFile>(`/super-assistant/palace/files/${fileId}/content`, { content }),
   replacePalaceFile: (fileId: string, file: File) => {

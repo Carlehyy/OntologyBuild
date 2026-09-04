@@ -727,6 +727,10 @@ def test_batch_import_mixed_zip(env, monkeypatch):
     payload = response.json()
     assert sorted(item["filename"] for item in payload["created"]) == ["嵌套.txt", "有效.md"]
     assert all(item["status"] == "pending" and item["editable"] is True for item in payload["created"])
+    # 目录层级保留：压缩包名为顶层目录，包内相对路径为子目录
+    paths = {item["filename"]: item["path"] for item in payload["created"]}
+    assert paths["有效.md"] == "批量"
+    assert paths["嵌套.txt"] == "批量/sub"
     reasons = {item["filename"]: item["reason"] for item in payload["skipped"]}
     assert set(reasons) == {"evil.exe", "超限.md"}
     assert "不支持的类型" in reasons["evil.exe"]
@@ -780,6 +784,90 @@ def test_batch_import_empty_zip(env):
 def test_batch_import_rejects_non_zip(env):
     assert _batch(env.client, "归档.txt", b"PK").status_code == 400
     assert _batch(env.client, "假.zip", "这不是压缩包".encode()).status_code == 400
+
+
+def test_batch_import_preserves_paths_and_allows_duplicate_basename(env, monkeypatch):
+    """目录层级随包保留；不同目录下的同名文件互不冲突。"""
+    dispatched = _record_dispatch(monkeypatch)
+    archive = _zip_bytes({
+        "a/共享.md": "甲",
+        "b/共享.md": "乙",
+        "a/deep/嵌套.txt": "文本",
+    })
+    response = _batch(env.client, "资料包.zip", archive)
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    by_path = {item["path"]: item for item in payload["created"]}
+    assert sorted(by_path) == ["资料包/a", "资料包/a/deep", "资料包/b"]
+    assert by_path["资料包/a"]["filename"] == "共享.md"
+    assert len(dispatched) == 3
+
+
+def test_batch_import_zip_with_image(env, monkeypatch):
+    """zip 内图片入库定格 built、不派发抽取；文档条目照常派发。"""
+    dispatched = _record_dispatch(monkeypatch)
+    archive = _zip_bytes({"图示.png": b"\x89PNG-fake", "doc.md": "# 知识"})
+    response = _batch(env.client, "带图.zip", archive)
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    image_row = next(item for item in payload["created"] if item["filename"] == "图示.png")
+    assert image_row["status"] == "built"
+    assert image_row["isImage"] is True
+    assert image_row["path"] == "带图"
+    doc_row = next(item for item in payload["created"] if item["filename"] == "doc.md")
+    assert doc_row["status"] == "pending"
+    assert len(dispatched) == 1
+
+
+def test_batch_import_images_bypass_in_flight_quota(env, monkeypatch):
+    """图片不抽取，不占用在途/每小时配额：超过在途上限的纯图片包应全部成功。"""
+    monkeypatch.setattr(settings, "super_assistant_palace_max_in_flight", 1)
+    archive = _zip_bytes({f"图{i}.png": b"p" for i in range(5)})
+    response = _batch(env.client, "全图.zip", archive)
+    assert response.status_code == 201, response.text
+    assert len(response.json()["created"]) == 5
+
+
+def test_upload_image_stores_without_extraction(env, monkeypatch):
+    """单传图片：入库定格 built、可经 /raw 内联读取（属主隔离）、重建 400。"""
+    dispatched = _record_dispatch(monkeypatch)
+    created = env.client.post(
+        f"{_PREFIX}/palace/files",
+        files={"file": ("截图.png", b"\x89PNG-fake", "image/png")},
+    )
+    assert created.status_code == 201, created.text
+    row = created.json()
+    assert row["status"] == "built"
+    assert row["isImage"] is True
+    assert row["editable"] is False
+    assert row["path"] == ""
+    assert dispatched == []  # 图片不触发抽取
+
+    raw = env.client.get(f"{_PREFIX}/palace/files/{row['id']}/raw")
+    assert raw.status_code == 200
+    assert raw.headers["content-type"].startswith("image/png")
+    assert raw.content == b"\x89PNG-fake"
+
+    assert env.client.post(f"{_PREFIX}/palace/files/{row['id']}/rebuild").status_code == 400
+    other_client = env.make_client(_user("user-2", "other"))
+    assert other_client.get(f"{_PREFIX}/palace/files/{row['id']}/raw").status_code == 404
+
+
+def test_replace_with_image_resets_to_built_without_dispatch(env, monkeypatch):
+    """把文档替换为图片：行身份与目录保留，状态定格 built、不派发。"""
+    dispatched = _record_dispatch(monkeypatch)
+    row = _upload(env.client, "笔记.md", "# 旧".encode()).json()
+    assert len(dispatched) == 1  # 仅初次文档上传派发
+    response = env.client.post(
+        f"{_PREFIX}/palace/files/{row['id']}/replace",
+        files={"file": ("新图.png", b"\x89PNG-fake", "image/png")},
+    )
+    assert response.status_code == 200, response.text
+    updated = response.json()
+    assert updated["status"] == "built"
+    assert updated["isImage"] is True
+    assert updated["entityCount"] == 0
+    assert len(dispatched) == 1  # 替换为图片不再派发抽取
 
 
 # ---------------------------------------------------------------------------
