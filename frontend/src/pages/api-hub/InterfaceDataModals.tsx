@@ -8,7 +8,10 @@ import {
   type ProxyKey, type ProxyKeyPayload,
 } from '@/api/apiHub'
 import { Button } from '@/components/ui/Button'
-import { ConfirmModal, Modal } from '@/components/ui/Modal'
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
+import { ConfirmDialog } from './ConfirmDialog'
 import { writeTextToClipboard } from '@/utils/clipboard'
 
 interface SharedProps {
@@ -70,12 +73,23 @@ export function ProxyKeysModal({ open, onClose, interfaces, onError }: Omit<Shar
 
   return (
     <>
-      <Modal open={open} onClose={onClose} title="调用方管理" description="查看、停用或撤销平台已经生成的调用凭证；日常分享无需在这里手动创建。" size="3xl" footer={<Button variant="outline" onClick={onClose}>关闭</Button>}>
-        {revealed ? <SecretView secret={revealed} info={info} onDone={() => setRevealed('')} />
+      <Dialog open={open} onOpenChange={next => { if (!next) onClose() }}>
+        <DialogContent className="w-[min(92vw,48rem)]">
+          <DialogHeader>
+            <div className="min-w-0 pt-0.5">
+              <DialogTitle>调用方管理</DialogTitle>
+              <DialogDescription>查看、停用或撤销平台已经生成的调用凭证；日常分享无需在这里手动创建。</DialogDescription>
+            </div>
+          </DialogHeader>
+          {revealed ? <SecretView secret={revealed} info={info} onDone={() => setRevealed('')} />
           : editing !== undefined ? <ProxyKeyForm keyValue={editing} interfaces={interfaces} busy={busy} onCancel={() => setEditing(undefined)} onSave={saveKey} />
             : <div className="space-y-4"><div className="flex items-center justify-between rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-4 py-3"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-700"><ShieldCheck size={17} /></div><div><div className="text-sm font-semibold">{keys.length} 把调用密钥</div><div className="text-[10px] text-[var(--color-text-tertiary)]">{info?.published.length || 0} 个已发布 HTTP 接口</div></div></div><Button size="sm" onClick={() => setEditing(null)}><Plus size={14} />创建密钥</Button></div>{!keys.length ? <div className="rounded-lg border border-dashed border-[var(--color-border)] py-16 text-center text-xs text-[var(--color-text-tertiary)]"><KeyRound size={26} className="mx-auto mb-3 opacity-50" />还没有调用密钥</div> : <div className="max-h-[52vh] space-y-2 overflow-y-auto">{keys.map(key => { const tone = key.status === 'active' ? 'bg-emerald-50 text-emerald-700' : key.status === 'expired' ? 'bg-red-50 text-red-700' : key.status === 'scheduled' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'; return <div key={key.id} className="rounded-lg border border-[var(--color-border)] p-4"><div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2"><span className="text-sm font-semibold">{key.name}</span><span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${tone}`}>{statusLabel(key.status)}</span></div><div className="mt-1 font-mono text-[11px] text-[var(--color-text-tertiary)]">{key.masked_key}</div></div><div className="flex gap-1"><Button variant="ghost" size="icon-sm" title="编辑" onClick={() => setEditing(key)}><Pencil size={13} /></Button><Button variant="ghost" size="sm" disabled={busy} onClick={() => toggle(key)}>{key.enabled ? '停用' : '启用'}</Button><Button variant="ghost" size="icon-sm" title="撤销" className="text-red-600" onClick={() => setDeleteKey(key)}><Trash2 size={13} /></Button></div></div><div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[10px] text-[var(--color-text-tertiary)]"><span>{key.scope_all ? '全部已发布接口' : `${key.interface_ids.length} 个指定接口`}</span><span>{key.expires_at ? `有效期至 ${formatTime(key.expires_at)}` : '长期有效'}</span><span>{key.last_used_at ? `最后调用 ${formatTime(key.last_used_at)}` : '尚未调用'}</span></div></div> })}</div>}</div>}
-      </Modal>
-      <ConfirmModal open={Boolean(deleteKey)} onClose={() => setDeleteKey(null)} onConfirm={remove} loading={busy} variant="danger" title={`撤销密钥“${deleteKey?.name || ''}”？`} description="撤销后调用方将立即无法继续使用，且不能恢复。" confirmText="永久撤销" />
+          <DialogFooter>
+            <Button variant="outline" onClick={onClose}>关闭</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <ConfirmDialog open={Boolean(deleteKey)} onClose={() => setDeleteKey(null)} onConfirm={remove} loading={busy} variant="danger" title={`撤销密钥“${deleteKey?.name || ''}”？`} description="撤销后调用方将立即无法继续使用，且不能恢复。" confirmText="永久撤销" />
     </>
   )
 }
@@ -109,8 +123,15 @@ export function SystemDataModal({ open, onClose, interfaces, reload, onError }: 
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="系统数据" description="备份或还原接口清单；调用历史、W3 凭据和代理密钥不会写入备份。" size="3xl" footer={<Button variant="outline" onClick={onClose}>关闭</Button>}>
-      {message && <div className="mb-4 rounded-md bg-[var(--color-success-bg)] px-3 py-2 text-xs text-[var(--color-success)]">{message}</div>}
+    <Dialog open={open} onOpenChange={next => { if (!next) onClose() }}>
+      <DialogContent className="w-[min(92vw,48rem)]">
+        <DialogHeader>
+          <div className="min-w-0 pt-0.5">
+            <DialogTitle>系统数据</DialogTitle>
+            <DialogDescription>备份或还原接口清单；调用历史、W3 凭据和代理密钥不会写入备份。</DialogDescription>
+          </div>
+        </DialogHeader>
+        {message && <div className="mb-4 rounded-md bg-[var(--color-success-bg)] px-3 py-2 text-xs text-[var(--color-success)]">{message}</div>}
       <div className="grid min-h-[430px] grid-cols-2 gap-6">
         <section className="space-y-4 rounded-lg border border-[var(--color-border)] p-4">
           <div><h4 className="text-sm font-semibold">数据备份</h4><p className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">将接口配置导出为可迁移 JSON 包。</p></div>
@@ -125,7 +146,11 @@ export function SystemDataModal({ open, onClose, interfaces, reload, onError }: 
           <label className="flex min-h-64 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-[var(--color-border-hover)] bg-[var(--color-bg-base)] text-center hover:border-[var(--color-nav-bg)]"><Upload size={28} className="mb-3 text-[var(--color-text-tertiary)]" /><span className="text-xs font-medium">选择 API-Hub 备份文件</span><span className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">支持 .json</span><input type="file" accept=".json,application/json" className="hidden" onChange={event => { void importData(event.target.files?.[0]); event.currentTarget.value = '' }} /></label>
         </section>
       </div>
-    </Modal>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>关闭</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

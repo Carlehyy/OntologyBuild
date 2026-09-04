@@ -7,7 +7,11 @@ import {
 import { apiError, apiHub, emptyHubInterface, validateHttpUrl, type HubInterface, type KV, type RunResult } from '@/api/apiHub'
 import { authApi, type PrivacyVar, type UserEnvVar } from '@/api/auth'
 import { Button } from '@/components/ui/Button'
-import { ConfirmModal, Modal } from '@/components/ui/Modal'
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { ConfirmDialog } from './ConfirmDialog'
 import { writeTextToClipboard } from '@/utils/clipboard'
 import { ProxyKeysModal, SystemDataModal } from './InterfaceDataModals'
 import { HttpPublicationModal } from './HttpPublicationModal'
@@ -158,6 +162,7 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
     setNewGroupOpen(true)
   }
   const changeGroup = (value: string) => {
+    if (value === '__default__') { patchDraft('group_name', ''); return }
     if (value === '__new__') { openNewGroup(); return }
     patchDraft('group_name', value)
   }
@@ -428,11 +433,16 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
         <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-4 py-3">
           <div className="flex min-w-[430px] flex-[1_1_430px] items-center gap-2">
             <input value={draft.name} onChange={event => patchDraft('name', event.target.value)} className="h-8 min-w-[180px] max-w-md flex-1 rounded-md border border-[var(--color-border)] bg-white px-3 text-sm font-semibold outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] hover:border-[var(--color-border-hover)] focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" placeholder="接口名称" />
-            <select value={draft.group_name} onChange={event => changeGroup(event.target.value)} className="h-8 w-40 shrink-0 rounded-md border border-[var(--color-border)] bg-white px-2.5 text-xs outline-none transition-colors hover:border-[var(--color-border-hover)] focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" title="选择或新增分类">
-              <option value="">默认分组</option>
-              {groupNames.map(group => <option key={group} value={group}>{group}</option>)}
-              <option value="__new__">＋ 新增分类…</option>
-            </select>
+            <Select value={draft.group_name || '__default__'} onValueChange={changeGroup}>
+              <SelectTrigger className="h-8 w-40 shrink-0 rounded-md text-xs" title="选择或新增分类" aria-label="选择或新增分类">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__default__">默认分组</SelectItem>
+                {groupNames.map(group => <SelectItem key={group} value={group}>{group}</SelectItem>)}
+                <SelectItem value="__new__">＋ 新增分类…</SelectItem>
+              </SelectContent>
+            </Select>
             <Button size="sm" loading={saving} onClick={save}><Check size={14} />{draft.id ? '保存配置' : '保存接口'}</Button>
             {isDirty && <span className="shrink-0 rounded bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-700">未保存</span>}
           </div>
@@ -448,9 +458,14 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
 
         <div className="shrink-0 p-4 pb-3">
           <div className={`flex overflow-hidden rounded-md border bg-[var(--color-bg-base)] focus-within:border-[var(--color-nav-bg)] ${urlError ? 'border-red-300' : 'border-[var(--color-border)]'}`}>
-            <select value={draft.method} onChange={event => patchDraft('method', event.target.value)} className="w-28 border-r border-[var(--color-border)] bg-transparent px-3 text-xs font-bold outline-none">
-              {methods.map(method => <option key={method}>{method}</option>)}
-            </select>
+            <Select value={draft.method} onValueChange={value => patchDraft('method', value)}>
+              <SelectTrigger aria-label="请求方法" className="h-10 w-28 shrink-0 rounded-none border-0 border-r border-border bg-transparent px-3 text-xs font-bold shadow-none focus:border-ring focus:ring-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {methods.map(method => <SelectItem key={method} value={method}>{method}</SelectItem>)}
+              </SelectContent>
+            </Select>
             <input value={draft.url} aria-invalid={Boolean(urlError)} aria-describedby={urlError ? 'api-hub-url-error' : undefined} onChange={event => patchDraft('url', event.target.value)} className="h-10 min-w-0 flex-1 bg-transparent px-3 font-mono text-xs outline-none" placeholder="https://example.com/api/resource" />
             <button onClick={run} disabled={running} className={`relative m-1 flex min-w-[84px] items-center justify-center gap-1.5 overflow-hidden rounded bg-emerald-600 px-4 text-xs font-semibold text-white shadow-sm transition-all duration-200 hover:-translate-y-px hover:bg-emerald-700 active:translate-y-0 active:scale-[0.98] disabled:cursor-wait disabled:opacity-90 ${running ? 'ring-4 ring-emerald-100' : ''}`}>
               {running ? <><LoaderCircle size={14} className="animate-spin" />调用中…</> : <><Play size={13} />调用</>}
@@ -482,39 +497,38 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
         <ResponsePanel result={result} stale={resultStale} loading={running} />
       </section>
 
-      <ConfirmModal open={deleteOpen} onClose={() => setDeleteOpen(false)} onConfirm={remove} loading={saving} variant="danger" title={`删除“${draft.name}”？`} description="接口配置及其全部调用历史都会被删除，此操作不可撤销。" confirmText="删除接口" />
-      <ConfirmModal open={Boolean(pendingNavigation)} onClose={() => setPendingNavigation(null)} onConfirm={discardAndNavigate} variant="danger" title="放弃未保存修改？" description="当前接口的未保存修改将丢失，且无法恢复。" confirmText="放弃并继续" />
-      <Modal open={newGroupOpen} onClose={closeNewGroup} title="新增分类" description="输入新的分类名称，添加后当前接口会立即选中该分类。" size="sm" footer={<><Button variant="outline" onClick={closeNewGroup}>取消</Button><Button onClick={addNewGroup}><CirclePlus size={14} />添加并选中</Button></>}>
-        <div className="space-y-3">
+      <ConfirmDialog open={deleteOpen} onClose={() => setDeleteOpen(false)} onConfirm={remove} loading={saving} variant="danger" title={`删除“${draft.name}”？`} description="接口配置及其全部调用历史都会被删除，此操作不可撤销。" confirmText="删除接口" />
+      <ConfirmDialog open={Boolean(pendingNavigation)} onClose={() => setPendingNavigation(null)} onConfirm={discardAndNavigate} variant="danger" title="放弃未保存修改？" description="当前接口的未保存修改将丢失，且无法恢复。" confirmText="放弃并继续" />
+      <Dialog open={newGroupOpen} onOpenChange={next => { if (!next) closeNewGroup() }}>
+        <DialogContent className="w-[min(92vw,26rem)]">
+          <DialogHeader>
+            <div className="min-w-0 pt-0.5">
+              <DialogTitle>新增分类</DialogTitle>
+              <DialogDescription>输入新的分类名称，添加后当前接口会立即选中该分类。</DialogDescription>
+            </div>
+          </DialogHeader>
+          <div className="space-y-3">
           <div className="rounded-lg border border-emerald-100 bg-emerald-50/70 px-3 py-2.5 text-xs leading-5 text-slate-600">分类会先保留在本次编辑会话中，保存当前接口后正式生效。</div>
           <label htmlFor="api-hub-new-group" className="block text-xs font-semibold text-slate-700">分类名称</label>
           <input id="api-hub-new-group" autoFocus autoComplete="off" value={newGroupName} onChange={event => { setNewGroupName(event.target.value); if (newGroupError) setNewGroupError('') }} onKeyDown={event => { if (event.key === 'Enter') addNewGroup() }} className={`h-10 w-full rounded-lg border bg-white px-3 text-sm outline-none transition-colors focus:ring-2 ${newGroupError ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : 'border-[var(--color-border)] focus:border-emerald-500 focus:ring-emerald-100'}`} placeholder="例如：用户中心 / 订单服务" />
           {newGroupError && <div role="alert" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{newGroupError}</div>}
-        </div>
-      </Modal>
-      <Modal
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeNewGroup}>取消</Button>
+            <Button onClick={addNewGroup}><CirclePlus size={14} />添加并选中</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
         open={Boolean(callExampleDraft)}
-        onClose={() => setCallExampleDraft(null)}
-        title="上游调试 cURL"
-        size="2xl"
-        panelClassName="max-w-[600px] border-slate-200 bg-white shadow-[0_24px_56px_-16px_rgba(13,148,136,0.22),0_12px_28px_-12px_rgba(15,23,42,0.2)]"
-        backdropClassName="bg-[#111e1c]/45 backdrop-blur-md"
-        headerClassName="border-b border-slate-100 bg-gradient-to-b from-white to-slate-50/70 px-6 pb-4 pt-5"
-        contentClassName="px-6 pb-5 pt-5"
-        footerClassName="justify-center border-slate-100 bg-gradient-to-t from-slate-50/80 to-white px-6 pb-5 pt-4"
-        footer={(
-          <>
-            <Button variant="outline" className="min-w-24 bg-white" onClick={() => setCallExampleDraft(null)}>关闭</Button>
-            <Button
-              className={`min-w-24 shadow-sm ${callExampleCopyState === 'failed' ? 'bg-red-600 hover:bg-red-700' : ''}`}
-              onClick={() => void copyCallExample()}
-            >
-              {callExampleCopyState === 'copied' ? <Check size={14} /> : <Copy size={14} />}
-              {callExampleCopyState === 'copied' ? '已复制' : callExampleCopyState === 'failed' ? '重试复制' : '复制'}
-            </Button>
-          </>
-        )}
+        onOpenChange={next => { if (!next) setCallExampleDraft(null) }}
       >
+        <DialogContent className="w-[min(92vw,37.5rem)]">
+          <DialogHeader>
+            <div className="min-w-0 pt-0.5">
+              <DialogTitle>上游调试 cURL</DialogTitle>
+            </div>
+          </DialogHeader>
         <div className="space-y-3.5">
           <div className="rounded-r-lg border-l-[3px] border-teal-600 bg-teal-50/80 px-3.5 py-2.5 text-xs leading-5 text-slate-600">
             此命令直连真实上游地址，仅用于管理员调试；对外系统请使用“HTTP 发布”生成的调用包。CMD / PowerShell / bash 通用。
@@ -524,7 +538,18 @@ export default function InterfaceManager({ interfaces, reload, onError }: Props)
             {callExampleCopyState === 'copied' ? 'cURL 命令已复制' : callExampleCopyState === 'failed' ? '复制失败，请重试' : ''}
           </span>
         </div>
-      </Modal>
+          <DialogFooter className="justify-center">
+            <Button variant="outline" className="min-w-24" onClick={() => setCallExampleDraft(null)}>关闭</Button>
+            <Button
+              className={`min-w-24 shadow-sm ${callExampleCopyState === 'failed' ? 'bg-red-600 hover:bg-red-700' : ''}`}
+              onClick={() => void copyCallExample()}
+            >
+              {callExampleCopyState === 'copied' ? <Check size={14} /> : <Copy size={14} />}
+              {callExampleCopyState === 'copied' ? '已复制' : callExampleCopyState === 'failed' ? '重试复制' : '复制'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <HttpPublicationModal open={Boolean(publicationTarget)} onClose={() => setPublicationTarget(null)} item={publicationTarget} reload={reloadPublication} onError={onError} />
       <ProxyKeysModal open={proxyKeys} onClose={() => setProxyKeys(false)} interfaces={interfaces} onError={onError} />
       <SystemDataModal open={systemData} onClose={() => setSystemData(false)} interfaces={interfaces} reload={reload} onError={onError} />

@@ -6,7 +6,9 @@ import {
   apiError, apiHub, type ForwardingPackage, type HubInterface,
 } from '@/api/apiHub'
 import { Button } from '@/components/ui/Button'
-import { Modal } from '@/components/ui/Modal'
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
 import { writeTextToClipboard } from '@/utils/clipboard'
 
 interface Props {
@@ -119,28 +121,18 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
   const code = callPackage ? forwardingCode(callPackage, tab) : ''
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={`HTTP 发布 · ${current.name}`}
-      description="勾选调用方可传入的业务参数后，平台生成可直接复制的调用包；固定值和认证信息继续由平台保管。"
-      size="3xl"
-      headerIcon={<Share2 size={19} className="text-emerald-700" />}
-      footer={callPackage ? (
-        <>
-          <Button variant="outline" onClick={onClose}>完成</Button>
-          <Button onClick={() => void copy(code, 'code')}><Copy size={14} />{copied === 'code' ? '已复制' : '复制当前代码'}</Button>
-        </>
-      ) : (
-        <>
-          {current.http_enabled && <Button variant="ghost" onClick={() => void disable()} disabled={busy} className="mr-auto text-slate-500">停止 HTTP 发布</Button>}
-          <Button variant="outline" onClick={() => setConfiguration(suggestedPublicationDraft(current))} disabled={busy}><RefreshCw size={14} />恢复推荐选择</Button>
-          <Button variant="outline" onClick={() => void savePublication(false)} loading={busy}>保存 HTTP 配置</Button>
-          <Button onClick={() => void savePublication(true)} loading={busy}><Share2 size={14} />{current.http_enabled ? '保存并生成调用包' : '发布并生成调用包'}</Button>
-        </>
-      )}
-    >
-      <div className="max-h-[66vh] space-y-5 overflow-y-auto pr-1">
+    <Dialog open={open} onOpenChange={next => { if (!next) onClose() }}>
+      <DialogContent className="w-[min(92vw,48rem)]">
+        <DialogHeader>
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--color-bg-hover)] text-[var(--color-nav-bg)]">
+            <Share2 size={19} />
+          </div>
+          <div className="min-w-0 pt-0.5">
+            <DialogTitle>{`HTTP 发布 · ${current.name}`}</DialogTitle>
+            <DialogDescription>勾选调用方可传入的业务参数后，平台生成可直接复制的调用包；固定值和认证信息继续由平台保管。</DialogDescription>
+          </div>
+        </DialogHeader>
+        <div className="max-h-[66vh] space-y-5 overflow-y-auto pr-1">
         <section className={`flex items-center justify-between gap-5 rounded-xl border px-4 py-4 ${current.http_enabled ? 'border-emerald-200 bg-emerald-50/70' : 'border-teal-100 bg-teal-50/60'}`}>
           <div className="flex min-w-0 items-start gap-3">
             <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${current.http_enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-teal-100 text-teal-700'}`}>
@@ -235,8 +227,22 @@ export function HttpPublicationModal({ open, onClose, item, reload, onError }: P
           </section>
         )}
 
-      </div>
-    </Modal>
+        </div>
+        {callPackage ? (
+          <DialogFooter>
+            <Button variant="outline" onClick={onClose}>完成</Button>
+            <Button onClick={() => void copy(code, 'code')}><Copy size={14} />{copied === 'code' ? '已复制' : '复制当前代码'}</Button>
+          </DialogFooter>
+        ) : (
+          <DialogFooter>
+            {current.http_enabled && <Button variant="ghost" onClick={() => void disable()} disabled={busy} className="mr-auto text-slate-500">停止 HTTP 发布</Button>}
+            <Button variant="outline" onClick={() => setConfiguration(suggestedPublicationDraft(current))} disabled={busy}><RefreshCw size={14} />恢复推荐选择</Button>
+            <Button variant="outline" onClick={() => void savePublication(false)} loading={busy}>保存 HTTP 配置</Button>
+            <Button onClick={() => void savePublication(true)} loading={busy}><Share2 size={14} />{current.http_enabled ? '保存并生成调用包' : '发布并生成调用包'}</Button>
+          </DialogFooter>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -46,7 +46,6 @@ const NATIVE_SELECT_ALLOWLIST = new Set([
   'pages/agent/InstanceKnowledgeGraph.tsx',
   'pages/agent/ReportStudioPage.tsx',
   'pages/agent/components/OntologyNetworkView.tsx',
-  'pages/api-hub/InterfaceManager.tsx',
   'pages/data-management/structured/CreateTableModal.tsx',
   'pages/data-management/structured/CuratedDetailPanel.tsx',
   'pages/data-management/structured/DatasetEditorModal.tsx',
