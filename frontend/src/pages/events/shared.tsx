@@ -16,11 +16,11 @@ export function fmt(iso: string | null | undefined): string {
 // ─── 级别标签 ────────────────────────────────────────────
 export function SeverityBadge({ sev }: { sev: string }) {
   const map: Record<string, { bg: string; text: string; dot: string; label: string; glow: string }> = {
-    critical: { bg: 'bg-red-50', text: 'text-red-600', dot: PALETTE.red, label: '严重', glow: 'rgba(251,113,133,0.4)' },
-    high: { bg: 'bg-orange-50', text: 'text-orange-600', dot: PALETTE.orange, label: '高级', glow: 'rgba(253,186,116,0.4)' },
-    medium: { bg: 'bg-amber-50', text: 'text-amber-600', dot: PALETTE.gold, label: '中级', glow: 'rgba(252,211,77,0.4)' },
-    low: { bg: 'bg-teal-50', text: 'text-teal-600', dot: PALETTE.teal, label: '低级', glow: 'rgba(94,234,212,0.4)' },
-    info: { bg: 'bg-blue-50', text: 'text-blue-600', dot: PALETTE.blue, label: '信息', glow: 'rgba(59,130,246,0.4)' },
+    critical: { bg: 'bg-[var(--color-danger-bg)]', text: 'text-[var(--color-danger)]', dot: PALETTE.red, label: '严重', glow: 'rgba(251,113,133,0.4)' },
+    high: { bg: 'bg-viz-orange-soft', text: 'text-viz-orange', dot: PALETTE.orange, label: '高级', glow: 'rgba(253,186,116,0.4)' },
+    medium: { bg: 'bg-[var(--color-warning-bg)]', text: 'text-[var(--color-warning)]', dot: PALETTE.gold, label: '中级', glow: 'rgba(252,211,77,0.4)' },
+    low: { bg: 'bg-brand-soft', text: 'text-brand-ink', dot: PALETTE.teal, label: '低级', glow: 'rgba(94,234,212,0.4)' },
+    info: { bg: 'bg-[var(--color-info-bg)]', text: 'text-[var(--color-info)]', dot: PALETTE.blue, label: '信息', glow: 'rgba(59,130,246,0.4)' },
   }
   const c = map[sev] ?? map.info
   return (

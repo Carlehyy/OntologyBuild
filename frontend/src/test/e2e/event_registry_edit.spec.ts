@@ -153,7 +153,8 @@ test('事件登记列表与编辑附件流程符合交互要求', async ({ page 
   await expect(dialog.getByText('已有附件', { exact: false })).toBeVisible()
   await expect(dialog.getByLabel('事件标题', { exact: false })).toHaveAttribute('required', '')
   await expect(dialog.getByLabel('事件类型', { exact: false })).toHaveAttribute('required', '')
-  await expect(dialog.getByLabel('严重程度', { exact: false })).toHaveAttribute('required', '')
+  // Radix combobox 触发器以 aria-required 表达必填语义
+  await expect(dialog.getByLabel('严重程度', { exact: false })).toHaveAttribute('aria-required', 'true')
   await expect(dialog.getByLabel('详细描述', { exact: false })).toHaveAttribute('required', '')
 
   await dialog.getByRole('button', { name: '删除 故障报告.pdf' }).click()

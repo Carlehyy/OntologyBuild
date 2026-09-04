@@ -13,9 +13,10 @@ import EventAttachmentsModal from './EventAttachmentsModal'
 import EventDetailDrawer from './EventDetailDrawer'
 import IngestKeysDrawer from './IngestKeysDrawer'
 import { PALETTE, fmt, SeverityBadge } from './shared'
+import { Select as UiSelect, SelectContent as UiSelectContent, SelectItem as UiSelectItem, SelectTrigger as UiSelectTrigger, SelectValue as UiSelectValue } from '@/components/ui/select'
 
 // 与「数据资产湖」一致的基础面板：白底、细边框、轻阴影。
-const PANEL = 'rounded-xl border border-slate-200 bg-white shadow-sm/50'
+const PANEL = 'rounded-xl border border-border bg-card shadow-sm/50'
 const PAGE_SIZE = 8
 const STATUS_TABS = [
   { value: 'active', label: '活跃', icon: Activity },
@@ -234,11 +235,11 @@ export default function EventRegistryPage() {
       {/* 顶部仅保留操作，不重复展示侧边栏已有的页面名称。 */}
       <div className={`${PANEL} shrink-0 px-4 py-3`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div ref={statusTabsRef} className="relative flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1 text-sm">
+          <div ref={statusTabsRef} className="relative flex items-center gap-1 rounded-lg border border-border bg-muted p-1 text-sm">
               <div
                 aria-hidden="true"
                 data-status-indicator
-                className="pointer-events-none absolute top-1 h-[calc(100%-8px)] rounded-md bg-emerald-600 shadow-sm transition-all duration-300 ease-out"
+                className="pointer-events-none absolute top-1 h-[calc(100%-8px)] rounded-md bg-[var(--color-success)] shadow-sm transition-all duration-300 ease-out"
                 style={{ left: `${statusIndicator.left}px`, width: `${statusIndicator.width}px` }}
               />
               {STATUS_TABS.map(tab => {
@@ -250,7 +251,7 @@ export default function EventRegistryPage() {
                     data-status-value={tab.value}
                     onClick={() => setStatus(tab.value)}
                     aria-pressed={status === tab.value}
-                    className={`relative z-10 inline-flex items-center gap-1 rounded-md px-4 py-2 font-medium transition-colors duration-200 ${status === tab.value ? 'text-white' : 'text-slate-500 hover:text-emerald-700'}`}
+                    className={`relative z-10 inline-flex items-center gap-1 rounded-md px-4 py-2 font-medium transition-colors duration-200 ${status === tab.value ? 'text-[var(--color-text-inverse)]' : 'text-muted-foreground hover:text-[var(--color-success)]'}`}
                   >
                     <StatusIcon className="h-3.5 w-3.5" />{tab.label}
                   </button>
@@ -260,12 +261,12 @@ export default function EventRegistryPage() {
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
             <button type="button" onClick={() => setKeysOpen(true)}
-              className="inline-flex h-9 w-32 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800">
+              className="inline-flex h-9 w-32 items-center justify-center gap-1 rounded-lg border border-border bg-card px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
               <Code2 className="h-4 w-4" />接入管理
-              <span className="rounded bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold leading-none text-emerald-700">API</span>
+              <span className="rounded bg-[var(--color-success-bg)] px-1 py-0.5 text-[9px] font-semibold leading-none text-[var(--color-success)]">API</span>
             </button>
             <button type="button" onClick={() => { setEditing(null); setFormOpen(true) }}
-              className="inline-flex h-9 w-32 items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 active:bg-emerald-800">
+              className="inline-flex h-9 w-32 items-center justify-center gap-1.5 rounded-lg bg-[var(--color-success)] px-3 text-sm font-medium text-[var(--color-text-inverse)] shadow-sm transition-colors hover:bg-[var(--color-success)] active:bg-[var(--color-success)]">
               <Plus className="h-4 w-4" />登记事件
             </button>
           </div>
@@ -284,8 +285,8 @@ export default function EventRegistryPage() {
         {/* 级别分布环：大屏下收紧卡片，为趋势图让出更多横向空间。 */}
         <div className={`${PANEL} flex min-h-[156px] flex-col overflow-hidden px-4 py-3 lg:col-span-4 xl:col-span-3 2xl:col-span-2`}>
           <div className="mb-1 flex shrink-0 items-center justify-between gap-2">
-            <span className="text-sm font-medium text-slate-700">事件级别分布</span>
-            <span className="text-xs text-slate-400" title="统计全部事件（含归档），与事件总数同口径">含归档</span>
+            <span className="text-sm font-medium text-foreground">事件级别分布</span>
+            <span className="text-xs text-[var(--color-text-tertiary)]" title="统计全部事件（含归档），与事件总数同口径">含归档</span>
           </div>
           <div className="flex min-h-0 flex-1 items-center gap-3">
             <div className="relative h-[88px] w-[88px] shrink-0 lg:h-[96px] lg:w-[96px] 2xl:h-[84px] 2xl:w-[84px]">
@@ -293,8 +294,8 @@ export default function EventRegistryPage() {
                 <ReactECharts option={severityOption} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} notMerge />
               </div>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-lg font-semibold text-slate-800 tabular-nums leading-none">{severityOption._centerTotal as number}</span>
-                <span className="mt-0.5 text-[11px] text-slate-400">合计</span>
+                <span className="text-lg font-semibold text-foreground tabular-nums leading-none">{severityOption._centerTotal as number}</span>
+                <span className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">合计</span>
               </div>
             </div>
             <div className="grid min-w-0 flex-1 grid-cols-1 gap-y-1">
@@ -305,8 +306,8 @@ export default function EventRegistryPage() {
                 return (
                   <div key={k} className="flex items-center gap-1.5 min-w-0">
                     <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: colors[i], boxShadow: `0 0 5px ${colors[i]}66` }} />
-                    <span className="shrink-0 whitespace-nowrap text-xs text-slate-500">{labels[k]}</span>
-                    <span className="ml-auto text-sm font-semibold tabular-nums text-slate-700">{v}</span>
+                    <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">{labels[k]}</span>
+                    <span className="ml-auto text-sm font-semibold tabular-nums text-foreground">{v}</span>
                   </div>
                 )
               })}
@@ -318,10 +319,10 @@ export default function EventRegistryPage() {
         <div className={`${PANEL} flex min-h-[156px] min-w-0 flex-col overflow-hidden px-4 py-3 lg:col-span-4 xl:col-span-5 2xl:col-span-6`}>
             <div className="flex items-center justify-between mb-1 shrink-0">
               <div className="flex items-center gap-1.5">
-                <span className="text-sm font-medium text-slate-700">近 7 日事件趋势</span>
-                <span className="text-xs text-slate-400">按级别堆叠 · 含归档</span>
+                <span className="text-sm font-medium text-foreground">近 7 日事件趋势</span>
+                <span className="text-xs text-[var(--color-text-tertiary)]">按级别堆叠 · 含归档</span>
               </div>
-              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+              <div className="flex items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
                 <LegendDot color={PALETTE.blue} label="信息" />
                 <LegendDot color={PALETTE.teal} label="低级" />
                 <LegendDot color={PALETTE.gold} label="中级" />
@@ -338,9 +339,9 @@ export default function EventRegistryPage() {
       {/* 筛选栏 */}
       <div className={`${PANEL} flex shrink-0 flex-wrap items-center gap-2 px-4 py-3`}>
           <div className="relative min-w-[220px] max-w-[340px] flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索事件标题、编号、上报人..."
-              className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 placeholder:text-slate-400" />
+              className="w-full rounded-lg border border-border bg-card py-2 pl-9 pr-3 text-sm text-foreground outline-none transition focus:border-[var(--color-success)] focus:ring-2 focus:ring-[var(--color-success)] placeholder:text-[var(--color-text-tertiary)]" />
           </div>
           <Select value={severity} onChange={setSeverity} options={[
             { v: '', l: '全部级别' }, { v: 'critical', l: '严重' }, { v: 'high', l: '高级' }, { v: 'medium', l: '中级' }, { v: 'low', l: '低级' }, { v: 'info', l: '信息' },
@@ -349,14 +350,14 @@ export default function EventRegistryPage() {
             { v: '', l: '全部来源' }, { v: 'platform', l: '平台录入' }, { v: 'api', l: 'API 上报' }, { v: 'system', l: '系统生成' },
           ]} />
           <div className="ml-auto flex items-center gap-1">
-            <span className="mr-1 text-sm text-slate-400">共 <span className="font-semibold tabular-nums text-slate-700">{listQ.data?.total ?? 0}</span> 条</span>
+            <span className="mr-1 text-sm text-[var(--color-text-tertiary)]">共 <span className="font-semibold tabular-nums text-foreground">{listQ.data?.total ?? 0}</span> 条</span>
             <button type="button" onClick={handleExport} disabled={exporting}
-              className="rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40"
+              className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
               title="按当前筛选条件导出 CSV" aria-label="导出事件 CSV">
               {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
             </button>
             <button type="button" onClick={refresh}
-              className="rounded-md p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800" title="刷新" aria-label="刷新事件列表">
+              className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" title="刷新" aria-label="刷新事件列表">
               <RefreshCcw className={`h-4 w-4 ${statsQ.isFetching || listQ.isFetching ? 'animate-spin' : ''}`} />
             </button>
           </div>
@@ -367,7 +368,7 @@ export default function EventRegistryPage() {
           <div className="flex-1 min-h-0 overflow-auto thin-scroll">
             <table className="w-full min-w-[960px] table-fixed text-sm">
               <thead>
-                <tr className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-sm text-slate-600">
+                <tr className="sticky top-0 z-10 border-b border-border bg-muted text-sm text-muted-foreground">
                   <th className="w-[22%] px-4 py-3 text-left font-medium">事件</th>
                   <th className="w-[13%] px-3 py-3 text-center font-medium">来源</th>
                   <th className="w-[9%] px-3 py-3 text-center font-medium">级别</th>
@@ -379,16 +380,16 @@ export default function EventRegistryPage() {
               </thead>
               <tbody>
                 {listQ.isLoading ? (
-                  <tr><td colSpan={7} className="py-16 text-center text-sm text-slate-400">加载中...</td></tr>
+                  <tr><td colSpan={7} className="py-16 text-center text-sm text-[var(--color-text-tertiary)]">加载中...</td></tr>
                 ) : listQ.data?.items?.length === 0 ? (
                   <tr><td colSpan={7} className="text-center py-16">
-                    <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100">
-                      <Filter className="w-5 h-5 text-slate-300" />
+                    <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-muted">
+                      <Filter className="w-5 h-5 text-[var(--color-text-tertiary)]" />
                     </div>
-                    <p className="text-sm text-slate-400">暂无匹配事件</p>
-                    <p className="mt-1 text-xs text-slate-300">尝试调整筛选条件，或登记新事件</p>
+                    <p className="text-sm text-[var(--color-text-tertiary)]">暂无匹配事件</p>
+                    <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">尝试调整筛选条件，或登记新事件</p>
                     <button onClick={() => { setEditing(null); setFormOpen(true) }}
-                      className="mt-3 inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100">
+                      className="mt-3 inline-flex items-center gap-1 rounded-lg bg-[var(--color-success-bg)] px-3 py-1.5 text-sm font-medium text-[var(--color-success)] transition-colors hover:bg-[var(--color-success-bg)]">
                       <PlusCircle className="h-3.5 w-3.5" />立即登记
                     </button>
                   </td></tr>
@@ -402,7 +403,7 @@ export default function EventRegistryPage() {
                         setDetailEventId(r.id)
                       }
                     }}
-                    className={`group cursor-pointer border-t border-slate-100 transition-colors hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none ${(r.severity === 'critical' || r.severity === 'high') ? 'bg-red-50/20' : ''}`}
+                    className={`group cursor-pointer border-t border-border transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none ${(r.severity === 'critical' || r.severity === 'high') ? 'bg-[var(--color-danger-bg)]' : ''}`}
                     style={{ animation: `rowIn 0.35s ease-out ${i * 30}ms both` }}>
                     <td className="px-4 py-3 text-left align-middle">
                       <div className="flex items-stretch justify-start gap-2">
@@ -410,11 +411,11 @@ export default function EventRegistryPage() {
                           <span className="w-1 self-stretch rounded-full shrink-0" style={{ background: r.severity === 'critical' ? PALETTE.red : PALETTE.orange }} />
                         )}
                         <div className="min-w-0">
-                          <div className="flex items-center justify-start gap-1 truncate font-medium text-slate-800">
+                          <div className="flex items-center justify-start gap-1 truncate font-medium text-foreground">
                             {r.title}
-                            {r.severity === 'critical' && <AlertOctagon className="h-3.5 w-3.5 shrink-0 text-red-400" />}
+                            {r.severity === 'critical' && <AlertOctagon className="h-3.5 w-3.5 shrink-0 text-[var(--color-danger)]" />}
                             {r.status === 'archived' && (
-                              <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">已归档</span>
+                              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">已归档</span>
                             )}
                           </div>
                         </div>
@@ -424,22 +425,22 @@ export default function EventRegistryPage() {
                       <div className="flex justify-center"><SourceTag sourceType={r.sourceType} reporter={r.reporterName} sourceLabel={r.sourceLabel} /></div>
                     </td>
                     <td className="px-3 py-3 text-center align-middle"><SeverityBadge sev={r.severity} /></td>
-                    <td className="max-w-0 px-3 py-3 text-center align-middle text-slate-500">
-                      <div className="truncate" title={r.description || undefined}>{r.description || <span className="italic text-slate-300">无描述</span>}</div>
+                    <td className="max-w-0 px-3 py-3 text-center align-middle text-muted-foreground">
+                      <div className="truncate" title={r.description || undefined}>{r.description || <span className="italic text-[var(--color-text-tertiary)]">无描述</span>}</div>
                     </td>
                     <td className="px-3 py-3 text-center align-middle">
                       {r.attachmentCount && r.attachmentCount > 0 ? (
                         <button
                           type="button"
                           onClick={event => { event.stopPropagation(); setAttachmentEventId(r.id) }}
-                          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-50 hover:text-emerald-800"
+                          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-sm font-medium text-[var(--color-success)] transition-colors hover:bg-[var(--color-success-bg)] hover:text-[var(--color-success)]"
                           title="点击查看附件清单"
                         >
                           <Paperclip size={14} /> {r.attachmentCount} 个附件
                         </button>
-                      ) : <span className="text-sm text-slate-300">—</span>}
+                      ) : <span className="text-sm text-[var(--color-text-tertiary)]">—</span>}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3 text-center align-middle text-sm tabular-nums text-slate-500">{fmt(r.occurredAt)}</td>
+                    <td className="whitespace-nowrap px-3 py-3 text-center align-middle text-sm tabular-nums text-muted-foreground">{fmt(r.occurredAt)}</td>
                     <td className="px-2 py-3 text-center align-middle" onClick={event => event.stopPropagation()}>
                       <div className="inline-flex items-center justify-center gap-1">
                         <ActionButton
@@ -478,13 +479,13 @@ export default function EventRegistryPage() {
           </div>
 
           {/* 分页 */}
-          <div className="flex shrink-0 items-center justify-between border-t border-slate-100 bg-white px-4 py-2">
-            <div className="text-sm tabular-nums text-slate-400">
+          <div className="flex shrink-0 items-center justify-between border-t border-border bg-card px-4 py-2">
+            <div className="text-sm tabular-nums text-[var(--color-text-tertiary)]">
               显示 {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, listQ.data?.total ?? 0)} / {listQ.data?.total ?? 0}
             </div>
             <div className="flex items-center gap-1">
               <button disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}
-                className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 disabled:opacity-40">
+                className="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-muted disabled:opacity-40">
                 <ChevronLeft className="w-3.5 h-3.5" />
               </button>
               {Array.from({ length: Math.min(totalPages, 5) }).map((_, i) => {
@@ -492,13 +493,13 @@ export default function EventRegistryPage() {
                 if (totalPages > 5) { if (page > 3) p = Math.min(totalPages - 4, page - 2) + i }
                 return (
                   <button key={p} onClick={() => setPage(p)}
-                    className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition-colors ${p === page ? 'bg-emerald-600 text-white shadow-sm' : 'border border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}>
+                    className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm font-medium transition-colors ${p === page ? 'bg-[var(--color-success)] text-[var(--color-text-inverse)] shadow-sm' : 'border border-border bg-card text-muted-foreground hover:bg-muted'}`}>
                     {p}
                   </button>
                 )
               })}
               <button disabled={page >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 disabled:opacity-40">
+                className="flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-muted disabled:opacity-40">
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -507,7 +508,7 @@ export default function EventRegistryPage() {
 
       {/* 移动端 FAB */}
       <button onClick={() => { setEditing(null); setFormOpen(true) }}
-          className="fixed bottom-6 right-6 z-20 flex h-11 w-11 items-center justify-center rounded-full bg-emerald-600 text-white shadow-lg transition-colors hover:bg-emerald-700 md:hidden">
+          className="fixed bottom-6 right-6 z-20 flex h-11 w-11 items-center justify-center rounded-full bg-[var(--color-success)] text-[var(--color-text-inverse)] shadow-lg transition-colors hover:bg-[var(--color-success)] md:hidden">
           <PlusCircle className="w-5 h-5" />
       </button>
 
@@ -557,21 +558,27 @@ export default function EventRegistryPage() {
 function MetricCard({ label, value, sub }: { label: string; value: number; sub?: string }) {
   return (
     <div className={`${PANEL} min-w-0 px-3 py-2.5`}>
-      <p className="text-xs font-medium text-slate-500">{label}</p>
-      <p className="mt-0.5 text-2xl font-semibold tabular-nums text-slate-900">{value.toLocaleString()}</p>
-      <p className="mt-0.5 truncate text-xs text-slate-400" title={sub}>{sub}</p>
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className="mt-0.5 text-2xl font-semibold tabular-nums text-foreground">{value.toLocaleString()}</p>
+      <p className="mt-0.5 truncate text-xs text-[var(--color-text-tertiary)]" title={sub}>{sub}</p>
     </div>
   )
 }
 
 // ─── 下拉选择 ────────────────────────────────────────────
-function Select({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { v: string; l: string }[] }) {
+function Select({ value, onChange, options, ariaLabel }: { value: string; onChange: (v: string) => void; options: { v: string; l: string }[]; ariaLabel?: string }) {
+  // Radix 不允许空字符串选项值：'' 哨兵映射为 __none__
   return (
-    <select value={value} onChange={e => onChange(e.target.value)}
-      className="cursor-pointer appearance-none rounded-lg border border-slate-200 bg-white py-2 pl-3 pr-8 text-sm text-slate-600 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-      style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center' }}>
-      {options.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
-    </select>
+    <UiSelect value={value || '__none__'} onValueChange={v => onChange(v === '__none__' ? '' : v)}>
+      <UiSelectTrigger className="h-9 w-fit min-w-36 rounded-lg bg-card px-3 text-sm" aria-label={ariaLabel}>
+        <UiSelectValue />
+      </UiSelectTrigger>
+      <UiSelectContent>
+        {options.map(o => (
+          <UiSelectItem key={o.v || '__none__'} value={o.v || '__none__'}>{o.l}</UiSelectItem>
+        ))}
+      </UiSelectContent>
+    </UiSelect>
   )
 }
 
@@ -595,9 +602,9 @@ function ActionButton({
   children: React.ReactNode
 }) {
   const hoverClass = {
-    emerald: 'hover:bg-emerald-50 hover:text-emerald-700',
-    amber: 'hover:bg-amber-50 hover:text-amber-700',
-    red: 'hover:bg-red-50 hover:text-red-600',
+    emerald: 'hover:bg-[var(--color-success-bg)] hover:text-[var(--color-success)]',
+    amber: 'hover:bg-[var(--color-warning-bg)] hover:text-[var(--color-warning)]',
+    red: 'hover:bg-[var(--color-danger-bg)] hover:text-[var(--color-danger)]',
   }[tone]
 
   return (
@@ -607,15 +614,15 @@ function ActionButton({
       disabled={disabled}
       title={label}
       aria-label={ariaLabel}
-      className={`group/action relative flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors disabled:opacity-40 ${hoverClass}`}
+      className={`group/action relative flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition-colors disabled:opacity-40 ${hoverClass}`}
     >
       {children}
       <span
         role="tooltip"
-        className="pointer-events-none absolute bottom-[calc(100%+6px)] left-1/2 z-30 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[11px] font-medium leading-4 text-white opacity-0 shadow-lg transition-opacity group-hover/action:opacity-100 group-focus-visible/action:opacity-100"
+        className="pointer-events-none absolute bottom-[calc(100%+6px)] left-1/2 z-30 -translate-x-1/2 whitespace-nowrap rounded-md bg-[var(--color-code-bg)] px-2 py-1 text-[11px] font-medium leading-4 text-[var(--color-code-fg)] opacity-0 shadow-lg transition-opacity group-hover/action:opacity-100 group-focus-visible/action:opacity-100"
       >
         {label}
-        <span className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-slate-900" />
+        <span className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-[var(--color-code-bg)]" />
       </span>
     </button>
   )
@@ -628,15 +635,15 @@ function SourceTag({ sourceType, reporter, sourceLabel }: { sourceType: string; 
   if (sourceType === 'api') {
     return (
       <div className="flex items-center gap-1.5">
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-600">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[var(--color-success-bg)] text-[var(--color-success)]">
           <Code2 className="w-2.5 h-2.5" />
         </span>
         <div className="min-w-0">
-          <div className="flex items-center gap-0.5 truncate text-sm text-slate-700">
+          <div className="flex items-center gap-0.5 truncate text-sm text-foreground">
             <span className="truncate max-w-[100px]">{name}</span>
-            <ArrowUpRight className="w-2.5 h-2.5 text-slate-400 shrink-0" />
+            <ArrowUpRight className="w-2.5 h-2.5 text-[var(--color-text-tertiary)] shrink-0" />
           </div>
-          <div className="text-xs text-emerald-600">API 接入</div>
+          <div className="text-xs text-[var(--color-success)]">API 接入</div>
         </div>
       </div>
     )
@@ -644,22 +651,22 @@ function SourceTag({ sourceType, reporter, sourceLabel }: { sourceType: string; 
   if (sourceType === 'system') {
     return (
       <div className="flex items-center gap-1.5">
-        <span className="w-5 h-5 rounded-md bg-slate-100 flex items-center justify-center text-slate-500 shrink-0">
+        <span className="w-5 h-5 rounded-md bg-muted flex items-center justify-center text-muted-foreground shrink-0">
           <Activity className="w-2.5 h-2.5" />
         </span>
         <div className="min-w-0">
-          <div className="truncate text-sm text-slate-700">{name}</div>
-          <div className="text-xs text-slate-400">系统生成</div>
+          <div className="truncate text-sm text-foreground">{name}</div>
+          <div className="text-xs text-[var(--color-text-tertiary)]">系统生成</div>
         </div>
       </div>
     )
   }
   return (
     <div className="flex items-center gap-1.5">
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-teal-100 text-xs font-semibold text-teal-700">{initial}</span>
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-soft text-xs font-semibold text-brand-ink">{initial}</span>
       <div className="min-w-0">
-        <div className="truncate text-sm text-slate-700">{name}</div>
-        <div className="text-xs text-slate-400">平台录入</div>
+        <div className="truncate text-sm text-foreground">{name}</div>
+        <div className="text-xs text-[var(--color-text-tertiary)]">平台录入</div>
       </div>
     </div>
   )

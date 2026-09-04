@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
+import { Select as FormSelect, SelectContent as FormSelectContent, SelectItem as FormSelectItem, SelectTrigger as FormSelectTrigger, SelectValue as FormSelectValue } from '@/components/ui/select'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, FilePlus2, Loader2, Paperclip, RefreshCcw, Trash2, Undo2, Upload } from 'lucide-react'
-import { Modal } from '@/components/ui/Modal'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/Toast'
 import { ontologyApi } from '@/api/ontologies'
 import { eventsApi, formatBytes, type Attachment, type EventCreateBody, type EventItem } from '@/api/events'
@@ -193,56 +194,40 @@ export default function EventFormModal({
     })
   }
 
-  const labelClass = 'mb-1.5 block text-sm font-medium text-slate-700'
-  const controlClass = 'h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm transition-all placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/15'
+  const labelClass = 'mb-1.5 block text-sm font-medium text-foreground'
+  const controlClass = 'h-10 w-full rounded-lg border border-border bg-card px-3 text-sm text-foreground shadow-sm transition-all placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-success)] focus:outline-none focus:ring-2 focus:ring-[var(--color-success)]'
   const visibleExistingCount = existingAttachments.filter(attachment => !removedAttachmentIds.has(attachment.id)).length
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={isEdit ? '编辑事件' : '登记事件'}
-      description={isEdit ? undefined : '记录一条业务事件，供后续本体优化挖掘'}
-      size="2xl"
-      headerIcon={<FilePlus2 size={19} className="text-emerald-600" />}
-      disableClose={mutation.isPending}
-      footer={(
-        <div className="flex w-full justify-center gap-3">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={mutation.isPending}
-            className="h-10 rounded-lg border border-slate-200 bg-white px-6 text-sm font-medium text-slate-600 transition-all hover:bg-slate-50 active:scale-[0.98] disabled:opacity-50"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={() => mutation.mutate()}
-            disabled={mutation.isPending}
-            className="inline-flex h-10 min-w-24 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-6 text-sm font-medium text-white shadow-sm transition-all hover:bg-emerald-700 active:scale-[0.98] disabled:opacity-50"
-          >
-            {mutation.isPending && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />}
-            {isEdit ? '保存' : '登记'}
-          </button>
-        </div>
-      )}
-    >
+    <Dialog open={open} onOpenChange={next => { if (!next && !mutation.isPending) onClose() }}>
+      <DialogContent
+        className="flex max-h-[min(88dvh,900px)] w-[min(92vw,64rem)] flex-col"
+        dismissible={!mutation.isPending}
+      >
+        <DialogHeader>
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--color-success-bg)] text-[var(--color-success)]">
+            <FilePlus2 size={19} />
+          </div>
+          <div className="min-w-0 pt-0.5">
+            <DialogTitle>{isEdit ? '编辑事件' : '登记事件'}</DialogTitle>
+            {!isEdit && <DialogDescription>记录一条业务事件，供后续本体优化挖掘</DialogDescription>}
+          </div>
+        </DialogHeader>
       <div className="max-h-[68vh] space-y-5 overflow-y-auto px-1 pb-1 pr-2">
         {error && (
-          <div className="flex items-center gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
+          <div className="flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-3 py-2 text-sm text-[var(--color-danger)]">
             <AlertTriangle size={15} /> {error}
           </div>
         )}
 
         <div>
-          <label htmlFor="event-title" className={labelClass}>事件标题 <span className="text-red-500">*</span></label>
+          <label htmlFor="event-title" className={labelClass}>事件标题 <span className="text-[var(--color-danger)]">*</span></label>
           <input id="event-title" required aria-required="true" value={title} onChange={event => setTitle(event.target.value)} placeholder="简要描述发生了什么" className={controlClass} />
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <label htmlFor="event-type" className={labelClass}>事件类型 <span className="text-red-500">*</span></label>
+            <label htmlFor="event-type" className={labelClass}>事件类型 <span className="text-[var(--color-danger)]">*</span></label>
             <input
               id="event-type"
               required
@@ -258,10 +243,15 @@ export default function EventFormModal({
             </datalist>
           </div>
           <div>
-            <label htmlFor="event-severity" className={labelClass}>严重程度 <span className="text-red-500">*</span></label>
-            <select id="event-severity" required aria-required="true" value={severity} onChange={event => setSeverity(event.target.value)} className={controlClass}>
-              {SEVERITY_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
+            <label htmlFor="event-severity" className={labelClass}>严重程度 <span className="text-[var(--color-danger)]">*</span></label>
+            <FormSelect value={severity} onValueChange={setSeverity}>
+              <FormSelectTrigger id="event-severity" aria-required="true" className={controlClass}>
+                <FormSelectValue />
+              </FormSelectTrigger>
+              <FormSelectContent>
+                {SEVERITY_OPTIONS.map(option => <FormSelectItem key={option.value} value={option.value}>{option.label}</FormSelectItem>)}
+              </FormSelectContent>
+            </FormSelect>
           </div>
         </div>
 
@@ -272,14 +262,19 @@ export default function EventFormModal({
           </div>
           <div>
             <label htmlFor="event-ontology" className={labelClass}>关联本体（后续挖掘目标）</label>
-            <select id="event-ontology" value={ontologyId} onChange={event => setOntologyId(event.target.value)} className={controlClass}>
-              {ontologyOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
+            <FormSelect value={ontologyId} onValueChange={setOntologyId}>
+              <FormSelectTrigger id="event-ontology" className={controlClass}>
+                <FormSelectValue />
+              </FormSelectTrigger>
+              <FormSelectContent>
+                {ontologyOptions.map(option => <FormSelectItem key={option.value} value={option.value}>{option.label}</FormSelectItem>)}
+              </FormSelectContent>
+            </FormSelect>
           </div>
         </div>
 
         <div>
-          <label htmlFor="event-description" className={labelClass}>详细描述 <span className="text-red-500">*</span></label>
+          <label htmlFor="event-description" className={labelClass}>详细描述 <span className="text-[var(--color-danger)]">*</span></label>
           <textarea
             id="event-description"
             required
@@ -287,7 +282,7 @@ export default function EventFormModal({
             value={description}
             onChange={event => setDescription(event.target.value)}
             rows={4}
-            className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm leading-6 text-slate-700 shadow-sm transition-all placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/15"
+            className="w-full resize-none rounded-lg border border-border bg-card px-3 py-2.5 text-sm leading-6 text-foreground shadow-sm transition-all placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-success)] focus:outline-none focus:ring-2 focus:ring-[var(--color-success)]"
             placeholder="事件的完整经过、背景、影响……"
           />
         </div>
@@ -295,13 +290,13 @@ export default function EventFormModal({
         <div>
           <div className="mb-2 flex items-center justify-between gap-3">
             <div>
-              <label className="text-sm font-medium text-slate-700">附件（可选，可多选）</label>
-              <p className="mt-0.5 text-xs text-slate-400">
+              <label className="text-sm font-medium text-foreground">附件（可选，可多选）</label>
+              <p className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
                 支持邮件、文档、表格、图片、音视频、压缩包等文件，单文件不超过 {MAX_ATTACHMENT_MB}MB
               </p>
             </div>
             {(visibleExistingCount > 0 || files.length > 0 || removedAttachmentIds.size > 0) && (
-              <span className="text-right text-xs font-medium text-emerald-700">
+              <span className="text-right text-xs font-medium text-[var(--color-success)]">
                 {visibleExistingCount > 0 ? `已有 ${visibleExistingCount} 个` : ''}
                 {visibleExistingCount > 0 && files.length > 0 ? ' · ' : ''}
                 {files.length > 0 ? `新增 ${files.length} 个` : ''}
@@ -309,7 +304,7 @@ export default function EventFormModal({
               </span>
             )}
           </div>
-          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-emerald-200 bg-emerald-50/40 px-4 py-4 text-sm font-medium text-emerald-700 transition-all hover:border-emerald-300 hover:bg-emerald-50 focus-within:ring-2 focus-within:ring-emerald-500/20">
+          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] px-4 py-4 text-sm font-medium text-[var(--color-success)] transition-all hover:border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] hover:bg-[var(--color-success-bg)] focus-within:ring-2 focus-within:ring-[var(--color-success)]">
             <Upload size={16} /> 选择多个附件
             <input
               type="file"
@@ -322,34 +317,34 @@ export default function EventFormModal({
             />
           </label>
           {isEdit && eventDetailQuery.isLoading && existingAttachments.length === 0 && (
-            <div className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+            <div className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-border bg-muted px-3 py-4 text-sm text-muted-foreground">
               <Loader2 size={15} className="animate-spin" /> 正在加载已有附件…
             </div>
           )}
           {isEdit && eventDetailQuery.isError && (
-            <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2.5 text-sm text-red-600">
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-3 py-2.5 text-sm text-[var(--color-danger)]">
               <span className="flex items-center gap-2"><AlertTriangle size={15} /> 已有附件加载失败</span>
               <button
                 type="button"
                 onClick={() => void eventDetailQuery.refetch()}
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium hover:bg-red-100"
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium hover:bg-[var(--color-danger-bg)]"
               >
                 <RefreshCcw size={13} /> 重试
               </button>
             </div>
           )}
           {(existingAttachments.length > 0 || files.length > 0) && (
-            <div className="mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <div className="mt-3 overflow-hidden rounded-xl border border-border bg-card">
               {existingAttachments.map(attachment => {
                 const removed = removedAttachmentIds.has(attachment.id)
                 return (
-                  <div key={attachment.id} className={`group flex items-center gap-3 border-t border-slate-100 px-3 py-2.5 first:border-t-0 ${removed ? 'bg-red-50/40' : ''}`}>
-                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${removed ? 'bg-red-50 text-red-400' : 'bg-emerald-50 text-emerald-600'}`}>
+                  <div key={attachment.id} className={`group flex items-center gap-3 border-t border-border px-3 py-2.5 first:border-t-0 ${removed ? 'bg-[var(--color-danger-bg)]' : ''}`}>
+                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${removed ? 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]' : 'bg-[var(--color-success-bg)] text-[var(--color-success)]'}`}>
                       <Paperclip size={15} />
                     </span>
                     <div className="min-w-0 flex-1">
-                      <p className={`truncate text-sm font-medium ${removed ? 'text-slate-400 line-through' : 'text-slate-700'}`} title={attachment.filename}>{attachment.filename}</p>
-                      <p className={`mt-0.5 text-xs ${removed ? 'text-red-500' : 'text-slate-400'}`}>
+                      <p className={`truncate text-sm font-medium ${removed ? 'text-[var(--color-text-tertiary)] line-through' : 'text-foreground'}`} title={attachment.filename}>{attachment.filename}</p>
+                      <p className={`mt-0.5 text-xs ${removed ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-tertiary)]'}`}>
                         {formatBytes(attachment.fileSize)} · {removed ? '保存后删除' : '已有附件'}
                       </p>
                     </div>
@@ -361,7 +356,7 @@ export default function EventFormModal({
                         else next.add(attachment.id)
                         return next
                       })}
-                      className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${removed ? 'text-slate-400 hover:bg-emerald-50 hover:text-emerald-600' : 'text-slate-400 hover:bg-red-50 hover:text-red-600'}`}
+                      className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${removed ? 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-success-bg)] hover:text-[var(--color-success)]' : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-danger-bg)] hover:text-[var(--color-danger)]'}`}
                       title={removed ? `撤销删除 ${attachment.filename}` : `删除 ${attachment.filename}`}
                       aria-label={removed ? `撤销删除 ${attachment.filename}` : `删除 ${attachment.filename}`}
                     >
@@ -373,13 +368,13 @@ export default function EventFormModal({
               {files.map((file, index) => {
                 const uploaded = uploadedFileKeys.has(fileIdentity(file))
                 return (
-                <div key={fileIdentity(file)} className="group flex items-center gap-3 border-t border-slate-100 px-3 py-2.5 first:border-t-0">
-                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${uploaded ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
+                <div key={fileIdentity(file)} className="group flex items-center gap-3 border-t border-border px-3 py-2.5 first:border-t-0">
+                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${uploaded ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-muted text-muted-foreground'}`}>
                     {uploaded ? <CheckCircle2 size={16} /> : <Paperclip size={15} />}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-slate-700" title={file.name}>{file.name}</p>
-                    <p className={`mt-0.5 text-xs ${uploaded ? 'text-emerald-600' : 'text-slate-400'}`}>
+                    <p className="truncate text-sm font-medium text-foreground" title={file.name}>{file.name}</p>
+                    <p className={`mt-0.5 text-xs ${uploaded ? 'text-[var(--color-success)]' : 'text-[var(--color-text-tertiary)]'}`}>
                       {formatBytes(file.size)}{uploaded ? ' · 已上传，重试时将自动跳过' : ''}
                     </p>
                   </div>
@@ -387,7 +382,7 @@ export default function EventFormModal({
                     <button
                       type="button"
                       onClick={() => setFiles(current => current.filter((_, currentIndex) => currentIndex !== index))}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-danger-bg)] hover:text-[var(--color-danger)]"
                       title={`移除 ${file.name}`}
                       aria-label={`移除 ${file.name}`}
                     >
@@ -401,6 +396,26 @@ export default function EventFormModal({
           )}
         </div>
       </div>
-    </Modal>
+      <DialogFooter className="flex w-full justify-center gap-3">
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={mutation.isPending}
+          className="h-10 rounded-lg border border-border bg-card px-6 text-sm font-medium text-muted-foreground transition-all hover:bg-muted active:scale-[0.98] disabled:opacity-50"
+        >
+          取消
+        </button>
+        <button
+          type="button"
+          onClick={() => mutation.mutate()}
+          disabled={mutation.isPending}
+          className="inline-flex h-10 min-w-24 items-center justify-center gap-2 rounded-lg bg-[var(--color-success)] px-6 text-sm font-medium text-[var(--color-text-inverse)] shadow-sm transition-all hover:bg-[var(--color-success)] active:scale-[0.98] disabled:opacity-50"
+        >
+          {mutation.isPending && <span className="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-white" />}
+          {isEdit ? '保存' : '登记'}
+        </button>
+      </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

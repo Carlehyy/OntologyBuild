@@ -117,13 +117,13 @@ export default function EventAttachmentsModal({
       title="事件附件"
       description={event ? `${event.title} · ${event.eventNo}` : '查看并下载事件相关附件'}
       size="xl"
-      headerIcon={<Paperclip size={19} className="text-emerald-600" />}
+      headerIcon={<Paperclip size={19} className="text-[var(--color-success)]" />}
       footer={(
         <div className="flex w-full justify-center gap-3">
           <button
             type="button"
             onClick={onClose}
-            className="h-10 rounded-lg border border-slate-200 bg-white px-6 text-sm font-medium text-slate-600 transition-all hover:bg-slate-50 active:scale-[0.98]"
+            className="h-10 rounded-lg border border-border bg-card px-6 text-sm font-medium text-muted-foreground transition-all hover:bg-muted active:scale-[0.98]"
           >
             关闭
           </button>
@@ -131,7 +131,7 @@ export default function EventAttachmentsModal({
             type="button"
             onClick={() => void downloadAll()}
             disabled={downloadingAll || eventQuery.isLoading || attachments.length === 0}
-            className="inline-flex h-10 min-w-36 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-6 text-sm font-medium text-white shadow-sm transition-all hover:bg-emerald-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-10 min-w-36 items-center justify-center gap-2 rounded-lg bg-[var(--color-success)] px-6 text-sm font-medium text-[var(--color-text-inverse)] shadow-sm transition-all hover:bg-[var(--color-success)] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {downloadingAll ? <Loader2 size={16} className="animate-spin" /> : <Archive size={16} />}
             {downloadingAll ? '正在打包' : '打包下载全部'}
@@ -140,50 +140,50 @@ export default function EventAttachmentsModal({
       )}
     >
       <div className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50 px-4 py-3">
-          <div className="flex items-center gap-4 text-sm text-slate-600">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-muted px-4 py-3">
+          <div className="flex items-center gap-4 text-sm text-muted-foreground">
             <span>
-              <span className="font-semibold tabular-nums text-slate-900">{attachments.length}</span> 个附件
+              <span className="font-semibold tabular-nums text-foreground">{attachments.length}</span> 个附件
             </span>
-            <span className="h-4 w-px bg-slate-200" aria-hidden="true" />
-            <span>合计 <span className="font-medium tabular-nums text-slate-800">{formatBytes(totalSize)}</span></span>
+            <span className="h-4 w-px bg-[var(--color-bg-active)]" aria-hidden="true" />
+            <span>合计 <span className="font-medium tabular-nums text-foreground">{formatBytes(totalSize)}</span></span>
           </div>
-          <p className="text-xs text-slate-400">压缩包按需临时生成，下载完成后自动清理</p>
+          <p className="text-xs text-[var(--color-text-tertiary)]">压缩包按需临时生成，下载完成后自动清理</p>
         </div>
 
         <section aria-label="附件清单" className="max-h-[52vh] overflow-y-auto pr-1">
           {eventQuery.isLoading ? (
             <div className="space-y-2" aria-label="正在加载附件">
               {[0, 1, 2].map(index => (
-                <div key={index} className="flex animate-pulse items-center gap-3 rounded-xl border border-slate-100 px-3 py-3">
-                  <span className="h-10 w-10 rounded-lg bg-slate-100" />
+                <div key={index} className="flex animate-pulse items-center gap-3 rounded-xl border border-border px-3 py-3">
+                  <span className="h-10 w-10 rounded-lg bg-muted" />
                   <span className="flex-1 space-y-2">
-                    <span className="block h-3 w-2/5 rounded bg-slate-100" />
-                    <span className="block h-2.5 w-1/3 rounded bg-slate-100" />
+                    <span className="block h-3 w-2/5 rounded bg-muted" />
+                    <span className="block h-2.5 w-1/3 rounded bg-muted" />
                   </span>
-                  <span className="h-9 w-20 rounded-lg bg-slate-100" />
+                  <span className="h-9 w-20 rounded-lg bg-muted" />
                 </div>
               ))}
             </div>
           ) : eventQuery.isError ? (
             <div className="flex flex-col items-center px-6 py-12 text-center">
-              <p className="text-sm font-medium text-red-600">附件清单加载失败</p>
-              <p className="mt-1 text-xs text-slate-400">请检查网络连接后重试</p>
+              <p className="text-sm font-medium text-[var(--color-danger)]">附件清单加载失败</p>
+              <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">请检查网络连接后重试</p>
               <button
                 type="button"
                 onClick={() => void eventQuery.refetch()}
-                className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30"
+                className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-success)]"
               >
                 <RefreshCw size={14} /> 重新加载
               </button>
             </div>
           ) : attachments.length === 0 ? (
             <div className="flex flex-col items-center px-6 py-12 text-center">
-              <span className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-400">
+              <span className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-muted text-[var(--color-text-tertiary)]">
                 <Paperclip size={20} />
               </span>
-              <p className="text-sm font-medium text-slate-700">当前事件没有附件</p>
-              <p className="mt-1 text-xs text-slate-400">登记或编辑事件时可以上传多个附件</p>
+              <p className="text-sm font-medium text-foreground">当前事件没有附件</p>
+              <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">登记或编辑事件时可以上传多个附件</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -193,16 +193,16 @@ export default function EventAttachmentsModal({
                 return (
                   <article
                     key={attachment.id}
-                    className="group flex items-center gap-3 rounded-xl border border-slate-100 px-3 py-3 transition-[border-color,background-color] duration-200 hover:border-emerald-100 hover:bg-emerald-50/30"
+                    className="group flex items-center gap-3 rounded-xl border border-border px-3 py-3 transition-[border-color,background-color] duration-200 hover:border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] hover:bg-[var(--color-success-bg)]"
                   >
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 transition-colors group-hover:bg-white group-hover:text-emerald-700">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-card group-hover:text-[var(--color-success)]">
                       <Icon size={17} />
                     </span>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-slate-800" title={attachment.filename}>
+                      <p className="truncate text-sm font-medium text-foreground" title={attachment.filename}>
                         {attachment.filename}
                       </p>
-                      <p className="mt-1 truncate text-xs tabular-nums text-slate-400">
+                      <p className="mt-1 truncate text-xs tabular-nums text-[var(--color-text-tertiary)]">
                         {label} · {formatBytes(attachment.fileSize)} · {formatTime(attachment.createdAt)}
                       </p>
                     </div>
@@ -210,7 +210,7 @@ export default function EventAttachmentsModal({
                       type="button"
                       onClick={() => void download(attachment)}
                       disabled={isDownloading || downloadingAll}
-                      className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 transition-all hover:border-emerald-200 hover:text-emerald-700 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-sm font-medium text-muted-foreground transition-all hover:border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] hover:text-[var(--color-success)] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-success)] disabled:cursor-not-allowed disabled:opacity-50"
                       aria-label={`下载 ${attachment.filename}`}
                     >
                       {isDownloading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}

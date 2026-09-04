@@ -32,12 +32,15 @@ function DialogOverlay({
 function DialogContent({
   className,
   children,
+  dismissible = true,
   ...props
-}: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>) {
+}: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & { dismissible?: boolean }) {
   return (
     <DialogPrimitive.Portal>
       <DialogOverlay />
       <DialogPrimitive.Content
+        onEscapeKeyDown={event => { if (!dismissible) event.preventDefault() }}
+        onInteractOutside={event => { if (!dismissible) event.preventDefault() }}
         className={cn(
           'fixed left-1/2 top-1/2 z-[var(--z-modal)] w-[min(92vw,32rem)] -translate-x-1/2 -translate-y-1/2',
           'animate-dialog-in rounded-2xl border border-border bg-popover p-5 text-foreground shadow-[var(--shadow-lg)]',
@@ -47,12 +50,14 @@ function DialogContent({
         {...props}
       >
         {children}
-        <DialogPrimitive.Close
-          aria-label="关闭"
-          className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <X size={14} />
-        </DialogPrimitive.Close>
+        {dismissible && (
+          <DialogPrimitive.Close
+            aria-label="关闭"
+            className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <X size={14} />
+          </DialogPrimitive.Close>
+        )}
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   )
