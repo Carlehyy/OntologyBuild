@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle, Boxes, Check, History, Loader2, Sparkles, X,
 } from 'lucide-react'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type {
   DatasetMappingSuggestion,
   MappingSuggestionResponse,
@@ -151,24 +152,32 @@ export default function MappingSuggestionPanel({
                 <div className="dmc-suggest-pairing">
                   <Boxes size={13} />
                   <span>映射到对象实体</span>
-                  <select
-                    value={selection.objectId}
-                    data-testid={`suggest-object-${suggestion.datasetId}`}
-                    onChange={event => {
-                      const objectId = event.target.value
+                  <Select
+                    value={selection.objectId || '__none__'}
+                    onValueChange={value => {
+                      const objectId = value === '__none__' ? '' : value
                       updateSelection(suggestion.datasetId, {
                         objectId,
                         checked: defaultChecked(suggestion, objectId, objectTypes),
                       })
                     }}
                   >
-                    <option value="">请选择对象实体</option>
-                    {objectTypes.map(object => (
-                      <option key={object.id} value={object.id}>
-                        {object.displayName || object.name}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger
+                      className="h-8 min-w-40 flex-1 rounded-md px-2 text-xs"
+                      data-testid={`suggest-object-${suggestion.datasetId}`}
+                      aria-label="映射到对象实体"
+                    >
+                      <SelectValue placeholder="请选择对象实体" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">请选择对象实体</SelectItem>
+                      {objectTypes.map(object => (
+                        <SelectItem key={object.id} value={object.id}>
+                          {object.displayName || object.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <em data-verdict={suggestion.pairingVerdict}>
                     {suggestion.pairingVerdict === 'match' ? '配对可信' : '请确认配对'}
                   </em>

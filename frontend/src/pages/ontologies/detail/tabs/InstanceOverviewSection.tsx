@@ -12,7 +12,7 @@ import {
 } from './instanceStatsFormat.ts'
 import { instanceSourceLabel } from './instanceValueDisplay.ts'
 import { useCountUp } from './useCountUp.ts'
-import { CHART_PALETTE } from './chartTheme.ts'
+import { CHART_SERIES_PALETTE } from '@/lib/echartsTheme'
 import InstanceChartCard from './InstanceChartCard'
 
 function KpiCard({ icon: Icon, iconCls, label, value, sub, onClick }: {
@@ -24,17 +24,17 @@ function KpiCard({ icon: Icon, iconCls, label, value, sub, onClick }: {
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-left transition hover:-translate-y-0.5 hover:border-teal-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+      className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 text-left transition hover:-translate-y-0.5 hover:border-brand-line focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${iconCls}`}>
         <Icon size={16} />
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-baseline gap-x-2">
-          <span className="text-xl font-semibold tabular-nums text-slate-900">{formatNumber(display)}</span>
-          <span className="whitespace-nowrap text-xs text-slate-400">{label}</span>
+          <span className="text-xl font-semibold tabular-nums text-foreground">{formatNumber(display)}</span>
+          <span className="whitespace-nowrap text-xs text-[var(--color-text-tertiary)]">{label}</span>
         </span>
-        <span className="mt-0.5 block truncate text-[11px] text-slate-400" title={sub}>{sub}</span>
+        <span className="mt-0.5 block truncate text-[11px] text-[var(--color-text-tertiary)]" title={sub}>{sub}</span>
       </span>
     </button>
   )
@@ -102,17 +102,17 @@ export default function InstanceOverviewSection({
   return (
     <section data-testid="instance-overview-section" className="flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard icon={Box} iconCls="bg-sky-50 text-sky-600" label="对象实例"
+        <KpiCard icon={Box} iconCls="bg-[var(--color-info-bg)] text-[var(--color-info)]" label="对象实例"
           value={objectTotal} sub={`覆盖 ${catalog.objectTypes.length} 类对象实体`}
           onClick={onScrollToBrowser} />
-        <KpiCard icon={Link2} iconCls="bg-violet-50 text-violet-600" label="关系实例"
+        <KpiCard icon={Link2} iconCls="bg-viz-violet-soft text-viz-violet" label="关系实例"
           value={linkTotal} sub={`覆盖 ${catalog.linkTypes.length} 类实体关系`}
           onClick={onScrollToBrowser} />
-        <KpiCard icon={Boxes} iconCls="bg-teal-50 text-teal-600" label="数据类型"
+        <KpiCard icon={Boxes} iconCls="bg-brand-soft text-brand-ink" label="数据类型"
           value={catalog.objectTypes.length + catalog.linkTypes.length}
           sub="点击类型分布图可直达数据"
           onClick={onScrollToBrowser} />
-        <KpiCard icon={Activity} iconCls="bg-amber-50 text-amber-600" label="近 7 天活跃"
+        <KpiCard icon={Activity} iconCls="bg-[var(--color-warning-bg)] text-[var(--color-warning)]" label="近 7 天活跃"
           value={activityTotal} sub="哨兵命中与动作执行总量"
           onClick={onScrollToBrowser} />
       </div>
@@ -121,7 +121,7 @@ export default function InstanceOverviewSection({
         <InstanceChartCard title="类型分布" sub="点击条形直达该类型数据" testId="overview-type-chart"
           bodyClassName="h-44">
           {chartTypes.length === 0 ? (
-            <p className="flex h-full items-center justify-center text-xs text-slate-400">
+            <p className="flex h-full items-center justify-center text-xs text-[var(--color-text-tertiary)]">
               暂无实例数据分布 —— 数据灌入后这里会展示各类型占比
             </p>
           ) : (
@@ -144,7 +144,7 @@ export default function InstanceOverviewSection({
           info="统计当前发布版内对象实例的写入来源分布。点击图例或扇区，可将下方实例表精确过滤到该来源。"
           bodyClassName="h-44">
           {sourceEntries.length === 0 ? (
-            <p className="flex h-full items-center justify-center text-xs text-slate-400">暂无来源数据</p>
+            <p className="flex h-full items-center justify-center text-xs text-[var(--color-text-tertiary)]">暂无来源数据</p>
           ) : (
             <div className="flex h-full items-center gap-2">
               <div className="relative h-full min-w-0 flex-1">
@@ -160,8 +160,8 @@ export default function InstanceOverviewSection({
                   }}
                 />
                 <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                  <span className="text-lg font-semibold tabular-nums text-slate-800">{formatNumber(sourceTotal)}</span>
-                  <span className="text-[10px] text-slate-400">实例总数</span>
+                  <span className="text-lg font-semibold tabular-nums text-foreground">{formatNumber(sourceTotal)}</span>
+                  <span className="text-[10px] text-[var(--color-text-tertiary)]">实例总数</span>
                 </div>
               </div>
               <div className="flex w-32 shrink-0 flex-col gap-1.5">
@@ -171,14 +171,14 @@ export default function InstanceOverviewSection({
                     type="button"
                     onClick={() => onFilterSource(entry.source)}
                     title={`过滤来源：${instanceSourceLabel(entry.source)}`}
-                    className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[11px] text-slate-500 transition hover:bg-teal-50 hover:text-teal-700"
+                    className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[11px] text-muted-foreground transition hover:bg-brand-soft hover:text-brand-ink"
                   >
                     <span
                       className="h-2 w-2 shrink-0 rounded-full"
-                      style={{ backgroundColor: CHART_PALETTE[index % CHART_PALETTE.length] }}
+                      style={{ backgroundColor: CHART_SERIES_PALETTE[index % CHART_SERIES_PALETTE.length] }}
                     />
                     <span className="min-w-0 flex-1 truncate">{instanceSourceLabel(entry.source)}</span>
-                    <span className="tabular-nums text-slate-400">{formatNumber(entry.count)}</span>
+                    <span className="tabular-nums text-[var(--color-text-tertiary)]">{formatNumber(entry.count)}</span>
                   </button>
                 ))}
               </div>
