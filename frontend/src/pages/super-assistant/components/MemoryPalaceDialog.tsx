@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dialog'
 import PalaceFileTree from './PalaceFileTree'
 import PalaceGraphPanel from './PalaceGraphPanel'
+import PalaceMarkdown from './palaceMarkdown'
 
 interface MemoryPalaceDialogProps {
   open: boolean
@@ -88,6 +89,8 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
   const [importResult, setImportResult] = useState<PalaceImportResult | null>(null)
   const [showSkipped, setShowSkipped] = useState(false)
   const [replaceTarget, setReplaceTarget] = useState<string | null>(null)
+  /** md 预览形态：默认渲染排版，可切源码（抽取文本即 markdown，txt 恒为源码） */
+  const [previewMode, setPreviewMode] = useState<'render' | 'source'>('render')
   const inputRef = useRef<HTMLInputElement>(null)
   const zipInputRef = useRef<HTMLInputElement>(null)
   const replaceInputRef = useRef<HTMLInputElement>(null)
@@ -123,6 +126,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
       setImportResult(null)
       setShowSkipped(false)
       setReplaceTarget(null)
+      setPreviewMode('render')
     }
   }, [open])
 
@@ -311,6 +315,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
   const building = files.some(item => item.status === 'pending' || item.status === 'building')
   const extracting = selected?.status === 'pending' || selected?.status === 'building'
   const editingThis = editor !== null && editor.fileId === selected?.id
+  const isMarkdown = (selected?.filename ?? '').toLowerCase().endsWith('.md')
 
   const renderMiddleBody = () => {
     if (!selected) {
@@ -380,7 +385,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
       )
     }
     return (
-      <div data-testid="palace-file-preview" className="min-h-0 flex-1 overflow-auto p-3">
+      <div data-testid="palace-file-preview" className="flex min-h-0 flex-1 flex-col p-3">
         {preview?.fileId === selected.id ? (
           preview.loading ? (
             <p className="flex items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
@@ -390,11 +395,23 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
             <p className="text-xs text-[var(--color-text-tertiary)]">该格式暂不支持文本预览，可下载替换或重建图谱。</p>
           ) : (
             <>
-              <pre className="whitespace-pre-wrap break-all rounded-md bg-[var(--color-bg-elevated)] p-2 font-mono text-xs leading-5 text-[var(--color-text-primary)]">
-                {preview.data.content}
-              </pre>
+              {isMarkdown ? (
+                previewMode === 'render' ? (
+                  <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                    <PalaceMarkdown text={preview.data.content} />
+                  </div>
+                ) : (
+                  <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-bg-elevated)] p-2 font-mono text-xs leading-5 text-[var(--color-text-primary)]">
+                    {preview.data.content}
+                  </pre>
+                )
+              ) : (
+                <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-bg-elevated)] p-2 font-mono text-xs leading-5 text-[var(--color-text-primary)]">
+                  {preview.data.content}
+                </pre>
+              )}
               {preview.data.truncated && (
-                <p className="mt-1 text-[11px] text-amber-600">内容已截断，仅展示前 60000 字符。</p>
+                <p className="mt-1 shrink-0 text-[11px] text-amber-600">内容已截断，仅展示前 60000 字符。</p>
               )}
             </>
           )
@@ -409,7 +426,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
 
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
-      <DialogContent className="flex max-h-[90dvh] w-[min(96vw,76rem)] flex-col overflow-hidden">
+      <DialogContent className="flex h-[min(88dvh,880px)] w-[min(96vw,76rem)] flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Brain size={16} className="text-teal-700" /> 记忆宫殿
@@ -563,6 +580,30 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
                     {selected.status === 'pending' && <Clock size={10} className="mr-0.5 inline" />}
                     {STATUS_META[selected.status]?.label ?? '待抽取'}
                   </span>
+                  {isMarkdown && !editingThis && (
+                    <div
+                      role="group"
+                      aria-label="预览形态"
+                      data-testid="palace-preview-mode"
+                      className="flex shrink-0 items-center gap-0.5 rounded-lg bg-[var(--color-bg-hover)] p-0.5"
+                    >
+                      {([['render', '渲染'], ['source', '源码']] as const).map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          aria-pressed={previewMode === value}
+                          onClick={() => setPreviewMode(value)}
+                          className={`h-5 rounded-md px-1.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] ${
+                            previewMode === value
+                              ? 'bg-white text-[var(--color-text-primary)] shadow-sm'
+                              : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <span className="flex shrink-0 items-center gap-0.5">
                     {selected.editable && (
                       <Button

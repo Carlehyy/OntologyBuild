@@ -82,9 +82,15 @@ export default function PalaceGraphPanel({
     return ids.size > 0 ? ids : null
   }, [fileFocus, selectedFileId, baseGraph])
   const highlightIds = searchHighlight ?? fileHighlight
+  // 大图密度开关：标签全开糊成一片时改为悬停/邻接按需展示
+  const compactLabels = baseGraph.nodes.length > 80
   const option = useMemo(
-    () => palaceGraphOption({ ...baseGraph, nodes: view.nodes, edges: view.edges }, highlightIds ?? undefined),
-    [baseGraph, view, highlightIds],
+    () => palaceGraphOption(
+      { ...baseGraph, nodes: view.nodes, edges: view.edges },
+      highlightIds ?? undefined,
+      { compactLabels },
+    ),
+    [baseGraph, view, highlightIds, compactLabels],
   )
   const fileById = useMemo(() => new Map(files.map(file => [file.id, file])), [files])
 
@@ -150,7 +156,7 @@ export default function PalaceGraphPanel({
     <section
       aria-label="记忆宫殿知识图谱"
       data-testid="super-assistant-palace-graph"
-      className="flex min-h-0 flex-1 flex-col overflow-y-auto"
+      className="flex min-h-0 flex-1 flex-col"
     >
       <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5">
         <h3 className="text-xs font-medium text-[var(--color-text-secondary)]">
@@ -187,14 +193,15 @@ export default function PalaceGraphPanel({
             data-testid="palace-graph-file-focus"
             onClick={toggleFileFocus}
             aria-pressed={fileFocus}
-            className={`flex max-w-full items-center gap-1 rounded-full px-2.5 py-1 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] ${
+            title={`「${selectedFile.filename}」贡献的节点${fileFocus ? '，其余已淡化' : ''}`}
+            className={`flex h-7 max-w-full items-center gap-1 rounded-full px-2.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] ${
               fileFocus
                 ? 'bg-teal-50 text-teal-700 hover:bg-teal-100'
                 : 'bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]'
             }`}
           >
             <Crosshair size={11} className="shrink-0" />
-            <span className="truncate">
+            <span className="min-w-0 truncate">
               {fileFocus
                 ? `聚焦「${selectedFile.filename}」贡献的节点，其余已淡化`
                 : `聚焦「${selectedFile.filename}」的贡献节点`}
@@ -236,17 +243,26 @@ export default function PalaceGraphPanel({
         </div>
       ) : (
         <>
-          <div className="h-[340px] shrink-0 overflow-hidden rounded-xl border border-[var(--color-border)]">
+          {/* 画布撑满面板剩余高度；详情卡出现时画布让位但不滚动，详情卡内部滚动 */}
+          <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--color-border)]">
             <ReactECharts
               option={option}
               notMerge
               style={{ height: '100%', width: '100%' }}
               onEvents={chartEvents}
             />
+            {!selectedNode && (
+              <p className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-slate-900/70 px-3 py-1 text-[11px] text-white">
+                点击图谱中的节点，可查看实体详情、一跳邻居并定位来源文档
+              </p>
+            )}
           </div>
 
           {selectedNode ? (
-            <div data-testid="palace-node-detail" className="mt-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3">
+            <div
+              data-testid="palace-node-detail"
+              className="mt-3 max-h-[46%] shrink-0 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3"
+            >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-[var(--color-text-primary)]" data-palace-node-name={selectedNode.id}>
@@ -326,9 +342,7 @@ export default function PalaceGraphPanel({
                 )}
               </div>
             </div>
-          ) : (
-            <p className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">点击图谱中的节点，可查看实体详情、一跳邻居并定位来源文档。</p>
-          )}
+          ) : null}
         </>
       )}
     </section>

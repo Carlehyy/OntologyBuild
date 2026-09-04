@@ -66,6 +66,32 @@ describe('palaceGraphOption', () => {
     assert.equal(links[0].edgeLabel, '任职')
   })
 
+  it('默认展示节点标签且顶部预留图例行高度；compactLabels 开启后标签默认隐藏（emphasis 仍展示）', () => {
+    const normal = palaceGraphOption(makeGraph()) as unknown as {
+      series: Array<{ top: string | number; label: { show: boolean } }>
+    }
+    assert.equal(normal.series[0].label.show, true)
+    assert.equal(normal.series[0].top, 44)
+
+    const compact = palaceGraphOption(makeGraph(), undefined, { compactLabels: true }) as unknown as {
+      series: Array<{ label: { show: boolean }; emphasis: { label: { show: boolean } } }>
+    }
+    assert.equal(compact.series[0].label.show, false)
+    assert.equal(compact.series[0].emphasis.label.show, true)
+  })
+
+  it('compactLabels + 高亮：命中节点强制展示标签，非命中节点隐藏并降透明', () => {
+    const option = palaceGraphOption(makeGraph(), ['e-1'], { compactLabels: true }) as unknown as {
+      series: Array<{ data: Array<{ name: string; label?: { show: boolean } }>; links: Array<{ lineStyle: { opacity: number } }> }>
+    }
+    const data = option.series[0].data
+    const hit = data.find(item => item.name === '张三') as { label?: { show: boolean } }
+    const miss = data.find(item => item.name === 'ACME') as { label?: { show: boolean } }
+    assert.equal(hit.label?.show, true)
+    assert.equal(miss.label?.show, false)
+    assert.equal(option.series[0].links[0].lineStyle.opacity, 0.08)
+  })
+
   it('空图谱不渲染 legend 数据之外的内容且 series 仍为 graph', () => {
     const option = palaceGraphOption({
       available: true,
