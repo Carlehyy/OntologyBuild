@@ -45,7 +45,7 @@ description: >-
 | `--background` | `#eef1f5` | `#0d1117` | 页面底色 |
 | `--card` | `#ffffff` | `#161c26` | 卡片/面板 |
 | `--foreground` | `#1a1a2e` | `#e6e9ef` | 正文墨色 |
-| `--primary` | `#1a1a2e` | `#e6e9ef` | 主按钮/主操作 |
+| `--primary` | `#059669` | `#3ecf8e` | 主按钮/主操作 |
 | `--muted-foreground` | `#5a5a72` | `#98a2b3` | 次要文字 |
 | `--border` | `#e2e4e9` | `#2a3342` | 发丝边框 |
 | `--ring` | `#059669` | `#3ecf8e` | 焦点环/强调 |
@@ -55,6 +55,8 @@ description: >-
 - 品牌强调：emerald `#059669`（浅）/ `#3ecf8e`（深，Supabase 祖母绿原值），
   用于导航底色（`--color-nav-bg`）、焦点环、选中态、图表主序列；浅档取
   emerald-600 以维持浅底 3:1 对比度（与历史 teal 同级），暗底直接用原值。
+- 主按钮 `--primary` 同取此绿（§2.1）：浅色档 #059669 配白字，深色档亮绿
+  #3ecf8e 配深字；hover/active/light 档见 tokens.css `--color-primary-*`。
 - 使用纪律：强调色是「信号」不是「装饰」——同一视图只给最重要的元素。
 
 ### 2.3 语义色
