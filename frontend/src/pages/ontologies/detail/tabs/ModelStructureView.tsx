@@ -92,19 +92,19 @@ function dynamicStructureSentinel(item: DynamicSentinel): StructureSentinel {
 
 function DetailRow({ label, value, mono = false }: { label: string; value: React.ReactNode; mono?: boolean }) {
   return (
-    <div className="grid grid-cols-[82px_minmax(0,1fr)] gap-3 border-b border-slate-100 py-2.5 last:border-0">
-      <dt className="text-[11px] text-slate-400">{label}</dt>
-      <dd className={`min-w-0 break-words text-xs text-slate-700 ${mono ? 'font-mono' : ''}`}>{value || '—'}</dd>
+    <div className="grid grid-cols-[82px_minmax(0,1fr)] gap-3 border-b border-border py-2.5 last:border-0">
+      <dt className="text-[11px] text-[var(--color-text-tertiary)]">{label}</dt>
+      <dd className={`min-w-0 break-words text-xs text-foreground ${mono ? 'font-mono' : ''}`}>{value || '—'}</dd>
     </div>
   )
 }
 
 function Pill({ children, tone = 'slate' }: { children: React.ReactNode; tone?: 'slate' | 'teal' | 'amber' | 'violet' }) {
   const styles = {
-    slate: 'border-slate-200 bg-slate-50 text-slate-600',
-    teal: 'border-teal-200 bg-teal-50 text-teal-700',
-    amber: 'border-amber-200 bg-amber-50 text-amber-700',
-    violet: 'border-violet-200 bg-violet-50 text-violet-700',
+    slate: 'border-border bg-muted text-muted-foreground',
+    teal: 'border-brand-line bg-brand-soft text-brand-ink',
+    amber: 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] text-[var(--color-warning)]',
+    violet: 'border-viz-violet-soft bg-viz-violet-soft text-viz-violet',
   }
   return <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] ${styles[tone]}`}>{children}</span>
 }
@@ -150,11 +150,11 @@ function AnimatedSegmentedControl<T extends string | number>({
   }, [items.length, measure])
 
   return (
-    <div ref={containerRef} className="relative flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5" aria-label={label}>
+    <div ref={containerRef} className="relative flex shrink-0 items-center gap-1 rounded-lg border border-border bg-muted p-0.5" aria-label={label}>
       {indicator && (
         <span
           aria-hidden="true"
-          className="absolute top-0.5 h-[calc(100%-4px)] rounded-md bg-teal-600 shadow-sm transition-all duration-300 ease-out motion-reduce:transition-none"
+          className="absolute top-0.5 h-[calc(100%-4px)] rounded-md bg-brand shadow-sm transition-all duration-300 ease-out motion-reduce:transition-none"
           style={{ left: indicator.left, width: indicator.width }}
         />
       )}
@@ -168,7 +168,7 @@ function AnimatedSegmentedControl<T extends string | number>({
             data-segment-value={item.value}
             aria-pressed={active}
             onClick={() => onChange(item.value)}
-            className={`relative z-10 inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-colors duration-200 ${active ? 'text-white' : 'text-slate-500 hover:text-slate-700'}`}
+            className={`relative z-10 inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-colors duration-200 ${active ? 'text-[var(--color-text-inverse)]' : 'text-muted-foreground hover:text-foreground'}`}
           >
             {Icon && <Icon size={13} />}{item.label}
           </button>
@@ -208,18 +208,18 @@ function DependencyPicker({
   const dynamicCount = items.filter(item => item.source === 'assistant_dynamic').length
   const tone = isFunction
     ? {
-      icon: 'bg-violet-50 text-violet-600 ring-violet-100',
-      active: 'border-violet-300 bg-violet-50 text-violet-700',
-      dot: 'bg-violet-500',
-      selected: 'bg-violet-50/70 text-violet-900',
-      selectedIcon: 'bg-violet-100 text-violet-700',
+      icon: 'bg-viz-violet-soft text-viz-violet ring-viz-violet',
+      active: 'border-viz-violet-soft bg-viz-violet-soft text-viz-violet',
+      dot: 'bg-viz-violet',
+      selected: 'bg-viz-violet-soft text-viz-violet',
+      selectedIcon: 'bg-viz-violet-soft text-viz-violet',
     }
     : {
-      icon: 'bg-fuchsia-50 text-fuchsia-600 ring-fuchsia-100',
-      active: 'border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700',
-      dot: 'bg-fuchsia-500',
-      selected: 'bg-fuchsia-50/70 text-fuchsia-900',
-      selectedIcon: 'bg-fuchsia-100 text-fuchsia-700',
+      icon: 'bg-viz-fuchsia-soft text-viz-fuchsia ring-viz-fuchsia',
+      active: 'border-viz-fuchsia-soft bg-viz-fuchsia-soft text-viz-fuchsia',
+      dot: 'bg-viz-fuchsia',
+      selected: 'bg-viz-fuchsia-soft text-viz-fuchsia',
+      selectedIcon: 'bg-viz-fuchsia-soft text-viz-fuchsia',
     }
 
   const updatePosition = useCallback(() => {
@@ -257,7 +257,7 @@ function DependencyPicker({
           if (event.key === 'Escape') onOpenChange(false)
           if (event.key === 'ArrowDown') onOpenChange(true)
         }}
-        className={`inline-flex h-9 w-[224px] items-center gap-2 rounded-lg border px-2.5 text-left text-xs outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-offset-1 ${open || selected ? tone.active : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 focus-visible:ring-teal-300'}`}
+        className={`inline-flex h-9 w-[224px] items-center gap-2 rounded-lg border px-2.5 text-left text-xs outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-offset-1 ${open || selected ? tone.active : 'border-border bg-card text-muted-foreground hover:border-border hover:bg-muted focus-visible:ring-ring'}`}
       >
         <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ring-1 ${tone.icon}`}><Icon size={13} /></span>
         <span className="min-w-0 flex-1 truncate">{selected?.label || (isFunction ? '激活函数 · 查看使用关系' : '哨兵规则 · 查看覆盖范围')}</span>
@@ -270,19 +270,19 @@ function DependencyPicker({
           <section
             role="dialog"
             aria-label={`选择${title}`}
-            className="fixed z-[80] w-[360px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_18px_52px_rgba(15,23,42,0.16)] animate-slide-up"
+            className="fixed z-[80] w-[360px] overflow-hidden rounded-xl border border-border bg-card shadow-[0_18px_52px_rgba(15,23,42,0.16)] animate-slide-up"
             style={{ left: position.left, top: position.top }}
           >
-            <header className="flex items-start gap-3 border-b border-slate-100 px-4 py-3">
+            <header className="flex items-start gap-3 border-b border-border px-4 py-3">
               <span className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ring-1 ${tone.icon}`}><Icon size={16} /></span>
               <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-2 text-sm font-semibold text-slate-800">{title}<span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} /><span className="text-xs font-medium tabular-nums text-slate-400">{items.length}</span></span>
-                <span className="mt-0.5 block text-[11px] leading-4 text-slate-400">
+                <span className="flex items-center gap-2 text-sm font-semibold text-foreground">{title}<span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} /><span className="text-xs font-medium tabular-nums text-[var(--color-text-tertiary)]">{items.length}</span></span>
+                <span className="mt-0.5 block text-[11px] leading-4 text-[var(--color-text-tertiary)]">
                   {helper}
                   {!isFunction && <span data-testid="sentinel-dependency-source-counts"> · 公共哨兵 {builtInCount} · 动态哨兵 {dynamicCount}</span>}
                 </span>
               </span>
-              {selected && <button type="button" data-testid={`${kind}-dependency-clear`} onClick={() => { onChange(''); onOpenChange(false) }} className="mt-1 shrink-0 rounded-md px-2 py-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700">清除</button>}
+              {selected && <button type="button" data-testid={`${kind}-dependency-clear`} onClick={() => { onChange(''); onOpenChange(false) }} className="mt-1 shrink-0 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">清除</button>}
             </header>
             <div className="scrollbar-thin max-h-[360px] overflow-y-auto py-1.5">
               {items.length ? items.map(item => {
@@ -296,25 +296,25 @@ function DependencyPicker({
                     data-testid={`${kind}-dependency-option-${item.id}`}
                     aria-selected={active}
                     onClick={() => { onChange(item.id); onOpenChange(false) }}
-                    className={`group flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors ${active ? tone.selected : 'hover:bg-slate-50'}`}
+                    className={`group flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors ${active ? tone.selected : 'hover:bg-muted'}`}
                   >
-                    <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${active ? tone.selectedIcon : 'bg-slate-100 text-slate-500 group-hover:bg-white'}`}><Icon size={14} /></span>
+                    <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${active ? tone.selectedIcon : 'bg-muted text-muted-foreground group-hover:bg-card'}`}><Icon size={14} /></span>
                     <span className="min-w-0 flex-1">
                       <span className="flex min-w-0 items-center gap-1.5">
-                        <span className="min-w-0 truncate text-sm font-medium text-slate-700">{item.label}</span>
+                        <span className="min-w-0 truncate text-sm font-medium text-foreground">{item.label}</span>
                         {item.source && (
                           <span
                             data-testid={`${kind}-dependency-source-${item.id}`}
-                            className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-semibold ${dynamicSource ? 'border-teal-200 bg-teal-50 text-teal-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}
+                            className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-semibold ${dynamicSource ? 'border-brand-line bg-brand-soft text-brand-ink' : 'border-border bg-muted text-muted-foreground'}`}
                           >
                             <span aria-hidden="true">{dynamicSource ? '✦' : '●'}</span>
                             {dynamicSource ? '动态哨兵' : '公共哨兵'}
                           </span>
                         )}
                       </span>
-                      <span className="mt-0.5 block min-w-0 truncate font-mono text-[10px] text-slate-400">{item.technicalName}</span>
-                      {item.meta && <span className="mt-0.5 block truncate text-[10px] text-slate-400">{item.meta}</span>}
-                      {item.description && <span className="mt-0.5 block truncate text-[10px] text-slate-400">{item.description}</span>}
+                      <span className="mt-0.5 block min-w-0 truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">{item.technicalName}</span>
+                      {item.meta && <span className="mt-0.5 block truncate text-[10px] text-[var(--color-text-tertiary)]">{item.meta}</span>}
+                      {item.description && <span className="mt-0.5 block truncate text-[10px] text-[var(--color-text-tertiary)]">{item.description}</span>}
                     </span>
                     {active && <Check size={15} className="shrink-0" />}
                   </button>
@@ -322,8 +322,8 @@ function DependencyPicker({
               }) : (
                 <div className="flex flex-col items-center px-6 py-10 text-center">
                   <span className={`mb-3 flex h-11 w-11 items-center justify-center rounded-full ${tone.icon}`}><Icon size={18} /></span>
-                  <p className="text-sm font-medium text-slate-600">当前发布版暂无{title}</p>
-                  <p className="mt-1 text-xs text-slate-400">发布包含{title}的版本后，可在这里查看依赖关系。</p>
+                  <p className="text-sm font-medium text-muted-foreground">当前发布版暂无{title}</p>
+                  <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">发布包含{title}的版本后，可在这里查看依赖关系。</p>
                 </div>
               )}
             </div>
@@ -356,20 +356,20 @@ function DetailPanel({ workspace, selection, onClose }: {
       <>
         <dl><DetailRow label="类型" value="对象实体" /><DetailRow label="描述" value={item.description} /><DetailRow label="主键" value={primary?.displayName || primary?.name} mono /></dl>
         <div className="mt-5">
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">属性 · {item.properties.length}</p>
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)]">属性 · {item.properties.length}</p>
           <div className="space-y-1.5">
             {item.properties.map(property => (
-              <div key={property.id || property.name} className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50/70 px-2.5 py-2">
-                {(property.id === item.primaryKey || property.name === item.primaryKey) ? <KeyRound size={12} className="text-amber-600" /> : <Braces size={12} className="text-violet-500" />}
-                <span className="min-w-0 flex-1 truncate text-xs text-slate-700">{property.displayName || property.name}</span>
+              <div key={property.id || property.name} className="flex items-center gap-2 rounded-lg border border-border bg-muted px-2.5 py-2">
+                {(property.id === item.primaryKey || property.name === item.primaryKey) ? <KeyRound size={12} className="text-[var(--color-warning)]" /> : <Braces size={12} className="text-viz-violet" />}
+                <span className="min-w-0 flex-1 truncate text-xs text-foreground">{property.displayName || property.name}</span>
                 <Pill tone={property.source === 'computed' ? 'violet' : 'slate'}>{property.type || 'unknown'}</Pill>
               </div>
             ))}
           </div>
         </div>
         <div className="mt-5">
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">动作 · {actions.length}</p>
-          {actions.length ? actions.map(action => <div key={action.id} className="mb-1.5 flex items-center gap-2 rounded-lg border border-amber-100 bg-amber-50/60 px-2.5 py-2 text-xs text-slate-700"><Bolt size={12} className="text-amber-600" />{action.displayName || action.name}</div>) : <p className="text-xs text-slate-400">暂无执行动作</p>}
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)]">动作 · {actions.length}</p>
+          {actions.length ? actions.map(action => <div key={action.id} className="mb-1.5 flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-2.5 py-2 text-xs text-foreground"><Bolt size={12} className="text-[var(--color-warning)]" />{action.displayName || action.name}</div>) : <p className="text-xs text-[var(--color-text-tertiary)]">暂无执行动作</p>}
         </div>
       </>
       ),
@@ -417,11 +417,11 @@ function DetailPanel({ workspace, selection, onClose }: {
   }
 
   return (
-    <aside data-testid="structure-detail-panel" className="absolute bottom-3 right-3 top-[3.25rem] z-30 flex w-[340px] max-w-[calc(100%-24px)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white/95 shadow-[0_20px_60px_rgba(15,23,42,0.18)] backdrop-blur-xl">
-      <div className="flex shrink-0 items-start gap-3 border-b border-slate-100 px-4 py-4">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-100">{panel.icon}</span>
-        <div className="min-w-0 flex-1"><h3 className="truncate text-sm font-semibold text-slate-800">{panel.title}</h3><p className="truncate font-mono text-[10px] text-slate-400">{panel.technicalName}</p></div>
-        <button type="button" onClick={onClose} aria-label="关闭详情" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X size={15} /></button>
+    <aside data-testid="structure-detail-panel" className="absolute bottom-3 right-3 top-[3.25rem] z-30 flex w-[340px] max-w-[calc(100%-24px)] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-[0_20px_60px_rgba(15,23,42,0.18)] backdrop-blur-xl">
+      <div className="flex shrink-0 items-start gap-3 border-b border-border px-4 py-4">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand-ink ring-1 ring-ring">{panel.icon}</span>
+        <div className="min-w-0 flex-1"><h3 className="truncate text-sm font-semibold text-foreground">{panel.title}</h3><p className="truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">{panel.technicalName}</p></div>
+        <button type="button" onClick={onClose} aria-label="关闭详情" className="rounded-lg p-1.5 text-[var(--color-text-tertiary)] hover:bg-muted hover:text-foreground"><X size={15} /></button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto px-4 py-3">{panel.content}</div>
     </aside>
@@ -790,8 +790,8 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
   const saveLabel = saveStatusLabel(saveState, saveCountdown)
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-slate-50/70" data-testid="ontology-structure-graph">
-      <div className="z-40 flex shrink-0 items-stretch border-b border-slate-200 bg-white">
+    <div className="flex h-full min-h-0 flex-col bg-muted" data-testid="ontology-structure-graph">
+      <div className="z-40 flex shrink-0 items-stretch border-b border-border bg-card">
         <div className="relative flex min-w-0 flex-1">
           <div
             ref={toolbarScrollRef}
@@ -806,17 +806,17 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
           onChange={changeLevel}
         />
         <div className="relative w-[240px] min-w-[170px] shrink">
-          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input ref={searchInputRef} value={searchText} onChange={event => { setSearchText(event.target.value); setSearchOpen(true); setSearchFocus(null) }} onFocus={() => setSearchOpen(true)} onKeyDown={event => { if (event.key === 'Enter' && searchResults[0]) chooseSearchResult(searchResults[0]); if (event.key === 'Escape') setSearchOpen(false) }} placeholder={level === 1 ? '搜索对象实体或实体关系' : '搜索对象、关系、属性或动作'} aria-label="搜索本体结构" role="combobox" aria-autocomplete="list" aria-controls="structure-search-results" aria-expanded={searchResultsVisible} autoComplete="off" className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-8 text-xs text-slate-700 outline-none transition focus:border-teal-400 focus:bg-white focus:ring-2 focus:ring-teal-100" />
-          {searchText && <button type="button" aria-label="清空搜索" onClick={() => { setSearchText(''); setSearchFocus(null); setSearchOpen(false) }} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-200"><X size={12} /></button>}
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
+          <input ref={searchInputRef} value={searchText} onChange={event => { setSearchText(event.target.value); setSearchOpen(true); setSearchFocus(null) }} onFocus={() => setSearchOpen(true)} onKeyDown={event => { if (event.key === 'Enter' && searchResults[0]) chooseSearchResult(searchResults[0]); if (event.key === 'Escape') setSearchOpen(false) }} placeholder={level === 1 ? '搜索对象实体或实体关系' : '搜索对象、关系、属性或动作'} aria-label="搜索本体结构" role="combobox" aria-autocomplete="list" aria-controls="structure-search-results" aria-expanded={searchResultsVisible} autoComplete="off" className="h-9 w-full rounded-lg border border-border bg-muted pl-9 pr-8 text-xs text-foreground outline-none transition focus:border-brand focus:bg-card focus:ring-2 focus:ring-ring" />
+          {searchText && <button type="button" aria-label="清空搜索" onClick={() => { setSearchText(''); setSearchFocus(null); setSearchOpen(false) }} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-active)]"><X size={12} /></button>}
           {searchResultsVisible && createPortal(
-            <div ref={searchResultsRef} id="structure-search-results" role="listbox" aria-label="本体结构搜索候选" className="fixed z-[80] max-h-72 overflow-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_18px_52px_rgba(15,23,42,0.16)]" style={searchPosition}>
-              {searchResults.length ? searchResults.map(result => <button key={`${result.kind}:${result.id}`} type="button" role="option" aria-selected="false" data-testid={`structure-search-result-${result.kind}-${result.id}`} onMouseDown={event => event.preventDefault()} onClick={() => chooseSearchResult(result)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-slate-50"><Pill tone={result.kind === 'relation' ? 'teal' : result.kind === 'property' ? 'violet' : result.kind === 'action' ? 'amber' : 'slate'}>{kindLabel[result.kind]}</Pill><span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium text-slate-700">{result.label}</span><span className="block truncate font-mono text-[10px] text-slate-400">{result.technicalName}{result.context ? ` · ${result.context}` : ''}</span></span><ChevronRight size={13} className="text-slate-300" /></button>) : <p aria-live="polite" className="px-3 py-5 text-center text-xs text-slate-400">当前 L{level} 视角没有匹配项</p>}
+            <div ref={searchResultsRef} id="structure-search-results" role="listbox" aria-label="本体结构搜索候选" className="fixed z-[80] max-h-72 overflow-auto rounded-xl border border-border bg-card p-1.5 shadow-[0_18px_52px_rgba(15,23,42,0.16)]" style={searchPosition}>
+              {searchResults.length ? searchResults.map(result => <button key={`${result.kind}:${result.id}`} type="button" role="option" aria-selected="false" data-testid={`structure-search-result-${result.kind}-${result.id}`} onMouseDown={event => event.preventDefault()} onClick={() => chooseSearchResult(result)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-muted"><Pill tone={result.kind === 'relation' ? 'teal' : result.kind === 'property' ? 'violet' : result.kind === 'action' ? 'amber' : 'slate'}>{kindLabel[result.kind]}</Pill><span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium text-foreground">{result.label}</span><span className="block truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">{result.technicalName}{result.context ? ` · ${result.context}` : ''}</span></span><ChevronRight size={13} className="text-[var(--color-text-tertiary)]" /></button>) : <p aria-live="polite" className="px-3 py-5 text-center text-xs text-[var(--color-text-tertiary)]">当前 L{level} 视角没有匹配项</p>}
             </div>,
             document.body,
           )}
         </div>
-        <div className="h-6 w-px shrink-0 bg-slate-200" />
+        <div className="h-6 w-px shrink-0 bg-[var(--color-bg-active)]" />
         <DependencyPicker
           kind="function"
           items={functionOptions}
@@ -838,15 +838,15 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
             <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 z-20 w-8 bg-gradient-to-l from-white via-white/85 to-transparent" />
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-1 border-l border-slate-200 bg-white px-2">
-          <button type="button" onClick={() => setStructureDocOpen(true)} aria-label="业务文档" title="查看当前本体结构关联的需求文档" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:translate-y-px"><FileText size={13} />业务文档</button>
+        <div className="flex shrink-0 items-center gap-1 border-l border-border bg-card px-2">
+          <button type="button" onClick={() => setStructureDocOpen(true)} aria-label="业务文档" title="查看当前本体结构关联的需求文档" className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-brand-line bg-brand-soft px-2.5 text-xs font-medium text-brand-ink transition-colors hover:border-brand-line hover:bg-brand-soft active:translate-y-px"><FileText size={13} />业务文档</button>
           <button
             type="button"
             onClick={() => setBusinessModelOpen(true)}
             aria-label="业务模型"
             title="查看业务澄清沉淀的七类业务模型"
             data-testid="open-business-model-dialog"
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 text-xs font-medium text-emerald-700 transition-colors hover:border-emerald-300 hover:bg-emerald-100 active:translate-y-px"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] px-2.5 text-xs font-medium text-[var(--color-success)] transition-colors hover:border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] hover:bg-[var(--color-success-bg)] active:translate-y-px"
           >
             <Shapes size={13} />业务模型
           </button>
@@ -865,18 +865,18 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
           proOptions={{ hideAttribution: true }}
         >
           <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#cbd5e1" />
-          <MiniMap pannable zoomable position="bottom-left" style={{ width: 150, height: 96 }} className="!m-3 !rounded-xl !border !border-slate-200 !bg-white/90 !shadow-sm" nodeColor={node => node.data?.kind === 'object' ? '#047857' : node.data?.kind === 'property' ? '#8b5cf6' : '#f59e0b'} maskColor="rgba(241,245,249,0.72)" />
+          <MiniMap pannable zoomable position="bottom-left" style={{ width: 150, height: 96 }} className="!m-3 !rounded-xl !border !border-border !bg-card !shadow-sm" nodeColor={node => node.data?.kind === 'object' ? '#047857' : node.data?.kind === 'property' ? '#8b5cf6' : '#f59e0b'} maskColor="rgba(241,245,249,0.72)" />
         </ReactFlow>
 
-        <div className="pointer-events-none absolute right-3 top-3 z-20 flex items-center gap-2 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-[11px] text-slate-500 shadow-sm backdrop-blur">
-          <Layers3 size={13} className="text-teal-600" /><span>L{level} · {workspace.objectTypes.length} 对象 · {workspace.linkTypes.length} 关系{level === 2 ? ` · ${workspace.objectTypes.reduce((sum, item) => sum + item.properties.length, 0)} 属性 · ${workspace.actions.length} 动作` : ''}</span>
-          <span className="h-3 w-px bg-slate-200" />
+        <div className="pointer-events-none absolute right-3 top-3 z-20 flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-[11px] text-muted-foreground shadow-sm backdrop-blur">
+          <Layers3 size={13} className="text-brand-ink" /><span>L{level} · {workspace.objectTypes.length} 对象 · {workspace.linkTypes.length} 关系{level === 2 ? ` · ${workspace.objectTypes.reduce((sum, item) => sum + item.properties.length, 0)} 属性 · ${workspace.actions.length} 动作` : ''}</span>
+          <span className="h-3 w-px bg-[var(--color-bg-active)]" />
           {saveState === 'error' ? (
             <button
               type="button"
               onClick={() => void flushLayout()}
               title={saveError || '布局保存失败'}
-              className="pointer-events-auto inline-flex items-center gap-1 rounded px-1 py-0.5 font-medium text-red-600 underline decoration-red-300 underline-offset-2 transition-colors hover:bg-red-50 hover:text-red-700"
+              className="pointer-events-auto inline-flex items-center gap-1 rounded px-1 py-0.5 font-medium text-[var(--color-danger)] underline decoration-[var(--color-danger)] underline-offset-2 transition-colors hover:bg-[var(--color-danger-bg)] hover:text-[var(--color-danger)]"
             >
               <AlertCircle size={11} />保存失败 · 点击重试
             </button>
@@ -886,9 +886,9 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
               aria-live="polite"
               data-testid="structure-save-status"
               className={`inline-flex items-center gap-1 ${
-                saveState === 'pending' ? 'text-amber-600'
-                  : saveState === 'saved' ? 'text-emerald-600'
-                    : 'text-slate-500'
+                saveState === 'pending' ? 'text-[var(--color-warning)]'
+                  : saveState === 'saved' ? 'text-[var(--color-success)]'
+                    : 'text-muted-foreground'
               }`}
             >
               {saveState === 'saving'
@@ -897,28 +897,28 @@ function StructureGraph({ ontologyId, ontologyName, workspace }: {
               {saveLabel}
             </span>
           )}
-          <span className="h-3 w-px bg-slate-200" />
-          <span>发布版 <span className="font-mono font-semibold text-teal-700" data-testid="published-structure-version">{workspace.version}</span></span>
-          <span className="h-3 w-px bg-slate-200" />
+          <span className="h-3 w-px bg-[var(--color-bg-active)]" />
+          <span>发布版 <span className="font-mono font-semibold text-brand-ink" data-testid="published-structure-version">{workspace.version}</span></span>
+          <span className="h-3 w-px bg-[var(--color-bg-active)]" />
           <span
             data-testid="published-structure-readonly"
             title="当前页面只允许调整并保存画布布局，不允许修改本体模型结构"
-            className="pointer-events-auto inline-flex shrink-0 items-center gap-1 font-medium text-slate-600"
+            className="pointer-events-auto inline-flex shrink-0 items-center gap-1 font-medium text-muted-foreground"
           >
-            <ShieldCheck size={13} className="text-teal-700" />发布快照 · 结构只读
+            <ShieldCheck size={13} className="text-brand-ink" />发布快照 · 结构只读
           </span>
         </div>
 
         {hasDependency && (
-          <div className="absolute bottom-4 left-1/2 z-20 max-w-[min(720px,calc(100%-360px))] -translate-x-1/2 rounded-xl border border-slate-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
-            <div className="flex items-center gap-2 text-xs text-slate-700"><Sparkles size={14} className={sentinelId ? 'text-fuchsia-600' : 'text-violet-600'} /><span className="font-medium">{dependencyHighlight.summary || '没有找到直接使用节点'}</span><button type="button" onClick={() => { setFunctionId(''); setSentinelId('') }} className="ml-1 rounded p-1 text-slate-400 hover:bg-slate-100"><X size={12} /></button></div>
+          <div className="absolute bottom-4 left-1/2 z-20 max-w-[min(720px,calc(100%-360px))] -translate-x-1/2 rounded-xl border border-border bg-card px-3 py-2 shadow-lg backdrop-blur">
+            <div className="flex items-center gap-2 text-xs text-foreground"><Sparkles size={14} className={sentinelId ? 'text-viz-fuchsia' : 'text-viz-violet'} /><span className="font-medium">{dependencyHighlight.summary || '没有找到直接使用节点'}</span><button type="button" onClick={() => { setFunctionId(''); setSentinelId('') }} className="ml-1 rounded p-1 text-[var(--color-text-tertiary)] hover:bg-muted"><X size={12} /></button></div>
           </div>
         )}
 
         <div
           data-testid="structure-canvas-hint"
           aria-hidden="true"
-          className="pointer-events-none absolute bottom-[7.5rem] left-3 z-10 rounded-lg bg-white/80 px-2.5 py-1 text-[10px] text-slate-400 shadow-sm backdrop-blur"
+          className="pointer-events-none absolute bottom-[7.5rem] left-3 z-10 rounded-lg bg-card px-2.5 py-1 text-[10px] text-[var(--color-text-tertiary)] shadow-sm backdrop-blur"
         >
           左键拖节点 · 拖空白平移 · 滚轮缩放
         </div>
@@ -959,21 +959,21 @@ export default function ModelStructureView({ ontologyId, ontologyName }: {
     queryFn: () => agentApi.dynamicSentinels(ontologyId, releaseId),
     enabled: Boolean(releaseId && releaseQuery.data?.isCurrentRelease),
   })
-  if (releaseQuery.isLoading || (releaseId && dynamicSentinelsQuery.isLoading)) return <div className="flex h-full items-center justify-center gap-2 text-sm text-slate-500"><Loader2 className="animate-spin" size={18} />正在构建本体结构图谱…</div>
+  if (releaseQuery.isLoading || (releaseId && dynamicSentinelsQuery.isLoading)) return <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="animate-spin" size={18} />正在构建本体结构图谱…</div>
   if (releaseQuery.isError || !releaseQuery.data?.isCurrentRelease || releaseQuery.data.workspaceMode !== 'release' || releaseQuery.data.editable !== false) return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 bg-red-50 text-sm text-red-700" role="alert">
+    <div className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--color-danger-bg)] text-sm text-[var(--color-danger)]" role="alert">
       <p className="inline-flex items-center gap-2"><AlertCircle size={18} />当前发布快照读取失败，已停止展示可变模型数据。</p>
-      <button type="button" onClick={() => void releaseQuery.refetch()} className="rounded-lg border border-red-300 bg-white px-3 py-2 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400">重新加载</button>
+      <button type="button" onClick={() => void releaseQuery.refetch()} className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-card px-3 py-2 text-xs font-semibold text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-danger)]">重新加载</button>
     </div>
   )
   if (dynamicSentinelsQuery.isError) return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 bg-amber-50 px-6 text-center text-sm text-amber-800" role="alert">
+    <div className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--color-warning-bg)] px-6 text-center text-sm text-[var(--color-warning)]" role="alert">
       <AlertCircle size={20} />
       <p>动态哨兵读取失败，已停止展示不完整的哨兵覆盖数据。</p>
-      <button type="button" onClick={() => void dynamicSentinelsQuery.refetch()} className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-800 transition-colors hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400">重新加载</button>
+      <button type="button" onClick={() => void dynamicSentinelsQuery.refetch()} className="rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-card px-3 py-2 text-xs font-semibold text-[var(--color-warning)] transition-colors hover:bg-[var(--color-warning-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-warning)]">重新加载</button>
     </div>
   )
-  if (releaseQuery.data.objectTypes.length === 0) return <div className="flex h-full flex-col items-center justify-center gap-3 text-slate-500"><span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100"><Database size={22} /></span><p className="text-sm">当前发布版还没有对象实体</p></div>
+  if (releaseQuery.data.objectTypes.length === 0) return <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground"><span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-muted"><Database size={22} /></span><p className="text-sm">当前发布版还没有对象实体</p></div>
   const sentinels: StructureSentinel[] = [
     ...releaseQuery.data.sentinels.map(item => ({
       ...item, origin: item.origin || 'release_builtin' as const,

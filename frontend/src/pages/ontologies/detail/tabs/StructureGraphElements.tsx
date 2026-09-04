@@ -9,18 +9,18 @@ import type { StructureEdge, StructureNode } from './structureGraphModel'
 const kindStyle = {
   object: {
     icon: Box,
-    iconClass: 'bg-teal-50 text-teal-700 ring-teal-100',
-    border: 'border-slate-200',
+    iconClass: 'bg-brand-soft text-brand-ink ring-ring',
+    border: 'border-border',
   },
   property: {
     icon: Braces,
-    iconClass: 'bg-violet-50 text-violet-700 ring-violet-100',
-    border: 'border-violet-200/80',
+    iconClass: 'bg-viz-violet-soft text-viz-violet ring-viz-violet',
+    border: 'border-viz-violet-soft',
   },
   action: {
     icon: Bolt,
-    iconClass: 'bg-amber-50 text-amber-700 ring-amber-100',
-    border: 'border-amber-200/80',
+    iconClass: 'bg-[var(--color-warning-bg)] text-[var(--color-warning)] ring-[var(--color-warning)]',
+    border: 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)]',
   },
 }
 
@@ -44,15 +44,15 @@ export const StructureGraphNode = memo(({ data, selected }: NodeProps<StructureN
   const style = kindStyle[data.kind]
   const Icon = style.icon
   const emphasisClass = data.emphasis === 'primary'
-    ? 'border-fuchsia-500 ring-4 ring-fuchsia-100 shadow-[0_14px_32px_rgba(192,38,211,0.16)]'
+    ? 'border-viz-fuchsia ring-4 ring-viz-fuchsia shadow-[0_14px_32px_rgba(192,38,211,0.16)]'
     : data.emphasis === 'dependency'
-      ? 'border-violet-500 ring-4 ring-violet-100 shadow-[0_14px_32px_rgba(124,58,237,0.16)]'
+      ? 'border-viz-violet ring-4 ring-viz-violet shadow-[0_14px_32px_rgba(124,58,237,0.16)]'
       : data.emphasis === 'search'
-        ? 'border-amber-500 ring-4 ring-amber-100 shadow-[0_14px_32px_rgba(245,158,11,0.16)]'
+        ? 'border-[var(--color-warning)] ring-4 ring-[var(--color-warning)] shadow-[0_14px_32px_rgba(245,158,11,0.16)]'
         : data.emphasis === 'context'
-          ? 'border-violet-300 ring-2 ring-violet-50'
+          ? 'border-viz-violet-soft ring-2 ring-viz-violet'
           : selected
-            ? 'border-teal-500 ring-4 ring-teal-100 shadow-[0_14px_32px_rgba(13,148,136,0.14)]'
+            ? 'border-brand ring-4 ring-ring shadow-[0_14px_32px_rgba(13,148,136,0.14)]'
             : style.border
   const widthClass = data.kind === 'object' ? 'w-[224px]' : data.kind === 'property' ? 'w-[188px]' : 'w-[196px]'
   /* 对象实体节点常态即取悬浮观感（微浮起 + 阴影），与属性/动作等子节点拉开
@@ -62,7 +62,7 @@ export const StructureGraphNode = memo(({ data, selected }: NodeProps<StructureN
   return (
     <div
       data-testid={`structure-node-${data.kind}`}
-      className={`${widthClass} rounded-xl border bg-white px-3.5 py-3 transition-[opacity,border-color,box-shadow,transform] duration-200 ${emphasisClass} ${data.dimmed ? 'opacity-20 grayscale' : 'opacity-100'} ${resting ? '-translate-y-0.5 shadow-lg' : ''} ${data.kind === 'object' ? 'hover:shadow-xl' : 'hover:-translate-y-0.5 hover:shadow-lg'}`}
+      className={`${widthClass} rounded-xl border bg-card px-3.5 py-3 transition-[opacity,border-color,box-shadow,transform] duration-200 ${emphasisClass} ${data.dimmed ? 'opacity-20 grayscale' : 'opacity-100'} ${resting ? '-translate-y-0.5 shadow-lg' : ''} ${data.kind === 'object' ? 'hover:shadow-xl' : 'hover:-translate-y-0.5 hover:shadow-lg'}`}
     >
       <DirectionalHandles />
       <div className="flex min-w-0 items-center gap-3">
@@ -71,11 +71,11 @@ export const StructureGraphNode = memo(({ data, selected }: NodeProps<StructureN
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <p className="truncate text-sm font-semibold text-slate-900">{data.label}</p>
-            {data.emphasis === 'primary' && <KeyRound size={12} className="shrink-0 text-fuchsia-600" />}
+            <p className="truncate text-sm font-semibold text-foreground">{data.label}</p>
+            {data.emphasis === 'primary' && <KeyRound size={12} className="shrink-0 text-viz-fuchsia" />}
           </div>
           {/* 画布节点只保留中文标识（英文技术名仍可在搜索候选与详情面板查看），字号与对比度上调保证清晰 */}
-          <p className="mt-0.5 truncate text-[11px] text-slate-600">{data.subtitle}</p>
+          <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{data.subtitle}</p>
         </div>
       </div>
     </div>
@@ -125,7 +125,7 @@ export function StructureGraphEdge({
         <EdgeLabelRenderer>
           <div
             data-testid="structure-edge-relation"
-            className={`nodrag nopan pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full border bg-white/95 px-2 py-0.5 text-[11px] font-semibold shadow-sm ${data?.emphasis === 'dependency' ? 'border-violet-300 text-violet-800' : data?.emphasis === 'search' ? 'border-amber-300 text-amber-800' : 'border-slate-200 text-slate-700'}`}
+            className={`nodrag nopan pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full border bg-card px-2 py-0.5 text-[11px] font-semibold shadow-sm ${data?.emphasis === 'dependency' ? 'border-viz-violet-soft text-viz-violet' : data?.emphasis === 'search' ? 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] text-[var(--color-warning)]' : 'border-border text-foreground'}`}
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
           >
             {data.label}

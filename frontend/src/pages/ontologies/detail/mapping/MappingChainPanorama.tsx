@@ -112,7 +112,7 @@ function MappingChainNodeCard({ data }: NodeProps<Node<ChainCardData>>) {
       style={{ width: NODE_W, minHeight: NODE_H }}
       data-icon={data.icon}
     >
-      <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-slate-300" />
+      <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-accent" />
       <div className="dmo-chain-row">
         <span className={`dmo-chain-icon dmo-chain-icon--${data.icon}`}><Icon size={13} /></span>
         <span className="dmo-chain-text">
@@ -121,7 +121,7 @@ function MappingChainNodeCard({ data }: NodeProps<Node<ChainCardData>>) {
         </span>
         {data.badge && <em className="dmo-chain-badge" data-tone={data.badge.tone}>{data.badge.text}</em>}
       </div>
-      <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-slate-300" />
+      <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-accent" />
     </div>
   )
 }

@@ -420,19 +420,6 @@
 
 /* 运行汇总时间维度下拉：替代原"时间范围"拖拽条，作为面板标题的子行控件 */
 .runtime-dimension { display: inline-flex; align-items: center; gap: 8px; }
-.runtime-dimension-select {
-  height: 26px;
-  border: 1px solid var(--ov-border);
-  border-radius: 8px;
-  padding: 0 6px;
-  background: #fff;
-  color: #526076;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.runtime-dimension-select:hover { border-color: #c6d3e0; color: #33415a; }
-.runtime-dimension-select:focus-visible { outline: 2px solid rgba(52, 120, 238, .48); outline-offset: 2px; }
 .runtime-custom-range { display: inline-flex; align-items: center; gap: 5px; color: #8490a2; font-size: 11px; }
 .runtime-custom-range input {
   height: 26px;

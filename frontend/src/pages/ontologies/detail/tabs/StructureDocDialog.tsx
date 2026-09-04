@@ -32,12 +32,12 @@ function DocMarkdown({ text }: { text: string }) {
       if (String(className || '').includes('language-mermaid')) {
         return <MermaidBlock chart={String(children).trim()} />
       }
-      return <code className={`px-1 py-0.5 rounded bg-black/[0.05] text-[12px] font-mono ${className || ''}`} {...p}>{children}</code>
+      return <code className={`px-1 py-0.5 rounded bg-[var(--color-bg-overlay)] text-[12px] font-mono ${className || ''}`} {...p}>{children}</code>
     },
     pre: ({ children, ...p }) => {
       // mermaid 代码块由 MermaidBlock 接管，去掉 pre 包裹
       if (Children.toArray(children).some(isMermaidEl)) return <>{children}</>
-      return <pre className="p-3 my-2 rounded-lg bg-black/[0.04] text-[12px] font-mono overflow-x-auto" {...p}>{children}</pre>
+      return <pre className="p-3 my-2 rounded-lg bg-[var(--color-bg-overlay)] text-[12px] font-mono overflow-x-auto" {...p}>{children}</pre>
     },
     table: p => (
       <div className="overflow-x-auto my-2 rounded-lg border border-[var(--color-border)]">
@@ -68,14 +68,14 @@ function CenterHint({ icon, title, hint, testid, retry }: {
 }) {
   return (
     <div data-testid={testid} className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
-      <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-400">{icon}</span>
-      <p className="text-sm font-medium text-slate-600">{title}</p>
-      <p className="max-w-sm text-xs leading-relaxed text-slate-400">{hint}</p>
+      <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-muted text-[var(--color-text-tertiary)]">{icon}</span>
+      <p className="text-sm font-medium text-muted-foreground">{title}</p>
+      <p className="max-w-sm text-xs leading-relaxed text-[var(--color-text-tertiary)]">{hint}</p>
       {retry && (
         <button
           type="button"
           onClick={retry}
-          className="mt-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+          className="mt-1 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
         >
           重新加载
         </button>
@@ -164,8 +164,8 @@ export default function StructureDocDialog({ open, ontologyId, ontologyName, ver
         className="odg-scope flex h-[78vh] min-h-[520px] !max-w-[min(94vw,1040px)] !rounded-[14px] shadow-[0_24px_80px_rgba(15,23,42,0.22)]"
       >
         {/* 文档目录：白 + teal 导航，细滚动条，点击跳转到正文具体位置 */}
-        <aside className="flex w-60 shrink-0 flex-col border-r border-teal-100 bg-teal-50/60">
-          <div className="flex h-16 shrink-0 flex-col justify-center border-b border-teal-100 px-4">
+        <aside className="flex w-60 shrink-0 flex-col border-r border-brand-line bg-brand-soft">
+          <div className="flex h-16 shrink-0 flex-col justify-center border-b border-brand-line px-4">
             <div className="text-sm font-semibold text-[var(--color-text-primary)]">业务文档</div>
             <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">需求文档目录 · 共 {toc.length} 节</div>
           </div>
@@ -186,8 +186,8 @@ export default function StructureDocDialog({ open, ontologyId, ontologyName, ver
                 onClick={() => jumpTo(section.id)}
                 style={{ paddingLeft: 10 + (Math.min(section.level, 4) - 1) * 12 }}
                 className={`block w-full truncate rounded-md py-2 pr-2.5 text-left text-[13px] transition-colors ${activeId === section.id
-                  ? 'odg-toc-active bg-teal-100 font-medium text-teal-800'
-                  : 'text-[var(--color-text-secondary)] hover:bg-white/70'}`}
+                  ? 'odg-toc-active bg-brand-soft font-medium text-brand-ink'
+                  : 'text-[var(--color-text-secondary)] hover:bg-card'}`}
               >
                 {section.title}
               </button>
@@ -197,7 +197,7 @@ export default function StructureDocDialog({ open, ontologyId, ontologyName, ver
 
         {/* 正文 + 顶部操作（下载入口随标题区展示；右上角为弹窗内置关闭按钮，留出让位） */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-teal-100 py-0 pl-5 pr-14">
+          <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-brand-line py-0 pl-5 pr-14">
             <div className="flex min-w-0 items-center gap-2">
               <span
                 data-testid="structure-doc-ontology-name"
@@ -208,7 +208,7 @@ export default function StructureDocDialog({ open, ontologyId, ontologyName, ver
               </span>
               {versionLabel && (
                 <span
-                  className="shrink-0 rounded border border-teal-200 bg-teal-50 px-1.5 py-px text-[10px] font-medium text-teal-700"
+                  className="shrink-0 rounded border border-brand-line bg-brand-soft px-1.5 py-px text-[10px] font-medium text-brand-ink"
                   title="需求文档在生成该版本时冻结为快照，随版本可追溯"
                 >
                   发布版本 {versionLabel}
@@ -221,7 +221,7 @@ export default function StructureDocDialog({ open, ontologyId, ontologyName, ver
                   type="button"
                   data-testid="structure-doc-download"
                   onClick={download}
-                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2.5 py-1.5 text-xs font-medium text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-brand-line bg-brand-soft px-2.5 py-1.5 text-xs font-medium text-brand-ink transition-colors hover:border-brand-line hover:bg-brand-soft"
                 >
                   <Download size={12} /> 下载 .md
                 </button>

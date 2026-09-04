@@ -111,7 +111,7 @@ function ModelDetail({ section, el }: { section: { key: CanvasKey; label: string
   return (
     <article data-testid="business-model-detail" aria-label={`${section.label}详情`}>
       <header className="flex items-center gap-3 pb-4">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--color-success-bg)] text-[var(--color-success)] ring-1 ring-[var(--color-success)]">
           <Icon size={18} />
         </span>
         <div className="min-w-0">
@@ -207,8 +207,8 @@ export default function BusinessModelDialog({ open, ontologyId, onClose }: {
         className="odg-scope flex h-[78vh] min-h-[520px] !max-w-[min(94vw,1040px)] !rounded-[14px] shadow-[0_24px_80px_rgba(15,23,42,0.22)]"
       >
         {/* 目录：按七类模型归纳 */}
-        <aside className="flex w-64 shrink-0 flex-col border-r border-teal-100 bg-teal-50/60">
-          <div className="flex h-16 shrink-0 flex-col justify-center border-b border-teal-100 px-4">
+        <aside className="flex w-64 shrink-0 flex-col border-r border-brand-line bg-brand-soft">
+          <div className="flex h-16 shrink-0 flex-col justify-center border-b border-brand-line px-4">
             <div className="text-sm font-semibold text-[var(--color-text-primary)]">业务模型</div>
             <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
               {totalModels > 0 ? `七类模型目录 · 共 ${totalModels} 个` : '七类模型目录'}
@@ -234,8 +234,8 @@ export default function BusinessModelDialog({ open, ontologyId, onClose }: {
                         onClick={() => setSelected({ key: section.key, id: el.id })}
                         className={`block w-full truncate rounded-md py-2 pl-7 pr-2.5 text-left text-[13px] transition-colors ${
                           active
-                            ? 'odg-toc-active bg-teal-100 font-medium text-teal-800'
-                            : 'text-[var(--color-text-secondary)] hover:bg-white/70'
+                            ? 'odg-toc-active bg-brand-soft font-medium text-brand-ink'
+                            : 'text-[var(--color-text-secondary)] hover:bg-card'
                         }`}
                         title={displayName(el)}
                       >
@@ -256,7 +256,7 @@ export default function BusinessModelDialog({ open, ontologyId, onClose }: {
 
         {/* 正文：选中模型详情 / 加载 / 空态（右上角为弹窗内置关闭按钮，留出让位） */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-teal-100 py-0 pl-5 pr-14">
+          <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-brand-line py-0 pl-5 pr-14">
             <span className="truncate text-xs font-medium text-[var(--color-text-primary)]">
               {boundSession ? `来源：业务澄清会话「${boundSession.title || '未命名会话'}」` : '业务模型'}
             </span>
@@ -265,19 +265,19 @@ export default function BusinessModelDialog({ open, ontologyId, onClose }: {
           <div data-testid="business-model-content" className="odg-scroll min-h-0 flex-1 overflow-y-auto px-6 py-4">
             {(sessionsQuery.isLoading || canvasQuery.isLoading) && (
               <div data-testid="business-model-loading" className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
-                <Loader2 size={20} className="animate-spin text-slate-400" />
-                <p className="text-sm text-slate-600">正在读取业务澄清沉淀的模型…</p>
+                <Loader2 size={20} className="animate-spin text-[var(--color-text-tertiary)]" />
+                <p className="text-sm text-muted-foreground">正在读取业务澄清沉淀的模型…</p>
               </div>
             )}
             {(sessionsQuery.isError || canvasQuery.isError) && (
               <div data-testid="business-model-error" className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
-                <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-400"><AlertCircle size={20} /></span>
-                <p className="text-sm font-medium text-slate-600">业务模型读取失败</p>
-                <p className="max-w-sm text-xs leading-relaxed text-slate-400">网络或服务异常导致读取失败，请重试。</p>
+                <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--color-danger-bg)] text-[var(--color-danger)]"><AlertCircle size={20} /></span>
+                <p className="text-sm font-medium text-muted-foreground">业务模型读取失败</p>
+                <p className="max-w-sm text-xs leading-relaxed text-[var(--color-text-tertiary)]">网络或服务异常导致读取失败，请重试。</p>
                 <button
                   type="button"
                   onClick={() => void (sessionsQuery.isError ? sessionsQuery.refetch() : canvasQuery.refetch())}
-                  className="mt-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                  className="mt-1 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
                 >
                   重新加载
                 </button>
@@ -285,9 +285,9 @@ export default function BusinessModelDialog({ open, ontologyId, onClose }: {
             )}
             {!sessionsQuery.isLoading && !sessionsQuery.isError && !canvasQuery.isLoading && !canvasQuery.isError && totalModels === 0 && (
               <div data-testid="business-model-empty" className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
-                <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-400"><CircleHelp size={20} /></span>
-                <p className="text-sm font-medium text-slate-600">当前本体没有关联的业务模型</p>
-                <p className="max-w-sm text-xs leading-relaxed text-slate-400">
+                <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-muted text-[var(--color-text-tertiary)]"><CircleHelp size={20} /></span>
+                <p className="text-sm font-medium text-muted-foreground">当前本体没有关联的业务模型</p>
+                <p className="max-w-sm text-xs leading-relaxed text-[var(--color-text-tertiary)]">
                   在「业务澄清」中绑定该本体并继续对话澄清后，七类业务模型会沉淀到这里。
                 </p>
               </div>

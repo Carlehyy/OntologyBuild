@@ -72,10 +72,10 @@ const KIND_ICON: Record<ChainNodeKind, typeof Database> = {
 }
 
 const BADGE_CLS: Record<string, string> = {
-  ok: 'border-emerald-200 bg-emerald-50 text-emerald-600',
-  warn: 'border-amber-200 bg-amber-50 text-amber-600',
-  danger: 'border-rose-200 bg-rose-50 text-rose-600',
-  info: 'border-sky-200 bg-sky-50 text-sky-600',
+  ok: 'border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] text-[var(--color-success)]',
+  warn: 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] text-[var(--color-warning)]',
+  danger: 'border-viz-rose-soft bg-viz-rose-soft text-viz-rose',
+  info: 'border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] text-[var(--color-info)]',
 }
 
 function ChainNodeCard({ data }: NodeProps<Node<ChainFlowData>>) {
@@ -89,17 +89,17 @@ function ChainNodeCard({ data }: NodeProps<Node<ChainFlowData>>) {
       style={{ width: NODE_W, minHeight: NODE_H }}
       data-kind={chainNode.kind}
     >
-      <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-slate-300" />
+      <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-accent" />
       <div className="flex items-start gap-2.5">
         <span className="chain-node-icon">
           <Icon size={14} />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[14px] font-semibold leading-[18px] text-slate-800" title={chainNode.title}>
+          <span className="block truncate text-[14px] font-semibold leading-[18px] text-foreground" title={chainNode.title}>
             {chainNode.title}
           </span>
           {chainNode.sub && (
-            <span className="mt-1 block truncate text-[11.5px] leading-4 text-slate-500" title={chainNode.sub}>
+            <span className="mt-1 block truncate text-[11.5px] leading-4 text-muted-foreground" title={chainNode.sub}>
               {chainNode.sub}
             </span>
           )}
@@ -110,7 +110,7 @@ function ChainNodeCard({ data }: NodeProps<Node<ChainFlowData>>) {
           </span>
         )}
       </div>
-      <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-slate-300" />
+      <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-accent" />
     </div>
   )
 }
@@ -118,10 +118,10 @@ function ChainNodeCard({ data }: NodeProps<Node<ChainFlowData>>) {
 function ChainColumnHeader({ data }: NodeProps<Node<{ label: string; count: number } & Record<string, unknown>>>) {
   return (
     <div className="pointer-events-none flex items-center justify-center gap-1.5 text-center" style={{ width: NODE_W }}>
-      <span className="text-[15px] font-semibold tracking-wide text-slate-500">
+      <span className="text-[15px] font-semibold tracking-wide text-muted-foreground">
         {data.label}
       </span>
-      <span className="rounded-full bg-slate-100 px-1.5 py-px text-[11px] tabular-nums text-slate-400">
+      <span className="rounded-full bg-muted px-1.5 py-px text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
         {data.count}
       </span>
     </div>
@@ -275,34 +275,34 @@ export default function ChainPanorama({
   }, [onOpenPending])
 
   return (
-    <div data-testid="governance-chain-panorama" className="rounded-xl border bg-white p-4">
+    <div data-testid="governance-chain-panorama" className="rounded-xl border bg-card p-4">
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <Waypoints size={15} className="text-teal-600" />
-        <p className="text-[13px] font-semibold text-gray-800">本体执行链 · 数据如何变成动作与事实</p>
-        <span className="text-[11px] text-gray-400">点击节点高亮整条上下游,点击空白复位;待审批节点即当前瓶颈,点开看前因后果</span>
+        <Waypoints size={15} className="text-brand-ink" />
+        <p className="text-[13px] font-semibold text-foreground">本体执行链 · 数据如何变成动作与事实</p>
+        <span className="text-[11px] text-[var(--color-text-tertiary)]">点击节点高亮整条上下游,点击空白复位;待审批节点即当前瓶颈,点开看前因后果</span>
         {isRefreshing && (
-          <span className="ml-auto inline-flex items-center gap-1 text-[10px] text-teal-600">
+          <span className="ml-auto inline-flex items-center gap-1 text-[10px] text-brand-ink">
             <Loader2 size={10} className="animate-spin" /> 同步中
           </span>
         )}
       </div>
       <div
-        className="chain-canvas overflow-hidden rounded-lg border border-slate-100"
+        className="chain-canvas overflow-hidden rounded-lg border border-border"
         style={{ height: canvasHeight }}
       >
         {isChainLoading && nodes.length === 0 ? (
           <div
             role="status"
             aria-label="正在构建链路全景"
-            className="flex h-full flex-col items-center justify-center gap-3 bg-slate-50/60"
+            className="flex h-full flex-col items-center justify-center gap-3 bg-muted"
           >
-            <Loader2 size={18} className="animate-spin text-teal-600" />
-            <span className="text-xs text-slate-400">正在构建链路全景…</span>
+            <Loader2 size={18} className="animate-spin text-brand-ink" />
+            <span className="text-xs text-[var(--color-text-tertiary)]">正在构建链路全景…</span>
             <div className="flex w-52 flex-col gap-2" aria-hidden="true">
               {[0, 1, 2].map(row => (
                 <div key={row} className="flex justify-center gap-3">
-                  <span className="h-9 w-40 animate-pulse rounded-lg bg-slate-200/80" />
-                  <span className="h-9 w-40 animate-pulse rounded-lg bg-slate-200/60" />
+                  <span className="h-9 w-40 animate-pulse rounded-lg bg-[var(--color-bg-active)]" />
+                  <span className="h-9 w-40 animate-pulse rounded-lg bg-[var(--color-bg-active)]" />
                 </div>
               ))}
             </div>
@@ -332,21 +332,21 @@ export default function ChainPanorama({
         </ReactFlow>
         )}
       </div>
-      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-        <span className="text-[11px] font-medium text-gray-400">链路导读</span>
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+        <span className="text-[11px] font-medium text-[var(--color-text-tertiary)]">链路导读</span>
         {guides.length === 0 ? (
-          <span className="text-[11px] text-gray-400">当前没有停滞在审批环节的链路,全链路畅通。</span>
+          <span className="text-[11px] text-[var(--color-text-tertiary)]">当前没有停滞在审批环节的链路,全链路畅通。</span>
         ) : (
           guides.map(guide => (
             <button
               key={guide.id}
               type="button"
               onClick={() => handleGuideClick(guide)}
-              className="group inline-flex max-w-full items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50/70 px-2.5 py-1 text-left transition hover:border-amber-300 hover:bg-amber-50"
+              className="group inline-flex max-w-full items-center gap-1.5 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-2.5 py-1 text-left transition hover:border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] hover:bg-[var(--color-warning-bg)]"
             >
-              <HandMetal size={11} className="shrink-0 text-amber-500" />
-              <span className="truncate text-[11px] font-medium text-amber-700">{guide.title}</span>
-              <span className="hidden truncate text-[10px] text-amber-500/80 sm:inline">{guide.sub}</span>
+              <HandMetal size={11} className="shrink-0 text-[var(--color-warning)]" />
+              <span className="truncate text-[11px] font-medium text-[var(--color-warning)]">{guide.title}</span>
+              <span className="hidden truncate text-[10px] text-[var(--color-warning)] sm:inline">{guide.sub}</span>
             </button>
           ))
         )}
