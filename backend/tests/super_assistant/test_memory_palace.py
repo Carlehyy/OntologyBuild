@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import threading
+import zipfile
 from types import SimpleNamespace
 
 import pytest
@@ -161,7 +163,7 @@ def test_run_build_extracts_merges_and_is_idempotent(env, monkeypatch):
         return len(entities), len(relations)
 
     monkeypatch.setattr(palace_service, "extract_chunk", fake_extract_chunk)
-    monkeypatch.setattr(palace_service.reflection_service, "_reflection_call_kwargs", lambda db: {})
+    monkeypatch.setattr(palace_service, "_palace_call_kwargs", lambda db: {})
     monkeypatch.setattr(palace_graph, "merge_extraction", fake_merge)
     monkeypatch.setattr(palace_graph, "remove_file_graph", lambda *args, **kwargs: calls.__setitem__("remove", calls["remove"] + 1))
 
@@ -188,7 +190,7 @@ def test_run_build_rebuild_strips_old_graph_contribution(env, monkeypatch):
         palace_service, "extract_chunk",
         lambda call_kwargs, chunk: {"entities": [{"name": "张三", "type": "人物", "aliases": []}], "relations": []},
     )
-    monkeypatch.setattr(palace_service.reflection_service, "_reflection_call_kwargs", lambda db: {})
+    monkeypatch.setattr(palace_service, "_palace_call_kwargs", lambda db: {})
     monkeypatch.setattr(palace_graph, "merge_extraction", lambda *a, **k: (1, 0))
     monkeypatch.setattr(
         palace_graph, "remove_file_graph",
@@ -213,7 +215,7 @@ def test_run_build_failure_marks_file_failed(env, monkeypatch):
         raise RuntimeError("模型超时")
 
     monkeypatch.setattr(palace_service, "extract_chunk", boom)
-    monkeypatch.setattr(palace_service.reflection_service, "_reflection_call_kwargs", lambda db: {})
+    monkeypatch.setattr(palace_service, "_palace_call_kwargs", lambda db: {})
     with env.session() as db:
         build = palace_service.run_build(db, "user-1", row["id"])
         assert build.status == "error"
@@ -472,3 +474,471 @@ def test_graph_overview_degrades_when_neo4j_unavailable(env, monkeypatch):
         "available": True, "nodes": [], "edges": [],
         "totals": {"entities": 0, "relations": 0}, "truncated": False,
     }
+
+
+# ---------------------------------------------------------------------------
+# 在线编辑 / 替换上传 / 内容预览
+# ---------------------------------------------------------------------------
+
+
+def _record_dispatch(monkeypatch) -> list[tuple[str, str]]:
+    dispatched: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        palace_service, "dispatch_super_assistant_palace_extract",
+        lambda owner_id, file_id: dispatched.append((owner_id, file_id)),
+    )
+    return dispatched
+
+
+def test_update_file_content_rebuild_and_dispatch(env, monkeypatch):
+    dispatched = _record_dispatch(monkeypatch)
+    row = _upload(env.client, "笔记.md", "# 旧内容".encode()).json()
+    assert len(dispatched) == 1  # 上传本身派发一次
+    response = env.client.put(
+        f"{_PREFIX}/palace/files/{row['id']}/content",
+        json={"content": "# 新内容\n李四 任职 ACME"},
+    )
+    assert response.status_code == 200, response.text
+    updated = response.json()
+    assert updated["id"] == row["id"]
+    assert updated["status"] == "pending"
+    assert updated["editable"] is True
+    assert updated["sha256"] != row["sha256"]
+    assert updated["extractedChars"] > 0
+    assert dispatched[-1] == ("user-1", row["id"])
+    # 工作区已换新 artifact：列表口径与编辑结果一致
+    assert env.client.get(f"{_PREFIX}/palace/files").json()[0]["sha256"] == updated["sha256"]
+
+
+def test_update_file_content_rejects_non_editable(env):
+    row = _upload(env.client, "表格.csv", "a,b\n1,2".encode(), "text/csv").json()
+    assert row["editable"] is False
+    response = env.client.put(f"{_PREFIX}/palace/files/{row['id']}/content", json={"content": "x"})
+    assert response.status_code == 400
+    assert "不支持在线编辑" in response.json()["detail"]
+
+
+def test_update_file_content_idempotent_when_unchanged(env, monkeypatch):
+    dispatched = _record_dispatch(monkeypatch)
+    content = "# 相同内容"
+    row = _upload(env.client, "笔记.md", content.encode()).json()
+    assert len(dispatched) == 1
+    response = env.client.put(f"{_PREFIX}/palace/files/{row['id']}/content", json={"content": content})
+    assert response.status_code == 200
+    assert response.json()["sha256"] == row["sha256"]
+    assert response.json()["status"] == row["status"]
+    assert len(dispatched) == 1  # 内容未变：不重建、不再派发
+
+
+def test_update_file_content_scoped_to_owner(env):
+    row = _upload(env.client, "笔记.md", "# x".encode()).json()
+    other_client = env.make_client(_user("user-2", "other"))
+    response = other_client.put(
+        f"{_PREFIX}/palace/files/{row['id']}/content", json={"content": "y"},
+    )
+    assert response.status_code == 404
+
+
+def test_replace_file_updates_sha_and_dispatches(env, monkeypatch):
+    dispatched = _record_dispatch(monkeypatch)
+    row = _upload(env.client, "笔记.md", "# 旧".encode()).json()
+    response = env.client.post(
+        f"{_PREFIX}/palace/files/{row['id']}/replace",
+        files={"file": ("报告.pdf", b"%PDF-1.4 fake-bytes", "application/pdf")},
+    )
+    assert response.status_code == 200, response.text
+    updated = response.json()
+    assert updated["sha256"] != row["sha256"]
+    assert updated["filename"] == "报告.pdf"
+    assert updated["mimeType"] == "application/pdf"
+    assert updated["status"] == "pending"
+    assert updated["editable"] is False
+    assert ("user-1", row["id"]) in dispatched
+
+
+def test_replace_file_rejects_disallowed_extension(env):
+    row = _upload(env.client, "笔记.md", "# 旧".encode()).json()
+    response = env.client.post(
+        f"{_PREFIX}/palace/files/{row['id']}/replace",
+        files={"file": ("evil.exe", b"MZ", "application/octet-stream")},
+    )
+    assert response.status_code == 400
+    assert "不支持的文件类型" in response.json()["detail"]
+
+
+def test_preview_file_content_truncation_and_404(env):
+    row = _upload(env.client, "笔记.md", ("段" * 500).encode()).json()
+    ok = env.client.get(f"{_PREFIX}/palace/files/{row['id']}/preview")
+    assert ok.status_code == 200
+    payload = ok.json()
+    assert payload["file"]["id"] == row["id"]
+    assert payload["file"]["editable"] is True
+    assert payload["previewable"] is True
+    assert payload["truncated"] is False
+    assert payload["content"] == "段" * 500
+
+    capped = env.client.get(f"{_PREFIX}/palace/files/{row['id']}/preview?max_chars=100")
+    assert capped.status_code == 200
+    assert capped.json()["truncated"] is True
+    assert len(capped.json()["content"]) == 100
+
+    assert env.client.get(f"{_PREFIX}/palace/files/no-such/preview").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 配额与保护：文件数 / 存储 / 在途 / 每小时抽取次数
+# ---------------------------------------------------------------------------
+
+
+def test_quota_file_count_429(env, monkeypatch):
+    monkeypatch.setattr(settings, "super_assistant_palace_max_files_per_user", 1)
+    assert _upload(env.client, "a.md", b"a").status_code == 201
+    second = _upload(env.client, "b.md", b"b")
+    assert second.status_code == 429
+    assert "文件数已达上限（1）" in second.json()["detail"]
+
+
+def test_quota_total_storage_429(env, monkeypatch):
+    monkeypatch.setattr(settings, "super_assistant_palace_max_total_mb", 1)
+    assert _upload(env.client, "a.md", b"x" * 600_000).status_code == 201
+    second = _upload(env.client, "b.md", b"x" * 600_000)
+    assert second.status_code == 429
+    assert "存储已达上限（1 MB）" in second.json()["detail"]
+    # 配额拒绝后不留脏行，也不留孤儿 artifact
+    assert [item["filename"] for item in env.client.get(f"{_PREFIX}/palace/files").json()] == ["a.md"]
+    artifacts = palace_workspace.user_workspace("user-1").list_files(
+        palace_workspace.user_dir_id("user-1"),
+    )
+    assert [item["filename"] for item in artifacts] == ["a.md"]
+
+
+def test_quota_in_flight_429(env, monkeypatch):
+    monkeypatch.setattr(settings, "super_assistant_palace_max_in_flight", 1)
+    first = _upload(env.client, "a.md", b"a").json()
+    second = _upload(env.client, "b.md", b"b")
+    assert second.status_code == 429
+    assert "抽取队列已满（1 个进行中）" in second.json()["detail"]
+    # 终态文件的重建同样被在途闸拦住：另一 pending 行占满在途额度
+    with env.session() as db:
+        db.get(SuperAssistantPalaceFile, first["id"]).status = "failed"
+        db.add(SuperAssistantPalaceFile(
+            owner_id="user-1", filename="c.md", artifact_id="placeholder", status="pending",
+        ))
+        db.commit()
+    rebuild = env.client.post(f"{_PREFIX}/palace/files/{first['id']}/rebuild")
+    assert rebuild.status_code == 429
+    assert "抽取队列已满" in rebuild.json()["detail"]
+
+
+def test_quota_builds_per_hour_429(env, monkeypatch):
+    monkeypatch.setattr(settings, "super_assistant_palace_max_builds_per_hour", 1)
+    row = _upload(env.client, "a.md", b"a").json()
+    with env.session() as db:
+        db.add(SuperAssistantPalaceBuild(
+            owner_id="user-1", file_id=row["id"], content_hash="h", status="success",
+        ))
+        db.commit()
+    second = _upload(env.client, "b.md", b"b")
+    assert second.status_code == 429
+    assert "抽取任务过于频繁（每小时上限 1 次）" in second.json()["detail"]
+
+
+def test_idempotent_content_update_does_not_consume_quota(env, monkeypatch):
+    monkeypatch.setattr(settings, "super_assistant_palace_max_builds_per_hour", 1)
+    row = _upload(env.client, "a.md", b"# a").json()
+    with env.session() as db:
+        db.add(SuperAssistantPalaceBuild(
+            owner_id="user-1", file_id=row["id"], content_hash="x", status="success",
+        ))
+        db.commit()
+    unchanged = env.client.put(
+        f"{_PREFIX}/palace/files/{row['id']}/content", json={"content": "# a"},
+    )
+    assert unchanged.status_code == 200
+    changed = env.client.put(
+        f"{_PREFIX}/palace/files/{row['id']}/content", json={"content": "# b"},
+    )
+    assert changed.status_code == 429
+    assert "抽取任务过于频繁" in changed.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# ZIP 批量导入
+# ---------------------------------------------------------------------------
+
+
+def _zip_bytes(entries: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    return buffer.getvalue()
+
+
+def _batch(client: TestClient, filename: str, data: bytes):
+    return client.post(
+        f"{_PREFIX}/palace/files/batch",
+        files={"archive": (filename, data, "application/zip")},
+    )
+
+
+def test_batch_import_mixed_zip(env, monkeypatch):
+    dispatched = _record_dispatch(monkeypatch)
+    monkeypatch.setattr(settings, "max_upload_mb", 1)
+    archive = _zip_bytes({
+        "有效.md": "# 知识",
+        "sub/嵌套.txt": "文本内容",
+        "evil.exe": b"MZ",
+        "超限.md": b"x" * (1024 * 1024 + 100),
+        "__MACOSX/垃圾.md": "junk",
+        ".隐藏.md": "hidden",
+        "空目录/": b"",
+    })
+    response = _batch(env.client, "批量.zip", archive)
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert sorted(item["filename"] for item in payload["created"]) == ["嵌套.txt", "有效.md"]
+    assert all(item["status"] == "pending" and item["editable"] is True for item in payload["created"])
+    reasons = {item["filename"]: item["reason"] for item in payload["skipped"]}
+    assert set(reasons) == {"evil.exe", "超限.md"}
+    assert "不支持的类型" in reasons["evil.exe"]
+    assert "超过大小限制（1MB）" in reasons["超限.md"]
+    assert len(dispatched) == 2  # 只有有效条目触发抽取派发
+
+
+def test_batch_import_count_cap(env, monkeypatch):
+    monkeypatch.setattr(settings, "super_assistant_palace_batch_max_files", 1)
+    archive = _zip_bytes({"one.md": "1", "two.md": "2", "three.md": "3"})
+    response = _batch(env.client, "批量.zip", archive)
+    assert response.status_code == 201
+    payload = response.json()
+    assert [item["filename"] for item in payload["created"]] == ["one.md"]
+    reasons = {item["filename"]: item["reason"] for item in payload["skipped"]}
+    assert reasons["two.md"].startswith("超出单次导入数量上限")
+    assert reasons["three.md"].startswith("超出单次导入数量上限")
+
+
+def test_batch_import_stops_on_quota(env, monkeypatch):
+    monkeypatch.setattr(settings, "super_assistant_palace_max_files_per_user", 1)
+    archive = _zip_bytes({"one.md": "1", "two.md": "2"})
+    response = _batch(env.client, "批量.zip", archive)
+    assert response.status_code == 201
+    payload = response.json()
+    assert [item["filename"] for item in payload["created"]] == ["one.md"]
+    reasons = {item["filename"]: item["reason"] for item in payload["skipped"]}
+    assert "文件数已达上限（1）" in reasons["two.md"]
+
+
+def test_batch_import_empty_zip(env):
+    response = _batch(env.client, "空.zip", _zip_bytes({}))
+    assert response.status_code == 201
+    assert response.json() == {"created": [], "skipped": []}
+
+
+def test_batch_import_rejects_non_zip(env):
+    assert _batch(env.client, "归档.txt", b"PK").status_code == 400
+    assert _batch(env.client, "假.zip", "这不是压缩包".encode()).status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# 抽取模型选型：palace 专用 tag + 回退
+# ---------------------------------------------------------------------------
+
+
+def test_palace_call_kwargs_prefers_palace_tag(env, monkeypatch):
+    calls: list[tuple] = []
+
+    def fake_select(*, db=None, purpose_tags=(), allow_vlm=False, **kwargs):
+        tags = tuple(purpose_tags)
+        calls.append(tags)
+        return SimpleNamespace(id="cfg", options={"usage_tags": list(tags)})
+
+    monkeypatch.setattr(palace_service, "select_llm_model_config", fake_select)
+    monkeypatch.setattr(palace_service, "llm_call_kwargs", lambda cfg: {"model": "m"})
+    with env.session() as db:
+        assert palace_service._palace_call_kwargs(db) == {"model": "m"}
+    assert calls == [("super_assistant_palace",)]
+
+
+def test_palace_call_kwargs_falls_back_to_super_assistant_tag(env, monkeypatch):
+    calls: list[tuple] = []
+
+    def fake_select(*, db=None, purpose_tags=(), allow_vlm=False, **kwargs):
+        calls.append(tuple(purpose_tags))
+        return SimpleNamespace(id="cfg", options={"usage_tags": ["super_assistant"]})
+
+    monkeypatch.setattr(palace_service, "select_llm_model_config", fake_select)
+    monkeypatch.setattr(palace_service, "llm_call_kwargs", lambda cfg: {"model": "m"} if cfg else None)
+    with env.session() as db:
+        assert palace_service._palace_call_kwargs(db) == {"model": "m"}
+    assert calls == [("super_assistant_palace",), ("super_assistant",)]
+
+
+def test_palace_call_kwargs_raises_without_any_model(env, monkeypatch):
+    monkeypatch.setattr(palace_service, "select_llm_model_config", lambda **kwargs: None)
+    monkeypatch.setattr(palace_service, "llm_call_kwargs", lambda cfg: {"model": "m"} if cfg else None)
+    with env.session() as db:
+        with pytest.raises(palace_service.provider.ProviderError):
+            palace_service._palace_call_kwargs(db)
+
+
+# ---------------------------------------------------------------------------
+# 别名级实体归一
+# ---------------------------------------------------------------------------
+
+
+def _entity(owner: str, name: str, aliases: list[str] | None = None, mentions: int = 1) -> dict:
+    return {
+        "key": palace_graph.entity_key(owner, name),
+        "name": name,
+        "type": "概念",
+        "aliases": list(aliases or []),
+        "mentions": mentions,
+    }
+
+
+def test_merge_alias_entities_alias_equals_name():
+    merged = palace_service._merge_alias_entities([
+        _entity("u1", "张三丰", ["张三"]),
+        _entity("u1", "张三"),
+    ])
+    assert len(merged) == 1
+    survivor = merged[0]
+    assert survivor["name"] == "张三丰"  # 保留更长者
+    assert survivor["mentions"] == 2  # mentions 相加
+    assert survivor["aliases"] == ["张三"]  # 被并入方的匹配别名保留
+    # 同长时保留 host 的名（严格大于才改写）
+    merged = palace_service._merge_alias_entities([
+        _entity("u1", "甲甲", ["乙乙"]),
+        _entity("u1", "丙丙"),
+    ])
+    assert len(merged) == 2  # 别名与名字不重合：不合并
+
+
+def test_merge_alias_entities_chain_converges():
+    merged = palace_service._merge_alias_entities([
+        _entity("u1", "A", ["B"]),
+        _entity("u1", "B", ["C"]),
+        _entity("u1", "C"),
+    ])
+    assert len(merged) == 1
+    assert merged[0]["mentions"] == 3
+    assert {merged[0]["name"], *merged[0]["aliases"]} >= {"A", "B", "C"} - {merged[0]["name"]}
+
+
+def test_merge_alias_entities_terminates_on_cycle():
+    merged = palace_service._merge_alias_entities([
+        _entity("u1", "X", ["Y"]),
+        _entity("u1", "Y", ["X"]),
+    ])
+    assert len(merged) == 1
+    assert merged[0]["mentions"] == 2
+
+
+def test_merge_alias_entities_keeps_disjoint_entities():
+    merged = palace_service._merge_alias_entities([
+        _entity("u1", "甲", ["别名甲"]),
+        _entity("u1", "乙"),
+    ])
+    assert len(merged) == 2
+    assert {item["name"] for item in merged} == {"甲", "乙"}
+    assert all(item["mentions"] == 1 for item in merged)
+
+
+def test_run_build_merges_alias_entities_and_redirects_relations(env, monkeypatch):
+    row = _seed_built_file(env)
+    captured: dict = {}
+
+    def fake_extract_chunk(call_kwargs, chunk):
+        return {
+            "entities": [
+                {"name": "张三丰", "type": "人物", "aliases": ["张三"]},
+                {"name": "张三", "type": "人物", "aliases": []},
+                {"name": "武当派", "type": "组织", "aliases": []},
+            ],
+            "relations": [
+                {"source": "张三", "target": "武当派", "relation": "属于"},
+                {"source": "张三丰", "target": "武当派", "relation": "属于"},
+            ],
+        }
+
+    def fake_merge(owner_id, file_id, filename, entities, relations):
+        captured["entities"] = entities
+        captured["relations"] = relations
+        return len(entities), len(relations)
+
+    monkeypatch.setattr(palace_service, "extract_chunk", fake_extract_chunk)
+    monkeypatch.setattr(palace_service, "_palace_call_kwargs", lambda db: {})
+    monkeypatch.setattr(palace_graph, "merge_extraction", fake_merge)
+    monkeypatch.setattr(palace_graph, "remove_file_graph", lambda *a, **k: None)
+    with env.session() as db:
+        build = palace_service.run_build(db, "user-1", row["id"])
+        assert build.status == "success"
+        # 别名归一：张三丰（alias=张三）并入「张三」实体，幸存者保留更长的名字
+        assert build.entity_count == 2
+        # 两条同义关系（端点分别是旧名与归一后名字）重定向去重为一条
+        assert build.relation_count == 1
+        survivor = next(item for item in captured["entities"] if item["name"] == "张三丰")
+        assert survivor["aliases"] == ["张三"]
+        assert survivor["mentions"] == 2
+        assert survivor["key"] == palace_graph.entity_key("user-1", "张三丰")
+        relation = captured["relations"][0]
+        assert relation["src_key"] == palace_graph.entity_key("user-1", "张三丰")
+        assert relation["tgt_key"] == palace_graph.entity_key("user-1", "武当派")
+
+
+# ---------------------------------------------------------------------------
+# 图谱检索端点：命中 / 空集 / Neo4j 不可用降级
+# ---------------------------------------------------------------------------
+
+
+def test_graph_search_endpoint_returns_matches(env, monkeypatch):
+    row = _seed_built_file(env)
+    with env.session() as db:
+        db.get(SuperAssistantPalaceFile, row["id"]).status = "built"
+        db.commit()
+
+    def fake_search(owner_id, terms, **kwargs):
+        assert terms
+        return {
+            "entities": [{"name": "张三", "type": "人物", "match_count": 2}],
+            "relations": [{
+                "source": "u:张三", "target": "u:acme",
+                "source_name": "张三", "target_name": "ACME", "name": "任职",
+            }],
+        }
+
+    monkeypatch.setattr(palace_graph, "search", fake_search)
+    response = env.client.get(f"{_PREFIX}/palace/graph/search", params={"q": "张三"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["entities"][0]["name"] == "张三"
+    assert payload["relations"][0]["source_name"] == "张三"
+    assert payload["relations"][0]["target_name"] == "ACME"
+
+
+def test_graph_search_empty_without_built_files(env, monkeypatch):
+    _seed_built_file(env)  # status=pending：无已建图文件
+    monkeypatch.setattr(
+        palace_graph, "search",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应触碰 Neo4j")),
+    )
+    response = env.client.get(f"{_PREFIX}/palace/graph/search", params={"q": "张三"})
+    assert response.status_code == 200
+    assert response.json() == {"available": True, "entities": [], "relations": []}
+
+
+def test_graph_search_degrades_when_neo4j_unavailable(env, monkeypatch):
+    row = _seed_built_file(env)
+    with env.session() as db:
+        db.get(SuperAssistantPalaceFile, row["id"]).status = "built"
+        db.commit()
+
+    def unavailable(owner_id, terms, **kwargs):
+        raise palace_graph.PalaceGraphUnavailable("Neo4j 不可用")
+
+    monkeypatch.setattr(palace_graph, "search", unavailable)
+    response = env.client.get(f"{_PREFIX}/palace/graph/search", params={"q": "张三"})
+    assert response.status_code == 200
+    assert response.json() == {"available": False, "entities": [], "relations": []}

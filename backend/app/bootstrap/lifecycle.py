@@ -158,6 +158,18 @@ async def application_lifespan(
             except Exception as exc:
                 _main_logger.warning("助手评估值守定时器启动失败: %s", exc)
 
+        # 记忆宫殿聚类合并定时器（每天 03:00 为有图谱的用户派发合并任务；
+        # APScheduler 进程内定时 + NATS JetStream，旁路能力，失败不阻断启动）
+        if settings.environment != "test":
+            try:
+                from app.super_assistant.palace_consolidate import (
+                    start as start_palace_consolidate,
+                )
+
+                start_palace_consolidate()
+            except Exception as exc:
+                _main_logger.warning("记忆宫殿聚类合并定时器启动失败: %s", exc)
+
         from app.data_channel.file_assets.service import (
             file_asset_cleanup_loop,
         )
@@ -218,3 +230,9 @@ async def application_lifespan(
                 stop_cdc_worker()
             except Exception:  # noqa: BLE001
                 _main_logger.exception("Sentinel cleanup failed")
+        try:
+            from app.super_assistant import palace_consolidate
+
+            palace_consolidate.shutdown()
+        except Exception:  # noqa: BLE001
+            _main_logger.exception("Palace consolidate scheduler cleanup failed")

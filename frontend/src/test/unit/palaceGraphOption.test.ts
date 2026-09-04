@@ -11,15 +11,15 @@ function makeGraph(overrides: Partial<PalaceGraph> = {}): PalaceGraph {
     nodes: [
       {
         id: 'e-1', name: '张三', type: '人物', aliases: ['老张'],
-        source_files: ['简历.md'], mention_count: 4,
+        source_files: ['简历.md'], mention_count: 4, match_count: 1,
       },
       {
         id: 'e-2', name: 'ACME', type: '组织', aliases: [],
-        source_files: ['简历.md', '项目说明.md'], mention_count: 1,
+        source_files: ['简历.md', '项目说明.md'], mention_count: 1, match_count: 0,
       },
       {
         id: 'e-3', name: '语义网', type: '未知类别', aliases: [],
-        source_files: ['资料.md'], mention_count: 1,
+        source_files: ['资料.md'], mention_count: 1, match_count: 0,
       },
     ],
     edges: [
@@ -80,5 +80,47 @@ describe('palaceGraphOption', () => {
     assert.equal(option.legend.show, false)
     assert.deepEqual(option.series[0].data, [])
     assert.deepEqual(option.series[0].links, [])
+  })
+
+  it('tooltip 节点展示提及与被引用（match_count）次数', () => {
+    const option = palaceGraphOption(makeGraph()) as unknown as {
+      tooltip: { formatter: (params: { dataType?: string; data?: Record<string, unknown> }) => string }
+      series: Array<{ data: Array<Record<string, unknown>> }>
+    }
+    const html = option.tooltip.formatter({ dataType: 'node', data: option.series[0].data[0] })
+    assert.match(html, /提及 4 次/)
+    assert.match(html, /被引用 1 次/)
+    assert.match(html, /张三（人物）/)
+  })
+
+  it('highlightIds（数组）：非命中节点静态降透明并隐藏 label，命中节点不受影响', () => {
+    const option = palaceGraphOption(makeGraph(), ['e-1']) as unknown as {
+      series: Array<{ data: Array<Record<string, any>>; links: Array<Record<string, any>> }>
+    }
+    const [hit, miss, other] = option.series[0].data
+    assert.equal(hit.itemStyle, undefined)
+    assert.equal(hit.label, undefined)
+    assert.deepEqual(miss.itemStyle, { opacity: 0.15 })
+    assert.equal(miss.label.show, false)
+    assert.deepEqual(other.itemStyle, { opacity: 0.15 })
+    // 边的两端未全部命中（e-2 未在集合内）→ 静态降透明
+    assert.equal(option.series[0].links[0].lineStyle.opacity, 0.08)
+  })
+
+  it('highlightIds（Set）：两端全部命中的边保持正常透明度', () => {
+    const option = palaceGraphOption(makeGraph(), new Set(['e-1', 'e-2'])) as unknown as {
+      series: Array<{ data: Array<Record<string, any>>; links: Array<Record<string, any>> }>
+    }
+    const [zhang, acme] = option.series[0].data
+    assert.equal(zhang.itemStyle, undefined)
+    assert.equal(acme.itemStyle, undefined)
+    assert.equal(option.series[0].links[0].lineStyle.opacity, 0.55)
+  })
+
+  it('highlightIds 为空集时不进入高亮模式，样式与无参数一致', () => {
+    const withEmptySet = palaceGraphOption(makeGraph(), new Set<string>()) as unknown as {
+      series: Array<{ data: Array<Record<string, any>> }>
+    }
+    assert.equal(withEmptySet.series[0].data.every(node => node.itemStyle === undefined), true)
   })
 })

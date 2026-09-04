@@ -210,6 +210,27 @@ ROUTE_PARAMETERS = {
         "current_user",
     ),
     "palace_graph_view": ("db", "current_user"),
+    "batch_import_palace_files": ("archive", "db", "current_user"),
+    "update_palace_file_content": (
+        "file_id",
+        "body",
+        "db",
+        "current_user",
+    ),
+    "replace_palace_file": (
+        "file_id",
+        "file",
+        "db",
+        "current_user",
+    ),
+    "preview_palace_file": (
+        "file_id",
+        "max_chars",
+        "db",
+        "current_user",
+    ),
+    "search_palace_graph": ("q", "db", "current_user"),
+    "consolidate_palace_graph": ("db", "current_user"),
 }
 
 DELEGATES = {
@@ -340,6 +361,21 @@ DELEGATES = {
     ),
     "rebuild_palace_file": ("palace_service", "rebuild_file"),
     "palace_graph_view": ("palace_service", "graph_overview"),
+    "batch_import_palace_files": (
+        "palace_service",
+        "batch_import_files",
+    ),
+    "update_palace_file_content": (
+        "palace_service",
+        "update_file_content",
+    ),
+    "replace_palace_file": ("palace_service", "replace_file"),
+    "preview_palace_file": ("palace_service", "preview_file"),
+    "search_palace_graph": ("palace_service", "search_graph"),
+    "consolidate_palace_graph": (
+        "palace_consolidate",
+        "run_consolidation",
+    ),
 }
 
 BODY_TYPES = {
@@ -358,6 +394,7 @@ BODY_TYPES = {
     "decide_reflection_candidate": schemas.ReflectionDecisionRequest,
     "request_full_reflection": schemas.ReflectionFullRequest,
     "update_reflection_settings": schemas.ReflectionSettingsUpdate,
+    "update_palace_file_content": palace_service.PalaceContentUpdate,
 }
 
 
@@ -604,8 +641,10 @@ def test_super_assistant_services_do_not_import_http_router():
 
 def test_super_assistant_router_and_services_stay_bounded():
     limits = {
-        # 记忆宫殿新增 /palace/* 5 个端点（3 条路径），router.py 748 → 778
-        "router.py": 820,
+        # 记忆宫殿新增 /palace/* 5 个端点（3 条路径），router.py 748 → 778；
+        # 第二批新增 batch/content/replace/preview/graph-search/consolidate
+        # 6 个端点 → 811
+        "router.py": 850,
         "conversation_service.py": 320,
         "skill_service.py": 380,
         "mcp_server_service.py": 340,
@@ -642,9 +681,10 @@ def test_super_assistant_openapi_matches_pre_extraction_baseline():
     # 5 个端点（3 条路径）；全局搜索新增 /search/conversations（search.py 子路由）；
     # 记忆宫殿（用户级文件库 + 知识图谱）新增 /palace/files 的 list/upload、
     # /palace/files/{id} 的 delete、/palace/files/{id}/rebuild 与
-    # /palace/graph 的 GET 共 5 个操作（4 条路径）
-    assert len(paths) == 33
-    assert sum(len(item) for item in paths.values()) == 48
+    # /palace/graph 的 GET 共 5 个操作（4 条路径）；第二批新增 ZIP 批量导入、
+    # 内容更新(PUT)/替换/预览、图谱检索与聚类合并 6 个操作（6 条路径）
+    assert len(paths) == 39
+    assert sum(len(item) for item in paths.values()) == 54
     assert hashlib.sha256(payload).hexdigest() == (
-        "6d10b9840eac23f038c19acfeda1fa563b8d62bd487ca2e817472e2b92023137"
+        "3edcc469b71a743dd8aa2621aa4471286a79598dcc2656ca31d573156af33dc6"
     )

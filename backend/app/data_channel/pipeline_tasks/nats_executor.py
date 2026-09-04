@@ -13,7 +13,9 @@
 - ``task.dataset.import``：数据集导入的解析（inspect）/提交（commit）；
 - ``task.dataset.migrate``：成品数据集异步迁移为人工数据集；
 - ``super_assistant.reflect.micro/full/focused``：超级助手三种自我进化
-  反思任务（micro 每轮后 / full 手动 / focused 定向技能）。
+  反思任务（micro 每轮后 / full 手动 / focused 定向技能）；
+- ``super_assistant.palace.extract/consolidate``：记忆宫殿图谱抽取与
+  定期聚类合并。
 
 每个 subject 使用独立 durable pull consumer，共享进程级并发信号量。
 启动方式::
@@ -54,6 +56,7 @@ _ASSISTANT_EVAL_AUTOPILOT_DURABLE = "assistant-eval-autopilot"
 _SUPER_ASSISTANT_REFLECT_FULL_DURABLE = "super-assistant-reflect-full"
 _SUPER_ASSISTANT_REFLECT_FOCUSED_DURABLE = "super-assistant-reflect-focused"
 _SUPER_ASSISTANT_PALACE_EXTRACT_DURABLE = "super-assistant-palace-extract"
+_SUPER_ASSISTANT_PALACE_CONSOLIDATE_DURABLE = "super-assistant-palace-consolidate"
 
 # 消息处理器：解析后的 payload → 协程；业务异常必须在 handler 内消化，
 # 逃到 ``_process_message`` 的异常一律 nak 重投
@@ -145,6 +148,7 @@ def _handler_registry():
         DATASET_MIGRATE_SUBJECT,
         PIPELINE_EXECUTE_SUBJECT,
         PIPELINE_RUN_SUBJECT,
+        SUPER_ASSISTANT_PALACE_CONSOLIDATE_SUBJECT,
         SUPER_ASSISTANT_PALACE_EXTRACT_SUBJECT,
         SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT,
         SUPER_ASSISTANT_REFLECT_FULL_SUBJECT,
@@ -186,6 +190,11 @@ def _handler_registry():
             SUPER_ASSISTANT_PALACE_EXTRACT_SUBJECT,
             _SUPER_ASSISTANT_PALACE_EXTRACT_DURABLE,
             palace_tasks.run_palace_extract_message,
+        ),
+        (
+            SUPER_ASSISTANT_PALACE_CONSOLIDATE_SUBJECT,
+            _SUPER_ASSISTANT_PALACE_CONSOLIDATE_DURABLE,
+            palace_tasks.run_palace_consolidate_message,
         ),
     )
 
