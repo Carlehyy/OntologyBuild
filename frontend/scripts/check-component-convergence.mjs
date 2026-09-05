@@ -8,6 +8,9 @@
  *    请改用 @/components/ui/select（场景选型查 component-catalog.ts）。
  *    palantir-graph 是独立设计作用域的图谱编辑器，不参与此约束。
  * 3. 棘轮下沉：白名单文件完成迁移后必须从白名单移除（报“白名单可收缩”）。
+ * 4. 平行消息提示实现（react-hot-toast / react-toastify / notistack /
+ *    antd message）：一律禁止，统一 sonner（catalog「瞬时消息提示」条目）。
+ *    palantir-graph 不参与此约束。
  *
  * 白名单与存量文件一一对应，迁移存量时请同步收紧本文件。
  */
@@ -52,6 +55,10 @@ const NATIVE_SELECT_ALLOWLIST = new Set([
   'pages/pipelines/sync-tasks/TaskFormModal.tsx',
                 ])
 
+const PARALLEL_TOAST_ALLOWLIST = new Set([])
+
+const parallelToastRe = /from\s+['"](react-hot-toast|react-toastify|notistack)['"]|\bmessage\.(success|error|warning|info|loading)\s*\(/
+
 function sourceFiles(root) {
   return readdirSync(root, { withFileTypes: true }).flatMap(entry => {
     const path = join(root, entry.name)
@@ -64,6 +71,7 @@ const errors = []
 const motionUiHits = new Set()
 const schedulerHits = new Set()
 const nativeSelectHits = new Set()
+const parallelToastHits = new Set()
 
 const motionUiRe = /from\s+['"](@\/components\/motion-ui|[^'"]*components\/motion-ui)/
 const schedulerRe = /from\s+['"](@\/components\/availability-scheduler|[^'"]*components\/availability-scheduler)/
@@ -92,6 +100,12 @@ for (const file of sourceFiles(srcRoot)) {
       errors.push(`新文件使用原生 <select>：${rel}\n  → 请改用 @/components/ui/select（reUI）；场景选型见 component-catalog.ts。`)
     }
   }
+  if (!rel.startsWith('palantir-graph/') && parallelToastRe.test(source)) {
+    parallelToastHits.add(rel)
+    if (!PARALLEL_TOAST_ALLOWLIST.has(rel)) {
+      errors.push(`新增平行消息提示实现：${rel}\n  → 请统一使用 sonner（import { toast } from 'sonner'；全局 Toaster 见 @/components/ui/sonner）；场景选型见 component-catalog.ts。`)
+    }
+  }
 }
 
 for (const rel of MOTION_UI_ALLOWLIST) {
@@ -103,6 +117,9 @@ for (const rel of AVAILABILITY_SCHEDULER_ALLOWLIST) {
 for (const rel of NATIVE_SELECT_ALLOWLIST) {
   if (!nativeSelectHits.has(rel)) errors.push(`原生 <select> 白名单可收缩：${rel} 已无原生 <select>，请从本脚本白名单移除。`)
 }
+for (const rel of PARALLEL_TOAST_ALLOWLIST) {
+  if (!parallelToastHits.has(rel)) errors.push(`消息提示白名单可收缩：${rel} 已无平行 toast，请从本脚本白名单移除。`)
+}
 
 if (errors.length > 0) {
   console.error('组件收敛门禁未通过：\n')
@@ -110,4 +127,4 @@ if (errors.length > 0) {
   console.error('\n规则全文：DESIGN.md §4、frontend/src/components/README.md、component-catalog.ts')
   process.exit(1)
 }
-console.log(`组件收敛门禁通过：motion-ui 例外层 ${motionUiHits.size} 处存量、原生 <select> ${nativeSelectHits.size} 处存量，均无新增。`)
+console.log(`组件收敛门禁通过：motion-ui 例外层 ${motionUiHits.size} 处存量、原生 <select> ${nativeSelectHits.size} 处存量、平行 toast ${parallelToastHits.size} 处存量，均无新增。`)

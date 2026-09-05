@@ -123,7 +123,8 @@ success `--color-success #2d8a4e` · warning `#c9861a` · danger
 ### 4.3 基础件要点
 
 按钮圆角 `--radius-md`(8px)、卡片 `--radius-lg`(12px)；弹层遮罩
-`--color-bg-overlay`；Toast 层级 `--z-toast: 1100`（高于 antd 弹层，低于悬浮助手）。
+`--color-bg-overlay`；全局消息提示（sonner）统一顶部居中，层级
+`--z-toast: 1100`（高于 antd 弹层，低于悬浮助手）。
 
 ## 5. 图表规范（ECharts 为主要标准）
 
