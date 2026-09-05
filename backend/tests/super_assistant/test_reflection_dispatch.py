@@ -17,12 +17,13 @@ from app.super_assistant import reflection_tasks
 
 def test_reflect_subjects_appended_to_stream_subjects():
     # 扩容只能追加：三条反思 subject 紧随既有主题，旧 subject 不受影响
+    # （Celery 退役新增的 3 个 subject 插在第 3 位起，旧主题相对顺序不变）
     assert PIPELINE_STREAM_SUBJECTS[:3] == (
         "pipeline.task.execute",
         "task.pipeline.run",
         "task.dataset.import",
     )
-    assert PIPELINE_STREAM_SUBJECTS[3:6] == (
+    assert PIPELINE_STREAM_SUBJECTS[6:9] == (
         SUPER_ASSISTANT_REFLECT_MICRO_SUBJECT,
         SUPER_ASSISTANT_REFLECT_FULL_SUBJECT,
         SUPER_ASSISTANT_REFLECT_FOCUSED_SUBJECT,
