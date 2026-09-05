@@ -27,7 +27,7 @@ from app.data_channel.curated.approved_version_reader import (
     review_matches_version,
     version_review,
 )
-from app.models.v2.curated import CuratedDataset, CuratedReview, CuratedRowEdit
+from app.data_channel.curated.models import CuratedDataset, CuratedReview, CuratedRowEdit
 
 
 class ReviewService:
@@ -41,7 +41,7 @@ class ReviewService:
         reviewer_id: str | None = None,
     ) -> CuratedReview:
         """为当前不可变 DatasetVersion 新建或复用 pending 审核。"""
-        from app.models.v2.dataset import Dataset, DatasetVersion
+        from app.data_channel.datasets.models import Dataset, DatasetVersion
 
         # Dataset 是版本发布与审核发起共享的串行点：create_version 更新
         # latest_version_id 时也会锁该行。这样既防止同版本并发创建两条审核，
@@ -330,8 +330,8 @@ class ReviewService:
         """验证编辑目标行真实存在于审核绑定版本。"""
         if not row_pks or not review.dataset_version_id:
             return {}
-        from app.models.v2.dataset import DatasetVersion
-        from app.services.v2.dataset_service import DatasetReadError, DatasetService
+        from app.data_channel.datasets.models import DatasetVersion
+        from app.data_channel.datasets.service import DatasetReadError, DatasetService
 
         version = self._db.query(DatasetVersion).filter(
             DatasetVersion.id == review.dataset_version_id,
@@ -349,7 +349,7 @@ class ReviewService:
                 latest_dataset_version,
             )
             from app.data_channel.datasets import lake_store
-            from app.models.v2.dataset import Dataset
+            from app.data_channel.datasets.models import Dataset
 
             dataset = self._db.query(Dataset).filter(
                 Dataset.id == review.curated_dataset_id).first()
@@ -425,7 +425,7 @@ class ReviewService:
 
     def _get_dataset_or_raise(self, dataset_id: str):
         """统一资产表是审核唯一权威源；legacy 表仅只读兼容。"""
-        from app.models.v2.dataset import Dataset
+        from app.data_channel.datasets.models import Dataset
 
         dataset = self._db.query(Dataset).filter(
             Dataset.id == dataset_id, Dataset.kind == "curated").first()
@@ -443,7 +443,7 @@ class ReviewService:
 
     def _set_dataset_status(self, dataset_id: str, status: str) -> None:
         """审核状态写入统一资产元数据；legacy 表只做兼容同步。"""
-        from app.models.v2.dataset import Dataset
+        from app.data_channel.datasets.models import Dataset
 
         dataset = self._db.query(Dataset).filter(
             Dataset.id == dataset_id, Dataset.kind == "curated").first()
@@ -474,7 +474,7 @@ class ReviewService:
         提交之间不会插入一个新版本。``populate_existing`` 很重要：请求可能
         已在 identity map 缓存 pending 状态，等待锁后必须以数据库最新值覆盖。
         """
-        from app.models.v2.dataset import Dataset
+        from app.data_channel.datasets.models import Dataset
 
         dataset = (self._db.query(Dataset)
                    .join(

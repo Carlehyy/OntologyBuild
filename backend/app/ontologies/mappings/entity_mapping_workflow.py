@@ -49,7 +49,7 @@ def create_mapping(
     *,
     rules: EntityMappingRules,
 ) -> dict:
-    from app.models.v2.mapping import OntologyMapping
+    from app.ontologies.mappings.models import OntologyMapping
     from app.ontologies.mappings.mapping_service import MappingService
 
     rules.require_draft_ontology(db, ontology_id)
@@ -190,7 +190,7 @@ def update_mapping(
     rules: EntityMappingRules,
 ) -> dict:
     """映射维护：结构和版本化自动触发策略均通过 draft 发布。"""
-    from app.models.v2.mapping import OntologyMapping
+    from app.ontologies.mappings.models import OntologyMapping
 
     provided = body.model_fields_set
     structural_fields = {
@@ -429,7 +429,7 @@ def delete_mapping(
     rules: EntityMappingRules,
 ) -> None:
     """删除映射并撤销其当前态投影；不可变事实历史通过墓碑保留。"""
-    from app.models.v2.mapping import OntologyMapping
+    from app.ontologies.mappings.models import OntologyMapping
     from app.ontologies.mappings.mapping_service import (
         MappingApplyError,
         MappingService,
@@ -483,7 +483,7 @@ def reject_raw_apply(
     data: list[dict],
 ) -> None:
     """Reject data that bypasses the versioned dataset source contract."""
-    from app.models.v2.mapping import OntologyMapping
+    from app.ontologies.mappings.models import OntologyMapping
 
     # Keep the request parameter in the workflow contract even though the
     # bypass is intentionally rejected after ownership validation.
@@ -510,7 +510,7 @@ def apply_mapping_from_dataset(
     ontology_id: str,
     mapping_id: str,
 ) -> dict:
-    from app.models.v2.mapping import OntologyMapping
+    from app.ontologies.mappings.models import OntologyMapping
     from app.ontologies.mappings.mapping_service import (
         MappingApplyError,
         MappingReleaseScopeError,
@@ -551,7 +551,7 @@ def apply_mapping_from_dataset(
 
 
 def build_all_mappings(db: Session, ontology_id: str) -> dict:
-    from app.models.v2.mapping import OntologyLinkMapping
+    from app.ontologies.mappings.models import OntologyLinkMapping
     from app.ontologies.mappings.mapping_service import (
         MappingApplyError,
         MappingReleaseScopeError,

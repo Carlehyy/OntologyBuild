@@ -20,7 +20,7 @@ from app.data_channel.pipelines.python_engine.client import (
     ScriptExecution,
     execute_script,
 )
-from app.models.v2.pipeline import Pipeline, PipelineScriptVersion
+from app.data_channel.pipelines.models import Pipeline, PipelineScriptVersion
 
 # 执行结果回传的样本行数（完整数据以 dry-run 暂存通道为准）
 _SAMPLE_ROWS = 50

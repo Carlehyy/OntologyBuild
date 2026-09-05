@@ -16,7 +16,7 @@ def dataset_consumers(db: Session, dataset_id: str) -> list[dict]:
 
 def dataset_consumer_map(db: Session) -> dict[str, list[dict]]:
     """Scan pipelines once and build a dataset-id to consumers mapping."""
-    from app.models.v2.pipeline import Pipeline
+    from app.data_channel.pipelines.models import Pipeline
 
     mapping: dict[str, list[dict]] = {}
 

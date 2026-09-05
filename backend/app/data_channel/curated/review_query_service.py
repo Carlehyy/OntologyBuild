@@ -20,9 +20,9 @@ from app.data_channel.datasets import lake_store
 from app.data_channel.datasets.lake_gate import split_pk
 from app.data_channel.datasets.models import DatasetChangeset, DatasetChangesetRow
 from app.data_channel.pipeline_tasks.merge import _slim_row, compute_lake_impact
-from app.models.v2.curated import CuratedReview
-from app.models.v2.dataset import Dataset
-from app.services.v2.dataset_service import DatasetReadError, DatasetService
+from app.data_channel.curated.models import CuratedReview
+from app.data_channel.datasets.models import Dataset
+from app.data_channel.datasets.service import DatasetReadError, DatasetService
 
 
 def _delta_from_changeset(

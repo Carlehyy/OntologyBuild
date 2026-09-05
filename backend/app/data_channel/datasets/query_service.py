@@ -10,7 +10,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.data_channel.datasets import cache as lake_cache
-from app.services.v2.dataset_service import DatasetService
+from app.data_channel.datasets.service import DatasetService
 
 
 def _as_int(value, fallback: int) -> int:
@@ -81,8 +81,8 @@ def _datasets_overview_from_db(
     *,
     consumer_map_fn: Callable[[Session], dict[str, list[dict]]],
 ) -> dict:
-    from app.models.v2.dataset import Dataset, DatasetVersion
-    from app.models.v2.connection import Connection
+    from app.data_channel.datasets.models import Dataset, DatasetVersion
+    from app.data_channel.connections.models import Connection
 
     q = db.query(Dataset).filter(Dataset.kind != "curated")
     if source == "manual":
@@ -180,7 +180,7 @@ def get_dataset(dataset_id: str, db: Session):
 def list_versions(dataset_id: str, db: Session):
     svc = DatasetService(db)
     versions = svc.list_versions(dataset_id)
-    from app.models.v2.dataset import DatasetVersionEvent
+    from app.data_channel.datasets.models import DatasetVersionEvent
     events = {
         event.dataset_version_id: event
         for event in db.query(DatasetVersionEvent).filter(
@@ -254,7 +254,7 @@ def preview_data(
     *,
     require_curated_preview_approved_fn: Callable[..., None],
 ):
-    from app.models.v2.dataset import DatasetVersion
+    from app.data_channel.datasets.models import DatasetVersion
 
     svc = DatasetService(db)
     ds = svc.get_dataset(dataset_id)
@@ -414,7 +414,7 @@ def export_dataset(
     """导出人工数据集最新版本的全部行，格式为 CSV 或 Excel。"""
     import io
     from urllib.parse import quote
-    from app.services.v2.dataset_service import DatasetReadError, rows_to_csv_bytes
+    from app.data_channel.datasets.service import DatasetReadError, rows_to_csv_bytes
 
     svc = DatasetService(db)
     ds = svc.get_dataset(dataset_id)

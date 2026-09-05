@@ -13,9 +13,9 @@ from app.data_channel.curated.approved_version_reader import (
 )
 from app.data_channel.datasets.lake_gate import split_pk
 from app.data_channel.pipeline_tasks.models import PipelineTask
-from app.models.v2.curated import CuratedDataset, CuratedReview
-from app.models.v2.dataset import Dataset, DatasetVersion
-from app.models.v2.pipeline import Pipeline
+from app.data_channel.curated.models import CuratedDataset, CuratedReview
+from app.data_channel.datasets.models import Dataset, DatasetVersion
+from app.data_channel.pipelines.models import Pipeline
 
 
 def list_curated(

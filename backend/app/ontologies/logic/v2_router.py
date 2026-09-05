@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 from app.database import SessionLocal
 from app.deps import get_current_user
 from app.models.user import User
-from app.models.v2.logic import OntologyLogicRule, OntologyStateMachine
-from app.models.v2.action import OntologyActionType, OntologyActionRun
+from app.ontologies.logic.v2_models import OntologyLogicRule, OntologyStateMachine
+from app.ontologies.actions.v2_models import OntologyActionType, OntologyActionRun
 from app.config import settings
 from app.ontologies.access import ontology_access_guard
 
@@ -197,7 +197,7 @@ def publish_logic_rules_v2(ontology_id: str, db: Session = Depends(get_db)):
 @router.post("/{ontology_id}/logic/discover")
 def discover_logic_rules(ontology_id: str, db: Session = Depends(get_db)):
     """发现 Logic Rules（同步写入 v2 + v1 表，供前端 LogicTab 读取）"""
-    from app.services.v2.mapping.mapping_service import MappingService
+    from app.ontologies.mappings.mapping_service import MappingService
     from app.models.logic import LogicRule as LogicRuleV1
     import uuid
     svc = MappingService(db)
@@ -356,7 +356,7 @@ def review_action_type(ontology_id: str, action_id: str, body: ActionReviewReque
 @router.post("/{ontology_id}/actions/discover")
 def discover_actions(ontology_id: str, db: Session = Depends(get_db)):
     """发现 Actions（同步写入 v2 + v1 表，供前端 ActionsTab 读取）"""
-    from app.services.v2.mapping.mapping_service import MappingService
+    from app.ontologies.mappings.mapping_service import MappingService
     from app.models.action import Action as ActionV1
     import uuid
     svc = MappingService(db)

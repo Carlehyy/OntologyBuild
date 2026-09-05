@@ -55,7 +55,7 @@ from app.data_channel.pipeline_tasks.query_service import (
 from app.data_channel.pipeline_tasks.validation_service import _validate
 from app.config import settings
 from app.deps import get_current_user, get_db
-from app.models.v2.pipeline import Pipeline, PipelineRun
+from app.data_channel.pipelines.models import Pipeline, PipelineRun
 
 
 router = APIRouter(dependencies=[Depends(get_current_user)])

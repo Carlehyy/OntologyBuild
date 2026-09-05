@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from app.database import SessionLocal
 from app.deps import get_current_user
-from app.models.v2.pipeline import Pipeline
+from app.data_channel.pipelines.models import Pipeline
 from app.data_channel.pipelines import (
     execution_service,
     management_service,
@@ -36,7 +36,7 @@ from app.data_channel.pipelines.execution_service import (
 )
 from app.data_channel.steward.models import N8nPipeline
 # 确保 Dataset 模型先导入以解析 FK
-import app.models.v2.dataset  # noqa: F401
+import app.data_channel.datasets.models  # noqa: F401
 
 
 _is_n8n_pipeline = validation_service.is_n8n_pipeline

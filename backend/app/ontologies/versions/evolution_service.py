@@ -16,8 +16,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.v2.dataset import Dataset, DatasetVersion
-from app.models.v2.mapping import OntologyMapping
+from app.data_channel.datasets.models import Dataset, DatasetVersion
+from app.ontologies.mappings.models import OntologyMapping
 from app.ontologies.formal_modeling import schemas as FS
 from app.ontologies.versions.snapshot_contract import (
     SNAPSHOT_KEYS,

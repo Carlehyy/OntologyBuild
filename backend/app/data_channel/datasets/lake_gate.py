@@ -156,7 +156,7 @@ def _value_type(v) -> str | None:
     s = str(v).strip()
     if not s:
         return None
-    from app.services.v2.pipeline.steps.schema_inference import SchemaInferenceStep
+    from app.data_channel.pipelines.steps.schema_inference import SchemaInferenceStep
     try:
         t = SchemaInferenceStep._infer_type(s)
     except Exception:  # noqa: BLE001 — 推断失败按 string 处理，不阻断
@@ -375,7 +375,7 @@ def infer_columns_typed(rows: list[dict], sample_size: int = 50) -> list[dict]:
     契约提交后全量校验遇 2/4/6 硬失败，只能整文件重传。冲突时按
     boolean→integer→float→string 阶梯降级，把一致契约留在推断阶段。
     """
-    from app.services.v2.pipeline.steps.schema_inference import SchemaInferenceStep
+    from app.data_channel.pipelines.steps.schema_inference import SchemaInferenceStep
 
     columns: list[str] = []
     seen: set[str] = set()
@@ -467,7 +467,7 @@ def _cell_type_ok(v, expected: str) -> bool:
     if expected == "boolean":
         return isinstance(v, bool) or s.lower() in ("true", "false", "yes", "no", "1", "0")
     if expected == "timestamp":
-        from app.services.v2.pipeline.steps.schema_inference import SchemaInferenceStep
+        from app.data_channel.pipelines.steps.schema_inference import SchemaInferenceStep
         try:
             return SchemaInferenceStep._infer_type(s) == "timestamp"
         except Exception:  # noqa: BLE001 — 推断器异常不应把校验变成误杀

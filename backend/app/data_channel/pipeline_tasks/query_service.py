@@ -14,7 +14,7 @@ from app.data_channel.pipeline_tasks.selection_service import (  # noqa: F401
     _curated_columns,
     selectable_pipelines,
 )
-from app.models.v2.pipeline import Pipeline, PipelineRun
+from app.data_channel.pipelines.models import Pipeline, PipelineRun
 
 
 QueryDependency = Callable[..., Any]

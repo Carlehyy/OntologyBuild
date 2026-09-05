@@ -49,10 +49,10 @@ def sync_connection(connection_id: str, mode: str = "full",
         或 {"status": "error", "error": str}
     """
     from app.database import SessionLocal
-    from app.models.v2.connection import Connection
-    from app.models.v2.dataset import Dataset, DatasetVersion  # noqa: F401
+    from app.data_channel.connections.models import Connection
+    from app.data_channel.datasets.models import Dataset, DatasetVersion  # noqa: F401
     from app.services.connection.registry import get_connector
-    from app.services.v2.dataset_service import DatasetService
+    from app.data_channel.datasets.service import DatasetService
 
     own_db = db is None
     db = db or SessionLocal()
@@ -186,7 +186,7 @@ def sync_connection(connection_id: str, mode: str = "full",
 def sync_all_connections() -> list[dict]:
     """顺序同步所有处于激活状态的 Connection。"""
     from app.database import SessionLocal
-    from app.models.v2.connection import Connection
+    from app.data_channel.connections.models import Connection
 
     db = SessionLocal()
     try:

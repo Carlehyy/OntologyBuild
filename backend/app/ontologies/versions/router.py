@@ -19,7 +19,7 @@ from app.models.ontology_formal import (
     ActionType as FoActionType, ObjectInstance as FoObjectInstance,
 )
 from app.models.sentinel import Sentinel
-from app.models.v2.mapping import OntologyMapping, OntologyLinkMapping
+from app.ontologies.mappings.models import OntologyMapping, OntologyLinkMapping
 from app.ontologies.formal_modeling import schemas as FS
 from app.ontologies.formal_modeling.validation import validate_model
 from app.ontologies.sentinels import validation as sentinel_validation

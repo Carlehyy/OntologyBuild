@@ -36,8 +36,8 @@ def run_external_pipeline(db, pl, run, write_opts: dict | None = None, *,
     （流式：行数由入湖段精确记账进 ctx.rows_in/rows_out）。
     contract_columns：引擎侧审批固化的期望列（供准入闸门做漂移检测）。
     """
-    from app.services.v2.dataset_service import DatasetService
-    from app.services.v2.pipeline.base import PipelineContext
+    from app.data_channel.datasets.service import DatasetService
+    from app.data_channel.pipelines.base import PipelineContext
     from app.tasks.v2.pipeline_run import _save_curated_outputs
 
     try:

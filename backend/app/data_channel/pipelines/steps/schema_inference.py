@@ -1,7 +1,7 @@
 """Schema 自动推断 Step — timestamp 检测 + 多样本投票"""
 from __future__ import annotations
 import re
-from app.services.v2.pipeline.base import PipelineStep, PipelineContext
+from app.data_channel.pipelines.base import PipelineStep, PipelineContext
 
 # 判别日期/时间戳的正则模式 (PRD: string/int/float/timestamp/bool)
 _DATE_RE = re.compile(

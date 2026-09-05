@@ -18,8 +18,8 @@ from app.data_channel.datasets.manual_contract import (
 )
 from app.data_channel.datasets.sharing_models import ManualDatasetChange, ManualDatasetShare
 from app.deps import get_current_user, get_db
-from app.models.v2.dataset import Dataset, DatasetVersion
-from app.services.v2.dataset_service import DatasetService, rows_to_csv_bytes
+from app.data_channel.datasets.models import Dataset, DatasetVersion
+from app.data_channel.datasets.service import DatasetService, rows_to_csv_bytes
 from app.shared.encryption import decrypt, encrypt
 
 

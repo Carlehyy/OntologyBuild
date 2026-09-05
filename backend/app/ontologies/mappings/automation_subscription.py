@@ -70,7 +70,7 @@ def subscribe_automation_route(
 def _dataset_view(db: Session, dataset_id: str | None) -> dict | None:
     if not dataset_id:
         return None
-    from app.models.v2.dataset import Dataset
+    from app.data_channel.datasets.models import Dataset
 
     dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
     if dataset is None:
@@ -87,7 +87,7 @@ def _version_eligibility(db: Session, dataset_id: str) -> tuple[bool, str]:
     from app.data_channel.datasets.automation_policy import (
         manual_dataset_automation_eligibility,
     )
-    from app.models.v2.dataset import Dataset, DatasetVersion
+    from app.data_channel.datasets.models import Dataset, DatasetVersion
 
     dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
     version = (
@@ -105,7 +105,7 @@ def _version_eligibility(db: Session, dataset_id: str) -> tuple[bool, str]:
 
 def automation_overview(db: Session, ontology_id: str) -> dict:
     """未订阅/已订阅映射一览：发布前据此补订阅，保证数据更新自动流入本体。"""
-    from app.models.v2.mapping import OntologyMapping
+    from app.ontologies.mappings.models import OntologyMapping
 
     mappings = (
         db.query(OntologyMapping)
@@ -163,7 +163,7 @@ def subscribe_automation(
     （主键 + 可校验不可变版本）；curated 数据集由审批触发（on_review）。
     不满足资格的映射跳过并在 skipped 中返回原因——发布门仍会 fail-closed。
     """
-    from app.models.v2.mapping import OntologyMapping
+    from app.ontologies.mappings.models import OntologyMapping
 
     mappings = (
         db.query(OntologyMapping)
@@ -183,7 +183,7 @@ def subscribe_automation(
         field_mapping = dict(mapping.field_mapping or {})
         changed = False
         if on_version:
-            from app.models.v2.dataset import Dataset
+            from app.data_channel.datasets.models import Dataset
 
             dataset = db.query(Dataset).filter(
                 Dataset.id == mapping.curated_dataset_id).first()

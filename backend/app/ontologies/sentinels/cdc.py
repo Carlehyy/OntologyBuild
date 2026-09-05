@@ -1350,7 +1350,7 @@ def recover_held_outbox(
             _last_held_recovery_error = None
             return result
 
-        from app.models.v2.mapping import OntologyMapping
+        from app.ontologies.mappings.models import OntologyMapping
 
         for row in rows:
             result["examined"] += 1

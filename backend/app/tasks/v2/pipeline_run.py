@@ -147,7 +147,7 @@ def _legacy_output_matches(schema: dict, source: dict, multi_source: bool,
 def _disambiguated_curated_name(db, base_name: str, pipeline_id: str,
                                 output_key: str) -> str:
     """同名已被其他产物占用时生成确定、可诊断且满足 200 字符限制的名字。"""
-    from app.models.v2.dataset import Dataset as _DS
+    from app.data_channel.datasets.models import Dataset as _DS
 
     digest = hashlib.sha256(f"{pipeline_id}:{output_key}".encode("utf-8")).hexdigest()[:8]
     suffix = f" [{digest}]"
@@ -169,7 +169,7 @@ def resolve_curated_target(db, pl, source: dict, multi_source: bool,
     的无主资产按旧槽位规则认领。发现同名属于别的流水线时，返回一个不冲突的
     展示名创建新资产，绝不复用对方的版本史、主键契约和下游映射。
     """
-    from app.models.v2.dataset import Dataset as _DS
+    from app.data_channel.datasets.models import Dataset as _DS
     from app.data_channel.datasets.lake_gate import LakeGateError
 
     ds_name = _curated_name(pl, source, multi_source, table_name)
@@ -273,7 +273,7 @@ def _save_curated_dataset_in_lock(db, svc, pl, source: dict, data, ctx, multi_so
     # 复用既有 curated 数据集追加版本：同一管道反复运行不再无限增殖新数据集，
     # 下游 mapping 绑定的 curated id 保持稳定、能持续收到新版本。
     # 绑定关系按 id（resolve_curated_target），流水线改名不影响归属
-    from app.models.v2.dataset import Dataset as _DS
+    from app.data_channel.datasets.models import Dataset as _DS
     from app.data_channel.datasets.lake_gate import LakeGateError
     from app.data_channel.pipeline_tasks.merge import normalize_write_mode
 
@@ -535,7 +535,7 @@ def _save_curated_outputs(db, svc, pl, source: dict, data, ctx, multi_source: bo
 def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = None):
     """Pipeline 执行任务 — 经 engine_registry 分发到采集引擎（n8n / python / 运行时注册）"""
     from app.database import SessionLocal
-    from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
+    from app.data_channel.pipelines.models import Pipeline, PipelineRun, PipelineVersion
     from app.config import settings
 
     db = SessionLocal()

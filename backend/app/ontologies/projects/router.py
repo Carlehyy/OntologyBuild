@@ -300,7 +300,7 @@ def delete_ontology(ontology_id: str, db: Session = Depends(get_db), current_use
         mark_projecting(db, ontology_id)
         db.commit()
 
-        from app.services.v2.graph.neo4j_service import Neo4jService
+        from app.ontologies.graph.neo4j_service import Neo4jService
 
         neo4j = Neo4jService()
         try:

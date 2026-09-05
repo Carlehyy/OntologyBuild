@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 
 def suggest_mapping(db: Session, body: Any) -> dict:
-    from app.services.v2.mapping.auto_mapper import AutoMapper
+    from app.ontologies.mappings.auto_mapper import AutoMapper
 
     mapper = AutoMapper(db)
     suggestion = mapper.suggest_field_mapping(
@@ -36,8 +36,8 @@ def suggest_mapping(db: Session, body: Any) -> dict:
 
 def list_mappings(db: Session, ontology_id: str) -> list[dict]:
     from app.models.ontology_formal import ObjectType
-    from app.models.v2.curated import CuratedDataset
-    from app.models.v2.dataset import Dataset, DatasetVersion
+    from app.data_channel.curated.models import CuratedDataset
+    from app.data_channel.datasets.models import Dataset, DatasetVersion
     from app.ontologies.mappings.mapping_service import MappingService
 
     service = MappingService(db)
@@ -163,7 +163,7 @@ def list_mappings(db: Session, ontology_id: str) -> list[dict]:
 
 
 def list_link_mappings(db: Session, ontology_id: str) -> list[dict]:
-    from app.models.v2.mapping import OntologyLinkMapping
+    from app.ontologies.mappings.models import OntologyLinkMapping
 
     links = (
         db.query(OntologyLinkMapping)

@@ -5,7 +5,7 @@ import logging
 
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.models.v2.mapping import OntologyMapping
+from app.ontologies.mappings.models import OntologyMapping
 from app.ontologies.mappings.errors import MappingApplyError, MappingSourceError
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ class RelationProcessingMixin:
                                    mapping_meta: dict) -> list[dict]:
         from app.models.entity import Entity
         from app.models.relation import Relation
-        from app.models.v2.mapping import OntologyLinkMapping
+        from app.ontologies.mappings.models import OntologyLinkMapping
         import re
 
         results = []
@@ -534,7 +534,7 @@ class RelationProcessingMixin:
             return []
 
     def _process_link_mappings(self, ontology_id: str, mapping_meta: dict) -> list[dict]:
-        from app.models.v2.mapping import OntologyLinkMapping, OntologyMapping as OM
+        from app.ontologies.mappings.models import OntologyLinkMapping, OntologyMapping as OM
         from app.models.ontology_formal import LinkType
 
         links = self._db.query(OntologyLinkMapping).filter(
@@ -664,8 +664,8 @@ class RelationProcessingMixin:
         from app.models.relation import Relation
         from app.data_channel.curated.approved_version_reader import (
             latest_dataset_version)
-        from app.models.v2.dataset import Dataset
-        from app.models.v2.curated import CuratedDataset
+        from app.data_channel.datasets.models import Dataset
+        from app.data_channel.curated.models import CuratedDataset
         from app.config import settings
 
         fmap = {k: v for k, v in dict(getattr(link, "field_mapping", None) or {}).items()
@@ -689,7 +689,7 @@ class RelationProcessingMixin:
                         for row in batch
                     ]
                 else:
-                    from app.services.v2.dataset_service import DatasetService
+                    from app.data_channel.datasets.service import DatasetService
                     edge_rows = DatasetService(self._db).load_all_rows(
                         link.edge_dataset_id,
                         edge_version.version_no if edge_version is not None else None)
@@ -698,7 +698,7 @@ class RelationProcessingMixin:
                     CuratedDataset.id == link.edge_dataset_id).first()
                 if settings.environment == "production" or legacy is None or legacy.status != "approved":
                     raise MappingSourceError("legacy 连接表不允许进入生产投影")
-                from app.services.v2.dataset_service import DatasetService
+                from app.data_channel.datasets.service import DatasetService
                 edge_rows = DatasetService(self._db).preview(
                     link.edge_dataset_id, None, limit=None)
         except Exception as e:  # noqa: BLE001

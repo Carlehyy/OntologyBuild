@@ -73,7 +73,7 @@ def _mapping_types_compatible(source_type: str, target_type: str) -> bool:
 
 
 def _dataset_column_types(db: Session, dataset_id: str) -> dict[str, str]:
-    from app.models.v2.dataset import Dataset
+    from app.data_channel.datasets.models import Dataset
 
     dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
     if dataset is None:
@@ -337,7 +337,7 @@ def _validate_version_automation_policy(db: Session, dataset_id: str) -> None:
     from app.data_channel.datasets.automation_policy import (
         manual_dataset_automation_eligibility,
     )
-    from app.models.v2.dataset import Dataset, DatasetVersion
+    from app.data_channel.datasets.models import Dataset, DatasetVersion
 
     dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
     version = (
@@ -367,7 +367,7 @@ def _validate_link_version_automation_policy(
     dataset_ids: set[str | None],
 ) -> None:
     """A link subscription may mix reviewed curated and governed manual inputs."""
-    from app.models.v2.dataset import Dataset
+    from app.data_channel.datasets.models import Dataset
 
     manual_ids: list[str] = []
     for dataset_id in dataset_ids - {None}:
@@ -485,7 +485,7 @@ def _canonical_primary_key(db: Session, dataset_id: str) -> str:
     identity while the lake, review diff and merge paths still use another key.
     """
     from app.data_channel.datasets.lake_gate import split_pk
-    from app.models.v2.dataset import Dataset
+    from app.data_channel.datasets.models import Dataset
 
     dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
     if dataset is None:

@@ -17,7 +17,7 @@ from app.data_channel.pipeline_tasks.query_service import (
     _as_utc,
     _utc_iso,
 )
-from app.models.v2.pipeline import Pipeline, PipelineRun
+from app.data_channel.pipelines.models import Pipeline, PipelineRun
 
 
 HistoryDependency = Callable[..., Any]
@@ -255,7 +255,7 @@ def run_audit(
         .first()
     )
 
-    from app.models.v2.dataset import Dataset
+    from app.data_channel.datasets.models import Dataset
 
     outputs = []
     for output in (

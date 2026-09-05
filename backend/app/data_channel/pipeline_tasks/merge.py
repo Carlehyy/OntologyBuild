@@ -35,7 +35,7 @@ def load_latest_rows(db, dataset_id: str) -> list[dict]:
     湖中存量在新版本里静默消失、且运行状态还是成功。
     数据集尚无数据时返回 []，属合法初始状态。
     """
-    from app.services.v2.dataset_service import DatasetService
+    from app.data_channel.datasets.service import DatasetService
     return DatasetService(db).load_all_rows(dataset_id)
 
 

@@ -56,7 +56,7 @@ def toggle_logic(ontology_id: str, logic_id: str, db: Session = Depends(get_db),
         raise HTTPException(404, "Not found")
     r.enabled = not getattr(r, 'enabled', True)
     try:
-        from app.models.v2.logic import OntologyLogicRule
+        from app.ontologies.logic.v2_models import OntologyLogicRule
         v2 = db.query(OntologyLogicRule).filter(
             OntologyLogicRule.ontology_id == ontology_id,
             OntologyLogicRule.name == r.name_cn,
@@ -82,7 +82,7 @@ def publish_logic_rules(ontology_id: str, db: Session = Depends(get_db), _=Depen
     for r in rules:
         r.status = 'published'
     try:
-        from app.models.v2.logic import OntologyLogicRule
+        from app.ontologies.logic.v2_models import OntologyLogicRule
         v2_rules = db.query(OntologyLogicRule).filter(
             OntologyLogicRule.ontology_id == ontology_id,
             OntologyLogicRule.status != "published",

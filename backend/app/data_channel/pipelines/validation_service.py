@@ -17,7 +17,7 @@ from app.data_channel.pipelines.contracts import (
     ValidateResult,
 )
 from app.data_channel.pipelines.execution_service import dry_run_uri
-from app.models.v2.pipeline import Pipeline, PipelineVersion
+from app.data_channel.pipelines.models import Pipeline, PipelineVersion
 
 
 def is_n8n_pipeline(pipeline: Pipeline) -> bool:
@@ -244,7 +244,7 @@ def validate_column_definitions(
         split_pk,
         validate_contract_structure,
     )
-    from app.models.v2.dataset import Dataset
+    from app.data_channel.datasets.models import Dataset
 
     pipeline = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pipeline:
@@ -608,7 +608,7 @@ def publish_pipeline_release(
         split_pk,
         validate_contract_structure,
     )
-    from app.models.v2.dataset import Dataset
+    from app.data_channel.datasets.models import Dataset
 
     pipeline = db.query(Pipeline).filter(
         Pipeline.id == pipeline_id

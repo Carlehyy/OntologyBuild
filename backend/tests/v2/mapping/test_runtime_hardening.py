@@ -426,7 +426,7 @@ def test_build_all_does_not_slice_strict_source_rows(db, admin_user, lake_storag
          patch.object(MappingService, "_discover_logic_rules", return_value={"total_v2": 0}), \
          patch.object(MappingService, "_discover_action_types", return_value={"total_v2": 0}), \
          patch(
-             "app.services.v2.mapping.formal_projection.project_to_formal_ontology",
+             "app.ontologies.mappings.formal_projection.project_to_formal_ontology",
              return_value={"instances": len(rows)},
          ):
         result = service.build_all(ontology.id, require_approved=True)
@@ -590,7 +590,7 @@ def test_formal_projection_failure_marks_mapping_failed(
 
     with patch.object(MappingService, "_write_v1_entities", return_value=1), \
          patch(
-             "app.services.v2.mapping.formal_projection.project_to_formal_ontology",
+             "app.ontologies.mappings.formal_projection.project_to_formal_ontology",
              side_effect=RuntimeError("formal unavailable"),
          ):
         with pytest.raises(MappingApplyError, match="未标记为 applied"):
@@ -622,7 +622,7 @@ def test_applied_projection_with_sentinel_failure_is_not_reported_success(
     with patch.object(
         MappingService, "_write_v1_entities", return_value=1,
     ), patch(
-        "app.services.v2.mapping.formal_projection.project_to_formal_ontology",
+        "app.ontologies.mappings.formal_projection.project_to_formal_ontology",
         return_value={"instances_created": 1},
     ), patch(
         "app.ontologies.sentinels.cdc.dispatch_captured_changes",
@@ -685,7 +685,7 @@ def test_unexpected_sentinel_dispatch_exception_preserves_applied_projection(
     with patch.object(
         MappingService, "_write_v1_entities", return_value=1,
     ), patch(
-        "app.services.v2.mapping.formal_projection.project_to_formal_ontology",
+        "app.ontologies.mappings.formal_projection.project_to_formal_ontology",
         return_value={"instances_created": 1},
     ), patch(
         "app.ontologies.sentinels.cdc.dispatch_captured_changes",
@@ -724,7 +724,7 @@ def test_build_all_failure_rolls_back_entities_and_stale_relation_deletes(
     db.commit()
 
     with patch(
-        "app.services.v2.mapping.formal_projection.project_to_formal_ontology",
+        "app.ontologies.mappings.formal_projection.project_to_formal_ontology",
         side_effect=RuntimeError("formal validation rejected"),
     ):
         with pytest.raises(MappingApplyError, match="关系型投影已回滚"):
@@ -1415,7 +1415,7 @@ def test_apply_refuses_stale_source_version_after_concurrent_publish(
 
     with patch.object(MappingService, "_write_v1_entities", return_value=1), \
          patch(
-             "app.services.v2.mapping.formal_projection.project_to_formal_ontology",
+             "app.ontologies.mappings.formal_projection.project_to_formal_ontology",
              return_value={"instances": 1},
          ):
         with pytest.raises(MappingApplyError, match="执行期间数据源已更新"):

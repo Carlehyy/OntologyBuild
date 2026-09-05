@@ -13,7 +13,7 @@ def build_edited_snapshot(db, svc, ds, body) -> tuple[list[dict], list[str], dic
     """
     from app.data_channel.datasets.lake_gate import (
         LakeGateError, infer_columns_typed, split_pk, validate_declared_types, validate_pk)
-    from app.services.v2.dataset_service import DatasetReadError
+    from app.data_channel.datasets.service import DatasetReadError
 
     schema = dict(ds.schema_json or {})
     pk_cols = split_pk(schema.get("primary_key"))
@@ -56,7 +56,7 @@ def build_edited_snapshot(db, svc, ds, body) -> tuple[list[dict], list[str], dic
             raise HTTPException(400, f"{what}未找到主键为 {dict(zip(pk_cols, key_tuple))} 的行（可能已被删除，请刷新）")
         return index
 
-    from app.models.v2.mapping import OntologyMapping
+    from app.ontologies.mappings.models import OntologyMapping
     mapping_count = db.query(OntologyMapping).filter(
         OntologyMapping.curated_dataset_id == ds.id).count()
     if mapping_count:

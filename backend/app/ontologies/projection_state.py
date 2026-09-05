@@ -90,7 +90,7 @@ def snapshot(
     *,
     lock_for_read: bool = False,
 ) -> ProjectionSnapshot:
-    from app.models.v2.mapping import OntologyMapping
+    from app.ontologies.mappings.models import OntologyMapping
 
     project = _project(db, ontology_id, read_lock=lock_for_read)
     if project is None:

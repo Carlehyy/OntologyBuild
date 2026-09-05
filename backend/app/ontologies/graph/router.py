@@ -70,7 +70,7 @@ def _require_projection_ready(db: Session, ontology_id: str) -> None:
 def _try_neo4j(ontology_id: str, limit: int) -> tuple[list, list]:
     """从 Neo4j 读取并转换为 v1 格式；空图保持为空图。"""
     try:
-        from app.services.v2.graph.neo4j_service import Neo4jService
+        from app.ontologies.graph.neo4j_service import Neo4jService
         svc = Neo4jService()
     except Exception:
         raise HTTPException(

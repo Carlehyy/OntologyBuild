@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.data_channel.datasets.lake_gate import split_pk
-from app.models.v2.curated import CuratedDataset, CuratedReview
+from app.data_channel.curated.models import CuratedDataset, CuratedReview
 
 
 class ReviewApprovalError(ValueError):
@@ -23,7 +23,7 @@ class ReviewApprovalError(ValueError):
 
 def latest_dataset_version(db: Session, dataset_id: str):
     """返回统一资产表的最新不可变版本。"""
-    from app.models.v2.dataset import DatasetVersion
+    from app.data_channel.datasets.models import DatasetVersion
 
     return (db.query(DatasetVersion)
             .filter(DatasetVersion.dataset_id == dataset_id)
@@ -101,7 +101,7 @@ def require_version_approved(db: Session, dataset_id: str, version) -> CuratedRe
 
 def _dataset_schema(db: Session, dataset_id: str) -> dict:
     """读取权威 v2 dataset schema；legacy 表仅作只读兼容回退。"""
-    from app.models.v2.dataset import Dataset
+    from app.data_channel.datasets.models import Dataset
 
     dataset = db.query(Dataset).filter(
         Dataset.id == dataset_id, Dataset.kind == "curated").first()
@@ -218,7 +218,7 @@ def normalize_row_pk(value, pk_cols: list[str], *, dataset_name: str = "") -> st
 def _version_by_id(db: Session, dataset_id: str, version_id: str | None):
     if not version_id:
         return latest_dataset_version(db, dataset_id)
-    from app.models.v2.dataset import DatasetVersion
+    from app.data_channel.datasets.models import DatasetVersion
 
     return db.query(DatasetVersion).filter(
         DatasetVersion.id == version_id,

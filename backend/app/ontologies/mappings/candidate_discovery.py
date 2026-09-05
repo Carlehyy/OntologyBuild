@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid as _uuid
 
-from app.models.v2.mapping import OntologyMapping
+from app.ontologies.mappings.models import OntologyMapping
 
 
 class CandidateDiscoveryMixin:
@@ -12,7 +12,7 @@ class CandidateDiscoveryMixin:
     def _upsert_v2_logic(self, ontology_id: str, name: str, logic_type: str, description: str,
                          target_entity_type: str | None, expression: dict, source_type: str,
                          severity: str = "info") -> bool:
-        from app.models.v2.logic import OntologyLogicRule
+        from app.ontologies.logic.v2_models import OntologyLogicRule
 
         # session 为 autoflush=False, 先 flush 让同一次运行中已 add 的同名规则可见
         self._db.flush()
@@ -213,7 +213,7 @@ class CandidateDiscoveryMixin:
         ))
 
         self._db.flush()
-        from app.models.v2.logic import OntologyLogicRule
+        from app.ontologies.logic.v2_models import OntologyLogicRule
         from app.models.logic import LogicRule
         return {
             "created_v2": created_v2,
@@ -225,7 +225,7 @@ class CandidateDiscoveryMixin:
     def _upsert_v2_action(self, ontology_id: str, name: str, category: str, description: str,
                           target_entity_type: str | None, parameters: list, effects: list,
                           criteria: list | None = None) -> bool:
-        from app.models.v2.action import OntologyActionType
+        from app.ontologies.actions.v2_models import OntologyActionType
 
         self._db.flush()
         exists = self._db.query(OntologyActionType).filter(
@@ -394,7 +394,7 @@ class CandidateDiscoveryMixin:
             ))
 
         self._db.flush()
-        from app.models.v2.action import OntologyActionType
+        from app.ontologies.actions.v2_models import OntologyActionType
         from app.models.action import Action
         return {
             "created_v2": created_v2,

@@ -73,7 +73,7 @@ def toggle_action(ontology_id: str, action_id: str, db: Session = Depends(get_db
         raise HTTPException(404, "Not found")
     a.enabled = not getattr(a, 'enabled', True)
     try:
-        from app.models.v2.action import OntologyActionType
+        from app.ontologies.actions.v2_models import OntologyActionType
         v2 = db.query(OntologyActionType).filter(
             OntologyActionType.ontology_id == ontology_id,
             OntologyActionType.name == a.name_cn,
@@ -98,7 +98,7 @@ def publish_actions(ontology_id: str, db: Session = Depends(get_db), _=Depends(g
     for a in acts:
         a.status = 'published'
     try:
-        from app.models.v2.action import OntologyActionType
+        from app.ontologies.actions.v2_models import OntologyActionType
         v2_actions = db.query(OntologyActionType).filter(
             OntologyActionType.ontology_id == ontology_id,
             OntologyActionType.status != "published",

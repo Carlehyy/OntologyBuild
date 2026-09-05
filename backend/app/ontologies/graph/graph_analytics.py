@@ -16,7 +16,7 @@ class GraphAnalyticsService:
         if neo4j is not None:
             graph_svc = neo4j
         if graph_svc is None:
-            from app.services.v2.graph.neo4j_service import Neo4jService
+            from app.ontologies.graph.neo4j_service import Neo4jService
             self._svc = Neo4jService()
         else:
             self._svc = graph_svc
