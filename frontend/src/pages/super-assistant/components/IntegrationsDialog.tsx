@@ -50,8 +50,10 @@ export default function IntegrationsDialog({ onClose, onSaved }: {
         setWorkspaceId(data.workspace_id)
         setEnabled(data.enabled)
         setToken('')
+        // 已保存配置的兜底选项：优先显示回填的工作区名，历史行无名称时
+        // 回落显示 ID（下次测试连接/保存即补齐名称）
         setWorkspaces(data.configured && data.workspace_id
-          ? [{ id: data.workspace_id, name: data.workspace_id, slug: '' }]
+          ? [{ id: data.workspace_id, name: data.workspace_name || data.workspace_id, slug: '' }]
           : [])
       })
       .catch(err => setError(errorText(err, '配置加载失败')))
@@ -88,10 +90,12 @@ export default function IntegrationsDialog({ onClose, onSaved }: {
     setSaving(true)
     setError('')
     try {
+      const selectedWorkspace = workspaces.find(workspace => workspace.id === workspaceId)
       const saved = await superAssistantApi.updateMulticaConfig({
         base_url: baseUrl.trim(),
         token: token.trim() || null,
         workspace_id: workspaceId,
+        workspace_name: selectedWorkspace?.name || config?.workspace_name || null,
         enabled,
       })
       setConfig(saved)

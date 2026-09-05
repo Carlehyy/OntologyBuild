@@ -70,7 +70,7 @@ const multicaUnconfiguredFixture = {
 
 const multicaEnabledFixture = {
   configured: true, enabled: true, base_url: 'http://127.0.0.1:8080', workspace_id: 'ws-1',
-  token_set: true, commands: multicaCommandsFixture,
+  workspace_name: 'My Workspace', token_set: true, commands: multicaCommandsFixture,
   last_test_status: 'success', last_test_message: '连接成功', last_tested_at: at(0, 8),
 }
 
@@ -993,6 +993,8 @@ test('记忆宫殿：三栏工作台（文件树|内容|图谱），上传删除
     base_url: 'http://127.0.0.1:8080',
     token: 'mul-e2e-token',
     workspace_id: 'ws-2',
+    // 选中工作区的显示名随保存持久化（下拉兜底显示名称而非裸 UUID）
+    workspace_name: 'E2E 工作区',
     enabled: true,
   })
   await expect(integrationsDialog).toHaveCount(0)

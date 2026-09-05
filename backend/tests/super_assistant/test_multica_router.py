@@ -63,11 +63,13 @@ def test_put_config_roundtrip_and_token_redaction(tmp_path):
         "base_url": "http://127.0.0.1:8080",
         "token": "mul-secret",
         "workspace_id": "ws-1",
+        "workspace_name": "My Workspace",
         "enabled": True,
     })
     assert saved.status_code == 200, saved.text
     body = saved.json()
     assert body["configured"] is True and body["enabled"] is True
+    assert body["workspace_name"] == "My Workspace"
     assert body["token_set"] is True
     assert "token" not in body  # 凭据永不回显
     assert [item["command"] for item in body["commands"]] == [

@@ -265,6 +265,9 @@ class SuperAssistantMulticaConfig(Base):
     owner_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     base_url: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     workspace_id: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    # 工作区显示名：保存/测试连接时从 multica 回填，配置弹窗下拉兜底显示
+    # 名称而非裸 UUID；工作区改名后下次测试连接会自动刷新
+    workspace_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     last_test_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
