@@ -1,4 +1,4 @@
-"""API-Hub configuration inside the OntologyBuild backend.
+"""API-Hub configuration inside the OpenOntology backend.
 
 The original environment variable names stay supported so an existing API-Hub
 configuration can be copied across without translation. Runtime files live in
@@ -60,7 +60,7 @@ def _app_host_and_port() -> tuple[str, int]:
     return host, port
 
 
-# Host and port are informational here: OntologyBuild owns the ASGI server.
+# Host and port are informational here: OpenOntology owns the ASGI server.
 APP_HOST, APP_PORT = _app_host_and_port()
 HTTP_TIMEOUT = int(_env("API_HUB_HTTP_TIMEOUT", _env("HTTP_TIMEOUT", "30")))
 MAX_RUNS_PER_INTERFACE = int(

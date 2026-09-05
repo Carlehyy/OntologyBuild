@@ -2,7 +2,7 @@
 """Run the Sentinel production path against a live API and real supplier data.
 
 This is intentionally not a pytest/TestClient test.  It talks to a running
-OntologyBuild backend, uploads the repository's real supplier workbook, goes
+OpenOntology backend, uploads the repository's real supplier workbook, goes
 through draft -> isolated trial -> promotion, publishes a second immutable
 dataset version, and verifies the resulting CDC/Sentinel/action cascade.
 """

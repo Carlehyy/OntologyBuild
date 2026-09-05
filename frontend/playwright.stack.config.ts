@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 import baseConfig from './playwright.config'
 
-// These tests require an isolated OntologyBuild backend. Some business calls
+// These tests require an isolated OpenOntology backend. Some business calls
 // are mocked, but no file in this list is safe to run as an offline PR test.
 export default defineConfig({
   ...baseConfig,

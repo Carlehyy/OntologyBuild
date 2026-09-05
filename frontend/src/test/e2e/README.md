@@ -3,7 +3,7 @@
 当前 77 个 spec 按运行依赖显式分组：
 
 - `mocked`：55 个，所有业务请求/实时通道本地替代，后端地址故意不可达；
-- `stack`：21 个，需要隔离的 OntologyBuild 后端；
+- `stack`：21 个，需要隔离的 OpenOntology 后端；
 - `external`：1 个，需要显式开关和真实付费/供应商服务。
 
 ```bash

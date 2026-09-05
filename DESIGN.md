@@ -1,15 +1,15 @@
 ---
 version: alpha
-name: OntologyBuild-Design-Language
+name: OpenOntology-Design-Language
 description: >-
-  OntologyBuild（本体即服务平台）的统一设计语言。基于 VoltAgent/awesome-design-md
+  OpenOntology（本体即服务平台）的统一设计语言。基于 VoltAgent/awesome-design-md
   （站点形式 getdesign.md）收录的 Supabase 设计分析骨架适配：白底近单色画布、
   单一绿系强调、克制 chrome、数据密度优先。本文档是前端 UI 的唯一设计事实
   来源，供人类开发者与 AI 编码代理共同遵循；取值的可执行载体是
   frontend/src/styles/tokens.css 与 frontend/src/lib/echartsTheme.ts。
 ---
 
-# OntologyBuild 设计语言（DESIGN.md）
+# OpenOntology 设计语言（DESIGN.md）
 
 ## 0. 适用范围与优先级
 

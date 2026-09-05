@@ -1,4 +1,4 @@
-# OntologyBuild 文档
+# OpenOntology 文档
 
 仓库只维护少数长期有效的文档，功能与行为说明以代码和测试为准
 （见 [AGENTS.md](../AGENTS.md) 第 7 节）。

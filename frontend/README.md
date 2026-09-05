@@ -1,4 +1,4 @@
-# OntologyBuild 前端
+# OpenOntology 前端
 
 前端使用 React、TypeScript、Vite 和 Tailwind CSS。当前导航事实源是
 `src/config/navigation.ts`，路由装配位于 `src/App.tsx`。
@@ -62,7 +62,7 @@ npm run build
 
 ```bash
 npm run test:e2e:mocked    # 后端被故意指向不可达端口，可用于 PR
-npm run test:e2e:stack     # 需要隔离的 OntologyBuild 后端
+npm run test:e2e:stack     # 需要隔离的 OpenOntology 后端
 npm run test:e2e:external  # 需要显式开关及真实外部服务
 ```
 

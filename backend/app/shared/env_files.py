@@ -1,4 +1,4 @@
-"""Stable environment-file locations for local OntologyBuild development.
+"""Stable environment-file locations for local OpenOntology development.
 
 The paths are derived from this module rather than the process working
 directory.  This keeps ``uvicorn``, Alembic, NATS executor and the embedded API Hub

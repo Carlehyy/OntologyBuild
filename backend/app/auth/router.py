@@ -378,7 +378,7 @@ def _build_reporter_script(
 _REPORTER_TEMPLATE = '''#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-OntologyBuild 隐私变量上报脚本（由平台自动生成）。
+OpenOntology 隐私变量上报脚本（由平台自动生成）。
 
 用法：
   1. 本脚本已内嵌：平台地址 BASE_URL、上报 token REPORT_TOKEN、

@@ -11,5 +11,5 @@
 必须作为独立运维变更。runner 无论成功失败都要清理上传压缩包。
 
 `DEPLOY_APP_DIR` 在任何 SSH 命令使用前必须调用
-`scripts/ci/validate-deploy-app-dir.sh`；默认 `/opt/ontologybuild` 可用，空值
+`scripts/ci/validate-deploy-app-dir.sh`；默认 `/opt/openontology` 可用，空值
 之外的危险/未规范化路径必须直接终止部署。

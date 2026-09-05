@@ -40,7 +40,7 @@ npm run test:e2e:mocked
 `frontend/src/test/unit/<domain>/`。浏览器测试采用显式 allowlist：
 
 - `test:e2e:mocked`：完全离线 spec；配置会把后端地址指向不可达端口；
-- `test:e2e:stack`：需要隔离 OntologyBuild 后端的 spec；
+- `test:e2e:stack`：需要隔离 OpenOntology 后端的 spec；
 - `test:e2e:external`：需要显式开关及真实 LLM/外部服务的 spec；
 - `test:e2e:classification`：保证全部 spec 恰好属于一组。
 

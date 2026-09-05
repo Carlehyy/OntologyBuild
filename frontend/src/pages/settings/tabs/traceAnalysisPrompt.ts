@@ -31,7 +31,7 @@ export function buildAnalysisPrompt(request: SlowRequestItem): string {
   lines.push('')
   lines.push('## 背景')
   lines.push(
-    'OntologyBuild 平台（本体即服务平台）的 API 性能监控捕获到一次慢请求。',
+    'OpenOntology 平台（本体即服务平台）的 API 性能监控捕获到一次慢请求。',
     '请以资深后端性能优化专家的视角，基于下面的调用链数据定位本次请求的耗时瓶颈，',
     '并给出具体、可落地的优化建议，用于指导平台性能优化。',
   )

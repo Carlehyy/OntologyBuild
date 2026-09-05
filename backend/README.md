@@ -1,4 +1,4 @@
-# OntologyBuild 后端
+# OpenOntology 后端
 
 后端使用 FastAPI、SQLAlchemy、Alembic、Celery-free 任务链（APScheduler +
 NATS JetStream → nats_executor）和 Redis 缓存，要求 Python 3.12。应用入口
@@ -47,7 +47,7 @@ uv run pytest -q --disable-warnings --ignore tests/v2/perf
 uv run pytest -q --disable-warnings tests/v2/perf
 
 # 仅用于隔离迁移 fixture；真实非测试启动只支持 PostgreSQL。
-DB_FILE="$(mktemp -u /tmp/ontologybuild-XXXXXX.db)"
+DB_FILE="$(mktemp -u /tmp/openontology-XXXXXX.db)"
 ENVIRONMENT=test DATABASE_URL="sqlite:///${DB_FILE}" \
   uv run alembic upgrade head
 ENVIRONMENT=test uv run alembic heads

@@ -69,7 +69,7 @@
               'docker compose config | grep -E "POSTGRES_USER|POSTGRES_PASSWORD|POSTGRES_DB"',
           },
           {
-            text: "只能登录但不知道原密码时，建议创建一个仅供 OntologyBuild 使用的新账号，不要直接修改生产账号密码。",
+            text: "只能登录但不知道原密码时，建议创建一个仅供 OpenOntology 使用的新账号，不要直接修改生产账号密码。",
           },
         ],
         macOS: [
@@ -237,7 +237,7 @@
     browser: {
       title: "用独立资料目录启动 Chromium CDP",
       intro:
-        "CDP 是浏览器远程控制接口。请关闭占用同一资料目录的浏览器，并为 OntologyBuild 使用独立目录。",
+        "CDP 是浏览器远程控制接口。请关闭占用同一资料目录的浏览器，并为 OpenOntology 使用独立目录。",
       warning: "CDP 端口必须只监听本机或可信网络。不要把 9222 端口直接开放到公网。",
       platforms: {
         Windows: [
@@ -272,7 +272,7 @@
     n8n: {
       title: "在 n8n 中创建 API Key",
       intro:
-        "API Key 不是登录密码。请登录 n8n 管理页面，在设置中创建一个供 OntologyBuild 使用的 API Key。",
+        "API Key 不是登录密码。请登录 n8n 管理页面，在设置中创建一个供 OpenOntology 使用的 API Key。",
       warning: "API Key 可以读取或修改工作流。只保存在本机配置中，泄露后请立即在 n8n 中撤销。",
       platforms: {
         Windows: [

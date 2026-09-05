@@ -252,7 +252,7 @@ def _default_ts_test_input() -> dict:
 # 直接嵌入 JSON 文本会把 true/false/null 带进 Python 表达式导致 NameError。
 _DEBUG_EPILOGUE_TEMPLATE = '''
 
-# ── OntologyBuild 世界模型调试执行（自动注入，请勿删除） ──
+# ── OpenOntology 世界模型调试执行（自动注入，请勿删除） ──
 import json as _ob_json
 if "simulate" not in globals():
     raise NameError("脚本未定义入口函数 simulate(context, actions, horizon)")

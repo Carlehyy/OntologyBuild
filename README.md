@@ -1,6 +1,6 @@
-# OntologyBuild
+# OpenOntology
 
-OntologyBuild 是一个“本体即服务（Ontology-as-a-Service）”平台：把企业数据
+OpenOntology 是一个“本体即服务（Ontology-as-a-Service）”平台：把企业数据
 接入、清洗并映射为对象、关系、动作与规则，再由 Sentinel Engine 监听状态
 变化、评估条件并执行受治理的动作。
 
@@ -23,8 +23,8 @@ OntologyBuild 是一个“本体即服务（Ontology-as-a-Service）”平台：
 ### 完整本地栈（推荐）
 
 ```bash
-git clone --branch nano-ontoprompt https://github.com/Carlehyy/OntologyBuild.git
-cd OntologyBuild
+git clone --branch nano-ontoprompt https://github.com/Carlehyy/OpenOntology.git
+cd OpenOntology
 cp .env.example .env
 # 填写并验证外部 n8n 地址与凭据后再启动
 docker compose -f docker-compose.local.yml up --build
@@ -123,7 +123,7 @@ RegisteredEvent → Formal/Sentinel 自动接线。状态门与发布契约的�
 ### 仓库结构
 
 ```text
-OntologyBuild/
+OpenOntology/
 ├── backend/                 FastAPI、领域模块、Alembic 和后端测试
 ├── frontend/                React 应用、纯逻辑单元测试与 Playwright 旅程
 ├── config/                  独立的本地配置中心
