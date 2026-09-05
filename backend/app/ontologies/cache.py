@@ -12,6 +12,7 @@ ob:lake:*、流水线 ob:pl:* 等）。失效策略：Web 进程内的写操作�
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Callable, Optional
 
 from app.config import settings
@@ -21,10 +22,14 @@ _DETAIL_VERSION_KEY = "ob:ont:detail:ver"
 _OVERVIEW_VERSION_KEY = "ob:ont:overview:ver"
 _PENDING_VERSION_KEY = "ob:ont:pending:ver"
 _INSTANCE_COUNTS_VERSION_KEY = "ob:ont:instance-counts:ver"
+_VERSION_TREE_VERSION_KEY = "ob:ont:vtree:ver"
 
 # 实例计数缓存 TTL：外部灌数/executor 进程无法事件失效，短 TTL 兜底；
 # 手动"刷新本体清单"可带 fresh 参数绕过缓存强制直查。
 INSTANCE_COUNTS_TTL_SECONDS = 60
+
+# 版本树响应回填上限：超限（如海量历史版本）放弃缓存只走直查。
+VERSION_TREE_MAX_BYTES = 1_000_000
 
 
 def _enabled() -> bool:
@@ -68,6 +73,38 @@ def instance_counts_cache_key(ontology_id: str, release_id: Optional[str]) -> st
     return f"ob:ont:instance-counts:v{_version(_INSTANCE_COUNTS_VERSION_KEY)}:{ontology_id}:{scope}"
 
 
+def _vtree_enabled() -> bool:
+    return bool(settings.ontology_version_tree_cache_enabled)
+
+
+def _vtree_version() -> str:
+    if not _vtree_enabled():
+        return "0"
+    return redis_cache.cache_version(_VERSION_TREE_VERSION_KEY)
+
+
+def version_tree_cache_key(ontology_id: str) -> str:
+    """本体版本树（版本行 + 当前发布指针 + 最近试跑状态）。"""
+    return f"ob:ont:vtree:v{_vtree_version()}:{ontology_id}"
+
+
+def vtree_cached_call(key: str, ttl_seconds: int, builder: Callable[[], Any]) -> Any:
+    """版本树 cache-aside：开关关闭时完全绕过；回填前校验字节上限。"""
+    if not _vtree_enabled():
+        return builder()
+    cached = redis_cache.cache_get(key)
+    if cached is not None:
+        return cached
+    value = builder()
+    try:
+        payload = json.dumps(value, ensure_ascii=False, default=str)
+        if len(payload.encode("utf-8")) <= VERSION_TREE_MAX_BYTES:
+            redis_cache.cache_set(key, value, ttl_seconds)
+    except Exception:  # noqa: BLE001 - 序列化/回填失败不影响返回值
+        pass
+    return value
+
+
 def cached_call(key: str, ttl_seconds: int, builder: Callable[[], Any]) -> Any:
     """开关关闭时完全绕过缓存，等价于现状直查路径。"""
     if not _enabled():
@@ -89,3 +126,7 @@ def invalidate_pending() -> None:
 
 def invalidate_instance_counts() -> None:
     redis_cache.cache_bump(_INSTANCE_COUNTS_VERSION_KEY)
+
+
+def invalidate_version_tree() -> None:
+    redis_cache.cache_bump(_VERSION_TREE_VERSION_KEY)

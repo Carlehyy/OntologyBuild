@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # bump 版本键；后台进程侧无写入，短 TTL 仅作键空间回收兜底。
     world_model_cache_enabled: bool = True
     world_model_cache_ttl_seconds: int = Field(default=30, ge=1, le=300)
+    # 本体版本树读接口缓存（fail-open 加速层，可整体关闭；键落 db 1）。
+    # 版本行增删与发布/回滚指针变更在写路径 bump 版本键换键；试跑状态
+    # 可能由后台推进，无法事件失效，由短 TTL 兜底（与 pending 同语义）。
+    ontology_version_tree_cache_enabled: bool = True
+    ontology_version_tree_cache_ttl_seconds: int = Field(default=15, ge=1, le=60)
     # 数据资产湖读缓存（fail-open 加速层，可整体关闭；键落 db 1）。
     # 版本级数据键携带 version id 自然换键；总览用短 TTL + 写路径 bump 失效。
     dataset_cache_enabled: bool = True

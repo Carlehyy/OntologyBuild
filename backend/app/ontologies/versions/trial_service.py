@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.ontologies import cache as ontology_cache
 from app.ontologies.projects.models import OntologyProject
 from app.ontologies.versions.snapshot_contract import (
     complete_snapshot,
@@ -564,6 +565,8 @@ def create_trial_run(
         db.flush()
         candidate = _trial_materialization_candidate(run)
         db.commit()
+        # 版本树展示最近试跑状态：发起试跑立即换键（fail-open）。
+        ontology_cache.invalidate_version_tree()
     except IntegrityError:
         db.rollback()
         competing = _active_trial_run(db, ontology_id, version_id)

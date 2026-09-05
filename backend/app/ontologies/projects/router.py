@@ -170,6 +170,7 @@ def create_ontology(body: OntologyCreate, db: Session = Depends(get_db), current
     )
     db.commit(); db.refresh(project)
     network_cache.invalidate_network()
+    ontology_cache.invalidate_version_tree()
     return {"data": _project_payload(project, OntologyOut, root)}
 
 
@@ -184,6 +185,7 @@ def import_ontology_structure(
         raise HTTPException(403, "Viewer role is read-only")
     result = import_structure_package(db, body, current_user=current_user)
     network_cache.invalidate_network()
+    ontology_cache.invalidate_version_tree()
     return {"data": result}
 
 @router.get("/{ontology_id}")
@@ -315,6 +317,7 @@ def delete_ontology(ontology_id: str, db: Session = Depends(get_db), current_use
                 ontology_cache.invalidate_instance_counts()
                 ontology_cache.invalidate_pending()
                 network_cache.invalidate_network()
+                ontology_cache.invalidate_version_tree()
                 return None
             mark_failed(
                 db,
@@ -335,3 +338,4 @@ def delete_ontology(ontology_id: str, db: Session = Depends(get_db), current_use
             ontology_cache.invalidate_instance_counts()
             ontology_cache.invalidate_pending()
             network_cache.invalidate_network()
+            ontology_cache.invalidate_version_tree()

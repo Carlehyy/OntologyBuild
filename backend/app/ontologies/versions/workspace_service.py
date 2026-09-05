@@ -8,9 +8,12 @@ import uuid
 from typing import Any
 
 from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
+from app.config import settings
+from app.ontologies import cache as ontology_cache
 from app.ontologies.inference.models import AuditLog
 from app.ontologies.projects.models import OntologyProject
 from app.ontologies.versions import release_service
@@ -495,27 +498,37 @@ def get_version_tree(
     db: Session,
     ontology_id: str,
 ):
-    project = db.query(OntologyProject).filter(
-        OntologyProject.id == ontology_id).first()
-    if project is None:
-        raise HTTPException(404, "Ontology not found")
-    current = _current_release(db, project)
-    versions = db.query(OntologyVersion).filter(
-        OntologyVersion.ontology_id == ontology_id,
-    ).order_by(OntologyVersion.created_at.asc()).all()
-    latest_trials: dict[str, OntologyTrialRun] = {}
-    for run in db.query(OntologyTrialRun).filter(
-            OntologyTrialRun.ontology_id == ontology_id,
-    ).order_by(desc(OntologyTrialRun.created_at)).all():
-        latest_trials.setdefault(run.version_id, run)
-    db.commit()
-    return {"data": {
-        "current_release_id": current.id,
-        "current_release_number": current.version_number,
-        "current_release_version": current.version_number,
-        "versions": [_version_payload(item, latest_trials.get(item.id))
-                     for item in versions],
-    }}
+    def build():
+        project = db.query(OntologyProject).filter(
+            OntologyProject.id == ontology_id).first()
+        if project is None:
+            raise HTTPException(404, "Ontology not found")
+        current = _current_release(db, project)
+        versions = db.query(OntologyVersion).filter(
+            OntologyVersion.ontology_id == ontology_id,
+        ).order_by(OntologyVersion.created_at.asc()).all()
+        latest_trials: dict[str, OntologyTrialRun] = {}
+        for run in db.query(OntologyTrialRun).filter(
+                OntologyTrialRun.ontology_id == ontology_id,
+        ).order_by(desc(OntologyTrialRun.created_at)).all():
+            latest_trials.setdefault(run.version_id, run)
+        db.commit()
+        return {"data": {
+            "current_release_id": current.id,
+            "current_release_number": current.version_number,
+            "current_release_version": current.version_number,
+            "versions": [_version_payload(item, latest_trials.get(item.id))
+                         for item in versions],
+        }}
+
+    # 详情页版本树高频入口：短 TTL 响应缓存 + 版本行写路径 bump 换键
+    # （fail-open）。jsonable_encoder 归一，缓存命中与直查逐字节一致；
+    # 试跑状态可能由后台推进，由短 TTL 兜底（与 pending 同语义）。
+    return ontology_cache.vtree_cached_call(
+        ontology_cache.version_tree_cache_key(ontology_id),
+        settings.ontology_version_tree_cache_ttl_seconds,
+        lambda: jsonable_encoder(build()),
+    )
 
 
 def create_draft_version(
@@ -615,6 +628,7 @@ def create_draft_version(
     )
     db.add(draft)
     db.commit()
+    ontology_cache.invalidate_version_tree()
     return {"data": _version_payload(draft)}
 
 
@@ -703,6 +717,7 @@ def delete_draft_version(
         meta={"lifecycleStatus": version.lifecycle_status},
     ))
     db.commit()
+    ontology_cache.invalidate_version_tree()
     return {"data": {"id": version_id, "version_number": number}}
 
 
@@ -780,6 +795,7 @@ def save_canvas_layout(
     merged.update(updates)
     version.canvas_layout = merged
     db.commit()
+    ontology_cache.invalidate_version_tree()
     return {"data": {
         "versionId": version.id,
         "positions": merged,
@@ -864,6 +880,7 @@ def save_draft_workspace(
         },
     ))
     db.commit()
+    ontology_cache.invalidate_version_tree()
     return {"data": {
         "revision": f"{draft.revision}:{draft.snapshot_hash}",
         "snapshotHash": draft.snapshot_hash,
@@ -955,6 +972,7 @@ def save_draft_mappings(
         },
     ))
     db.commit()
+    ontology_cache.invalidate_version_tree()
     return {"data": {
         "revision": f"{draft.revision}:{draft.snapshot_hash}",
         "snapshotHash": draft.snapshot_hash,

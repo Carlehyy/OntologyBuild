@@ -9,6 +9,7 @@ import uuid
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.ontologies import cache as ontology_cache
 from app.ontologies.actions.models import Action
 from app.ontologies.entities.models import Entity
 from app.ontologies.formal_modeling.models import (
@@ -171,8 +172,11 @@ def rollback_version(
     approvals keep the release ids under which they were originally produced.
     """
     with _ontology_build_lock(db, ontology_id):
-        return _rollback_version_locked(
+        result = _rollback_version_locked(
             ontology_id, version_id, db, current_user)
+    # 回滚生成新激活版本并移动发布指针：版本树整体换键（fail-open）。
+    ontology_cache.invalidate_version_tree()
+    return result
 
 
 def _rollback_version_locked(

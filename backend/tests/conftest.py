@@ -19,6 +19,9 @@ os.environ["ONTOLOGY_NETWORK_CACHE_ENABLED"] = "false"
 # 世界模型缓存同理：默认关闭，缓存语义由 test_world_model_cache.py
 # 用假客户端按需开启验证。
 os.environ["WORLD_MODEL_CACHE_ENABLED"] = "false"
+# 本体版本树缓存同理：默认关闭，缓存语义由 test_version_tree_cache.py
+# 用假客户端按需开启验证。
+os.environ["ONTOLOGY_VERSION_TREE_CACHE_ENABLED"] = "false"
 # 版本事件 drain 默认内联执行（历史语义）；异步派发路径由
 # test_version_automation_events.py 用 patch 单独验证。
 os.environ["DATASET_EVENT_DISPATCH_MODE"] = "sync"
