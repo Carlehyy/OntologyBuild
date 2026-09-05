@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import JSON, String, Boolean, DateTime, Text, UniqueConstraint
+from sqlalchemy import JSON, String, Boolean, DateTime, Integer, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
@@ -13,6 +13,10 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String, nullable=False)
     role: Mapped[str] = mapped_column(String(20), default="viewer")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 会话吊销代数：JWT 的 ver claim 与此值不一致即失效。改密（自助或管理
+    # 员重置）时 +1，使全部已签发 token 立即作废。默认 0，且校验侧对缺失
+    # ver claim 的存量 token 按 0 处理，升级不强制全员重新登录。
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # 隐私变量上报 token（用户级，Fernet 密文）。为空表示该用户尚未启用
     # 隐私变量上报；创建首个隐私变量或显式重置时生成。nullable 以兼容存量用户。
     report_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)

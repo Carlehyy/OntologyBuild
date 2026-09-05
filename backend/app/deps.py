@@ -30,6 +30,10 @@ def get_current_user(
         user = get_user_by_id(db, payload["sub"])
         if not user or not user.is_active:
             raise HTTPException(status_code=401, detail="Invalid credentials")
+        # 会话吊销：token 代数落后于用户当前代数（改密/管理员重置过）即失效。
+        # 存量 token 无 ver claim 按 0 处理，与列默认一致，升级不强制重登。
+        if int(payload.get("ver", 0)) != user.token_version:
+            raise HTTPException(status_code=401, detail="Token revoked")
         return user
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")

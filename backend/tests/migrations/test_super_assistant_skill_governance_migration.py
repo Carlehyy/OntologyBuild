@@ -32,10 +32,9 @@ def test_revision_graph_head_is_single_head(tmp_path, monkeypatch):
     heads = ScriptDirectory.from_config(cfg).get_heads()
 
     # 单头门禁：新迁移必须线性追加（当前 head 见 alembic heads 输出）。
-    # 0091 删除 event_ingest_keys.secret_plain 明文列（密钥明文仅创建时
-    # 一次性返回）为当前 head。
+    # 0092 users.token_version 会话吊销代数为当前 head。
     assert len(heads) == 1
-    assert heads == ["0091_drop_ingest_key_plaintext"]
+    assert heads == ["0092_user_token_version"]
 
 
 def _create_0067_shape_skills_table(db_path: Path) -> None:

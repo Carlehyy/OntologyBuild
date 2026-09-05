@@ -336,3 +336,29 @@ def test_non_admin_cannot_manage_users(client, admin_user, auth_headers):
         f"/api/v1/users/{admin_user.id}",
         headers=editor_headers,
     ).status_code == 403
+
+
+def test_admin_password_reset_revokes_target_tokens(client, admin_user, auth_headers):
+    # 管理员重置密码同样触发 token_version 吊销；仅改资料不吊销
+    user = _create_editor(client, auth_headers)
+    editor_headers = _login(client, "team_editor", "editor123")
+    assert client.get("/api/v1/auth/profile", headers=editor_headers).status_code == 200
+
+    # 仅改邮箱：会话保持
+    renamed = client.put(
+        f"/api/v1/users/{user['id']}",
+        json={"email": "team_editor2@example.com"},
+        headers=auth_headers,
+    )
+    assert renamed.status_code == 200
+    assert client.get("/api/v1/auth/profile", headers=editor_headers).status_code == 200
+
+    # 重置密码：旧会话立即失效，新口令可登录
+    reset = client.put(
+        f"/api/v1/users/{user['id']}",
+        json={"password": "resetPass456"},
+        headers=auth_headers,
+    )
+    assert reset.status_code == 200
+    assert client.get("/api/v1/auth/profile", headers=editor_headers).status_code == 401
+    assert _login(client, "team_editor", "resetPass456")

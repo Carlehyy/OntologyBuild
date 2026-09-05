@@ -122,6 +122,8 @@ def update_user(
     password = changes.pop("password", None)
     if password:
         user.password_hash = hash_password(password)
+        # 管理员重置密码同样吊销该用户全部已签发 token
+        user.token_version = (user.token_version or 0) + 1
     for key, value in changes.items():
         setattr(user, key, value)
     db.commit(); db.refresh(user)
