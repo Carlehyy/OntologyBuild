@@ -971,3 +971,48 @@ test('输入草稿按会话缓存：切换会话不丢内容，发送后清空',
   await page.locator('[data-workbench-conversation="c-today"] button').first().click()
   await expect(textbox).toHaveValue('')
 })
+
+test('记忆宫殿：弹窗全屏切换与图谱缩放控制', async ({ page }) => {
+  await seedAuth(page)
+  await mockApis(page)
+  await page.goto('/#/super-assistant')
+
+  await page.getByRole('button', { name: '记忆宫殿' }).click()
+  const dialog = page.getByRole('dialog')
+  const filesPane = dialog.getByTestId('super-assistant-palace-files')
+  const contentPane = dialog.locator('section[aria-label="文档内容"]')
+  const graphSection = dialog.getByTestId('super-assistant-palace-graph')
+
+  // 选中一个文档作为联动基线
+  await filesPane.locator('[data-palace-file="pf-1"]').click()
+  await expect(dialog.getByTestId('palace-file-preview')).toBeVisible()
+
+  // 缩放控制簇：放大/缩小/复位可用
+  const zoomIn = graphSection.getByTestId('palace-zoom-in')
+  const zoomOut = graphSection.getByTestId('palace-zoom-out')
+  const zoomReset = graphSection.getByTestId('palace-zoom-reset')
+  await zoomIn.click()
+  await zoomIn.click()
+  await zoomOut.click()
+  await zoomReset.click()
+
+  // 全屏切换：aria-pressed 翻转，三栏与选中态在两种形态下都保持
+  const fullscreen = dialog.getByTestId('palace-fullscreen')
+  await fullscreen.click()
+  await expect(fullscreen).toHaveAttribute('aria-pressed', 'true')
+  await expect(filesPane.getByTestId('palace-file-tree')).toBeVisible()
+  await expect(graphSection.locator('canvas').first()).toBeVisible()
+  await expect(contentPane.getByText('个人知识库.md').first()).toBeVisible()
+
+  // 全屏下退出：状态复位
+  await fullscreen.click()
+  await expect(fullscreen).toHaveAttribute('aria-pressed', 'false')
+  await expect(contentPane.getByText('个人知识库.md').first()).toBeVisible()
+
+  // 图谱视图保持：放大后刷新（同一数据签名）不重置用户视角 —— 通过
+  // 缩放按钮放大后触发刷新按钮，画布不报错且聚焦 chip 仍在
+  await zoomIn.click()
+  await graphSection.getByRole('button', { name: '刷新知识图谱' }).click()
+  await expect(graphSection.locator('canvas').first()).toBeVisible()
+  await expect(graphSection.getByText(/3 实体 \/ 2 关系/)).toBeVisible()
+})
