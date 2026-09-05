@@ -587,17 +587,17 @@ export default function AgentWorkbenchPage() {
       >
         {/* 左卡：本体结构 / 数据推演图谱 */}
         <section data-testid="agent-ontology-panel" className={`${panelClass} col-start-1 row-start-1 flex flex-col`}>
-          <div className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-white px-4">
+          <div className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-card px-4">
             <div className="flex w-full min-w-0 items-center justify-between gap-3">
               <div className="flex min-w-0 flex-1 items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sky-50 text-sky-600">
+                <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--color-info-bg)] text-[var(--color-info)]">
                   {workspaceView === 'trace' ? <Workflow size={16} /> : workspaceView === 'decision' ? <Scale size={16} /> : <Network size={16} />}
                 </div>
                 <div className="min-w-0">
                   <h3 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
                     {workspaceView === 'ontology' ? '本体拓扑图' : workspaceView === 'data' ? '数据推演图谱' : workspaceView === 'decision' ? '决策推演' : 'Agent调用链'}
                   </h3>
-                  <p className={`truncate text-[11px] ${workspaceView === 'ontology' && syncStatus === 'error' ? 'text-red-500' : 'text-[var(--color-text-tertiary)]'}`}>
+                  <p className={`truncate text-[11px] ${workspaceView === 'ontology' && syncStatus === 'error' ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-tertiary)]'}`}>
                     {workspaceView === 'ontology' && syncStatus === 'error'
                       ? (syncError || '网络图加载失败。')
                       : workspaceView === 'ontology'
@@ -615,7 +615,7 @@ export default function AgentWorkbenchPage() {
                   value={oid}
                   onChange={e => selectOntology(e.target.value)}
                   aria-label="选择本体"
-                  className="h-8 min-w-[180px] cursor-pointer appearance-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] bg-no-repeat pl-3 pr-8 text-xs text-[var(--color-text-primary)] outline-none transition-colors focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
+                  className="h-8 min-w-[180px] cursor-pointer appearance-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] bg-no-repeat pl-3 pr-8 text-xs text-[var(--color-text-primary)] outline-none transition-colors focus:border-brand focus:ring-2 focus:ring-ring"
                   style={{ backgroundImage: selectArrow, backgroundPosition: 'right 10px center' }}
                 >
                   {releasedOntologyList.length === 0 && <option value="">无已发布本体</option>}
@@ -626,7 +626,7 @@ export default function AgentWorkbenchPage() {
                     </option>
                   ))}
                 </select>
-                <div className="flex items-center rounded-md border border-slate-200 bg-slate-50 p-0.5" aria-label="切换工作台视图">
+                <div className="flex items-center rounded-md border border-border bg-muted p-0.5" aria-label="切换工作台视图">
                   {([
                     { id: 'ontology', label: '本体拓扑图', icon: Network },
                     { id: 'data', label: '数据推演图谱', icon: ArrowLeftRight },
@@ -643,7 +643,7 @@ export default function AgentWorkbenchPage() {
                       aria-pressed={workspaceView === item.id}
                       data-testid={item.id === 'data' ? 'workspace-view-toggle' : `workspace-view-${item.id}`}
                       className={`flex h-7 w-8 items-center justify-center rounded transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${workspaceView === item.id
-                        ? 'bg-white text-teal-700 shadow-sm' : 'text-slate-400 hover:bg-white/70 hover:text-slate-700'}`}
+                        ? 'bg-card text-brand-ink shadow-sm' : 'text-[var(--color-text-tertiary)] hover:bg-card hover:text-foreground'}`}
                     >
                       <item.icon size={13} />
                     </button>
@@ -656,8 +656,8 @@ export default function AgentWorkbenchPage() {
           <div className="workspace-topology-surface relative min-h-0 flex-1 overflow-hidden">
             {workspaceView === 'decision' ? (
               <Suspense fallback={(
-                <div className="flex h-full items-center justify-center gap-2 bg-slate-50 text-xs text-slate-500">
-                  <Loader2 size={14} className="animate-spin text-teal-600" />正在加载决策推演工作台…
+                <div className="flex h-full items-center justify-center gap-2 bg-muted text-xs text-muted-foreground">
+                  <Loader2 size={14} className="animate-spin text-brand-ink" />正在加载决策推演工作台…
                 </div>
               )}>
                 <DecisionSimulationView
@@ -677,8 +677,8 @@ export default function AgentWorkbenchPage() {
               />
             ) : workspaceView === 'data' ? (
               <Suspense fallback={(
-                <div className="flex h-full items-center justify-center gap-2 bg-slate-50 text-xs text-slate-500">
-                  <Loader2 size={14} className="animate-spin text-teal-600" />正在加载数据图谱工作台…
+                <div className="flex h-full items-center justify-center gap-2 bg-muted text-xs text-muted-foreground">
+                  <Loader2 size={14} className="animate-spin text-brand-ink" />正在加载数据图谱工作台…
                 </div>
               )}>
                 <InstanceKnowledgeGraph
@@ -689,15 +689,15 @@ export default function AgentWorkbenchPage() {
                 />
               </Suspense>
             ) : graphLoading ? (
-              <div className="flex h-full flex-col items-center justify-center gap-3 bg-slate-50 text-slate-500">
-                <Loader2 size={22} className="animate-spin text-sky-500" />
+              <div className="flex h-full flex-col items-center justify-center gap-3 bg-muted text-muted-foreground">
+                <Loader2 size={22} className="animate-spin text-[var(--color-info)]" />
                 <span className="text-xs">正在加载本体网络…</span>
               </div>
             ) : graphError ? (
               <div className="flex h-full items-center justify-center p-6">
-                <div className="max-w-sm rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
+                <div className="max-w-sm rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-4 py-3 text-sm text-[var(--color-danger)]">
                   <div className="mb-1 flex items-center gap-2 font-medium"><AlertTriangle size={15} />图谱加载失败</div>
-                  <p className="text-xs leading-relaxed text-red-500/80">{syncError || '请稍后刷新模型结构。'}</p>
+                  <p className="text-xs leading-relaxed text-[var(--color-danger)]">{syncError || '请稍后刷新模型结构。'}</p>
                 </div>
               </div>
             ) : !oid ? (
@@ -723,10 +723,10 @@ export default function AgentWorkbenchPage() {
 
         {/* 右卡：智能对话 */}
         <section data-testid="agent-chat-panel" className={`${panelClass} col-start-3 row-start-1 flex flex-col`}>
-          <div className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-white px-4">
+          <div className="flex h-14 shrink-0 items-center border-b border-[var(--color-border)] bg-card px-4">
             <div className="flex w-full min-w-0 items-center justify-between gap-2">
               <div className="flex min-w-0 flex-1 items-center gap-2">
-                <div className="flex shrink-0 h-8 w-8 items-center justify-center rounded-md bg-teal-50 text-teal-600">
+                <div className="flex shrink-0 h-8 w-8 items-center justify-center rounded-md bg-brand-soft text-brand-ink">
                   <Bot size={18} />
                 </div>
                 <div className="min-w-0">
@@ -734,7 +734,7 @@ export default function AgentWorkbenchPage() {
                   <p className="truncate text-[11px] text-[var(--color-text-tertiary)]">基于授权范围回答，并可生成行动提案</p>
                 </div>
                 {caps && !caps.enabled && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-600">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-danger-bg)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-danger)]">
                     <AlertTriangle size={11} />智能体已停用
                   </span>
                 )}
@@ -745,7 +745,7 @@ export default function AgentWorkbenchPage() {
                   onChange={e => setModelId(e.target.value)}
                   aria-label="选择对话模型"
                   disabled={!oid}
-                  className="h-8 w-44 cursor-pointer appearance-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] bg-no-repeat pl-2 pr-7 text-xs text-[var(--color-text-primary)] outline-none transition-colors focus:border-teal-400 focus:ring-2 focus:ring-teal-100 disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="h-8 w-44 cursor-pointer appearance-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-base)] bg-no-repeat pl-2 pr-7 text-xs text-[var(--color-text-primary)] outline-none transition-colors focus:border-brand focus:ring-2 focus:ring-ring disabled:opacity-30 disabled:cursor-not-allowed"
                   style={{ backgroundImage: selectArrow, backgroundPosition: 'right 6px center', backgroundSize: '10px' }}
                 >
                   {llmModels.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
@@ -756,16 +756,16 @@ export default function AgentWorkbenchPage() {
                   disabled={!oid || !releaseId}
                   aria-label="管理动态哨兵"
                   data-testid="dynamic-sentinel-button"
-                  className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-teal-200 bg-teal-50 text-teal-600 transition-colors hover:border-teal-300 hover:bg-teal-100 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-30"
+                  className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-brand-line bg-brand-soft text-brand-ink transition-colors hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-30"
                 >
                   <BellRing size={14} />
-                  <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">动态哨兵</span>
+                  <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-accent px-2 py-0.5 text-[11px] text-[var(--color-text-inverse)] opacity-0 transition-opacity group-hover/tip:opacity-100">动态哨兵</span>
                 </button>
                 {isAdmin && (
                   <button onClick={() => setDrawerOpen(true)} disabled={!oid} aria-label="授权边界配置"
-                    className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-teal-200 bg-teal-50 text-teal-500 transition-colors hover:border-teal-300 hover:bg-teal-100 hover:text-teal-700 disabled:opacity-30 disabled:cursor-not-allowed">
+                    className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-brand-line bg-brand-soft text-brand-ink transition-colors hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink disabled:opacity-30 disabled:cursor-not-allowed">
                     <Shield size={14} />
-                    <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">授权边界配置</span>
+                    <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-accent px-2 py-0.5 text-[11px] text-[var(--color-text-inverse)] opacity-0 transition-opacity group-hover/tip:opacity-100">授权边界配置</span>
                   </button>
                 )}
                 <button
@@ -775,11 +775,11 @@ export default function AgentWorkbenchPage() {
                     : '/agent/reports')}
                   disabled={!oid}
                   aria-label={oid ? '生成分析报告' : '分析报告'}
-                  className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-sky-200 bg-sky-50 text-sky-600 transition-colors hover:border-sky-300 hover:bg-sky-100 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-30"
+                  className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] text-[var(--color-info)] transition-colors hover:border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] hover:bg-[var(--color-info-bg)] hover:text-[var(--color-info)] disabled:cursor-not-allowed disabled:opacity-30"
                   title={oid ? '基于当前本体和会话生成可编辑分析报告模板' : '打开分析报告工作台'}
                 >
                   <FileText size={14} />
-                  <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">{oid ? '生成分析报告' : '分析报告'}</span>
+                  <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-accent px-2 py-0.5 text-[11px] text-[var(--color-text-inverse)] opacity-0 transition-opacity group-hover/tip:opacity-100">{oid ? '生成分析报告' : '分析报告'}</span>
                 </button>
                 <div className="relative">
                   <button
@@ -789,12 +789,12 @@ export default function AgentWorkbenchPage() {
                     aria-label="查看历史会话"
                     aria-expanded={showHistory}
                     data-testid="agent-session-history-button"
-                    className={`group/tip relative flex h-8 w-8 items-center justify-center rounded-md border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showHistory
-                      ? 'border-teal-400 bg-teal-100 text-teal-800'
-                      : 'border-teal-200 bg-teal-50 text-teal-600 hover:border-teal-300 hover:bg-teal-100 hover:text-teal-700'}`}
+                    className={`group/tip relative flex h-8 w-8 items-center justify-center rounded-md border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${showHistory
+                      ? 'border-brand bg-brand-mist text-brand-ink'
+                      : 'border-brand-line bg-brand-soft text-brand-ink hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink'}`}
                   >
                     <History size={14} />
-                    <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">查看历史会话</span>
+                    <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-accent px-2 py-0.5 text-[11px] text-[var(--color-text-inverse)] opacity-0 transition-opacity group-hover/tip:opacity-100">查看历史会话</span>
                   </button>
                   <SessionHistoryPopover
                     open={showHistory}
@@ -826,14 +826,14 @@ export default function AgentWorkbenchPage() {
                       void resumeBackgroundRun(entry)
                     }}
                     data-testid="agent-resume-banner"
-                    className="mx-auto mb-5 flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700 transition-colors hover:border-sky-300 hover:bg-sky-100"
+                    className="mx-auto mb-5 flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] px-3 py-2 text-xs text-[var(--color-info)] transition-colors hover:border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] hover:bg-[var(--color-info-bg)]"
                   >
                     <Loader2 size={13} className="animate-spin" />
                     <span className="max-w-[260px] truncate">「{backgroundRun.question}」仍在后台处理</span>
                     <span className="shrink-0 font-medium">点击查看会话</span>
                   </button>
                 )}
-                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-teal-600 text-white shadow-sm">
+                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-brand text-[var(--color-text-inverse)] shadow-sm">
                   <Sparkles size={22} />
                 </div>
                 <h3 className="mb-1 text-base font-semibold text-[var(--color-text-primary)]">
@@ -850,9 +850,9 @@ export default function AgentWorkbenchPage() {
                     { icon: FileSearch, title: '全程可溯', desc: '每步工具调用可展开，查看输入与输出' },
                     { icon: PenLine, title: '行动预演', desc: '真实修改前先预演提案与影响' },
                   ].map(f => (
-                    <div key={f.title} className="rounded-md border border-[var(--color-border)] bg-white/70 p-3">
+                    <div key={f.title} className="rounded-md border border-[var(--color-border)] bg-card p-3">
                       <div className="mb-1.5 flex items-center gap-2 text-xs font-semibold text-[var(--color-text-primary)]">
-                        <f.icon size={14} className="text-teal-600 shrink-0" />{f.title}
+                        <f.icon size={14} className="text-brand-ink shrink-0" />{f.title}
                       </div>
                       <p className="text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">{f.desc}</p>
                     </div>
@@ -862,7 +862,7 @@ export default function AgentWorkbenchPage() {
                 <div className="flex flex-wrap justify-center gap-2">
                   {suggested.map(q => (
                     <button key={q} onClick={() => send(q)}
-                      className="rounded-full border border-[var(--color-border)] bg-white px-3 py-1.5 text-xs text-[var(--color-text-secondary)] transition-all hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700">
+                      className="rounded-full border border-[var(--color-border)] bg-card px-3 py-1.5 text-xs text-[var(--color-text-secondary)] transition-all hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink">
                       {q}
                     </button>
                   ))}
@@ -872,29 +872,29 @@ export default function AgentWorkbenchPage() {
               <div className="space-y-5">
                 {messages.map(msg => msg.role === 'user' ? (
                   <div key={msg.id} id={`agent-msg-${msg.id}`} className="flex scroll-mt-4 justify-end gap-3">
-                    <div className="max-w-[88%] rounded-lg rounded-br-sm bg-teal-700 px-3.5 py-2.5 text-white shadow-sm">
+                    <div className="max-w-[88%] rounded-lg rounded-br-sm bg-brand-deep px-3.5 py-2.5 text-[var(--color-text-inverse)] shadow-sm">
                       <p className="whitespace-pre-line text-sm leading-relaxed">{msg.content}</p>
                     </div>
-                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-teal-200 bg-teal-50 text-teal-700 shadow-sm">
+                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-brand-line bg-brand-soft text-brand-ink shadow-sm">
                       <User size={14} />
                     </div>
                   </div>
                 ) : (
                   <div key={msg.id} className="flex gap-3">
-                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-teal-600 text-white shadow-sm">
+                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand text-[var(--color-text-inverse)] shadow-sm">
                       <Bot size={14} />
                     </div>
                     <div className="min-w-0 flex-1">
                       <StepTrace steps={msg.steps} running={msg.loading} />
                       {msg.loading && msg.resumed && (
                         <p className="mt-1 flex items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]" data-testid="agent-resume-pending">
-                          <Loader2 size={11} className="animate-spin text-sky-600" />
+                          <Loader2 size={11} className="animate-spin text-[var(--color-info)]" />
                           您离开页面期间，这条消息仍在后台处理，完成后自动展示结果。
                         </p>
                       )}
                       {msg.error ? (
-                        <div className="rounded-lg border border-red-200 bg-red-50/70 px-4 py-3">
-                          <p className="flex items-start gap-2 text-sm text-red-600">
+                        <div className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-4 py-3">
+                          <p className="flex items-start gap-2 text-sm text-[var(--color-danger)]">
                             <AlertTriangle size={14} className="mt-0.5 shrink-0" />{msg.error}
                           </p>
                         </div>
@@ -918,7 +918,7 @@ export default function AgentWorkbenchPage() {
                               title={c.snippet
                                 ? `${c.sourceLabel || `${c.objectType} · ${c.label}`} — ${c.snippet}`
                                 : (c.sourceLabel || c.instanceId)}
-                              className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-white px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:border-cyan-300 hover:bg-cyan-50">
+                              className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-card px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:border-viz-cyan-soft hover:bg-viz-cyan-soft">
                               <span className="text-[var(--color-text-tertiary)]">{c.objectType}</span>
                               <span className="font-medium text-[var(--color-text-primary)]">{c.label}</span>
                             </button>
@@ -935,7 +935,7 @@ export default function AgentWorkbenchPage() {
                               aria-label="高亮引用节点"
                               title="在数据推演图谱中高亮本条回答引用的节点"
                               data-testid="citation-highlight-button"
-                              className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--color-border)] bg-white text-[var(--color-text-tertiary)] transition-colors hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 disabled:cursor-not-allowed disabled:opacity-40"
+                              className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--color-border)] bg-card text-[var(--color-text-tertiary)] transition-colors hover:border-viz-cyan-soft hover:bg-viz-cyan-soft hover:text-viz-cyan disabled:cursor-not-allowed disabled:opacity-40"
                             >
                               <Highlighter size={12} />
                             </button>
@@ -945,7 +945,7 @@ export default function AgentWorkbenchPage() {
                               aria-label="取消引用高亮"
                               title="取消数据推演图谱中的引用节点高亮"
                               data-testid="citation-clear-button"
-                              className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--color-border)] bg-white text-[var(--color-text-tertiary)] transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700"
+                              className="flex h-6 w-6 items-center justify-center rounded-md border border-[var(--color-border)] bg-card text-[var(--color-text-tertiary)] transition-colors hover:border-border hover:bg-muted hover:text-foreground"
                             >
                               <CircleOff size={12} />
                             </button>
@@ -966,8 +966,8 @@ export default function AgentWorkbenchPage() {
 
           {/* pt/pb 取 2.5 使输入栏高度精确为 67px：顶部分割线距视口底部 72px
               （历史取值沿用，侧边栏底栏移除后保持输入栏高度不变）。 */}
-          <div data-testid="agent-input-bar" className="border-t border-[var(--color-border)] bg-white px-4 pb-2.5 pt-2.5">
-            <div className="relative flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-white py-1.5 pl-3 pr-1.5 transition-all focus-within:border-teal-400 focus-within:ring-2 focus-within:ring-teal-100">
+          <div data-testid="agent-input-bar" className="border-t border-[var(--color-border)] bg-card px-4 pb-2.5 pt-2.5">
+            <div className="relative flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-card py-1.5 pl-3 pr-1.5 transition-all focus-within:border-brand focus-within:ring-2 focus-within:ring-ring">
               <input
                 placeholder={oid ? (busy ? '可继续输入，回车进入追问队列…' : '问业务问题，或让它帮你预演一个操作…') : '请先选择一个本体'}
                 value={input}
@@ -982,13 +982,13 @@ export default function AgentWorkbenchPage() {
                   onClick={stopCurrentTurn}
                   aria-label="停止生成"
                   data-testid="agent-stop-button"
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-rose-600 text-white transition-all duration-200 hover:bg-rose-500"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-viz-rose text-[var(--color-text-inverse)] transition-all duration-200 hover:bg-viz-rose"
                 >
                   <Square size={13} fill="currentColor" />
                 </button>
               ) : (
                 <button onClick={() => send()} disabled={!input.trim() || !oid}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-teal-700 text-white transition-all duration-200 hover:bg-teal-600 disabled:cursor-not-allowed disabled:opacity-25">
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand-deep text-[var(--color-text-inverse)] transition-all duration-200 hover:bg-brand disabled:cursor-not-allowed disabled:opacity-25">
                   <Send size={14} />
                 </button>
               )}
@@ -999,7 +999,7 @@ export default function AgentWorkbenchPage() {
                   title={`追问队列中有 ${queuedCount} 条，点击清空`}
                   aria-label="清空追问队列"
                   data-testid="agent-queue-clear"
-                  className="flex h-6 shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 text-[11px] font-medium text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100"
+                  className="flex h-6 shrink-0 items-center gap-1 rounded-full border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-2 text-[11px] font-medium text-[var(--color-warning)] transition-colors hover:border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] hover:bg-[var(--color-warning-bg)]"
                 >
                   排队 {queuedCount}
                   <X size={11} />
@@ -1011,7 +1011,7 @@ export default function AgentWorkbenchPage() {
                 disabled={myMessages.length === 0}
                 title="我发送的消息 · 快速跳转"
                 className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors disabled:cursor-not-allowed disabled:opacity-30 ${showJump
-                  ? 'border-teal-300 bg-teal-50 text-teal-700'
+                  ? 'border-brand-line bg-brand-soft text-brand-ink'
                   : 'border-[var(--color-border)] text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'}`}>
                 <List size={15} />
               </button>

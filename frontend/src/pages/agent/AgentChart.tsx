@@ -374,7 +374,7 @@ export function AgentChart({ spec }: { spec: ChartSpec }) {
   return (
     <figure className="my-3 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
       <figcaption className="flex items-center gap-1.5 border-b border-[var(--color-border)] px-3 py-2 text-xs font-semibold text-[var(--color-text-primary)]">
-        <BarChart3 size={13} className="text-teal-600" />
+        <BarChart3 size={13} className="text-brand-ink" />
         {spec.title || '数据图表'}
       </figcaption>
       <div className="px-3 py-2.5">{body}</div>
@@ -398,7 +398,7 @@ export function ChartBlock({ source }: { source: string }) {
   if (!spec) {
     return (
       <div className="my-2">
-        <pre className="overflow-x-auto rounded-lg bg-black/[0.04] p-3 text-[12px] font-mono">{source}</pre>
+        <pre className="overflow-x-auto rounded-lg bg-[var(--color-bg-overlay)] p-3 text-[12px] font-mono">{source}</pre>
         <p className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">（图表数据未能解析，已按原文显示）</p>
       </div>
     )

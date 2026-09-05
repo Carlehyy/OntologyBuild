@@ -628,10 +628,10 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-white" data-testid="instance-knowledge-graph">
-      <div className="shrink-0 border-b border-slate-200 bg-slate-50/80">
+    <div className="flex h-full min-h-0 flex-col bg-card" data-testid="instance-knowledge-graph">
+      <div className="shrink-0 border-b border-border bg-muted">
         <div className="flex min-h-11 flex-wrap items-center gap-2 px-3 py-2">
-          <div className="flex rounded-md border border-slate-200 bg-white p-0.5" aria-label="图谱操作模式">
+          <div className="flex rounded-md border border-border bg-card p-0.5" aria-label="图谱操作模式">
             {([
               { id: 'browse', label: '浏览', icon: CircleDotDashed },
               { id: 'path', label: '路径', icon: Route },
@@ -643,8 +643,8 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
                 onClick={() => setMode(item.id)}
                 aria-pressed={mode === item.id}
                 className={[
-                  'inline-flex h-8 items-center gap-1.5 rounded px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500',
-                  mode === item.id ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800',
+                  'inline-flex h-8 items-center gap-1.5 rounded px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  mode === item.id ? 'bg-accent text-[var(--color-text-inverse)] shadow-sm' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                 ].join(' ')}
               >
                 <item.icon size={13} />{item.label}
@@ -652,7 +652,7 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
             ))}
           </div>
 
-          <div className="flex rounded-md border border-slate-200 bg-white p-0.5" aria-label="图谱展开层级">
+          <div className="flex rounded-md border border-border bg-card p-0.5" aria-label="图谱展开层级">
             {([1, 2, 3] as const).map(level => (
               <button
                 key={level}
@@ -661,8 +661,8 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
                 aria-pressed={depth === level}
                 title={level === 1 ? '仅对象类型' : level === 2 ? '对象类型与实例' : '当前实例的字段'}
                 className={[
-                  'flex h-8 min-w-9 items-center justify-center rounded px-2 text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500',
-                  depth === level ? 'bg-teal-50 text-teal-700' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700',
+                  'flex h-8 min-w-9 items-center justify-center rounded px-2 text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  depth === level ? 'bg-brand-soft text-brand-ink' : 'text-[var(--color-text-tertiary)] hover:bg-muted hover:text-foreground',
                 ].join(' ')}
               >
                 L{level}
@@ -670,17 +670,17 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
             ))}
           </div>
 
-          <form onSubmit={searchGraph} className="flex min-w-[220px] flex-1 items-center rounded-md border border-slate-200 bg-white focus-within:border-teal-400 focus-within:ring-2 focus-within:ring-teal-100">
-            <Search size={13} className="ml-2.5 shrink-0 text-slate-400" />
+          <form onSubmit={searchGraph} className="flex min-w-[220px] flex-1 items-center rounded-md border border-border bg-card focus-within:border-brand focus-within:ring-2 focus-within:ring-ring">
+            <Search size={13} className="ml-2.5 shrink-0 text-[var(--color-text-tertiary)]" />
             <input
               value={queryInput}
               onChange={event => setQueryInput(event.target.value)}
               placeholder="定位实例、主键或字段值"
               aria-label="搜索实例"
-              className="h-8 min-w-0 flex-1 bg-transparent px-2 text-xs text-slate-700 outline-none placeholder:text-slate-400"
+              className="h-8 min-w-0 flex-1 bg-transparent px-2 text-xs text-foreground outline-none placeholder:text-[var(--color-text-tertiary)]"
             />
             {queryInput && (
-              <button type="button" onClick={() => setQueryInput('')} aria-label="清空搜索" className="flex h-8 w-8 items-center justify-center text-slate-400 hover:text-slate-700">
+              <button type="button" onClick={() => setQueryInput('')} aria-label="清空搜索" className="flex h-8 w-8 items-center justify-center text-[var(--color-text-tertiary)] hover:text-foreground">
                 <X size={13} />
               </button>
             )}
@@ -692,7 +692,7 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
             value={selectedNode?.kind === 'instance' ? selectedNode.id : ''}
             onChange={event => setSelectedNodeId(event.target.value)}
             aria-label="快速选择实例"
-            className="h-8 max-w-[170px] rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-600 outline-none focus:border-teal-400"
+            className="h-8 max-w-[170px] rounded-md border border-border bg-card px-2 text-xs text-muted-foreground outline-none focus:border-brand"
           >
             <option value="">快速选择实例</option>
             {instanceOptions.map(node => (
@@ -701,60 +701,60 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
           </select>
 
           <div className="flex items-center gap-1">
-            <button type="button" onClick={() => cyRef.current?.zoom(cyRef.current.zoom() * 1.18)} aria-label="放大图谱" className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-100">
+            <button type="button" onClick={() => cyRef.current?.zoom(cyRef.current.zoom() * 1.18)} aria-label="放大图谱" className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-card text-muted-foreground hover:bg-muted">
               <ZoomIn size={14} />
             </button>
-            <button type="button" onClick={() => cyRef.current?.zoom(cyRef.current.zoom() / 1.18)} aria-label="缩小图谱" className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-100">
+            <button type="button" onClick={() => cyRef.current?.zoom(cyRef.current.zoom() / 1.18)} aria-label="缩小图谱" className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-card text-muted-foreground hover:bg-muted">
               <ZoomOut size={14} />
             </button>
-            <button type="button" onClick={() => cyRef.current?.fit(undefined, 54)} aria-label="适应画布" className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-100">
+            <button type="button" onClick={() => cyRef.current?.fit(undefined, 54)} aria-label="适应画布" className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-card text-muted-foreground hover:bg-muted">
               <LocateFixed size={14} />
             </button>
           </div>
         </div>
 
         {mode === 'path' && (
-          <div className="flex flex-wrap items-end gap-2 border-t border-slate-200 px-3 py-2" data-testid="path-controls">
+          <div className="flex flex-wrap items-end gap-2 border-t border-border px-3 py-2" data-testid="path-controls">
             <label className="min-w-[150px] flex-1">
-              <span className="mb-1 block text-[10px] font-medium text-slate-500">起点实例</span>
-              <select value={pathSource} onChange={event => setPathSource(event.target.value)} className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-teal-400">
+              <span className="mb-1 block text-[10px] font-medium text-muted-foreground">起点实例</span>
+              <select value={pathSource} onChange={event => setPathSource(event.target.value)} className="h-8 w-full rounded-md border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-brand">
                 <option value="">选择起点</option>
                 {instanceOptions.map(node => <option key={node.entityId} value={node.entityId}>{node.objectTypeLabel} · {node.label}</option>)}
               </select>
             </label>
-            <ArrowRight size={14} className="mb-2 text-slate-400" />
+            <ArrowRight size={14} className="mb-2 text-[var(--color-text-tertiary)]" />
             <label className="min-w-[150px] flex-1">
-              <span className="mb-1 block text-[10px] font-medium text-slate-500">终点实例</span>
-              <select value={pathTarget} onChange={event => setPathTarget(event.target.value)} className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-teal-400">
+              <span className="mb-1 block text-[10px] font-medium text-muted-foreground">终点实例</span>
+              <select value={pathTarget} onChange={event => setPathTarget(event.target.value)} className="h-8 w-full rounded-md border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-brand">
                 <option value="">选择终点</option>
                 {instanceOptions.map(node => <option key={node.entityId} value={node.entityId}>{node.objectTypeLabel} · {node.label}</option>)}
               </select>
             </label>
             <label>
-              <span className="mb-1 block text-[10px] font-medium text-slate-500">方向</span>
-              <select value={direction} onChange={event => setDirection(event.target.value as Direction)} className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none">
+              <span className="mb-1 block text-[10px] font-medium text-muted-foreground">方向</span>
+              <select value={direction} onChange={event => setDirection(event.target.value as Direction)} className="h-8 rounded-md border border-border bg-card px-2 text-xs text-foreground outline-none">
                 <option value="both">双向关系</option>
                 <option value="outgoing">仅正向</option>
                 <option value="incoming">仅反向</option>
               </select>
             </label>
-            <button type="button" onClick={runPath} disabled={analysisLoading} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-blue-600 px-3 text-xs font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50">
+            <button type="button" onClick={runPath} disabled={analysisLoading} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--color-info)] px-3 text-xs font-medium text-[var(--color-text-inverse)] transition-colors hover:bg-[var(--color-info)] disabled:opacity-50">
               {analysisLoading ? <Loader2 size={13} className="animate-spin" /> : <Route size={13} />}查找路径
             </button>
           </div>
         )}
 
         {mode === 'impact' && (
-          <div className="flex flex-wrap items-end gap-2 border-t border-slate-200 px-3 py-2" data-testid="impact-controls">
+          <div className="flex flex-wrap items-end gap-2 border-t border-border px-3 py-2" data-testid="impact-controls">
             <div className="min-w-[140px] flex-1">
-              <span className="mb-1 block text-[10px] font-medium text-slate-500">拟议变更对象</span>
-              <div className="flex h-8 items-center rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-600">
+              <span className="mb-1 block text-[10px] font-medium text-muted-foreground">拟议变更对象</span>
+              <div className="flex h-8 items-center rounded-md border border-border bg-card px-2 text-xs text-muted-foreground">
                 {detail ? detail.objectType.displayName + ' · ' + detail.label : '先在图中选择一个实例'}
               </div>
             </div>
             <label className="min-w-[130px]">
-              <span className="mb-1 block text-[10px] font-medium text-slate-500">字段</span>
-              <select value={impactProperty} onChange={event => setImpactProperty(event.target.value)} disabled={!detail} className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none disabled:bg-slate-100">
+              <span className="mb-1 block text-[10px] font-medium text-muted-foreground">字段</span>
+              <select value={impactProperty} onChange={event => setImpactProperty(event.target.value)} disabled={!detail} className="h-8 w-full rounded-md border border-border bg-card px-2 text-xs text-foreground outline-none disabled:bg-muted">
                 <option value="">选择字段</option>
                 {detail?.objectType.properties.map(property => (
                   <option key={property.name} value={property.name}>{property.displayName || property.display_name || property.name}</option>
@@ -762,16 +762,16 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
               </select>
             </label>
             <label className="min-w-[150px] flex-1">
-              <span className="mb-1 block text-[10px] font-medium text-slate-500">拟议新值</span>
-              <input value={proposedValue} onChange={event => setProposedValue(event.target.value)} disabled={!detail} placeholder="仅模拟，不写入真实数据" className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-violet-400 disabled:bg-slate-100" />
+              <span className="mb-1 block text-[10px] font-medium text-muted-foreground">拟议新值</span>
+              <input value={proposedValue} onChange={event => setProposedValue(event.target.value)} disabled={!detail} placeholder="仅模拟，不写入真实数据" className="h-8 w-full rounded-md border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-viz-violet disabled:bg-muted" />
             </label>
             <label>
-              <span className="mb-1 block text-[10px] font-medium text-slate-500">传播深度</span>
-              <select value={impactDepth} onChange={event => setImpactDepth(Number(event.target.value))} className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none">
+              <span className="mb-1 block text-[10px] font-medium text-muted-foreground">传播深度</span>
+              <select value={impactDepth} onChange={event => setImpactDepth(Number(event.target.value))} className="h-8 rounded-md border border-border bg-card px-2 text-xs text-foreground outline-none">
                 {[1, 2, 3, 4].map(value => <option key={value} value={value}>{value} 跳</option>)}
               </select>
             </label>
-            <button type="button" onClick={runImpact} disabled={analysisLoading || !detail} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-violet-600 px-3 text-xs font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-50">
+            <button type="button" onClick={runImpact} disabled={analysisLoading || !detail} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-viz-violet px-3 text-xs font-medium text-[var(--color-text-inverse)] transition-colors hover:bg-viz-violet disabled:opacity-50">
               {analysisLoading ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}只读推演
             </button>
           </div>
@@ -779,10 +779,10 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
       </div>
 
       {error && (
-        <div role="alert" className="flex shrink-0 items-center gap-2 border-b border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+        <div role="alert" className="flex shrink-0 items-center gap-2 border-b border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-3 py-2 text-xs text-[var(--color-danger)]">
           <AlertTriangle size={13} className="shrink-0" />
           <span className="flex-1">{error}</span>
-          <button type="button" onClick={() => setError('')} aria-label="关闭错误提示" className="flex h-7 w-7 items-center justify-center rounded hover:bg-red-100"><X size={13} /></button>
+          <button type="button" onClick={() => setError('')} aria-label="关闭错误提示" className="flex h-7 w-7 items-center justify-center rounded hover:bg-[var(--color-danger-bg)]"><X size={13} /></button>
         </div>
       )}
 
@@ -790,41 +790,41 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
         <div ref={graphHostRef} className="absolute inset-0" aria-label="对象实例知识图谱画布" />
 
         {loading && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/70 backdrop-blur-[1px]">
-            <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 shadow-sm">
-              <Loader2 size={14} className="animate-spin text-teal-600" />正在按需加载图谱…
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-card backdrop-blur-[1px]">
+            <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground shadow-sm">
+              <Loader2 size={14} className="animate-spin text-brand-ink" />正在按需加载图谱…
             </div>
           </div>
         )}
 
         {!loading && displayGraph.nodes.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center p-6">
-            <div className="max-w-sm rounded-lg border border-dashed border-slate-300 bg-white/90 px-5 py-6 text-center">
-              <Search size={22} className="mx-auto mb-2 text-slate-400" />
-              <p className="text-sm font-medium text-slate-700">没有匹配的实例</p>
-              <p className="mt-1 text-xs leading-relaxed text-slate-500">清空搜索条件，或切换到 L1 查看当前授权范围内的对象类型。</p>
+            <div className="max-w-sm rounded-lg border border-dashed border-border bg-card px-5 py-6 text-center">
+              <Search size={22} className="mx-auto mb-2 text-[var(--color-text-tertiary)]" />
+              <p className="text-sm font-medium text-foreground">没有匹配的实例</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">清空搜索条件，或切换到 L1 查看当前授权范围内的对象类型。</p>
             </div>
           </div>
         )}
 
-        <div className="absolute bottom-3 left-3 z-10 rounded-md border border-slate-200 bg-white/92 px-2.5 py-2 text-[10px] text-slate-600 shadow-sm backdrop-blur">
-          <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-slate-700"><Layers3 size={11} />图例</div>
+        <div className="absolute bottom-3 left-3 z-10 rounded-md border border-border bg-card px-2.5 py-2 text-[10px] text-muted-foreground shadow-sm backdrop-blur">
+          <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-foreground"><Layers3 size={11} />图例</div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-            <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-sm border-2 border-teal-600 bg-slate-50" />对象类型</span>
-            <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full border-2 border-teal-500 bg-white" />实例</span>
+            <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-sm border-2 border-brand bg-muted" />对象类型</span>
+            <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full border-2 border-brand bg-card" />实例</span>
             {(pathResult || impactResult || citedIds.length > 0) && (
               <>
-                <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full border-2 border-cyan-600 bg-cyan-50" />助手引用</span>
-                <span className="flex items-center gap-1"><i className="h-0.5 w-3 bg-blue-600" />查询路径</span>
-                <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full border-2 border-violet-600 bg-violet-50" />拟议变更</span>
-                <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full border-2 border-orange-600 bg-orange-50" />直接关联</span>
-                <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full border-2 border-dashed border-red-600 bg-red-50" />间接关联</span>
+                <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full border-2 border-viz-cyan bg-viz-cyan-soft" />助手引用</span>
+                <span className="flex items-center gap-1"><i className="h-0.5 w-3 bg-[var(--color-info)]" />查询路径</span>
+                <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full border-2 border-viz-violet bg-viz-violet-soft" />拟议变更</span>
+                <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full border-2 border-viz-orange bg-viz-orange-soft" />直接关联</span>
+                <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full border-2 border-dashed border-[var(--color-danger)] bg-[var(--color-danger-bg)]" />间接关联</span>
               </>
             )}
           </div>
         </div>
 
-        <div className="absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-md border border-slate-200 bg-white/92 px-2.5 py-1.5 text-[10px] text-slate-500 shadow-sm backdrop-blur">
+        <div className="absolute left-3 top-3 z-10 flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5 text-[10px] text-muted-foreground shadow-sm backdrop-blur">
           <span>{graph.meta.loadedInstances} 个实例已加载</span>
           <span>·</span>
           <span>{displayGraph.edges.filter(edge => edge.kind === 'relation').length} 条真实关系</span>
@@ -834,52 +834,52 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
               <span>{displayGraph.nodes.filter(node => node.kind === 'property').length} 个字段节点</span>
             </>
           )}
-          {graph.meta.truncated && <span className="rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700">已按预算截断</span>}
+          {graph.meta.truncated && <span className="rounded bg-[var(--color-warning-bg)] px-1.5 py-0.5 font-medium text-[var(--color-warning)]">已按预算截断</span>}
         </div>
 
         {(citedIds.length > 0 || pathResult || impactResult) && (
           <div className="absolute bottom-3 left-1/2 z-10 flex w-[min(560px,calc(100%-24px))] -translate-x-1/2 flex-col gap-2">
             {citedIds.length > 0 && (
-              <div className="flex items-center gap-2 rounded-lg border border-cyan-200 bg-cyan-50/95 px-3 py-2 shadow-sm backdrop-blur" data-testid="citation-highlight-summary">
-                <Sparkles size={14} className="shrink-0 text-cyan-600" />
-                <p className="min-w-0 flex-1 text-xs font-medium text-cyan-800">已高亮 {citedIds.length} 个助手引用节点</p>
+              <div className="flex items-center gap-2 rounded-lg border border-viz-cyan-soft bg-viz-cyan-soft px-3 py-2 shadow-sm backdrop-blur" data-testid="citation-highlight-summary">
+                <Sparkles size={14} className="shrink-0 text-viz-cyan" />
+                <p className="min-w-0 flex-1 text-xs font-medium text-viz-cyan">已高亮 {citedIds.length} 个助手引用节点</p>
                 <button
                   type="button"
                   onClick={() => setCitedIds([])}
                   aria-label="取消引用高亮"
                   title="取消引用高亮"
                   data-testid="graph-clear-citation-button"
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-cyan-500 transition-colors hover:bg-cyan-100 hover:text-cyan-700"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-viz-cyan transition-colors hover:bg-viz-cyan-soft hover:text-viz-cyan"
                 ><X size={13} /></button>
               </div>
             )}
             {(pathResult || impactResult) && (
-              <div className="rounded-lg border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur" data-testid="analysis-summary">
+              <div className="rounded-lg border border-border bg-card p-3 shadow-lg backdrop-blur" data-testid="analysis-summary">
             {pathResult && (
               <>
                 <div className="flex items-start gap-2">
-                  <Route size={15} className="mt-0.5 shrink-0 text-blue-600" />
+                  <Route size={15} className="mt-0.5 shrink-0 text-[var(--color-info)]" />
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold text-slate-800">
+                    <p className="text-xs font-semibold text-foreground">
                       {pathResult.found
                         ? '找到 ' + pathResult.paths.length + ' 条候选路径'
                         : '当前深度内没有找到路径'}
                     </p>
-                    <p className="mt-0.5 truncate text-[11px] text-slate-500">{pathResult.sourceLabel} → {pathResult.targetLabel}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{pathResult.sourceLabel} → {pathResult.targetLabel}</p>
                   </div>
-                  <button type="button" onClick={clearAnalysis} aria-label="清除路径分析" className="flex h-7 w-7 items-center justify-center rounded text-slate-400 hover:bg-slate-100"><X size={13} /></button>
+                  <button type="button" onClick={clearAnalysis} aria-label="清除路径分析" className="flex h-7 w-7 items-center justify-center rounded text-[var(--color-text-tertiary)] hover:bg-muted"><X size={13} /></button>
                 </div>
                 {pathResult.paths.length > 1 && (
                   <div className="mt-2 flex flex-wrap gap-1">
                     {pathResult.paths.map((path, index) => (
-                      <button key={index} type="button" onClick={() => setSelectedPath(index)} className={['rounded px-2 py-1 text-[10px] font-medium', selectedPath === index ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'].join(' ')}>
+                      <button key={index} type="button" onClick={() => setSelectedPath(index)} className={['rounded px-2 py-1 text-[10px] font-medium', selectedPath === index ? 'bg-[var(--color-info)] text-[var(--color-text-inverse)]' : 'bg-muted text-muted-foreground hover:bg-[var(--color-bg-active)]'].join(' ')}>
                         路径 {index + 1} · {path.hops} 跳
                       </button>
                     ))}
                   </div>
                 )}
                 {pathResult.visualizationTruncated && (
-                  <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-[10.5px] text-amber-800">
+                  <p className="mt-2 rounded-md bg-[var(--color-warning-bg)] px-2 py-1.5 text-[10.5px] text-[var(--color-warning)]">
                     结果较大，画布已展示最相关的 {pathResult.visualizationCounts?.displayed.nodes || pathResult.nodes.length} 个节点；请缩小查询范围查看其余节点。
                   </p>
                 )}
@@ -887,7 +887,7 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
                   <button
                     type="button"
                     onClick={() => onAskAssistant('请解释从“' + pathResult.sourceLabel + '”(instance_id=' + pathResult.sourceInstanceId + ')到“' + pathResult.targetLabel + '”(instance_id=' + pathResult.targetInstanceId + ')的关系路径，并说明每一跳的业务含义。')}
-                    className="mt-2 inline-flex h-8 items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                    className="mt-2 inline-flex h-8 items-center gap-1.5 rounded-md border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] px-2.5 text-xs font-medium text-[var(--color-info)] hover:bg-[var(--color-info-bg)]"
                   >
                     <MessageSquareText size={13} />让助手解释这条路径
                   </button>
@@ -897,27 +897,27 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
             {impactResult && (
               <>
                 <div className="flex items-start gap-2">
-                  <ShieldCheck size={15} className="mt-0.5 shrink-0 text-violet-600" />
+                  <ShieldCheck size={15} className="mt-0.5 shrink-0 text-viz-violet" />
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold text-slate-800">只读关联影响预演</p>
-                    <p className="mt-0.5 text-[11px] text-slate-500">
+                    <p className="text-xs font-semibold text-foreground">只读关联影响预演</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
                       直接 {impactResult.summary.direct} · 间接 {impactResult.summary.indirect} · 未写入真实数据
                     </p>
                   </div>
-                  <button type="button" onClick={clearAnalysis} aria-label="清除影响分析" className="flex h-7 w-7 items-center justify-center rounded text-slate-400 hover:bg-slate-100"><X size={13} /></button>
+                  <button type="button" onClick={clearAnalysis} aria-label="清除影响分析" className="flex h-7 w-7 items-center justify-center rounded text-[var(--color-text-tertiary)] hover:bg-muted"><X size={13} /></button>
                 </div>
-                <div className="mt-2 flex items-start gap-1.5 rounded-md bg-amber-50 px-2 py-1.5 text-[10.5px] leading-relaxed text-amber-800">
+                <div className="mt-2 flex items-start gap-1.5 rounded-md bg-[var(--color-warning-bg)] px-2 py-1.5 text-[10.5px] leading-relaxed text-[var(--color-warning)]">
                   <BadgeInfo size={12} className="mt-0.5 shrink-0" />{impactResult.disclaimer}
                 </div>
                 {impactResult.visualizationTruncated && (
-                  <p className="mt-2 rounded-md bg-slate-100 px-2 py-1.5 text-[10.5px] text-slate-600">
+                  <p className="mt-2 rounded-md bg-muted px-2 py-1.5 text-[10.5px] text-muted-foreground">
                     完整计数保留，画布按相关性展示 {impactResult.visualizationCounts?.displayed.impacts || impactResult.impacts.length} 个关联实例；可缩小传播深度继续核查。
                   </p>
                 )}
                 <button
                   type="button"
                   onClick={() => onAskAssistant('请分析：如果将“' + impactResult.change.instanceLabel + '”(instance_id=' + impactResult.change.instanceId + ')的字段“' + impactResult.change.propertyLabel + '”从“' + stringifyValue(impactResult.change.currentValue) + '”拟议改为“' + stringifyValue(impactResult.change.proposedValue) + '”，哪些实例处于直接或间接关联范围？请区分确定事实与推测，不要执行真实修改。')}
-                  className="mt-2 inline-flex h-8 items-center gap-1.5 rounded-md border border-violet-200 bg-violet-50 px-2.5 text-xs font-medium text-violet-700 hover:bg-violet-100"
+                  className="mt-2 inline-flex h-8 items-center gap-1.5 rounded-md border border-viz-violet-soft bg-viz-violet-soft px-2.5 text-xs font-medium text-viz-violet hover:bg-viz-violet-soft"
                 >
                   <MessageSquareText size={13} />让助手分析影响与建议
                 </button>
@@ -929,28 +929,28 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
         )}
 
         {selectedNode && (
-          <aside className="absolute bottom-3 right-3 top-3 z-10 flex w-[min(310px,42%)] min-w-[260px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg" data-testid="graph-inspector">
-            <div className="flex items-start gap-2 border-b border-slate-200 px-3 py-3">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-teal-50 text-teal-700">
+          <aside className="absolute bottom-3 right-3 top-3 z-10 flex w-[min(310px,42%)] min-w-[260px] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-lg" data-testid="graph-inspector">
+            <div className="flex items-start gap-2 border-b border-border px-3 py-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand-soft text-brand-ink">
                 {selectedNode.kind === 'object_type' ? <Layers3 size={15} /> : selectedNode.kind === 'property' ? <GitBranch size={15} /> : <CircleDotDashed size={15} />}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-slate-800">{selectedNode.label}</p>
-                <p className="truncate text-[10.5px] text-slate-500">
+                <p className="truncate text-sm font-semibold text-foreground">{selectedNode.label}</p>
+                <p className="truncate text-[10.5px] text-muted-foreground">
                   {selectedNode.kind === 'object_type' ? '对象类型' : selectedNode.kind === 'property' ? '实例字段' : selectedNode.objectTypeLabel || '对象实例'}
                 </p>
               </div>
-              <button type="button" onClick={() => setSelectedNodeId('')} aria-label="关闭节点详情" className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100"><X size={13} /></button>
+              <button type="button" onClick={() => setSelectedNodeId('')} aria-label="关闭节点详情" className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-[var(--color-text-tertiary)] hover:bg-muted"><X size={13} /></button>
             </div>
 
             <div className="scrollbar-thin min-h-0 flex-1 overflow-auto px-3 py-3">
               {selectedNode.kind === 'object_type' && (
                 <div className="space-y-2 text-xs">
-                  <div className="rounded-md bg-slate-50 p-2.5">
-                    <p className="font-medium text-slate-700">{selectedNode.count || 0} 个实例</p>
-                    <p className="mt-1 text-[11px] leading-relaxed text-slate-500">{selectedNode.description || '该对象类型暂无说明'}</p>
+                  <div className="rounded-md bg-muted p-2.5">
+                    <p className="font-medium text-foreground">{selectedNode.count || 0} 个实例</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{selectedNode.description || '该对象类型暂无说明'}</p>
                   </div>
-                  <button type="button" onClick={() => { setDepth(2); void loadGraph(2, query) }} className="flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-teal-200 bg-teal-50 text-xs font-medium text-teal-700 hover:bg-teal-100">
+                  <button type="button" onClick={() => { setDepth(2); void loadGraph(2, query) }} className="flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-brand-line bg-brand-soft text-xs font-medium text-brand-ink hover:bg-brand-soft">
                     展开实例<ChevronRight size={13} />
                   </button>
                 </div>
@@ -959,12 +959,12 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
               {selectedNode.kind === 'property' && (
                 <div className="space-y-2 text-xs">
                   <div>
-                    <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">字段名</p>
-                    <p className="mt-1 font-mono text-slate-700">{selectedNode.propertyName}</p>
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-tertiary)]">字段名</p>
+                    <p className="mt-1 font-mono text-foreground">{selectedNode.propertyName}</p>
                   </div>
                   <div>
-                    <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">当前值</p>
-                    <p className="mt-1 break-words rounded-md bg-slate-50 p-2 text-slate-700">{stringifyValue(selectedNode.value)}</p>
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-tertiary)]">当前值</p>
+                    <p className="mt-1 break-words rounded-md bg-muted p-2 text-foreground">{stringifyValue(selectedNode.value)}</p>
                   </div>
                 </div>
               )}
@@ -972,30 +972,30 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
               {selectedNode.kind === 'instance' && (
                 <>
                   {detailLoading ? (
-                    <div className="flex items-center gap-2 py-4 text-xs text-slate-500"><Loader2 size={13} className="animate-spin" />加载实例详情…</div>
+                    <div className="flex items-center gap-2 py-4 text-xs text-muted-foreground"><Loader2 size={13} className="animate-spin" />加载实例详情…</div>
                   ) : detail ? (
                     <div className="space-y-3">
                       <div className="grid grid-cols-2 gap-2">
-                        <button type="button" onClick={() => { setMode('path'); setPathSource(detail.id) }} className="flex h-8 items-center justify-center gap-1 rounded-md border border-blue-200 bg-blue-50 text-[11px] font-medium text-blue-700 hover:bg-blue-100">
+                        <button type="button" onClick={() => { setMode('path'); setPathSource(detail.id) }} className="flex h-8 items-center justify-center gap-1 rounded-md border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] text-[11px] font-medium text-[var(--color-info)] hover:bg-[var(--color-info-bg)]">
                           <Route size={12} />设为起点
                         </button>
-                        <button type="button" onClick={() => { setMode('path'); setPathTarget(detail.id) }} className="flex h-8 items-center justify-center gap-1 rounded-md border border-blue-200 bg-white text-[11px] font-medium text-blue-700 hover:bg-blue-50">
+                        <button type="button" onClick={() => { setMode('path'); setPathTarget(detail.id) }} className="flex h-8 items-center justify-center gap-1 rounded-md border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-card text-[11px] font-medium text-[var(--color-info)] hover:bg-[var(--color-info-bg)]">
                           <Focus size={12} />设为终点
                         </button>
-                        <button type="button" onClick={() => { setMode('impact'); setImpactProperty(''); setProposedValue('') }} className="flex h-8 items-center justify-center gap-1 rounded-md border border-violet-200 bg-violet-50 text-[11px] font-medium text-violet-700 hover:bg-violet-100">
+                        <button type="button" onClick={() => { setMode('impact'); setImpactProperty(''); setProposedValue('') }} className="flex h-8 items-center justify-center gap-1 rounded-md border border-viz-violet-soft bg-viz-violet-soft text-[11px] font-medium text-viz-violet hover:bg-viz-violet-soft">
                           <SlidersHorizontal size={12} />模拟影响
                         </button>
-                        <button type="button" onClick={() => switchDepth(3)} className="flex h-8 items-center justify-center gap-1 rounded-md border border-slate-200 bg-white text-[11px] font-medium text-slate-600 hover:bg-slate-50">
+                        <button type="button" onClick={() => switchDepth(3)} className="flex h-8 items-center justify-center gap-1 rounded-md border border-border bg-card text-[11px] font-medium text-muted-foreground hover:bg-muted">
                           <Layers3 size={12} />展开字段
                         </button>
                       </div>
-                      <button type="button" onClick={focusSelected} className="flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-slate-200 text-[11px] font-medium text-slate-600 hover:bg-slate-50">
+                      <button type="button" onClick={focusSelected} className="flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-border text-[11px] font-medium text-muted-foreground hover:bg-muted">
                         <LocateFixed size={12} />聚焦当前节点
                       </button>
                       <div>
                         <div className="mb-1.5 flex items-center justify-between">
-                          <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">实例字段</p>
-                          <span className="text-[10px] text-slate-400">{Object.keys(detail.properties).length + Object.keys(detail.computed).length} 项</span>
+                          <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-tertiary)]">实例字段</p>
+                          <span className="text-[10px] text-[var(--color-text-tertiary)]">{Object.keys(detail.properties).length + Object.keys(detail.computed).length} 项</span>
                         </div>
                         <div className="space-y-1">
                           {[...Object.entries(detail.properties), ...Object.entries(detail.computed)].map(([name, value]) => {
@@ -1005,13 +1005,13 @@ export default function InstanceKnowledgeGraph({ oid, releaseId, assistantSignal
                                 type="button"
                                 key={name}
                                 onClick={() => { setMode('impact'); setImpactProperty(name) }}
-                                className="flex w-full items-start justify-between gap-2 rounded-md border border-slate-100 px-2 py-1.5 text-left transition-colors hover:border-violet-200 hover:bg-violet-50"
+                                className="flex w-full items-start justify-between gap-2 rounded-md border border-border px-2 py-1.5 text-left transition-colors hover:border-viz-violet-soft hover:bg-viz-violet-soft"
                               >
                                 <span className="min-w-0">
-                                  <span className="block truncate text-[11px] font-medium text-slate-600">{definition?.displayName || definition?.display_name || name}</span>
-                                  <span className="block truncate font-mono text-[9.5px] text-slate-400">{name}</span>
+                                  <span className="block truncate text-[11px] font-medium text-muted-foreground">{definition?.displayName || definition?.display_name || name}</span>
+                                  <span className="block truncate font-mono text-[9.5px] text-[var(--color-text-tertiary)]">{name}</span>
                                 </span>
-                                <span className="max-w-[48%] truncate text-[10.5px] text-slate-600">{stringifyValue(value)}</span>
+                                <span className="max-w-[48%] truncate text-[10.5px] text-muted-foreground">{stringifyValue(value)}</span>
                               </button>
                             )
                           })}

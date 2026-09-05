@@ -144,13 +144,13 @@ export function BoundaryDrawer({ oid, open, onClose }: {
   }))
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/30 px-4 pt-[7vh] backdrop-blur-[1px]" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-accent px-4 pt-[7vh] backdrop-blur-[1px]" onMouseDown={onClose}>
       <section
         role="dialog"
         aria-modal="true"
         aria-labelledby="agent-boundary-title"
         data-testid="agent-boundary-dialog"
-        className="animate-slide-up relative flex max-h-[86dvh] w-[720px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-white/60 bg-[var(--color-bg-elevated)] shadow-[0_24px_80px_rgba(15,23,42,0.22)]"
+        className="animate-slide-up relative flex max-h-[86dvh] w-[720px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-border bg-[var(--color-bg-elevated)] shadow-[0_24px_80px_rgba(15,23,42,0.22)]"
         onMouseDown={event => event.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
@@ -158,7 +158,7 @@ export function BoundaryDrawer({ oid, open, onClose }: {
             <Shield size={15} className="text-[var(--color-primary)]" />
             <h3 id="agent-boundary-title" className="text-sm font-semibold text-[var(--color-text-primary)]">智能体授权边界</h3>
           </div>
-          <button onClick={onClose} aria-label="关闭授权边界配置" className="rounded-md p-1.5 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400">
+          <button onClick={onClose} aria-label="关闭授权边界配置" className="rounded-md p-1.5 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-success)]">
             <X size={16} />
           </button>
         </div>
@@ -209,8 +209,8 @@ export function BoundaryDrawer({ oid, open, onClose }: {
         </div>
 
         <div data-testid="agent-boundary-footer" className="flex shrink-0 justify-center gap-3 border-t border-[var(--color-border)] px-4 py-3">
-          <Button variant="outline" size="sm" onClick={onClose} className="min-w-24 border-emerald-200 text-emerald-700 hover:bg-emerald-50">取消</Button>
-          <Button variant="success" size="sm" onClick={save} disabled={saving} className="min-w-24 bg-emerald-600 hover:bg-emerald-700">
+          <Button variant="outline" size="sm" onClick={onClose} className="min-w-24 border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] text-[var(--color-success)] hover:bg-[var(--color-success-bg)]">取消</Button>
+          <Button variant="success" size="sm" onClick={save} disabled={saving} className="min-w-24 bg-[var(--color-success)] hover:bg-[var(--color-success)]">
             {saving && <Loader2 size={12} className="animate-spin" />}保存边界
           </Button>
         </div>

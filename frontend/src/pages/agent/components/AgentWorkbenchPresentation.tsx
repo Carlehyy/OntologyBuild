@@ -146,12 +146,12 @@ export function Md({ text }: { text: string }) {
           ul: p => <ul className="list-disc pl-5 mb-2 space-y-1" {...p} />,
           ol: p => <ol className="list-decimal pl-5 mb-2 space-y-1" {...p} />,
           li: p => <li className="text-sm leading-relaxed" {...p} />,
-          code: p => <code className="px-1 py-0.5 rounded bg-black/[0.05] text-[12px] font-mono" {...p} />,
+          code: p => <code className="px-1 py-0.5 rounded bg-[var(--color-bg-overlay)] text-[12px] font-mono" {...p} />,
           pre: (p: any) => {
             const child = Array.isArray(p.children) ? p.children[0] : p.children
             const lang = /language-(\w+)/.exec(child?.props?.className || '')?.[1]
             if (lang === 'chart') return <ChartBlock source={codeText(child?.props?.children)} />
-            return <pre className="p-3 my-2 rounded-lg bg-black/[0.04] text-[12px] font-mono overflow-x-auto" {...p} />
+            return <pre className="p-3 my-2 rounded-lg bg-[var(--color-bg-overlay)] text-[12px] font-mono overflow-x-auto" {...p} />
           },
           table: p => (
             <div className="overflow-x-auto my-2 rounded-lg border border-[var(--color-border)]">
@@ -242,7 +242,7 @@ function StepRow({ step }: { step: AgentStep }) {
       >
         <div className={`mt-px flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${step.error
           ? 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'
-          : 'bg-sky-50 text-sky-600'}`}>
+          : 'bg-[var(--color-info-bg)] text-[var(--color-info)]'}`}>
           <Icon size={11} />
         </div>
         <div className="min-w-0 flex-1 text-xs leading-5">
@@ -286,8 +286,8 @@ export function StepTrace({ steps, running }: { steps: AgentStep[]; running?: bo
       {steps.map((s, i) => <StepRow key={i} step={s} />)}
       {running && (
         <div className="flex items-center gap-2.5">
-          <div className="w-5 h-5 rounded-md bg-sky-50 flex items-center justify-center shrink-0">
-            <Loader2 size={11} className="animate-spin text-sky-600" />
+          <div className="w-5 h-5 rounded-md bg-[var(--color-info-bg)] flex items-center justify-center shrink-0">
+            <Loader2 size={11} className="animate-spin text-[var(--color-info)]" />
           </div>
           <span className="text-xs text-[var(--color-text-tertiary)]">
             {steps.length === 0 ? '正在阅读本体技能卡，规划查询…' : '正在综合工具结果继续推理…'}
@@ -367,11 +367,11 @@ export function AgentCallChainView({ messages, conversationId, ontologyName, run
     return (
       <div className="flex h-full items-center justify-center bg-[#f8fbff] p-8 text-center dark:bg-[#161c26]">
         <div className="max-w-sm">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl border border-sky-100 bg-white text-sky-600 shadow-sm">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-card text-[var(--color-info)] shadow-sm">
             <Workflow size={21} />
           </div>
-          <h3 className="mt-4 text-sm font-semibold text-slate-800">当前会话还没有调用记录</h3>
-          <p className="mt-1 text-xs leading-5 text-slate-500">发起一次业务查询后，这里会按执行顺序记录工具、输入、输出、结果与耗时。</p>
+          <h3 className="mt-4 text-sm font-semibold text-foreground">当前会话还没有调用记录</h3>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">发起一次业务查询后，这里会按执行顺序记录工具、输入、输出、结果与耗时。</p>
         </div>
       </div>
     )
@@ -380,77 +380,77 @@ export function AgentCallChainView({ messages, conversationId, ontologyName, run
   return (
     <div className="scrollbar-none h-full overflow-y-auto bg-[#f8fbff] px-4 py-4 dark:bg-[#161c26]" data-testid="agent-call-chain-view">
       <div className="mx-auto max-w-4xl">
-        <div className="grid grid-cols-3 gap-2 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
+        <div className="grid grid-cols-3 gap-2 rounded-xl border border-border bg-card p-2.5 shadow-sm">
           {[
             ['执行轮次', `${turns.length}`],
             ['工具调用', `${allSteps.length}`],
             ['累计耗时', totalDuration > 0 ? `${totalDuration.toLocaleString('zh-CN')} ms` : '—'],
           ].map(([label, value]) => (
-            <div key={label} className="rounded-lg bg-slate-50 px-3 py-2">
-              <p className="text-[10px] text-slate-400">{label}</p>
-              <p className="mt-0.5 font-mono text-sm font-semibold text-slate-700">{value}</p>
+            <div key={label} className="rounded-lg bg-muted px-3 py-2">
+              <p className="text-[10px] text-[var(--color-text-tertiary)]">{label}</p>
+              <p className="mt-0.5 font-mono text-sm font-semibold text-foreground">{value}</p>
             </div>
           ))}
         </div>
-        <div className="mt-2 flex items-center justify-between px-1 text-[10px] text-slate-400">
+        <div className="mt-2 flex items-center justify-between px-1 text-[10px] text-[var(--color-text-tertiary)]">
           <span>{ontologyName} · 当前会话完整执行记录</span>
           <span className="font-mono">{conversationId ? `会话 ${conversationId.slice(0, 8)}` : '会话建立中'}</span>
         </div>
 
-        <div className="relative mt-4 space-y-3 before:absolute before:bottom-4 before:left-[18px] before:top-4 before:w-px before:bg-slate-200">
+        <div className="relative mt-4 space-y-3 before:absolute before:bottom-4 before:left-[18px] before:top-4 before:w-px before:bg-[var(--color-bg-active)]">
           {turns.map(({ turn, question, startedAt, message }, index) => {
             const duration = message.steps.reduce((sum, step) => sum + (step.durationMs || 0), 0)
             const { start: startLabel, end: endLabel } = formatTurnTimes(startedAt, message.createdAt)
             const elapsed = formatTurnElapsed(startedAt, message.createdAt)
             return (
-              <details key={message.id} open={index === turns.length - 1} className="group relative rounded-xl border border-slate-200 bg-white shadow-sm">
+              <details key={message.id} open={index === turns.length - 1} className="group relative rounded-xl border border-border bg-card shadow-sm">
                 <summary className="flex cursor-pointer list-none items-start gap-3 px-3 py-3 marker:content-none">
                   <span className={`relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg font-mono text-[11px] font-semibold ${message.error
-                    ? 'bg-red-50 text-red-600' : 'bg-teal-50 text-teal-700'}`}>
+                    ? 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]' : 'bg-brand-soft text-brand-ink'}`}>
                     {String(turn).padStart(2, '0')}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-semibold text-slate-800">{question || '系统续执行'}</span>
-                    <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-400">
+                    <span className="block truncate text-xs font-semibold text-foreground">{question || '系统续执行'}</span>
+                    <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-[var(--color-text-tertiary)]">
                       <span>开始 {startLabel}</span>
                       <span>结束 {endLabel}</span>
                       <span>{elapsed ? `总耗时 ${elapsed}` : '等待耗时数据'}</span>
                       <span>{message.steps.length} 次工具调用</span>
                       <span>{duration > 0 ? `工具耗时 ${duration.toLocaleString('zh-CN')} ms` : null}</span>
-                      {message.loading && <span className="inline-flex items-center gap-1 text-sky-600"><Loader2 size={10} className="animate-spin" />执行中</span>}
-                      {message.error && <span className="text-red-600">执行异常</span>}
+                      {message.loading && <span className="inline-flex items-center gap-1 text-[var(--color-info)]"><Loader2 size={10} className="animate-spin" />执行中</span>}
+                      {message.error && <span className="text-[var(--color-danger)]">执行异常</span>}
                     </span>
                   </span>
-                  <ChevronRight size={14} className="mt-1 shrink-0 text-slate-400 transition-transform group-open:rotate-90" />
+                  <ChevronRight size={14} className="mt-1 shrink-0 text-[var(--color-text-tertiary)] transition-transform group-open:rotate-90" />
                 </summary>
-                <div className="border-t border-slate-100 px-4 pb-4 pt-3">
+                <div className="border-t border-border px-4 pb-4 pt-3">
                   {message.steps.length > 0 ? (
                     <div className="space-y-3">
                       {message.steps.map((step, stepIndex) => (
-                        <div key={stepIndex} className="rounded-lg border border-slate-100 bg-slate-50/70 px-3 py-2.5">
+                        <div key={stepIndex} className="rounded-lg border border-border bg-muted px-3 py-2.5">
                           <StepRow step={step} />
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <div className="rounded-lg border border-dashed border-slate-200 px-3 py-3 text-xs text-slate-400">
+                    <div className="rounded-lg border border-dashed border-border px-3 py-3 text-xs text-[var(--color-text-tertiary)]">
                       {message.loading ? '正在规划并等待第一次工具调用…' : '本轮未调用工具，直接生成答复。'}
                     </div>
                   )}
                   {(message.content || message.error) && (
-                    <div className={`mt-3 rounded-lg border px-3 py-2.5 ${message.error ? 'border-red-100 bg-red-50' : 'border-teal-100 bg-teal-50/50'}`}>
-                      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">本轮执行结果</p>
+                    <div className={`mt-3 rounded-lg border px-3 py-2.5 ${message.error ? 'border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)]' : 'border-brand-line bg-brand-soft'}`}>
+                      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-tertiary)]">本轮执行结果</p>
                       {message.error
-                        ? <p className="text-xs text-red-600">{message.error}</p>
+                        ? <p className="text-xs text-[var(--color-danger)]">{message.error}</p>
                         : /* 不再限制高度：回答完整展开，随外层容器整体滚动，避免卡片内再出现一层滚轮（MYW-66） */
-                          <div className="text-slate-700"><Md text={message.content} /></div>}
+                          <div className="text-foreground"><Md text={message.content} /></div>}
                     </div>
                   )}
                 </div>
               </details>
             )
           })}
-          {running && <div className="relative z-10 ml-1 flex items-center gap-2 text-[11px] text-sky-600"><Loader2 size={12} className="animate-spin" />执行链持续写入中</div>}
+          {running && <div className="relative z-10 ml-1 flex items-center gap-2 text-[11px] text-[var(--color-info)]"><Loader2 size={12} className="animate-spin" />执行链持续写入中</div>}
         </div>
       </div>
     </div>
@@ -465,7 +465,7 @@ export function SplitHandle({ onPointerDown }: { onPointerDown: (event: React.Po
       onPointerDown={onPointerDown}
       className="group col-start-2 row-start-1 flex cursor-col-resize items-center justify-center"
     >
-      <div className="h-16 w-1 rounded-full bg-[var(--color-border)] transition-all group-hover:h-24 group-hover:bg-teal-500/70" />
+      <div className="h-16 w-1 rounded-full bg-[var(--color-border)] transition-all group-hover:h-24 group-hover:bg-brand" />
     </div>
   )
 }
