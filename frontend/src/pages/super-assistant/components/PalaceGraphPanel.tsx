@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactECharts from 'echarts-for-react'
-import { AlertCircle, Brain, Crosshair, Loader2, RefreshCw, Search, X } from 'lucide-react'
+import { AlertCircle, Brain, Crosshair, Loader2, Maximize, Minus, RefreshCw, RotateCcw, Search, X } from 'lucide-react'
 
 import { superAssistantApi, type PalaceFile, type PalaceGraph, type PalaceGraphNode } from '@/api/superAssistant'
 import { Button } from '@/components/ui/Button'
@@ -11,6 +11,8 @@ import { palaceGraphOption } from './palaceGraphOption'
 interface PalaceGraphPanelProps {
   graph: PalaceGraph | null
   loading: boolean
+  /** 弹窗全屏态：容器尺寸变化时手动触发图表 resize（ECharts 只监听 window resize） */
+  maximized?: boolean
   /** 文件库是否已有文档：区分「先上传」与「抽取中」两种空态文案 */
   hasFiles: boolean
   /** 文件库列表（节点→文档联动的 id→文件名解析） */
@@ -36,6 +38,7 @@ const EMPTY_GRAPH: PalaceGraph = {
 export default function PalaceGraphPanel({
   graph,
   loading,
+  maximized = false,
   hasFiles,
   files,
   selectedFileId,
@@ -79,6 +82,25 @@ export default function PalaceGraphPanel({
     baseGraphRef.current = graph ?? EMPTY_GRAPH
   }
   const baseGraph = baseGraphRef.current
+
+  // 漫游视图（zoom/center）保持：notMerge 重建 option 会把视图重置回默认，
+  // 组装新 option 前从实例读出当前视图注入，轮询/过滤/选中都不再打断用户视角
+  const chartRef = useRef<InstanceType<typeof ReactECharts> | null>(null)
+  const viewRef = useRef<{ zoom?: number; center?: [number | string, number | string] }>({})
+
+  // 全屏切换改变容器尺寸：ECharts 只监听 window resize，需手动 resize
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      chartRef.current?.getEchartsInstance()?.resize()
+    }, 120)
+    return () => window.clearTimeout(timer)
+  }, [maximized])
+
+  /** 显式设置漫游视图（缩放按钮/复位），并同步进 viewRef 供后续重建沿用 */
+  const applyView = (zoom: number, center: [number | string, number | string]) => {
+    viewRef.current = { zoom, center }
+    chartRef.current?.getEchartsInstance()?.setOption({ series: [{ zoom, center }] })
+  }
   const view = useMemo(() => filterPalaceGraph(baseGraph, filterKeyword), [baseGraph, filterKeyword])
   const selectedNode: PalaceGraphNode | null = useMemo(
     () => graph?.nodes.find(node => node.id === selectedId) ?? null,
@@ -101,11 +123,19 @@ export default function PalaceGraphPanel({
   // 大图密度开关：标签全开糊成一片时改为悬停/邻接按需展示
   const compactLabels = baseGraph.nodes.length > 80
   const option = useMemo(
-    () => palaceGraphOption(
-      { ...baseGraph, nodes: view.nodes, edges: view.edges },
-      highlightIds ?? undefined,
-      { compactLabels },
-    ),
+    () => {
+      const instance = chartRef.current?.getEchartsInstance()
+      // getOption 的返回在 echarts 类型里是宽泛 {}，这里只关心 series[0] 的漫游视图
+      const current = (instance?.getOption?.() as { series?: Array<{ zoom?: number; center?: [number | string, number | string] }> } | undefined)?.series?.[0]
+      if (typeof current?.zoom === 'number' || Array.isArray(current?.center)) {
+        viewRef.current = { zoom: current.zoom, center: current.center }
+      }
+      return palaceGraphOption(
+        { ...baseGraph, nodes: view.nodes, edges: view.edges },
+        highlightIds ?? undefined,
+        { compactLabels, view: viewRef.current },
+      )
+    },
     [baseGraph, view, highlightIds, compactLabels],
   )
   const fileById = useMemo(() => new Map(files.map(file => [file.id, file])), [files])
@@ -262,11 +292,44 @@ export default function PalaceGraphPanel({
           {/* 画布恒定占满面板；节点详情卡为容器内悬浮覆盖，不改变画布尺寸（避免重排抖动） */}
           <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--color-border)]">
             <ReactECharts
+              ref={chartRef}
               option={option}
               notMerge
               style={{ height: '100%', width: '100%' }}
               onEvents={chartEvents}
             />
+            <div className="absolute right-2 top-2 z-10 flex flex-col gap-1">
+              <button
+                type="button"
+                data-testid="palace-zoom-in"
+                aria-label="放大图谱"
+                title="放大"
+                onClick={() => applyView((viewRef.current.zoom ?? 1) * 1.3, viewRef.current.center ?? ['50%', '50%'])}
+                className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] shadow-sm transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
+              >
+                <Maximize size={13} />
+              </button>
+              <button
+                type="button"
+                data-testid="palace-zoom-out"
+                aria-label="缩小图谱"
+                title="缩小"
+                onClick={() => applyView((viewRef.current.zoom ?? 1) / 1.3, viewRef.current.center ?? ['50%', '50%'])}
+                className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] shadow-sm transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
+              >
+                <Minus size={13} />
+              </button>
+              <button
+                type="button"
+                data-testid="palace-zoom-reset"
+                aria-label="重置图谱视图"
+                title="重置视图"
+                onClick={() => applyView(1, ['50%', '50%'])}
+                className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] shadow-sm transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
+              >
+                <RotateCcw size={13} />
+              </button>
+            </div>
             {!selectedNode && (
               <p className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-slate-900/70 px-3 py-1 text-[11px] text-white">
                 点击图谱中的节点，可查看实体详情、一跳邻居并定位来源文档

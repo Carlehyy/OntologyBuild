@@ -46,6 +46,27 @@ describe('palaceGraphOption', () => {
     assert.deepEqual((series.emphasis as { focus: string }).focus, 'adjacency')
   })
 
+  it('节点不可拖拽（拖拽一律平移画布）；漫游视图默认复位', () => {
+    const option = palaceGraphOption(makeGraph()) as unknown as {
+      series: Array<{ draggable: boolean; roam: boolean; zoom: number; center?: unknown }>
+    }
+    const series = option.series[0]
+    assert.equal(series.draggable, false)
+    assert.equal(series.roam, true)
+    assert.equal(series.zoom, 1)
+    assert.equal(series.center, undefined)
+  })
+
+  it('view 注入：重建 option 时沿用用户的缩放与平移，不被重置', () => {
+    const option = palaceGraphOption(makeGraph(), undefined, {
+      view: { zoom: 1.6, center: [180, 220] },
+    }) as unknown as {
+      series: Array<{ zoom: number; center: [number, number] }>
+    }
+    assert.equal(option.series[0].zoom, 1.6)
+    assert.deepEqual(option.series[0].center, [180, 220])
+  })
+
   it('节点按类型归入 category，未知类型归入「其他」，提及数驱动尺寸', () => {
     const option = palaceGraphOption(makeGraph()) as unknown as {
       series: Array<{ data: Array<Record<string, unknown>> }>

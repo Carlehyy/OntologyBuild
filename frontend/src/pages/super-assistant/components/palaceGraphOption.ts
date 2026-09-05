@@ -37,14 +37,20 @@ export function palaceGraphCategories(): { name: string }[] {
  *
  * compactLabels（大图密度开关）：节点数过多时默认隐藏名称标签（糊成一片），
  * 依赖 tooltip 与 emphasis（悬停/邻接）按需展示；顶部预留图例行高度。
+ *
+ * view（漫游视图保持）：notMerge 重建会把 zoom/center 重置回默认，调用方
+ * 从实例读出当前视图传入，保证轮询/过滤/选中不打断用户的缩放与平移。
+ * draggable 关闭：力导向布局下拖动节点与拖拽平移冲突（画布密集时几乎
+ * 总是命中节点），且节点坐标不持久化，手动理线没有留存价值——拖拽一律平移。
  */
 export function palaceGraphOption(
   graph: PalaceGraph,
   highlightIds?: Set<string> | string[],
-  options?: { compactLabels?: boolean },
+  options?: { compactLabels?: boolean; view?: { zoom?: number; center?: [number | string, number | string] } },
 ): EChartsOption {
   const base = baseChartOption()
   const compactLabels = options?.compactLabels ?? false
+  const view = options?.view
   const highlight = highlightIds
     ? (highlightIds instanceof Set ? highlightIds : new Set(highlightIds))
     : null
@@ -133,7 +139,9 @@ export function palaceGraphOption(
           layoutAnimation: true,
         },
         roam: true,
-        draggable: true,
+        draggable: false,
+        zoom: view?.zoom ?? 1,
+        ...(view?.center ? { center: view.center } : {}),
         categories: palaceGraphCategories(),
         data: nodeData,
         links: linkData,

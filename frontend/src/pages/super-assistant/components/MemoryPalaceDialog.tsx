@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AlertCircle, Brain, CheckCircle2, Clock, FileArchive, FileText, Image as ImageIcon,
-  Loader2, Pencil, RefreshCw, Trash2, Upload, X,
+  Loader2, Maximize2, Minimize2, Pencil, RefreshCw, Trash2, Upload, X,
 } from 'lucide-react'
 
 import {
@@ -90,6 +90,8 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
   const [replaceTarget, setReplaceTarget] = useState<string | null>(null)
   /** md 预览形态：默认渲染排版，可切源码（抽取文本即 markdown，txt 恒为源码） */
   const [previewMode, setPreviewMode] = useState<'render' | 'source'>('render')
+  /** 工作台全屏：占满视口并放宽图谱栏（Esc 仍关闭弹窗） */
+  const [maximized, setMaximized] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const zipInputRef = useRef<HTMLInputElement>(null)
   const replaceInputRef = useRef<HTMLInputElement>(null)
@@ -129,6 +131,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
       setShowSkipped(false)
       setReplaceTarget(null)
       setPreviewMode('render')
+      setMaximized(false)
     }
   }, [open])
 
@@ -418,7 +421,21 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
 
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
-      <DialogContent className="flex h-[min(88dvh,880px)] w-[min(96vw,88rem)] flex-col overflow-hidden">
+      <DialogContent className={maximized
+          ? 'flex h-dvh w-screen max-w-none translate-x-0 translate-y-0 left-0 top-0 flex-col overflow-hidden rounded-none border-0'
+          : 'flex h-[min(88dvh,880px)] w-[min(96vw,88rem)] flex-col overflow-hidden'}
+        >
+        <button
+          type="button"
+          data-testid="palace-fullscreen"
+          aria-pressed={maximized}
+          aria-label={maximized ? '退出全屏' : '全屏'}
+          title={maximized ? '退出全屏' : '全屏'}
+          onClick={() => setMaximized(value => !value)}
+          className="absolute right-12 top-4 flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+        >
+          {maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+        </button>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Brain size={16} className="text-teal-700" /> 记忆宫殿
@@ -433,7 +450,12 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
           上传的文档沉淀为跨会话长期知识：自动抽取实体关系构建图谱，选中文件可阅读编辑，图谱与文档双向联动。
         </p>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto lg:grid-cols-[248px_minmax(0,1fr)_clamp(400px,32vw,500px)] lg:overflow-hidden">
+        <div className={`grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto lg:overflow-hidden ${
+            maximized
+              ? 'lg:grid-cols-[280px_minmax(0,1fr)_clamp(520px,40vw,760px)]'
+              : 'lg:grid-cols-[248px_minmax(0,1fr)_clamp(400px,32vw,500px)]'
+          }`}>
+
           {/* 左：文件树 */}
           <aside
             aria-label="记忆宫殿文件库"
@@ -660,6 +682,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
             <PalaceGraphPanel
               graph={graph}
               loading={loading}
+              maximized={maximized}
               hasFiles={files.length > 0}
               files={files}
               selectedFileId={selectedFileId}
