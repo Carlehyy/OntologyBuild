@@ -205,7 +205,7 @@ export default function OntologyDetailPage() {
             className="min-w-0 overflow-x-auto"
             style={{ scrollbarWidth: 'none' }}
           >
-          <div ref={groupTabsRef} className="relative flex w-max items-center gap-1 rounded-xl border border-border bg-muted p-1">
+          <div ref={groupTabsRef} className="relative flex w-max items-center gap-1 rounded-xl border border-border bg-card p-1 shadow-sm">
             <div
               aria-hidden="true"
               className="absolute top-1 h-[calc(100%-8px)] rounded-lg bg-brand shadow-sm transition-all duration-300 ease-out"
@@ -228,7 +228,7 @@ export default function OntologyDetailPage() {
                   {group.key === 'governance' && pendingApprovalCount > 0 && (
                     <span
                       className={`ml-1.5 inline-flex h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums ${
-                        isActive ? 'bg-card text-[var(--color-text-inverse)]' : 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'
+                        isActive ? 'bg-card text-brand-ink' : 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'
                       }`}
                       title={`${pendingApprovalCount} 条动作待人工审批`}
                       aria-label={`${pendingApprovalCount} 条动作待人工审批`}
