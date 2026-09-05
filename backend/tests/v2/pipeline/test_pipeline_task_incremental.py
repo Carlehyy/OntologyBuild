@@ -171,7 +171,7 @@ def _run_with_fake_pipeline(db, monkeypatch, *, cursor_column="updated_at",
         finally:
             run_db.close()
 
-    monkeypatch.setattr(pipeline_run_task, "run", fake_pipeline_run)
+    monkeypatch.setattr(pipeline_run_task, "run", fake_pipeline_run, raising=False)
     result = task_engine.execute_pipeline_task(
         created["id"], full_refresh=full_refresh)
     run_db = runtime_session()
