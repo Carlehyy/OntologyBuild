@@ -43,7 +43,7 @@ import SceneListPage from '@/pages/scenes/list/SceneListPage'
 import SceneDetailPage from '@/pages/scenes/detail/SceneDetailPage'
 import SceneModelingPage from '@/pages/scenes/modeling/SceneModelingPage'
 import PublicManualDatasetPage from '@/pages/data-management/structured/PublicManualDatasetPage'
-import { ToastProvider } from '@/components/ui/Toast'
+import { Toaster } from '@/components/ui/sonner'
 import { AccessDeniedPage, NoAssignedPagesPage } from '@/pages/errors/AccessDeniedPage'
 import { canAccessPath, defaultLandingPath, firstAccessiblePath } from '@/config/navigation'
 
@@ -135,7 +135,7 @@ function LegacyWorldModelRedirect() {
 export default function App() {
   return (
     <QueryClientProvider client={qc}>
-      <ToastProvider>
+      <Toaster />
         <HashRouter>
           <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -227,7 +227,6 @@ export default function App() {
           <Route path="*" element={<UnknownRouteRedirect />} />
           </Routes>
         </HashRouter>
-      </ToastProvider>
     </QueryClientProvider>
   )
 }
