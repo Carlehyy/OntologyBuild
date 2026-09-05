@@ -8,7 +8,6 @@ from app.models.v2.dataset import Dataset, DatasetVersion
 from app.tasks.v2.connection_sync import sync_connection
 
 
-CONNECTION_SYNC_TASK_NAME = "app.tasks.v2.connection_sync.sync_connection"
 
 
 class _Connector:
@@ -58,26 +57,8 @@ class _Storage:
         self.objects.pop(uri, None)
 
 
-def test_connection_sync_task_has_stable_name_and_delay(monkeypatch):
-    dispatched = object()
-    apply_async = MagicMock(return_value=dispatched)
-    monkeypatch.setattr(sync_connection, "apply_async", apply_async)
-
-    result = sync_connection.delay("conn-1", "delta", "orders")
-
-    assert sync_connection.name == CONNECTION_SYNC_TASK_NAME
-    assert result is dispatched
-    apply_async.assert_called_once_with(("conn-1", "delta", "orders"), {})
-
-
-def test_connection_sync_worker_include_registers_task():
-    from app.tasks.celery_app import celery_app
-
-    assert "app.tasks.v2.connection_sync" in celery_app.conf.include
-    celery_app.loader.import_default_modules()
-    registered = celery_app.tasks[CONNECTION_SYNC_TASK_NAME]
-    assert registered.name == CONNECTION_SYNC_TASK_NAME
-    assert callable(registered.delay)
+# Celery 退役：stable task name / worker include 两条契约测试随任务框架
+# 一并移除；异步派发契约改由 NATS subject 断言（见下方 dispatched 断言）。
 
 
 def test_connection_sync_uses_database_when_managed_minio_is_unavailable(
@@ -226,12 +207,12 @@ def test_async_dispatch_does_not_mark_connection_active_before_completion(
     )
     db.add(connection)
     db.commit()
+    from app.data_channel.pipeline_tasks.dispatch import CONNECTION_SYNC_SUBJECT
+
     dispatched = []
     monkeypatch.setattr(
-        sync_connection,
-        "delay",
-        lambda *args: dispatched.append(args),
-        raising=False,
+        "app.data_channel.pipeline_tasks.dispatch.dispatch_task",
+        lambda subject, payload: dispatched.append((subject, payload)),
     )
 
     result = trigger_sync(
@@ -243,7 +224,8 @@ def test_async_dispatch_does_not_mark_connection_active_before_completion(
     db.refresh(connection)
     assert result["status"] == "sync_triggered"
     assert connection.status == "inactive"
-    assert dispatched == [(connection.id, "full", "/orders")]
+    assert dispatched == [(CONNECTION_SYNC_SUBJECT, {
+        "connection_id": connection.id, "mode": "full", "resource": "/orders"})]
 
 
 def test_async_dispatch_fails_closed_in_compatibility_mode(

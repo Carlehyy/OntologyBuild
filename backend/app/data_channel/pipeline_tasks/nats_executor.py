@@ -50,6 +50,9 @@ _HEARTBEAT_INTERVAL_SECONDS = 5
 _CONSUMER_DURABLE = "pipeline-executor"
 _PIPELINE_RUN_DURABLE = "pipeline-run-executor"
 _DATASET_IMPORT_DURABLE = "dataset-import-executor"
+_MAPPING_APPLY_DURABLE = "mapping-apply-executor"
+_CONNECTION_SYNC_DURABLE = "connection-sync-executor"
+_DATASET_EVENT_DURABLE = "dataset-event-executor"
 _DATASET_MIGRATE_DURABLE = "dataset-migrate-executor"
 _SUPER_ASSISTANT_REFLECT_MICRO_DURABLE = "super-assistant-reflect-micro"
 _ASSISTANT_EVAL_AUTOPILOT_DURABLE = "assistant-eval-autopilot"
@@ -140,12 +143,48 @@ async def _run_dataset_migrate_message(payload: dict) -> None:
     logger.info("数据集迁移任务 %s 执行完成", job_id)
 
 
+async def _run_mapping_apply_message(payload: dict) -> None:
+    """task.mapping.apply：增量编排触发的 Mapping 异步应用。"""
+    from app.tasks.v2.mapping_apply import mapping_apply_task
+
+    await asyncio.to_thread(
+        mapping_apply_task, str(payload["mapping_id"]), str(payload["ontology_id"]))
+    logger.info("Mapping %s 应用完成", payload["mapping_id"])
+
+
+async def _run_connection_sync_message(payload: dict) -> None:
+    """task.connection.sync：手动触发的 Connection 异步数据同步。"""
+    from app.tasks.v2.connection_sync import sync_connection
+
+    result = await asyncio.to_thread(
+        sync_connection,
+        str(payload["connection_id"]),
+        str(payload.get("mode") or "full"),
+        payload.get("resource") or None,
+    )
+    logger.info("Connection %s 异步同步完成: %s", payload["connection_id"],
+                result.get("status") if isinstance(result, dict) else result)
+
+
+async def _run_dataset_event_message(payload: dict) -> None:
+    """task.dataset.event：已 claim 的 DatasetVersion 事件终态处理。"""
+    from app.tasks.v2.dataset_event_processing import process_dataset_version_event
+
+    await asyncio.to_thread(
+        process_dataset_version_event,
+        str(payload["event_id"]), str(payload["claim_token"]))
+    logger.info("DatasetVersion 事件 %s 处理完成", payload["event_id"])
+
+
 def _handler_registry():
     """subject → (durable, handler)：每 subject 独立 durable pull consumer。"""
     from app.data_channel.pipeline_tasks.dispatch import (
         ASSISTANT_EVAL_AUTOPILOT_SUBJECT,
+        CONNECTION_SYNC_SUBJECT,
+        DATASET_EVENT_SUBJECT,
         DATASET_IMPORT_SUBJECT,
         DATASET_MIGRATE_SUBJECT,
+        MAPPING_APPLY_SUBJECT,
         PIPELINE_EXECUTE_SUBJECT,
         PIPELINE_RUN_SUBJECT,
         SUPER_ASSISTANT_PALACE_CONSOLIDATE_SUBJECT,
@@ -161,6 +200,9 @@ def _handler_registry():
         (PIPELINE_EXECUTE_SUBJECT, _CONSUMER_DURABLE, _execute_pipeline_task_message),
         (PIPELINE_RUN_SUBJECT, _PIPELINE_RUN_DURABLE, _run_pipeline_run_message),
         (DATASET_IMPORT_SUBJECT, _DATASET_IMPORT_DURABLE, _run_dataset_import_message),
+        (MAPPING_APPLY_SUBJECT, _MAPPING_APPLY_DURABLE, _run_mapping_apply_message),
+        (CONNECTION_SYNC_SUBJECT, _CONNECTION_SYNC_DURABLE, _run_connection_sync_message),
+        (DATASET_EVENT_SUBJECT, _DATASET_EVENT_DURABLE, _run_dataset_event_message),
         (
             SUPER_ASSISTANT_REFLECT_MICRO_SUBJECT,
             _SUPER_ASSISTANT_REFLECT_MICRO_DURABLE,

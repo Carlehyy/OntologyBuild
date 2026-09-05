@@ -39,7 +39,6 @@ def readiness_response(
         "status": "ok",
         "db": "unknown",
         "redis": "unknown",
-        "celery": "unknown",
         "neo4j": "unknown",
         "minio": "unknown",
         "object_storage": "unknown",
@@ -76,16 +75,6 @@ def readiness_response(
         checks["redis"] = "ok"
     except Exception:
         checks["redis"] = "unavailable"
-
-    # A healthy broker does not prove that any worker can consume registered
-    # tasks. Keep the ping bounded and require at least one worker response.
-    try:
-        from app.tasks.celery_app import celery_app
-
-        replies = celery_app.control.ping(timeout=1.5)
-        checks["celery"] = "ok" if replies else "unavailable"
-    except Exception:
-        checks["celery"] = "unavailable"
 
     # Neo4j check
     driver = None
@@ -233,7 +222,6 @@ def readiness_response(
     service_keys = (
         "db",
         "redis",
-        "celery",
         "neo4j",
         "minio",
         "browser",

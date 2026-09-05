@@ -181,14 +181,16 @@ def trigger_sync(connection_id: str, body: SyncBody | None = None,
 
     if body.async_mode:
         try:
-            from app.tasks.celery_app import celery_app  # noqa: F401
-            from app.tasks.v2.connection_sync import sync_connection as _sync
-            delay = getattr(_sync, "delay", None)
-            if not callable(delay):
-                raise RuntimeError("Connection 同步任务未注册")
-            # 异步入口也必须透传 resource；丢失它会退回“第一个资源”，使调用
-            # 者请求的资源与最终 Dataset 身份不一致。
-            delay(connection_id, body.mode, body.resource)
+            from app.data_channel.pipeline_tasks.dispatch import (
+                CONNECTION_SYNC_SUBJECT, dispatch_task,
+            )
+            # 透传 resource；丢失它会退回“第一个资源”，使调用方请求的资源
+            # 与最终 Dataset 身份不一致。
+            dispatch_task(CONNECTION_SYNC_SUBJECT, {
+                "connection_id": connection_id,
+                "mode": body.mode,
+                "resource": body.resource or "",
+            })
         except Exception as exc:
             logger.error(
                 "Connection %s 异步同步任务投递失败；任务未执行（%s）",
@@ -197,7 +199,7 @@ def trigger_sync(connection_id: str, body: SyncBody | None = None,
             )
             raise HTTPException(
                 503,
-                "Redis/Celery 后台任务服务不可用，异步同步任务未投递",
+                "NATS 后台任务服务不可用，异步同步任务未投递",
             ) from exc
         return {"connection_id": connection_id, "status": "sync_triggered"}
 
