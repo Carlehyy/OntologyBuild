@@ -616,35 +616,44 @@ test('定时任务为如实占位的即将上线弹窗，全局搜索打开真�
   await expect(page.getByText(/即将上线/).first()).toBeVisible()
 })
 
-test('multica 命令提示：未配置/未启用时输入框不提供任何命令', async ({ page }) => {
+test('multica 命令提示：未配置/未启用时输入 / 也不提供任何命令', async ({ page }) => {
   await seedAuth(page)
   await mockApis(page)
   await page.goto('/#/super-assistant')
 
   const composer = page.getByRole('textbox', { name: '向超级助手发送消息' })
+  await composer.fill('/')
+  await expect(page.getByTestId('multica-command-hints')).toHaveCount(0)
   await composer.fill('/multica')
   await expect(page.getByTestId('multica-command-hints')).toHaveCount(0)
   await composer.fill('/multica:list_agents')
   await expect(page.getByTestId('multica-command-hints')).toHaveCount(0)
 })
 
-test('multica 命令提示：配置启用后前缀过滤、点选填充，未知片段收起', async ({ page }) => {
+test('multica 命令提示：输入 / 即列出全部，前缀收窄、点选填充、参数区收起', async ({ page }) => {
   await seedAuth(page)
   await mockApis(page, { multicaConfig: multicaEnabledFixture })
   await page.goto('/#/super-assistant')
 
   const composer = page.getByRole('textbox', { name: '向超级助手发送消息' })
-  await composer.fill('/multica')
   const hints = page.getByTestId('multica-command-hints')
+
+  // 仅输入 / 即列出全部可用命令（由已启用集成的命令目录驱动）
+  await composer.fill('/')
   await expect(hints).toBeVisible()
   await expect(hints.getByRole('button')).toHaveCount(3)
   await expect(hints.getByText('需确认')).toBeVisible()
 
+  await composer.fill('/multica:l')
+  await expect(hints.getByRole('button')).toHaveCount(2)
   await composer.fill('/multica:list_a')
   await expect(hints.getByRole('button')).toHaveCount(1)
   await hints.getByRole('button', { name: /list_agents/ }).click()
   await expect(composer).toHaveValue('/multica:list_agents')
 
+  // 选中进入参数输入（出现空白）后提示收起；未知前缀同样收起
+  await composer.fill('/multica:list_agents 进行中的')
+  await expect(page.getByTestId('multica-command-hints')).toHaveCount(0)
   await composer.fill('/multica:warp')
   await expect(page.getByTestId('multica-command-hints')).toHaveCount(0)
 })
@@ -952,12 +961,21 @@ test('记忆宫殿：三栏工作台（文件树|内容|图谱），上传删除
   await page.keyboard.press('Escape')
   await expect(dialog).toHaveCount(0)
 
-  // 外部集成已是真实功能：打开 multica 配置弹窗，走通「测试连接 → 选工作区 → 保存」
+  // 外部集成已是真实功能：左侧集成类型 tabs（multica / GitHub 占位），
+  // multica 默认选中并走通「测试连接 → 选工作区 → 保存」
   await page.getByRole('button', { name: '外部集成' }).click()
   const integrationsDialog = page.getByRole('dialog')
   await expect(integrationsDialog.getByRole('heading', { name: '外部集成' })).toBeVisible()
+  const multicaTab = integrationsDialog.locator('[data-integrations-tab="multica"]')
+  await expect(multicaTab).toHaveAttribute('aria-selected', 'true')
   await expect(integrationsDialog.getByTestId('multica-config-card')).toBeVisible()
-  await expect(integrationsDialog.getByText(/更多集成/)).toBeVisible()
+
+  // GitHub tab 为结构化占位：切过去显示规划中，切回 multica 表单仍在
+  await integrationsDialog.locator('[data-integrations-tab="github"]').click()
+  await expect(integrationsDialog.getByTestId('integrations-github-placeholder')).toBeVisible()
+  await expect(integrationsDialog.getByTestId('multica-config-card')).toHaveCount(0)
+  await multicaTab.click()
+  await expect(integrationsDialog.getByTestId('multica-config-card')).toBeVisible()
 
   await integrationsDialog.getByTestId('multica-base-url').fill('http://127.0.0.1:8080')
   await integrationsDialog.getByTestId('multica-token').fill('mul-e2e-token')
