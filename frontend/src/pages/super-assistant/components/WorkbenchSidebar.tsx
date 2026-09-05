@@ -28,6 +28,7 @@ import {
   CONVERSATION_GROUP_VISIBLE_LIMIT,
   groupConversations,
 } from '../conversationGroups'
+import IntegrationsDialog from './IntegrationsDialog'
 import MemoryPalaceDialog from './MemoryPalaceDialog'
 
 interface WorkbenchSidebarProps {
@@ -40,18 +41,16 @@ interface WorkbenchSidebarProps {
   onDelete: (id: string) => void
   onSetArchived: (id: string, archived: boolean) => void
   onOpenSearch: () => void
+  /** 外部集成保存后回调（页面刷新 multica 配置以同步命令提示可用性） */
+  onIntegrationsSaved?: () => void | Promise<void>
 }
 
-type PlaceholderFeature = 'tasks' | 'integrations'
+type PlaceholderFeature = 'tasks'
 
 const PLACEHOLDER_COPY: Record<PlaceholderFeature, { title: string; body: string }> = {
   tasks: {
     title: '定时任务',
     body: '定时任务功能即将上线：让超级助手按你设定的计划自动执行任务，当前版本请手动发起对话。',
-  },
-  integrations: {
-    title: '外部集成',
-    body: '外部集成功能即将上线：打通邮箱、GitHub 等外部平台，让助手接入你的日常工作流，当前版本请先在对话中直接使用助手。',
   },
 }
 
@@ -125,12 +124,14 @@ export default function WorkbenchSidebar({
   onDelete,
   onSetArchived,
   onOpenSearch,
+  onIntegrationsSaved,
 }: WorkbenchSidebarProps) {
   const user = useAuthStore(state => state.user)
   const logout = useAuthStore(state => state.logout)
   const navigate = useNavigate()
   const [placeholder, setPlaceholder] = useState<PlaceholderFeature | null>(null)
   const [palaceOpen, setPalaceOpen] = useState(false)
+  const [integrationsOpen, setIntegrationsOpen] = useState(false)
   const [archivedOpen, setArchivedOpen] = useState(false)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
 
@@ -227,7 +228,12 @@ export default function WorkbenchSidebar({
             <LayoutDashboard size={17} className="shrink-0" /> 本体治理
           </Link>
         )}
-        <button type="button" onClick={() => setPlaceholder('integrations')} className={actionItemClass}>
+        <button
+          type="button"
+          onClick={() => setIntegrationsOpen(true)}
+          className={actionItemClass}
+          data-workbench-integrations
+        >
           <Plug size={17} className="shrink-0" /> 外部集成
         </button>
       </nav>
@@ -357,6 +363,12 @@ export default function WorkbenchSidebar({
       </Dialog>
 
       <MemoryPalaceDialog open={palaceOpen} onOpenChange={setPalaceOpen} />
+      {integrationsOpen && (
+        <IntegrationsDialog
+          onClose={() => setIntegrationsOpen(false)}
+          onSaved={onIntegrationsSaved}
+        />
+      )}
     </>
   )
 }

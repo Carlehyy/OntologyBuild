@@ -16,7 +16,7 @@ from app.model_configs.selector import llm_call_kwargs, select_llm_model_config
 from app.settings.object_storage.service import execute_minio_tool
 from app.shared.config import settings
 from app.shared.database import SessionLocal
-from app.super_assistant import files_workspace, memory_service, palace_service, provider, reflection_service, web_tools
+from app.super_assistant import files_workspace, memory_service, multica_service, palace_service, provider, reflection_service, web_tools
 from app.super_assistant.compaction import maybe_compact
 from app.super_assistant.mcp_client import call_tool, decrypt_env, decrypt_headers, namespaced_tool_name
 from app.super_assistant.models import (
@@ -61,6 +61,9 @@ _READ_ONLY_BUILTIN_TOOLS = frozenset({
     "palace_recall",
     "web_fetch",
     "web_search",
+    # multica 外部集成只读工具（写操作 multica_create_task 走串行 + 审批门）
+    "multica_list_agents",
+    "multica_list_tasks",
     "think",
     # 会话附件只读读取：写入由 HTTP 上传端点完成，agent 不可写
     "list_session_files",
@@ -72,6 +75,9 @@ _READ_ONLY_BUILTIN_TOOLS = frozenset({
     "todo_write",
     "todo_read",
 })
+
+# 需要用户审批确认的内置工具：目前是 multica 下发任务（外部系统写操作）
+_CONFIRMATION_REQUIRED_BUILTIN_TOOLS = frozenset({"multica_create_task"})
 
 
 def sse(event: str, data: dict[str, Any]) -> str:
@@ -105,6 +111,7 @@ def _system_prompt(
     agent_mode: bool = False,
     file_section: str = "",
     palace_section: str = "",
+    multica_enabled: bool = False,
 ) -> str:
     catalog = "\n".join(
         f"- {skill.name}: {skill.description}"
@@ -131,6 +138,13 @@ def _system_prompt(
         prompt = f"{prompt}\n{_AGENT_MODE_SECTION}\n"
     if always_active_section:
         prompt = f"{prompt}\n{always_active_section}\n"
+    if multica_enabled:
+        prompt = (
+            f"{prompt}\n10. 已配置 multica 外部集成：可用 multica_list_agents / "
+            "multica_list_tasks 查询智能体与任务，multica_create_task 创建并指派任务"
+            "（写操作，平台会要求用户确认后执行）；用户消息以 /multica: 命令开头时，"
+            "系统会强制指定对应工具，请照做。\n"
+        )
     if memory_section:
         prompt = f"{prompt}\n{memory_section}\n"
     if file_section:
@@ -629,6 +643,8 @@ def _execute_builtin_tool(
         if not task:
             return json.dumps({"error": "task 不能为空"}, ensure_ascii=False)
         return run_subagent(db, owner_id, call_kwargs, task)
+    if name in {"multica_list_agents", "multica_list_tasks", "multica_create_task"}:
+        return multica_service.execute_tool(db, owner_id, name, arguments)
     return json.dumps({"error": f"未知工具 {name}"}, ensure_ascii=False)
 
 
@@ -774,6 +790,68 @@ def _trigger_micro_reflection(
     threading.Thread(target=_inline_reflect, daemon=True, name="sa-micro-reflect").start()
 
 
+def _run_multica_direct_tool(
+    db,
+    *,
+    owner_id: str,
+    conversation_id: str,
+    assistant_message_id: str,
+    tool_name: str,
+    messages: list[dict[str, Any]],
+    steps: list[dict[str, Any]],
+) -> Iterator[str]:
+    """直接执行无参数尾串的 multica 查询命令（不经过 LLM 决策）。
+
+    产出与常规工具循环同一套 tool_start/tool_result SSE 契约，并把
+    assistant tool_calls + tool 结果回灌 messages，供随后一轮 LLM 总结。
+    """
+    call_id = f"multica-{assistant_message_id[:8]}"
+    tool_run = SuperAssistantToolRun(
+        conversation_id=conversation_id,
+        assistant_message_id=assistant_message_id,
+        call_id=call_id,
+        tool_name=tool_name,
+        server_id=None,
+        arguments={},
+        status="running",
+        requires_confirmation=False,
+    )
+    db.add(tool_run)
+    db.commit()
+    db.refresh(tool_run)
+    yield sse("tool_start", {"toolRunId": tool_run.id, "toolName": tool_name, "arguments": {}})
+    started = time.monotonic()
+    try:
+        output = multica_service.execute_tool(db, owner_id, tool_name, {})
+        status = "success"
+        error = None
+    except Exception as exc:  # 失败同样回灌模型，让总结轮如实转述
+        output = json.dumps({"error": str(exc)}, ensure_ascii=False)
+        status = "error"
+        error = str(exc)
+    if len(output) > settings.super_assistant_tool_result_chars:
+        output = output[: settings.super_assistant_tool_result_chars] + "\n…[结果已截断]"
+    tool_run.result = output
+    tool_run.status = status
+    tool_run.error = error
+    tool_run.duration_ms = int((time.monotonic() - started) * 1000)
+    tool_run.completed_at = datetime.now(timezone.utc)
+    db.commit()
+    steps.append({
+        "toolName": tool_name,
+        "status": status,
+        "arguments": {},
+        "preview": output[:800],
+    })
+    messages.append({
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": call_id, "name": tool_name, "arguments": {}}],
+    })
+    messages.append({"role": "tool", "tool_call_id": call_id, "name": tool_name, "content": output})
+    yield sse("tool_result", {"toolRunId": tool_run.id, "status": status, "preview": output[:800]})
+
+
 def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: str,
                 requested_model_id: str | None, agent_mode: bool = False) -> Iterator[str]:
     db = SessionLocal()
@@ -820,6 +898,10 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
             SuperAssistantMcpServer.enabled.is_(True),
         ).order_by(SuperAssistantMcpServer.name.asc()).all()
         tools, mcp_registry = _tool_catalog(servers, agent_mode)
+        # multica 外部集成：配置生效时工具才进入目录（未配置的用户不可见、不可调）
+        multica_config = multica_service.active_config(db, owner_id)
+        if multica_config is not None:
+            tools.extend(multica_service.tool_schemas())
         # 自主 agent 模式的 todo 清单状态：仅存活于本次 stream_chat，不落库
         todo_state: dict[str, list[str]] | None = {"items": []} if agent_mode else None
         max_rounds = (
@@ -836,6 +918,9 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
             SuperAssistantMessage.status == "complete",
         ).order_by(SuperAssistantMessage.created_at.desc()).first()
         user_query = latest_user.content if latest_user else ""
+        multica_slash = multica_service.parse_slash_command(
+            user_query, configured=multica_config is not None,
+        )
 
         stored_messages = db.query(SuperAssistantMessage).filter(
             SuperAssistantMessage.conversation_id == conversation_id,
@@ -859,6 +944,7 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
             {"role": "system", "content": _system_prompt(
                 skills, memory_section, agent_mode,
                 file_section=file_section, palace_section=palace_section,
+                multica_enabled=multica_config is not None,
             )}
         ]
         messages.extend({"role": item.role, "content": item.content} for item in stored_messages if item.role in {"user", "assistant"})
@@ -868,14 +954,52 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
         last_input_tokens = 0
         all_text: list[str] = []
 
+        # /multica: 强制命令处理：未配置/未知命令给确定性引导（不走 LLM）；
+        # 查询命令无参数尾串时直接执行；其余进入强制 LLM 轮（首轮工具目录
+        # 收敛到命令指定的工具，写操作仍走审批门）
+        direct_reply: str | None = None
+        forced_tool: str | None = None
+        if multica_slash is not None:
+            if multica_slash.state != "ok":
+                direct_reply = multica_service.guidance_text(multica_slash)
+            elif not multica_slash.command["write"] and not multica_slash.tail:
+                forced_tool = multica_slash.tool_name
+                yield from _run_multica_direct_tool(
+                    db,
+                    owner_id=owner_id,
+                    conversation_id=conversation_id,
+                    assistant_message_id=assistant_message.id,
+                    tool_name=forced_tool,
+                    messages=messages,
+                    steps=steps,
+                )
+                tools = []  # 后续轮次仅做中文总结，不再提供工具
+            else:
+                forced_tool = multica_slash.tool_name
+                directive = multica_service.forced_directive_text(multica_slash)
+                for item in reversed(messages):
+                    if item.get("role") == "user":
+                        item["content"] = f"{item.get('content') or ''}{directive}"
+                        break
+        if direct_reply is not None:
+            yield sse("text_delta", {"delta": direct_reply})
+            all_text.append(direct_reply)
+
         for round_index in range(max_rounds):
+            if direct_reply is not None:
+                break  # 确定性引导已产出全文；break 同时跳过 for-else 的收尾合成
             if _run_cancelled(db, assistant_message):
                 yield sse("cancelled", {"message": "已停止生成"})
                 return
             yield sse("thinking", {"round": round_index + 1})
             messages = maybe_compact(db, conversation, call_kwargs, messages)
+            round_tools = tools
+            if forced_tool is not None and round_index == 0 and tools:
+                round_tools = [
+                    entry for entry in tools if entry.get("name") == forced_tool
+                ]
             result, round_text, cancelled = yield from _chat_round(
-                call_kwargs, messages, tools,
+                call_kwargs, messages, round_tools,
                 lambda: _run_cancelled(db, assistant_message),
             )
             if cancelled:
@@ -910,6 +1034,12 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
                 arguments = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
                 call_id = str(call.get("id") or f"call-{round_index}-{len(order)}")
                 server_tuple = mcp_registry.get(tool_name)
+                requires_confirmation = bool(
+                    server_tuple and server_tuple[0].require_confirmation
+                ) or (
+                    server_tuple is None
+                    and tool_name in _CONFIRMATION_REQUIRED_BUILTIN_TOOLS
+                )
                 tool_run = SuperAssistantToolRun(
                     conversation_id=conversation_id,
                     assistant_message_id=assistant_message.id,
@@ -917,8 +1047,8 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
                     tool_name=tool_name,
                     server_id=server_tuple[0].id if server_tuple else None,
                     arguments=arguments,
-                    status="awaiting_confirmation" if server_tuple and server_tuple[0].require_confirmation else "running",
-                    requires_confirmation=bool(server_tuple and server_tuple[0].require_confirmation),
+                    status="awaiting_confirmation" if requires_confirmation else "running",
+                    requires_confirmation=requires_confirmation,
                 )
                 db.add(tool_run)
                 db.commit()
@@ -990,11 +1120,12 @@ def stream_chat(*, conversation_id: str, owner_id: str, assistant_message_id: st
                 tool_run = item["run"]
                 server_tuple = item["server"]
                 if tool_run.requires_confirmation:
-                    server, original_name = server_tuple
+                    # MCP 工具按 server 名展示来源；multica 等需确认的内置
+                    # 工具无 server 归属，统一以 multica 作为来源标签
                     yield sse("tool_confirmation_required", {
                         "toolRunId": tool_run.id,
-                        "toolName": original_name,
-                        "serverName": server.name,
+                        "toolName": server_tuple[1] if server_tuple else tool_run.tool_name,
+                        "serverName": server_tuple[0].name if server_tuple else "multica",
                         "arguments": item["arguments"],
                     })
                     decision = _wait_for_confirmation(db, tool_run, assistant_message)

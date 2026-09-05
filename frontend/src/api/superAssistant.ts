@@ -270,6 +270,35 @@ const streamChat = async (
   if (buffer.trim()) dispatch(buffer)
 }
 
+/** multica 外部集成配置（每用户一条）：commands 由后端下发，未配置/未启用时为空，
+ *  输入框据此决定是否展示 /multica: 命令提示 */
+export interface MulticaCommand {
+  command: string
+  title: string
+  description: string
+  usage: string
+  write: boolean
+}
+
+export interface MulticaConfig {
+  configured: boolean
+  enabled: boolean
+  base_url: string
+  workspace_id: string
+  token_set: boolean
+  commands: MulticaCommand[]
+  last_test_status: 'success' | 'error' | null
+  last_test_message: string | null
+  last_tested_at: string | null
+}
+
+export interface MulticaTestResult {
+  ok: boolean
+  message: string
+  account_name: string | null
+  workspaces: Array<{ id: string; name: string; slug: string }>
+}
+
 export interface SuperMemory {
   id: string
   content: string
@@ -461,4 +490,10 @@ export const superAssistantApi = {
   widgetConfig: () => apiClientV2.get<AssistantWidgetConfig>('/super-assistant/widget-config'),
   updateWidgetConfig: (hiddenMenuKeys: string[]) =>
     apiClientV2.put<AssistantWidgetConfig>('/super-assistant/widget-config', { hidden_menu_keys: hiddenMenuKeys }),
+
+  multicaConfig: () => apiClientV2.get<MulticaConfig>('/super-assistant/multica/config'),
+  updateMulticaConfig: (body: { base_url: string; token?: string | null; workspace_id: string; enabled: boolean }) =>
+    apiClientV2.put<MulticaConfig>('/super-assistant/multica/config', body),
+  testMultica: (body: { base_url?: string | null; token?: string | null } = {}) =>
+    apiClientV2.post<MulticaTestResult>('/super-assistant/multica/test', body),
 }
