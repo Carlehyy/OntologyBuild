@@ -27,11 +27,11 @@ agentloop/
 
 1. `agentloop/Dockerfile` 在标准 backend 镜像构建流程的基础上，额外安装阿里云 Python
    探针 `aliyun-bootstrap`（装进 `/app/.venv` 虚拟环境），产出
-   `ontologybuild-backend-agentloop:local` 镜像。
+   `openontology-backend-agentloop:local` 镜像。
 2. `agentloop/compose.agentloop.yml` 是 `docker-compose.prod.yml` 的覆盖层，只替换
    backend 服务的三样东西：镜像/构建、启动命令（包一层 `aliyun-instrument`）、
    探针环境变量（`ARMS_*`）。
-3. `deploy/deploy-prod.sh` 检测到服务器 `/opt/ontologybuild/.env` 中配置了
+3. `deploy/deploy-prod.sh` 检测到服务器 `/opt/openontology/.env` 中配置了
    `ARMS_LICENSE_KEY` 时，自动把覆盖层叠加到 compose 文件列表；**没有配置时部署
    行为与原来完全一致**。因此启用/回退只需增删 `.env` 两行，无需改 CI、无需改业务。
 
@@ -52,7 +52,7 @@ bash agentloop/scripts/onboard.sh
 ```
 
 脚本会依次完成：初始化 APM 配置（幂等）→ 读取 LicenseKey/上报端点 → 注册应用服务
-`ontologybuild-backend` → 拉取 `ai-openai` 插件模板 → 校验注册结果，最后打印两行
+`openontology-backend` → 拉取 `ai-openai` 插件模板 → 校验注册结果，最后打印两行
 需要追加到服务器 `.env` 的配置（形如 `ARMS_LICENSE_KEY=…`）。
 
 > LicenseKey 是敏感凭据：只保留在你自己的终端输出里，**不要提交进仓库**，
@@ -60,7 +60,7 @@ bash agentloop/scripts/onboard.sh
 
 ### 第 2 步：服务器 .env 追加两行
 
-SSH 到部署服务器，把 onboard.sh 输出的两行追加到 `/opt/ontologybuild/.env`：
+SSH 到部署服务器，把 onboard.sh 输出的两行追加到 `/opt/openontology/.env`：
 
 ```bash
 ARMS_LICENSE_KEY=<onboard.sh 输出的值>
@@ -75,7 +75,7 @@ ARMS_REGION_ID=cn-hangzhou
 
 ## 验证接入
 
-1. 服务注册：控制台「接入中心/应用列表」能看到 `ontologybuild-backend`；
+1. 服务注册：控制台「接入中心/应用列表」能看到 `openontology-backend`；
    或用 CLI：`aliyun cms2 apm service list --workspace <workspace> --region cn-hangzhou`。
 2. 数据上报：控制台「观测」里出现 Trace（LLM 调用耗时、Token 用量、工具调用）。
 3. 没有数据时的排查顺序：

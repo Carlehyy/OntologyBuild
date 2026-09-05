@@ -36,7 +36,7 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 # 注入在用户脚本之后的平台收尾代码：提取 result 并序列化到标记之间。
 # 用户脚本抛错时（stop_on_error=True）收尾代码不会执行，错误经 iopub 回收。
 _RESULT_EPILOGUE = f'''
-# ── OntologyBuild 平台输出提取（自动注入，请勿删除） ──
+# ── OpenOntology 平台输出提取（自动注入，请勿删除） ──
 import json as _ob_json
 if "result" not in globals():
     raise NameError("脚本未定义输出变量 result：请将最终结果赋值为 result（list[dict]，每行一个 {{列名: 值}} 对象）")
@@ -148,7 +148,7 @@ def execute_script(script: str, *, timeout: int | None = None, cancel_event=None
     prelude = ""
     if params is not None:
         prelude = (
-            "# ── OntologyBuild 平台运行参数（自动注入） ──\n"
+            "# ── OpenOntology 平台运行参数（自动注入） ──\n"
             "OB_RUN_PARAMS = "
             + json.dumps(params, ensure_ascii=False)
             + "\n"
@@ -281,7 +281,7 @@ def _run_on_kernel_impl(
     request = {
         "header": {
             "msg_id": msg_id,
-            "username": "ontologybuild",
+            "username": "openontology",
             "session": uuid.uuid4().hex,
             "msg_type": "execute_request",
             "version": "5.3",

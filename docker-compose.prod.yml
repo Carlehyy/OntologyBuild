@@ -69,7 +69,7 @@ services:
     restart: unless-stopped
 
   browser:
-    image: ontologybuild-browser:local
+    image: openontology-browser:local
     build:
       context: ./docker/browser
       args:

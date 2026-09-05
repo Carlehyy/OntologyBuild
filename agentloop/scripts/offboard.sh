@@ -8,7 +8,7 @@ set -Eeuo pipefail
 
 cat <<'EOF'
 ========== 回退步骤（按顺序执行） ==========
-1) 从部署服务器 /opt/ontologybuild/.env 删除这两行（或清空值）：
+1) 从部署服务器 /opt/openontology/.env 删除这两行（或清空值）：
      ARMS_LICENSE_KEY=...
      ARMS_REGION_ID=...
 2) 正常部署一次（GitHub Actions 或手动 bash deploy/deploy-prod.sh）。
@@ -20,7 +20,7 @@ EOF
 if [ "${1:-}" = "--delete" ]; then
   WORKSPACE="${AGENTLOOP_WORKSPACE:-agentloop-9d2a85cf4ad2319dcd8bbab20b3eed85}"
   REGION="${AGENTLOOP_REGION:-cn-hangzhou}"
-  SERVICE_NAME="${AGENTLOOP_SERVICE_NAME:-ontologybuild-backend}"
+  SERVICE_NAME="${AGENTLOOP_SERVICE_NAME:-openontology-backend}"
   echo
   echo "当前注册的服务记录："
   aliyun cms2 apm service list --workspace "$WORKSPACE" --service-name "$SERVICE_NAME" --region "$REGION" -o json

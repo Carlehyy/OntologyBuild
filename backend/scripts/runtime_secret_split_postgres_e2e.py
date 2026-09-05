@@ -169,7 +169,7 @@ def _self_test() -> None:
         else:
             raise AssertionError("report sanitizer accepted a sensitive value")
     guarded_keys = (
-        "ONTOLOGYBUILD_RUNTIME_SECRET_E2E",
+        "OPENONTOLOGY_RUNTIME_SECRET_E2E",
         "ENVIRONMENT",
         "DATABASE_URL",
     )
@@ -177,7 +177,7 @@ def _self_test() -> None:
     try:
         os.environ.update(
             {
-                "ONTOLOGYBUILD_RUNTIME_SECRET_E2E": "1",
+                "OPENONTOLOGY_RUNTIME_SECRET_E2E": "1",
                 "ENVIRONMENT": "test",
                 "DATABASE_URL": (
                     "postgresql://synthetic:synthetic@127.0.0.1/synthetic_e2e"
@@ -210,8 +210,8 @@ def _self_test() -> None:
 
 
 def _guard_database_url() -> str:
-    if os.environ.get("ONTOLOGYBUILD_RUNTIME_SECRET_E2E") != "1":
-        raise ValueError("ONTOLOGYBUILD_RUNTIME_SECRET_E2E must be 1")
+    if os.environ.get("OPENONTOLOGY_RUNTIME_SECRET_E2E") != "1":
+        raise ValueError("OPENONTOLOGY_RUNTIME_SECRET_E2E must be 1")
     if os.environ.get("ENVIRONMENT") != "test":
         raise ValueError("ENVIRONMENT must be test")
     database_url = os.environ.get("DATABASE_URL", "")
@@ -398,7 +398,7 @@ def _run(report_path: Path) -> None:
         _insert_postgres_fixtures(connection, ciphertexts)
 
         with tempfile.TemporaryDirectory(
-            prefix="ontologybuild-runtime-secret-e2e-"
+            prefix="openontology-runtime-secret-e2e-"
         ) as raw_temp:
             temp_root = Path(raw_temp)
             app_dir = temp_root / "app"

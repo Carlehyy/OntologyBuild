@@ -119,13 +119,13 @@ def _workflow_payload(*, name: str, webhook_path: str) -> dict[str, Any]:
             "mode": "runOnceForAllItems",
             "jsCode": (
                 "const runId = String($input.first().json.body.run_id);\n"
-                "const content = `OntologyBuild FileRef E2E ${runId}\\n`;\n"
+                "const content = `OpenOntology FileRef E2E ${runId}\\n`;\n"
                 "return [{\n"
                 "  json: { record_id: runId, title: '附件链路验收' },\n"
                 "  binary: { data: {\n"
                 "    data: Buffer.from(content, 'utf8').toString('base64'),\n"
                 "    mimeType: 'text/plain',\n"
-                "    fileName: 'ontologybuild-file-e2e.txt'\n"
+                "    fileName: 'openontology-file-e2e.txt'\n"
                 "  } }\n"
                 "}];"
             ),
@@ -488,7 +488,7 @@ def main(argv: list[str] | None = None) -> int:
     pipeline_id = str(uuid.uuid4())
     binding_id = str(uuid.uuid4())
     run_id = str(uuid.uuid4())
-    expected_content = f"OntologyBuild FileRef E2E {run_id}\n".encode("utf-8")
+    expected_content = f"OpenOntology FileRef E2E {run_id}\n".encode("utf-8")
     expected_sha256 = hashlib.sha256(expected_content).hexdigest()
 
     report: dict[str, Any] = {

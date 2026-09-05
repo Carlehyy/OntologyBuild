@@ -1,5 +1,5 @@
 [project]
-name = "ontologybuild-backend"
+name = "openontology-backend"
 version = "0.1.0"
 description = "OpenOntology platform backend"
 requires-python = ">=3.12,<3.13"

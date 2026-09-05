@@ -64,13 +64,13 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_DB: ontologybuild_ci
-          POSTGRES_USER: ontologybuild_ci
-          POSTGRES_PASSWORD: ontologybuild_ci
+          POSTGRES_DB: openontology_ci
+          POSTGRES_USER: openontology_ci
+          POSTGRES_PASSWORD: openontology_ci
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U ontologybuild_ci -d ontologybuild_ci"
+          --health-cmd "pg_isready -U openontology_ci -d openontology_ci"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -107,7 +107,7 @@ jobs:
         if: matrix.shard == 1
         env:
           ENVIRONMENT: test
-          DATABASE_URL: postgresql://ontologybuild_ci:ontologybuild_ci@127.0.0.1:5432/ontologybuild_ci
+          DATABASE_URL: postgresql://openontology_ci:openontology_ci@127.0.0.1:5432/openontology_ci
         run: |
           uv run alembic upgrade head
           test "$(uv run alembic heads | grep -c '(head)')" -eq 1
@@ -118,9 +118,9 @@ jobs:
       - name: Persisted ciphertext secret-split E2E
         if: matrix.shard == 1
         env:
-          ONTOLOGYBUILD_RUNTIME_SECRET_E2E: "1"
+          OPENONTOLOGY_RUNTIME_SECRET_E2E: "1"
           ENVIRONMENT: test
-          DATABASE_URL: postgresql://ontologybuild_ci:ontologybuild_ci@127.0.0.1:5432/ontologybuild_ci
+          DATABASE_URL: postgresql://openontology_ci:openontology_ci@127.0.0.1:5432/openontology_ci
         run: |
           mkdir -p ../.artifacts/runtime-secret-migration
           uv run python scripts/runtime_secret_split_postgres_e2e.py --self-test
@@ -221,7 +221,7 @@ jobs:
               repo: context.repo.repo,
               sha: context.sha,
               state: 'pending',
-              context: 'ontologybuild/deploy',
+              context: 'openontology/deploy',
               description: 'Verification and deployment are running',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             })
@@ -316,7 +316,7 @@ jobs:
           : "${DEPLOY_HOST:?DEPLOY_HOST secret is required}"
           : "${DEPLOY_USER:?DEPLOY_USER secret is required}"
           : "${DEPLOY_PASSWORD:?DEPLOY_PASSWORD secret is required}"
-          APP_DIR="${DEPLOY_APP_DIR:-/opt/ontologybuild}"
+          APP_DIR="${DEPLOY_APP_DIR:-/opt/openontology}"
           bash "${GITHUB_WORKSPACE}/scripts/ci/validate-deploy-app-dir.sh" "${APP_DIR}"
           if [ -n "${DEPLOY_HOST}" ]; then echo "DEPLOY_HOST configured: yes"; else echo "DEPLOY_HOST configured: no"; fi
           if [ -n "${DEPLOY_USER}" ]; then echo "DEPLOY_USER configured: yes"; else echo "DEPLOY_USER configured: no"; fi
@@ -340,13 +340,13 @@ jobs:
           : "${DEPLOY_HOST:?DEPLOY_HOST secret is required}"
           : "${DEPLOY_USER:?DEPLOY_USER secret is required}"
           : "${DEPLOY_PASSWORD:?DEPLOY_PASSWORD secret is required}"
-          APP_DIR="${DEPLOY_APP_DIR:-/opt/ontologybuild}"
+          APP_DIR="${DEPLOY_APP_DIR:-/opt/openontology}"
           bash "${GITHUB_WORKSPACE}/scripts/ci/validate-deploy-app-dir.sh" "${APP_DIR}"
           sudo apt-get update -qq
           sudo apt-get install -y -qq sshpass
-          bash scripts/ci/create-deployment-archive.sh /tmp/ontologybuild.tar.gz
-          REMOTE_ARCHIVE="/tmp/ontologybuild.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.tar.gz"
-          sshpass -p "${DEPLOY_PASSWORD}" scp -o StrictHostKeyChecking=yes -o ConnectTimeout=20 /tmp/ontologybuild.tar.gz "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_ARCHIVE}"
+          bash scripts/ci/create-deployment-archive.sh /tmp/openontology.tar.gz
+          REMOTE_ARCHIVE="/tmp/openontology.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.tar.gz"
+          sshpass -p "${DEPLOY_PASSWORD}" scp -o StrictHostKeyChecking=yes -o ConnectTimeout=20 /tmp/openontology.tar.gz "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_ARCHIVE}"
           # Keep the persistent .env in place throughout source replacement.
           # An interrupted upload can remove code, but can never strand or
           # restore a stale copy of the encryption authority from /tmp.
@@ -395,7 +395,7 @@ jobs:
           : "${DEPLOY_HOST:?DEPLOY_HOST secret is required}"
           : "${DEPLOY_USER:?DEPLOY_USER secret is required}"
           : "${DEPLOY_PASSWORD:?DEPLOY_PASSWORD secret is required}"
-          APP_DIR="${DEPLOY_APP_DIR:-/opt/ontologybuild}"
+          APP_DIR="${DEPLOY_APP_DIR:-/opt/openontology}"
           bash "${GITHUB_WORKSPACE}/scripts/ci/validate-deploy-app-dir.sh" "${APP_DIR}"
           if [ -n "${DEPLOY_HEALTH_URL}" ]; then
             HEALTH_URL="${DEPLOY_HEALTH_URL}"
@@ -440,7 +440,7 @@ jobs:
 
       - name: Remove runner deployment archive
         if: ${{ always() }}
-        run: rm -f /tmp/ontologybuild.tar.gz
+        run: rm -f /tmp/openontology.tar.gz
 
   report:
     if: ${{ always() }}
@@ -471,7 +471,7 @@ jobs:
               repo: context.repo.repo,
               sha: context.sha,
               state: succeeded ? 'success' : 'failure',
-              context: 'ontologybuild/deploy',
+              context: 'openontology/deploy',
               description: succeeded
                 ? 'Verification and deployment succeeded'
                 : summary.slice(0, 140),

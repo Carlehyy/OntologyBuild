@@ -22,7 +22,7 @@ from fastapi import FastAPI
 
 
 AIHOT_URL = "https://aihot.virxact.com/api/public/items"
-AIHOT_USER_AGENT = "ontologybuild-api-hub-live-e2e/1.0"
+AIHOT_USER_AGENT = "openontology-api-hub-live-e2e/1.0"
 
 
 def _free_port() -> int:

@@ -2,7 +2,7 @@
 # AgentLoop 接入准备 —— 在你自己装有阿里云 CLI 的电脑上执行（macOS/Linux）。
 #
 # 本脚本只在你本机运行，凭据不外传：最终只输出两行需要追加到部署服务器
-# /opt/ontologybuild/.env 的配置（LicenseKey 等敏感值由你自行保管）。
+# /opt/openontology/.env 的配置（LicenseKey 等敏感值由你自行保管）。
 #
 # 前置条件（一次性）：
 #   1. aliyun CLI >= 3.3.15（安装：curl -fsSL https://aliyuncli.alicdn.com/setup.sh | bash）
@@ -16,7 +16,7 @@ set -Eeuo pipefail
 
 WORKSPACE="${AGENTLOOP_WORKSPACE:-agentloop-9d2a85cf4ad2319dcd8bbab20b3eed85}"
 REGION="${AGENTLOOP_REGION:-cn-hangzhou}"
-SERVICE_NAME="${AGENTLOOP_SERVICE_NAME:-ontologybuild-backend}"
+SERVICE_NAME="${AGENTLOOP_SERVICE_NAME:-openontology-backend}"
 OUT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.runtime"
 
 log() { printf '[onboard] %s\n' "$*"; }
@@ -105,7 +105,7 @@ aliyun cms2 apm service list --workspace "$WORKSPACE" --service-name "$SERVICE_N
 cat <<EOF
 
 ========== 接入准备完成，只差最后两步 ==========
-1) 把下面两行追加到部署服务器的 /opt/ontologybuild/.env（不要提交进代码仓库）：
+1) 把下面两行追加到部署服务器的 /opt/openontology/.env（不要提交进代码仓库）：
 
 ARMS_LICENSE_KEY=${LICENSE_KEY}
 ARMS_REGION_ID=${REGION}

@@ -1451,7 +1451,7 @@ wheels = [
 ]
 
 [[package]]
-name = "ontologybuild-backend"
+name = "openontology-backend"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

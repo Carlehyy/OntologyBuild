@@ -8,7 +8,7 @@
 #   docker compose -f docker-compose.prod.yml -f agentloop/compose.agentloop.yml ...
 services:
   backend:
-    image: ontologybuild-backend-agentloop:local
+    image: openontology-backend-agentloop:local
     build:
       # 相对路径以第一个 compose 文件（docker-compose.prod.yml，仓库根目录）为基准。
       context: .
@@ -20,7 +20,7 @@ services:
     command: ["aliyun-instrument", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       # 探针标识与凭据；ARMS_LICENSE_KEY 从服务器 .env 注入，未配置时探针不生效。
-      ARMS_APP_NAME: ${ARMS_APP_NAME:-ontologybuild-backend}
+      ARMS_APP_NAME: ${ARMS_APP_NAME:-openontology-backend}
       ARMS_WORKSPACE: ${ARMS_WORKSPACE:-agentloop-9d2a85cf4ad2319dcd8bbab20b3eed85}
       ARMS_REGION_ID: ${ARMS_REGION_ID:-cn-hangzhou}
       ARMS_LICENSE_KEY: ${ARMS_LICENSE_KEY:-}

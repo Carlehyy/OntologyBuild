@@ -134,7 +134,7 @@ PostgreSQL、API Hub `api_hub_data`、Neo4j、MinIO、uploads 和其他平台持
 Issue、PR、工单或 CI 日志：
 
 ```bash
-cd /opt/ontologybuild
+cd /opt/openontology
 sudo stat -c '%a %U:%G %n' .env
 sudo awk -F= '
   $1 == "FIRST_ADMIN_USER" || $1 == "FIRST_ADMIN_PASSWORD" {
@@ -148,14 +148,14 @@ sudo awk -F= '
 `admin`：
 
 ```bash
-cd /opt/ontologybuild
-read -rsp 'New admin password: ' ONTOLOGYBUILD_NEW_ADMIN_PASSWORD
+cd /opt/openontology
+read -rsp 'New admin password: ' OPENONTOLOGY_NEW_ADMIN_PASSWORD
 printf '\n'
 sudo docker compose -f docker-compose.prod.yml exec -T \
   -e PYTHONPATH=/app backend \
-  python - --user admin --password "${ONTOLOGYBUILD_NEW_ADMIN_PASSWORD}" \
+  python - --user admin --password "${OPENONTOLOGY_NEW_ADMIN_PASSWORD}" \
   < backend/scripts/maintenance/reset_admin_password.py
-unset ONTOLOGYBUILD_NEW_ADMIN_PASSWORD
+unset OPENONTOLOGY_NEW_ADMIN_PASSWORD
 ```
 
 生产 backend 镜像按 `.dockerignore` 不携带人工维护脚本；上述命令从服务器源码
@@ -218,7 +218,7 @@ backend 和 frontend，且不得在旧 API 仍可访问数据库时
 - 既有 `DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_PASSWORD`、
   `DEPLOY_APP_DIR`、`DEPLOY_HEALTH_URL` Repository Secrets 可用；
 - `DEPLOY_APP_DIR` 通过 `bash scripts/ci/validate-deploy-app-dir.sh
-  "${DEPLOY_APP_DIR:-/opt/ontologybuild}"`；
+  "${DEPLOY_APP_DIR:-/opt/openontology}"`；
 - 如启用 `STRICT_IMAGE_DIGESTS`，最终服务器 `.env` 的全部镜像引用均已固定
   到不可变 `@sha256`；
 - 服务器 shell 中没有被当作临时部署配置的同名依赖、端口或镜像变量；部署入口

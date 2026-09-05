@@ -22,20 +22,20 @@ assert_rejected() {
   fi
 }
 
-assert_accepted /opt/ontologybuild
-assert_accepted /srv/apps/ontology-build_1
+assert_accepted /opt/openontology
+assert_accepted /srv/apps/openontology_1
 
 assert_rejected ""
 assert_rejected /
 assert_rejected /opt
-assert_rejected opt/ontologybuild
-assert_rejected /opt/../ontologybuild
-assert_rejected /opt//ontologybuild
-assert_rejected /opt/ontologybuild/
-assert_rejected "/opt/ontology build"
+assert_rejected opt/openontology
+assert_rejected /opt/../openontology
+assert_rejected /opt//openontology
+assert_rejected /opt/openontology/
+assert_rejected "/opt/openontology build"
 assert_rejected "/opt/ontology'build"
-assert_rejected $'/opt/ontologybuild\nunexpected'
-assert_rejected "/opt/ontologybuild;unexpected"
+assert_rejected $'/opt/openontology\nunexpected'
+assert_rejected "/opt/openontology;unexpected"
 
 if grep -q 'StrictHostKeyChecking=no' "$DEPLOY_WORKFLOW"; then
   printf 'deployment workflow must not bypass SSH host-key verification\n' >&2
@@ -71,7 +71,7 @@ if [ "$sshpass_command_count" -eq 0 ] ||
   exit 1
 fi
 if ! grep -Fq \
-  'bash scripts/ci/create-deployment-archive.sh /tmp/ontologybuild.tar.gz' \
+  'bash scripts/ci/create-deployment-archive.sh /tmp/openontology.tar.gz' \
   "$DEPLOY_WORKFLOW"; then
   printf 'deployment workflow must use the tested runtime archive builder\n' >&2
   exit 1
@@ -126,9 +126,9 @@ if [ "$post_migration_stop_count" -ne 3 ] \
   exit 1
 fi
 
-test_dir="$(mktemp -d /tmp/ontologybuild-deploy-guards.XXXXXX)"
-archive_source="$(mktemp -d /tmp/ontologybuild-archive-source.XXXXXX)"
-archive_output="$(mktemp /tmp/ontologybuild-archive.XXXXXX.tar.gz)"
+test_dir="$(mktemp -d /tmp/openontology-deploy-guards.XXXXXX)"
+archive_source="$(mktemp -d /tmp/openontology-archive-source.XXXXXX)"
+archive_output="$(mktemp /tmp/openontology-archive.XXXXXX.tar.gz)"
 trap 'rm -rf -- "$test_dir" "$archive_source"; rm -f -- "$archive_output"' EXIT
 
 archive_fixture_paths=(
@@ -229,7 +229,7 @@ set_test_env_value() {
   mv "$output" "$test_dir/.env"
 }
 
-digest="example.invalid/ontologybuild@sha256:$(printf 'a%.0s' {1..64})"
+digest="example.invalid/openontology@sha256:$(printf 'a%.0s' {1..64})"
 for image_key in \
   POSTGRES_IMAGE REDIS_IMAGE NEO4J_IMAGE MINIO_IMAGE BROWSER_IMAGE \
   PYTHON_BASE_IMAGE NODE_BASE_IMAGE NGINX_BASE_IMAGE; do

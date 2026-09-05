@@ -212,7 +212,7 @@ Environment Secrets/Variables 时，使用
 | `DEPLOY_HOST` | 是 | SSH/SCP 目标；空值立即失败 |
 | `DEPLOY_PASSWORD` | 是 | 当前密码式 SSH 凭据；空值立即失败 |
 | `DEPLOY_USER` | 否 | 为空时使用 `root` |
-| `DEPLOY_APP_DIR` | 否 | 映射为远端 `APP_DIR`，默认 `/opt/ontologybuild` |
+| `DEPLOY_APP_DIR` | 否 | 映射为远端 `APP_DIR`，默认 `/opt/openontology` |
 | `DEPLOY_HEALTH_URL` | 否 | 映射为 `HEALTH_URL`；为空时按 `PUBLIC_PORT` 生成 |
 
 `DEPLOY_HEALTH_URL` 未设置时，`PUBLIC_PORT=80` 使用
@@ -223,11 +223,17 @@ Environment Secrets/Variables 时，使用
 显式 `DEPLOY_HEALTH_URL` 必须是无空白、无原始单引号的 HTTP(S) URL；不合法值
 会在发起 SSH 前失败。
 
-`DEPLOY_APP_DIR` 为空时使用 `/opt/ontologybuild`。自定义值必须是规范化的
+`DEPLOY_APP_DIR` 为空时使用 `/opt/openontology`。自定义值必须是规范化的
 绝对路径，并位于某个顶层目录之下；根目录、顶层目录本身、`.`/`..` 段、重复
 或末尾斜杠，以及空格、引号、控制字符和 shell 标点都会在任何 SSH 删除/解包
 命令前被拒绝。远端最终路径还必须是真实目录而非软链接，避免源码替换跟随链接
 写入另一个目录。
+
+品牌由 OntologyBuild 更名为 OpenOntology 时，默认部署目录随之从
+`/opt/ontologybuild` 改为 `/opt/openontology`。存量服务器上已存在的
+`/opt/ontologybuild` 部署（含其持久 `.env`）不会自动迁移：这类环境必须在
+GitHub Secret 中显式设置 `DEPLOY_APP_DIR=/opt/ontologybuild`，或一次性把
+目录迁移到 `/opt/openontology` 后再解除该 Secret。
 
 ## 首个管理员配置
 

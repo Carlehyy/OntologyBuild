@@ -59,7 +59,7 @@ jobs:
 
       - name: Validate a fresh database migration
         run: |
-          DB_FILE="$(mktemp -u /tmp/ontologybuild-ci-XXXXXX.db)"
+          DB_FILE="$(mktemp -u /tmp/openontology-ci-XXXXXX.db)"
           trap 'rm -f "${DB_FILE}"' EXIT
           ENVIRONMENT=test DATABASE_URL="sqlite:///${DB_FILE}" uv run alembic upgrade head
           test "$(ENVIRONMENT=test uv run alembic heads | grep -c '(head)')" -eq 1

@@ -155,7 +155,7 @@ def merge_lake_increment(
         new_rows=new_rows,
     )
 
-    with tempfile.TemporaryDirectory(prefix="ontologybuild-merge-") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="openontology-merge-") as tmpdir:
         eng.tmpdir = tmpdir
         eng.load_base(base_bytes)
         eng.prepare_increment()

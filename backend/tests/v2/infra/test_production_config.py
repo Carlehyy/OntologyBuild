@@ -233,7 +233,7 @@ def test_workflow_keeps_persistent_env_in_place_during_source_replacement(
     )
 
     assert syntax.returncode == 0, syntax.stderr
-    assert "/tmp/ontologybuild.env" not in script
+    assert "/tmp/openontology.env" not in script
     assert "! -name .env" in script
     assert "rm -rf '${APP_DIR}'" not in script
     assert "REMOTE_ARCHIVE=" in script
@@ -376,7 +376,7 @@ def test_workflow_publishes_real_ciphertext_migration_evidence():
     ).read_text()
 
     assert migration_index < e2e_index < upload_index
-    assert e2e_step["env"]["ONTOLOGYBUILD_RUNTIME_SECRET_E2E"] == "1"
+    assert e2e_step["env"]["OPENONTOLOGY_RUNTIME_SECRET_E2E"] == "1"
     assert e2e_step["env"]["ENVIRONMENT"] == "test"
     assert "127.0.0.1" in e2e_step["env"]["DATABASE_URL"]
     assert e2e_step["env"]["DATABASE_URL"].endswith("_ci")
@@ -699,8 +699,8 @@ def test_git_mode_refuses_to_delete_non_worktree_deployment_state(tmp_path):
     fake_git = fake_bin / "git"
     fake_git.write_text(
         "#!/usr/bin/env bash\n"
-        ": > \"$ONTOLOGYBUILD_FAKE_GIT_MARKER\"\n"
-        "rm -f -- \"$ONTOLOGYBUILD_FAKE_GIT_TARGET\"\n",
+        ": > \"$OPENONTOLOGY_FAKE_GIT_MARKER\"\n"
+        "rm -f -- \"$OPENONTOLOGY_FAKE_GIT_TARGET\"\n",
         encoding="utf-8",
     )
     fake_git.chmod(0o755)
@@ -711,8 +711,8 @@ def test_git_mode_refuses_to_delete_non_worktree_deployment_state(tmp_path):
             "APP_DIR": str(git_worktree),
             "SKIP_GIT": "0",
             "PATH": f"{fake_bin}:{symlink_env['PATH']}",
-            "ONTOLOGYBUILD_FAKE_GIT_MARKER": str(marker),
-            "ONTOLOGYBUILD_FAKE_GIT_TARGET": str(authority),
+            "OPENONTOLOGY_FAKE_GIT_MARKER": str(marker),
+            "OPENONTOLOGY_FAKE_GIT_TARGET": str(authority),
         }
     )
 
@@ -1433,7 +1433,7 @@ def _run_deploy_workflow_step(
         "DEPLOY_HOST": "203.0.113.8",
         "DEPLOY_USER": "deploy-user",
         "DEPLOY_PASSWORD": "test-password",
-        "DEPLOY_APP_DIR": "/srv/ontologybuild",
+        "DEPLOY_APP_DIR": "/srv/openontology",
         "DEPLOY_HEALTH_URL": health_url,
         "BOOTSTRAP_PRODUCTION_ENV": "0",
     })

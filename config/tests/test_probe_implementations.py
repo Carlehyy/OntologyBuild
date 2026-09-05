@@ -255,7 +255,7 @@ def test_minio_probe_is_read_only_and_reports_bucket(monkeypatch) -> None:
             seen.update(kwargs)
 
         def list_buckets(self):
-            return [SimpleNamespace(name="ontology-build")]
+            return [SimpleNamespace(name="openontology")]
 
     monkeypatch.setattr(probes, "Minio", Client)
     message, detail = probes.probe_minio(_profile())

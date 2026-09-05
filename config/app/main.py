@@ -295,14 +295,14 @@ def inspect_requirements(
             "label": "后端源码",
             "ok": (project_root / "backend" / "pyproject.toml").is_file(),
             "value": "backend/pyproject.toml",
-            "help": "请从完整的 OntologyBuild 项目根目录运行配置中心",
+            "help": "请从完整的 OpenOntology 项目根目录运行配置中心",
         },
         {
             "id": "frontend_project",
             "label": "前端源码",
             "ok": (project_root / "frontend" / "package.json").is_file(),
             "value": "frontend/package.json",
-            "help": "请从完整的 OntologyBuild 项目根目录运行配置中心",
+            "help": "请从完整的 OpenOntology 项目根目录运行配置中心",
         },
         {
             "id": "backend_port",
@@ -381,7 +381,7 @@ def service_guides() -> dict[str, dict[str, Any]]:
             ],
             "commands": [
                 "sudo -u postgres psql",
-                "ALTER USER ontologybuild WITH PASSWORD '<new-password>';",
+                "ALTER USER openontology WITH PASSWORD '<new-password>';",
                 "docker exec -it <postgres-container> psql -U postgres -c \"\\du\"",
             ],
         },
@@ -426,7 +426,7 @@ def service_guides() -> dict[str, dict[str, Any]]:
         },
         "minio": {
             "title": "区分 MinIO API 与管理页面",
-            "summary": "OntologyBuild 连接 S3 API，默认端口常见为 9000，不是管理页面的 9001。",
+            "summary": "OpenOntology 连接 S3 API，默认端口常见为 9000，不是管理页面的 9001。",
             "steps": [
                 "Docker 部署时查看 MINIO_ROOT_USER 和 MINIO_ROOT_PASSWORD 的来源。",
                 "生产凭据无法确认时，请新建权限受限的 Access Key，不要共享根账号。",

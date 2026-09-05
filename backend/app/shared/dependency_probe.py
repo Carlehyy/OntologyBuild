@@ -21,7 +21,7 @@ def probe_postgresql() -> None:
     connection = psycopg2.connect(
         settings.database_url,
         connect_timeout=5,
-        application_name="ontologybuild-deploy-check",
+        application_name="openontology-deploy-check",
     )
     try:
         with connection.cursor() as cursor:

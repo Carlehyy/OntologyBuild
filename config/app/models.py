@@ -91,8 +91,8 @@ class PlatformConfig(StrictModel):
 class PostgresConfig(StrictModel):
     host: str = Field(default="127.0.0.1", min_length=1, max_length=253)
     port: int = Field(default=5432, ge=1, le=65535)
-    database: str = Field(default="ontologybuild", min_length=1, max_length=128)
-    username: str = Field(default="ontologybuild", min_length=1, max_length=128)
+    database: str = Field(default="openontology", min_length=1, max_length=128)
+    username: str = Field(default="openontology", min_length=1, max_length=128)
     password: str = Field(default="", min_length=0, max_length=512)
     ssl_mode: str = "prefer"
 

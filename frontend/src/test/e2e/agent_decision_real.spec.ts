@@ -136,7 +136,7 @@ test('真实模型从助手消息完成隔离决策推演并保持实例不变',
     )
     expect(instance.properties.stock).toBe(180)
     await page.screenshot({
-      path: '/tmp/ontologybuild-decision-e2e.GzGjtc/decision-simulation.png',
+      path: '/tmp/openontology-decision-e2e.GzGjtc/decision-simulation.png',
       fullPage: true,
     })
   } finally {

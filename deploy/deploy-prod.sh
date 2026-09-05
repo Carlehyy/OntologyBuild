@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="${APP_DIR:-/opt/ontologybuild}"
+APP_DIR="${APP_DIR:-/opt/openontology}"
 bash "$SCRIPT_DIR/../scripts/ci/validate-deploy-app-dir.sh" "$APP_DIR"
 BRANCH="${BRANCH:-nano-ontoprompt}"
-REPO_URL="${REPO_URL:-https://github.com/Carlehyy/OntologyBuild.git}"
+REPO_URL="${REPO_URL:-https://github.com/Carlehyy/OpenOntology.git}"
 COMPOSE_FILE="docker-compose.prod.yml"
 # AgentLoop 观测接入（阿里云 AgentLoop）：服务器 .env 中配置了 ARMS_LICENSE_KEY 时
 # 自动叠加探针覆盖文件（agentloop/compose.agentloop.yml）。未配置时部署行为与
@@ -303,8 +303,8 @@ set_env_value_in_file() {
   # even when /tmp and APP_DIR are different filesystems.
   tmp="$(mktemp "${target_dir}/.${target_name}.update.XXXXXX")"
   chmod 600 "$tmp"
-  if ! ONTOLOGYBUILD_ENV_VALUE="$value" awk -v key="$key" '
-    BEGIN { found=0; value=ENVIRON["ONTOLOGYBUILD_ENV_VALUE"] }
+  if ! OPENONTOLOGY_ENV_VALUE="$value" awk -v key="$key" '
+    BEGIN { found=0; value=ENVIRON["OPENONTOLOGY_ENV_VALUE"] }
     $0 ~ "^[[:space:]]*" key "=" {
       print key "=" value; found=1; next
     }
@@ -569,17 +569,17 @@ write_runtime_secret_split() {
   local tmp
   tmp="$(mktemp "${APP_DIR}/.env.runtime-secrets.XXXXXX")"
   chmod 600 "$tmp"
-  if ! ONTOLOGYBUILD_NEXT_SECRET_KEY="$secret_key" \
-      ONTOLOGYBUILD_NEXT_ENCRYPTION_KEY="$encryption_key" \
-      ONTOLOGYBUILD_NEXT_ADMIN_PASSWORD="$admin_password" \
+  if ! OPENONTOLOGY_NEXT_SECRET_KEY="$secret_key" \
+      OPENONTOLOGY_NEXT_ENCRYPTION_KEY="$encryption_key" \
+      OPENONTOLOGY_NEXT_ADMIN_PASSWORD="$admin_password" \
       awk '
     BEGIN {
       secret_seen=0
       encryption_seen=0
       admin_seen=0
-      secret_key=ENVIRON["ONTOLOGYBUILD_NEXT_SECRET_KEY"]
-      encryption_key=ENVIRON["ONTOLOGYBUILD_NEXT_ENCRYPTION_KEY"]
-      admin_password=ENVIRON["ONTOLOGYBUILD_NEXT_ADMIN_PASSWORD"]
+      secret_key=ENVIRON["OPENONTOLOGY_NEXT_SECRET_KEY"]
+      encryption_key=ENVIRON["OPENONTOLOGY_NEXT_ENCRYPTION_KEY"]
+      admin_password=ENVIRON["OPENONTOLOGY_NEXT_ADMIN_PASSWORD"]
     }
     /^[[:space:]]*SECRET_KEY=/ {
       if (!secret_seen) print "SECRET_KEY=" secret_key

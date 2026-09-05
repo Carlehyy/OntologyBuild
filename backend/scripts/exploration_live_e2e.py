@@ -1062,7 +1062,7 @@ def main() -> int:
         api_key, base_url, model_name = _environment()
         _configure_logging(api_key)
         with tempfile.TemporaryDirectory(
-            prefix="ontologybuild-exploration-live-e2e-"
+            prefix="openontology-exploration-live-e2e-"
         ) as temp_root:
             report = _execute(
                 Path(temp_root),
