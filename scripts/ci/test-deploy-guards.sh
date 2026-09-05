@@ -91,7 +91,7 @@ if grep -Eq '^[[:space:]]+environment:[[:space:]]+production[[:space:]]*$' \
 fi
 
 stop_line="$(grep -nF \
-  'compose stop --timeout 30 frontend pipeline_executor celery_worker backend' \
+  'compose stop --timeout 30 frontend pipeline_executor backend' \
   "$DEPLOY_SCRIPT" | tail -n1 | cut -d: -f1)"
 migration_line="$(grep -nF \
   'run_with_retry compose run --rm --no-deps backend alembic upgrade head' \
@@ -120,7 +120,7 @@ post_migration_stop_count="$(
 )"
 if [ "$post_migration_stop_count" -ne 3 ] \
     || ! grep -Fq \
-      'if ! compose stop --timeout 30 frontend pipeline_executor celery_worker backend; then' \
+      'if ! compose stop --timeout 30 frontend pipeline_executor backend; then' \
       "$DEPLOY_SCRIPT"; then
   printf 'post-migration startup/readiness failures must stop the new runtime\n' >&2
   exit 1
@@ -558,7 +558,7 @@ probe_line="$(grep -nF \
   'compose -f docker-compose.prod.yml run --rm --no-deps backend python -m app.shared.dependency_probe' \
   "$fake_docker_log" | head -n1 | cut -d: -f1)"
 stop_line="$(grep -nF \
-  'compose -f docker-compose.prod.yml stop -t 30 backend pipeline_executor celery_worker' \
+  'compose -f docker-compose.prod.yml stop -t 30 backend pipeline_executor' \
   "$fake_docker_log" | head -n1 | cut -d: -f1)"
 heads_line="$(grep -nF \
   'compose -f docker-compose.prod.yml run --rm --no-deps backend alembic heads' \
