@@ -47,7 +47,7 @@ async def application_lifespan(
         # 初始化 Neo4j 索引。除显式单元测试环境外，索引初始化是启动契约，
         # 不能让应用在缺少图约束/索引时继续对外服务。
         try:
-            from app.services.v2.graph.index_setup import setup_indexes
+            from app.ontologies.graph.index_setup import setup_indexes
 
             index_result = setup_indexes()
             if settings.environment != "test" and (
@@ -113,7 +113,7 @@ async def application_lifespan(
 
         # 启动数据同步任务调度器（后台线程）
         try:
-            from app.services.v2.sync_scheduler import get_sync_scheduler
+            from app.data_channel.sync_tasks.scheduler import get_sync_scheduler
 
             data_scheduler = get_sync_scheduler()
             data_scheduler_attempted = True

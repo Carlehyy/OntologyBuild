@@ -5,7 +5,7 @@ import json
 import re
 import uuid as _uuid
 
-from app.models.v2.mapping import OntologyMapping
+from app.ontologies.mappings.models import OntologyMapping
 from app.ontologies.mappings.errors import MappingSourceError
 
 
@@ -168,7 +168,7 @@ class IdentityMetadataMixin:
         }
 
     def _infer_property_type(self, rows: list[dict], col: str) -> str:
-        from app.services.v2.pipeline.steps.schema_inference import SchemaInferenceStep
+        from app.data_channel.pipelines.steps.schema_inference import SchemaInferenceStep
 
         for row in rows[:20]:
             value = row.get(col)
@@ -185,7 +185,7 @@ class IdentityMetadataMixin:
         if not dataset_id:
             return False, None
         from app.data_channel.datasets.lake_gate import split_pk
-        from app.models.v2.dataset import Dataset
+        from app.data_channel.datasets.models import Dataset
 
         dataset = self._db.query(Dataset).filter(Dataset.id == dataset_id).first()
         if not isinstance(dataset, Dataset):

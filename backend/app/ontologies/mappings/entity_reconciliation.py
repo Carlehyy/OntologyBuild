@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from app.models.v2.mapping import OntologyMapping
+from app.ontologies.mappings.models import OntologyMapping
 from app.ontologies.mappings.errors import MappingApplyError
 
 logger = logging.getLogger(__name__)

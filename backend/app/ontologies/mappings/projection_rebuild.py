@@ -67,7 +67,7 @@ def rebuild_neo4j_projection(db: Session, ontology_id: str) -> bool:
 
     neo = None
     try:
-        from app.services.v2.graph.neo4j_service import Neo4jService
+        from app.ontologies.graph.neo4j_service import Neo4jService
 
         neo = Neo4jService()
         if not neo.available:

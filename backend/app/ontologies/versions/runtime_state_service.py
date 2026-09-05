@@ -21,7 +21,7 @@ from app.models.ontology_version import (
     OntologyVersion,
 )
 from app.models.sentinel import Sentinel
-from app.models.v2.dataset import Dataset, DatasetVersion
+from app.data_channel.datasets.models import Dataset, DatasetVersion
 from app.ontologies.versions.snapshot_contract import (
     complete_snapshot,
     snapshot_hash,

@@ -20,7 +20,7 @@ LinkType / LinkInstance)，让流水线与图谱编辑器共用同一套数据�
 
 调用方式
 --------
-    from app.services.v2.mapping.formal_projection import project_to_formal_ontology
+    from app.ontologies.mappings.formal_projection import project_to_formal_ontology
     summary = project_to_formal_ontology(db, ontology_id)
 """
 from __future__ import annotations
@@ -124,7 +124,7 @@ def project_to_formal_ontology(
     # 其余类的绑定信息不在本次 meta 里——从映射表按 entity_class 补齐，
     # 否则单映射增量灌入时其他类会丢绑定、退化成自建平行类型
     try:
-        from app.models.v2.mapping import OntologyMapping as _OM
+        from app.ontologies.mappings.models import OntologyMapping as _OM
         for _m in db.query(_OM).filter(_OM.ontology_id == ontology_id).all():
             cm = class_meta.setdefault(_m.entity_class, {})
             if _m.target_object_type_id:

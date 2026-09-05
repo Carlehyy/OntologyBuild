@@ -23,16 +23,18 @@ def seed_database() -> None:
     try:
         # Import all models to ensure tables are created
         from app.models import user, ontology, model_config, entity, logic as logic_model, action, relation, domain  # noqa: F401
-        from app.models.v2 import dataset as v2_dataset, pipeline as v2_pipeline, connection as v2_connection  # noqa: F401
-        from app.models.v2.logic import OntologyLogicRule, OntologyStateMachine  # noqa: F401
-        from app.models.v2.action import OntologyActionType, OntologyActionRun  # noqa: F401
-        from app.models.v2.curated import CuratedDataset, CuratedReview, CuratedRowEdit  # noqa: F401
-        from app.models.v2.sync_task import DataSyncTask, DataSyncHistory  # noqa: F401
+        from app.data_channel.datasets import models as v2_dataset  # noqa: F401
+        from app.data_channel.pipelines import models as v2_pipeline  # noqa: F401
+        from app.data_channel.connections import models as v2_connection  # noqa: F401
+        from app.ontologies.logic.v2_models import OntologyLogicRule, OntologyStateMachine  # noqa: F401
+        from app.ontologies.actions.v2_models import OntologyActionType, OntologyActionRun  # noqa: F401
+        from app.data_channel.curated.models import CuratedDataset, CuratedReview, CuratedRowEdit  # noqa: F401
+        from app.data_channel.sync_tasks.models import DataSyncTask, DataSyncHistory  # noqa: F401
         from app.data_channel.pipeline_tasks.models import PipelineTask  # noqa: F401
         from app.data_channel.datasets.sharing_models import (  # noqa: F401
             ManualDatasetChange, ManualDatasetShare,
         )
-        from app.models.v2.mapping import OntologyMapping, OntologyLinkMapping  # noqa: F401
+        from app.ontologies.mappings.models import OntologyMapping, OntologyLinkMapping  # noqa: F401
         from app.models.ontology_version import OntologyVersion, OntologyChangeLog  # noqa: F401
         from app.models.attribute_schema import AttributeSchema, VocabularyEntry  # noqa: F401
         from app.models.inference import ShadowRun, InferenceRun, InferenceResult, ActionFiring, AuditLog  # noqa: F401
@@ -247,7 +249,7 @@ def seed_database() -> None:
                 N8nPipeline as _N8nRec,
                 STATUS_ARCHIVED as _ARCH,
             )
-            from app.models.v2.pipeline import Pipeline as _Pipeline
+            from app.data_channel.pipelines.models import Pipeline as _Pipeline
 
             orphans = db.query(_N8nRec).filter(
                 _N8nRec.status != _ARCH,

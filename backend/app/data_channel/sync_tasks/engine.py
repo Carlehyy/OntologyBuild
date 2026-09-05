@@ -18,9 +18,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.v2.sync_task import DataSyncTask, DataSyncHistory
-from app.models.v2.connection import Connection
-from app.models.v2.dataset import Dataset, DatasetVersion
+from app.data_channel.sync_tasks.models import DataSyncTask, DataSyncHistory
+from app.data_channel.connections.models import Connection
+from app.data_channel.datasets.models import Dataset, DatasetVersion
 from app.services.connection.registry import get_connector
 from app.services import encryption_service
 
@@ -198,7 +198,7 @@ def _write_dataset_version(
     # 记录源信息
     schema_json["source"] = {"connection_id": connection_id, "trigger": trigger}
 
-    from app.services.v2.dataset_service import DatasetService
+    from app.data_channel.datasets.service import DatasetService
     ver = DatasetService(db).create_version(ds.id, content, rowcount=len(rows))
     ds.schema_json = schema_json
     ds.updated_at = datetime.utcnow()
@@ -213,7 +213,7 @@ def _load_previous_version_rows(db: Session, ds: Dataset) -> list[dict]:
     存储读取/解析/checksum 失败必须让本次同步失败；把失败伪装成空基座会使
     新版本只剩本次增量，构成静默数据丢失。
     """
-    from app.services.v2.dataset_service import DatasetService
+    from app.data_channel.datasets.service import DatasetService
     return DatasetService(db).load_all_rows(ds.id)
 
 
@@ -288,7 +288,7 @@ def _run_pipeline_if_configured(db: Session, task: DataSyncTask) -> None:
         return
     try:
         from app.data_channel.pipelines.trigger_service import execute_pipeline
-        from app.models.v2.pipeline import Pipeline
+        from app.data_channel.pipelines.models import Pipeline
 
         pipe = db.query(Pipeline).filter(
             Pipeline.id == task.trigger_pipeline_id,

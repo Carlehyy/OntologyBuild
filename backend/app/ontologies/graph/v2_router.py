@@ -14,7 +14,7 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 
 def get_neo4j():
     """Return the concrete Neo4j service used by graph routes."""
-    from app.services.v2.graph.neo4j_service import Neo4jService
+    from app.ontologies.graph.neo4j_service import Neo4jService
 
     return Neo4jService()
 
@@ -171,7 +171,7 @@ def run_cypher(
     db: Session = Depends(get_db),
 ):
     """执行 Cypher 查询 (只读校验 + 强制 ontology_id 过滤)"""
-    from app.services.v2.graph.cypher_builder import validate_readonly_cypher
+    from app.ontologies.graph.cypher_builder import validate_readonly_cypher
 
     error = validate_readonly_cypher(body.query)
     if error:
@@ -229,7 +229,7 @@ def nl_query(
     db: Session = Depends(get_db),
 ):
     """自然语言 → Cypher → Neo4j 图数据。"""
-    from app.services.v2.graph.nl2cypher import NL2CypherService
+    from app.ontologies.graph.nl2cypher import NL2CypherService
 
     _require_projection_ready(db, ontology_id)
     nl_svc = NL2CypherService()
@@ -262,7 +262,7 @@ def graph_path(
     db: Session = Depends(get_db),
 ):
     """两节点间最短路径"""
-    from app.services.v2.graph.graph_analytics import GraphAnalyticsService
+    from app.ontologies.graph.graph_analytics import GraphAnalyticsService
     _require_projection_ready(db, ontology_id)
     svc = None
     try:
@@ -282,7 +282,7 @@ def node_degree(
     db: Session = Depends(get_db),
 ):
     """查询节点度数（入度 + 出度）"""
-    from app.services.v2.graph.graph_analytics import GraphAnalyticsService
+    from app.ontologies.graph.graph_analytics import GraphAnalyticsService
     _require_projection_ready(db, ontology_id)
     svc = None
     try:
@@ -302,7 +302,7 @@ def top_nodes(
     db: Session = Depends(get_db),
 ):
     """返回连接数最多的 Top-N 节点"""
-    from app.services.v2.graph.graph_analytics import GraphAnalyticsService
+    from app.ontologies.graph.graph_analytics import GraphAnalyticsService
     _require_projection_ready(db, ontology_id)
     svc = None
     try:

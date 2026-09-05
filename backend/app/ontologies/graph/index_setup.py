@@ -1,7 +1,7 @@
 """Neo4j 索引初始化 — 提升查询性能"""
 from __future__ import annotations
 import logging
-from app.services.v2.graph.neo4j_service import Neo4jService
+from app.ontologies.graph.neo4j_service import Neo4jService
 
 logger = logging.getLogger(__name__)
 

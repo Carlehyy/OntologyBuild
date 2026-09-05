@@ -2,7 +2,7 @@
 from __future__ import annotations
 import logging
 from sqlalchemy.orm import Session
-from app.models.v2.mapping import OntologyMapping
+from app.ontologies.mappings.models import OntologyMapping
 from app.ontologies.runtime_fence import _ontology_build_lock
 from app.ontologies.mappings.candidate_discovery import CandidateDiscoveryMixin
 from app.ontologies.mappings.entity_reconciliation import (
@@ -51,8 +51,8 @@ def load_mapping_source_rows(
     if not dataset_id:
         raise MappingSourceError(f"Mapping {mapping.id} 未绑定数据集")
 
-    from app.models.v2.dataset import Dataset
-    from app.services.v2.dataset_service import DatasetService
+    from app.data_channel.datasets.models import Dataset
+    from app.data_channel.datasets.service import DatasetService
     from app.data_channel.curated.approved_version_reader import (
         ReviewApprovalError, latest_dataset_version)
 
@@ -82,7 +82,7 @@ def load_mapping_source_rows(
                 dataset_id, version.version_no if version is not None else None)
     else:
         # 迁移前的 legacy curated 兼容；没有真实版本时无法提供版本级血缘。
-        from app.models.v2.curated import CuratedDataset
+        from app.data_channel.curated.models import CuratedDataset
         legacy = db.query(CuratedDataset).filter(CuratedDataset.id == dataset_id).first()
         if legacy is None:
             raise MappingSourceError(f"映射绑定的数据集 {dataset_id} 不存在")
@@ -149,7 +149,7 @@ class MappingService(
         """
         from app.models.ontology import OntologyProject
         from app.models.ontology_version import OntologyVersion
-        from app.models.v2.mapping import OntologyLinkMapping
+        from app.ontologies.mappings.models import OntologyLinkMapping
         from app.ontologies.versions.snapshot_contract import (
             complete_snapshot,
         )
@@ -252,7 +252,7 @@ class MappingService(
     def remove_link_mapping_projection(self, link_mapping) -> list[str]:
         """Remove relations/materialized Formal links owned by a LinkMapping."""
         from app.models.relation import Relation
-        from app.models.v2.mapping import OntologyLinkMapping
+        from app.ontologies.mappings.models import OntologyLinkMapping
         from app.models.ontology_formal import ObjectInstance, LinkType, LinkInstance
         from app.ontologies.formal_modeling.facts import record_link_fact
 
@@ -393,7 +393,7 @@ class MappingService(
 
             # 单映射路径同样要投影到正规本体（fo_object_instances）。该投影是
             # Mapping applied 的必需条件，不再作为可吞掉的 best-effort 尾步骤。
-            from app.services.v2.mapping.formal_projection import (
+            from app.ontologies.mappings.formal_projection import (
                 project_to_formal_ontology,
                 projection_property_mappings,
             )
@@ -629,13 +629,13 @@ class MappingService(
             item.id for item in mappings if item.curated_dataset_id
         }
 
-        from app.models.v2.dataset import Dataset
-        from app.models.v2.curated import CuratedDataset
+        from app.data_channel.datasets.models import Dataset
+        from app.data_channel.curated.models import CuratedDataset
 
         # Phase 1: Entity Mapping
         entity_results = []
         mapping_meta: dict[str, dict] = {}
-        from app.services.v2.mapping.formal_projection import (
+        from app.ontologies.mappings.formal_projection import (
             project_to_formal_ontology,
             projection_property_mappings,
         )

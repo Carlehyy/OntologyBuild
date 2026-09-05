@@ -132,7 +132,7 @@ def _record_run_initialization_failure(
     两种结果：存在的 pending run 标为 failed；不存在则只释放任务 claim。
     两项写入共用一次提交，避免任务已释放但审计运行仍永久 pending。
     """
-    from app.models.v2.pipeline import PipelineRun
+    from app.data_channel.pipelines.models import PipelineRun
 
     db.rollback()
     now = datetime.utcnow()
@@ -209,7 +209,7 @@ def execute_pipeline_task(task_id: str, trigger_type: str = "manual",
     """
     from app.database import SessionLocal
     from app.data_channel.pipeline_tasks.models import PipelineTask
-    from app.models.v2.pipeline import Pipeline, PipelineRun
+    from app.data_channel.pipelines.models import Pipeline, PipelineRun
 
     db = SessionLocal()
     try:

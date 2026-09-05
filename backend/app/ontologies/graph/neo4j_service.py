@@ -184,7 +184,7 @@ class Neo4jService:
         """实体 MERGE — 存在则更新, 不存在则创建"""
         if not self._available:
             return None
-        from app.services.v2.graph.cypher_builder import validate_label
+        from app.ontologies.graph.cypher_builder import validate_label
 
         label = validate_label(label)
         key_field = validate_label(key_field)
@@ -209,7 +209,7 @@ class Neo4jService:
         """关系 MERGE"""
         if not self._available:
             return False
-        from app.services.v2.graph.cypher_builder import validate_label
+        from app.ontologies.graph.cypher_builder import validate_label
 
         src_label = validate_label(src_label)
         tgt_label = validate_label(tgt_label)
@@ -254,7 +254,7 @@ class Neo4jService:
         """
         if not self._available or not entities:
             return 0
-        from app.services.v2.graph.cypher_builder import validate_label
+        from app.ontologies.graph.cypher_builder import validate_label
 
         label = validate_label(label)
         key_field = validate_label(key_field)

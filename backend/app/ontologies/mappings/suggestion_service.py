@@ -298,7 +298,7 @@ def _suggest_for_dataset(
     llm_kwargs: dict | None,
 ) -> dict:
     from app.data_channel.datasets.query_service import get_schema
-    from app.models.v2.dataset import Dataset
+    from app.data_channel.datasets.models import Dataset
 
     base = {
         "datasetId": dataset_id,

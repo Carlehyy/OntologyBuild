@@ -442,7 +442,7 @@ def record_for_pipeline(db: Session, pl) -> N8nPipeline | None:
 def shadow_pipeline(db: Session, rec: N8nPipeline):
     if not rec.pipeline_id:
         return None
-    from app.models.v2.pipeline import Pipeline
+    from app.data_channel.pipelines.models import Pipeline
 
     return db.query(Pipeline).filter(Pipeline.id == rec.pipeline_id).first()
 
@@ -979,7 +979,7 @@ def ensure_shadow_pipeline(db: Session, rec: N8nPipeline,
     数据管家只是 AI 编排工具，发布与否由编辑向导的 publish 决定
     （published 表示「可被调度」）。本函数不触碰影子行的 status。
     """
-    from app.models.v2.pipeline import Pipeline
+    from app.data_channel.pipelines.models import Pipeline
 
     pl = db.query(Pipeline).filter(Pipeline.id == rec.pipeline_id).first() if rec.pipeline_id else None
     if pl is None:
@@ -1010,7 +1010,7 @@ def _archive_shadow_pipeline(db: Session, rec: N8nPipeline) -> None:
     """Archive the shadow without deleting versions, runs, or its identity."""
     if not rec.pipeline_id:
         return
-    from app.models.v2.pipeline import Pipeline
+    from app.data_channel.pipelines.models import Pipeline
 
     pl = db.query(Pipeline).filter(Pipeline.id == rec.pipeline_id).first()
     if pl is not None:

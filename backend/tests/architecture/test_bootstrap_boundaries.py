@@ -129,8 +129,8 @@ async def test_canonical_lifecycle_preserves_startup_and_shutdown_order(
     from app.data_channel.file_assets import service as file_asset_service
     from app.data_channel.steward import browser_runtime
     from app.services import sentinel
-    from app.services.v2 import sync_scheduler
-    from app.services.v2.graph import index_setup
+    from app.data_channel.sync_tasks import scheduler as sync_scheduler
+    from app.ontologies.graph import index_setup
     from app.shared import dependency_probe
     from app.ontologies import projection_state
 
@@ -304,7 +304,7 @@ async def test_lifecycle_partial_startup_failure_cleans_started_resources(
     from app.bootstrap import lifecycle
     from app.ontologies import projection_state
     from app.services import sentinel
-    from app.services.v2.graph import index_setup
+    from app.ontologies.graph import index_setup
     from app.shared import dependency_probe
 
     events: list[str] = []

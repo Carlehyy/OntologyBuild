@@ -21,7 +21,7 @@ from app.models.ontology_formal import (
     PropertyFact,
 )
 from app.models.ontology_version import OntologyVersion
-from app.models.v2.dataset import Dataset
+from app.data_channel.datasets.models import Dataset
 from app.ontologies.formal_modeling.derived import recompute_instance_derived
 from app.ontologies.formal_modeling.facts import (
     fact_order_clause,

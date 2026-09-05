@@ -246,7 +246,7 @@ def _pipeline_task_recipient_ids(db: Session, task, pipeline) -> list[str]:
 
 def _dispatch_pipeline_task_result(db: Session, row: InboxOutboxEvent) -> None:
     from app.data_channel.pipeline_tasks.models import PipelineTask
-    from app.models.v2.pipeline import Pipeline
+    from app.data_channel.pipelines.models import Pipeline
 
     payload = row.payload or {}
     task = db.query(PipelineTask).filter(PipelineTask.id == payload.get("taskId")).first()

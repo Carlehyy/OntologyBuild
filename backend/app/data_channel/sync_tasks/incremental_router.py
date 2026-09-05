@@ -26,7 +26,7 @@ def notify_sync_complete(
     """
     数据连接同步完成的回调通知，触发下游 Pipeline 增量运行。
     """
-    from app.services.v2.incremental.orchestrator import IncrementalOrchestrator
+    from app.data_channel.sync_tasks.incremental_orchestrator import IncrementalOrchestrator
     orch = IncrementalOrchestrator(db)
     return orch.on_connection_sync(connection_id, dataset_id)
 
@@ -36,7 +36,7 @@ def notify_pipeline_complete(run_id: str, db: Session = Depends(get_db)):
     """
     Pipeline 运行完成的回调通知，更新 Curated Dataset 状态。
     """
-    from app.services.v2.incremental.orchestrator import IncrementalOrchestrator
+    from app.data_channel.sync_tasks.incremental_orchestrator import IncrementalOrchestrator
     orch = IncrementalOrchestrator(db)
     return orch.on_pipeline_success(run_id)
 
@@ -46,6 +46,6 @@ def trigger_on_approve(review_id: str, db: Session = Depends(get_db)):
     """
     审核通过后自动触发 Ontology Mapping 增量写入。
     """
-    from app.services.v2.incremental.orchestrator import IncrementalOrchestrator
+    from app.data_channel.sync_tasks.incremental_orchestrator import IncrementalOrchestrator
     orch = IncrementalOrchestrator(db)
     return orch.on_review_approved(review_id)

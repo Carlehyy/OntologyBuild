@@ -28,7 +28,7 @@ def mapping_apply_task(mapping_id: str, ontology_id: str):
     from app.ontologies.mappings.application import (
         rebuild_ontology_projection,
     )
-    from app.models.v2.mapping import OntologyLinkMapping, OntologyMapping
+    from app.ontologies.mappings.models import OntologyLinkMapping, OntologyMapping
 
     db = SessionLocal()
     try:

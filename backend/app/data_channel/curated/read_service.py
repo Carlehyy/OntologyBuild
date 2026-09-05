@@ -17,8 +17,8 @@ from app.data_channel.curated.approved_version_reader import (
     require_version_approved,
     version_review,
 )
-from app.models.v2.dataset import Dataset
-from app.services.v2.dataset_service import DatasetReadError, rows_to_csv_bytes
+from app.data_channel.datasets.models import Dataset
+from app.data_channel.datasets.service import DatasetReadError, rows_to_csv_bytes
 
 
 def require_current_approved_for_read(

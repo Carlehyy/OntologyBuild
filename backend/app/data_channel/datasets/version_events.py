@@ -232,7 +232,7 @@ def _process_claimed_event(
                 dataset.id, version.id),
         )
     if event.event_type == CURATED_REVIEW_APPROVED_EVENT:
-        from app.models.v2.curated import CuratedReview
+        from app.data_channel.curated.models import CuratedReview
 
         review = (db.query(CuratedReview).filter(
             CuratedReview.curated_dataset_id == dataset.id,

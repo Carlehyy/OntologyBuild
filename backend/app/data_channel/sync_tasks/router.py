@@ -10,9 +10,9 @@ import uuid
 from app.config import settings
 from app.deps import get_current_user, get_db
 from app.data_channel.sync_tasks import cache as _cache
-from app.models.v2.sync_task import DataSyncTask, DataSyncHistory, SyncMode, ScheduleType, SyncStatus, TriggerType, HistoryStatus
-from app.models.v2.connection import Connection
-from app.models.v2.pipeline import Pipeline
+from app.data_channel.sync_tasks.models import DataSyncTask, DataSyncHistory, SyncMode, ScheduleType, SyncStatus, TriggerType, HistoryStatus
+from app.data_channel.connections.models import Connection
+from app.data_channel.pipelines.models import Pipeline
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
@@ -98,7 +98,7 @@ def _validate_task(db: Session, body, is_create: bool) -> None:
 
 def _refresh_scheduler(task_id: str) -> None:
     try:
-        from app.services.v2.sync_scheduler import get_sync_scheduler
+        from app.data_channel.sync_tasks.scheduler import get_sync_scheduler
         get_sync_scheduler().reload_task(task_id)
     except Exception:
         pass
@@ -150,7 +150,7 @@ def stats_overview(db: Session = Depends(get_db)):
 @router.get("/scheduler/status")
 def scheduler_status():
     try:
-        from app.services.v2.sync_scheduler import get_sync_scheduler
+        from app.data_channel.sync_tasks.scheduler import get_sync_scheduler
         sched = get_sync_scheduler()
         jobs = sched.scheduler.get_jobs() if sched.started else []
         return {
@@ -397,7 +397,7 @@ def trigger_task(
         raise HTTPException(404, "SyncTask not found")
     if task.status == SyncStatus.RUNNING.value:
         raise HTTPException(409, "任务正在执行中，请稍后再试")
-    from app.services.v2.sync_engine import execute_sync_task
+    from app.data_channel.sync_tasks.engine import execute_sync_task
 
     if sync:
         result = execute_sync_task(task_id, trigger_type=TriggerType.MANUAL.value)

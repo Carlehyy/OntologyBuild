@@ -21,7 +21,7 @@ from app.data_channel.curated.review_row_identity import (
     require_version_approved,
     review_matches_version,
 )
-from app.models.v2.curated import CuratedReview, CuratedRowEdit
+from app.data_channel.curated.models import CuratedReview, CuratedRowEdit
 
 
 def _edits_map_for_version(
@@ -158,7 +158,7 @@ def iter_rows_with_edits(
     blob 版本保持「全量读取 + 全量叠加（含未命中校验）」后分批产出。
     存储读取、校验或解析失败均抛错。
     """
-    from app.services.v2.dataset_service import DatasetService
+    from app.data_channel.datasets.service import DatasetService
 
     version = version or latest_dataset_version(db, dataset_id)
     if version is None:
@@ -169,7 +169,7 @@ def iter_rows_with_edits(
         require_version_approved(db, dataset_id, version)
 
     from app.data_channel.datasets import lake_store
-    from app.models.v2.dataset import Dataset
+    from app.data_channel.datasets.models import Dataset
 
     dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
     if dataset is not None and lake_store.version_uses_lake(dataset, version):

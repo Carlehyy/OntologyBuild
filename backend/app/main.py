@@ -23,24 +23,24 @@ from app.platform.router import router as overview_router
 from app.routers import formal as formal_router
 from app.routers import sentinel as sentinel_router
 from app.routers import collectors as collectors_router
-from app.routers.v2 import connections as connections_v2
-from app.routers.v2 import datasets as datasets_v2
-from app.routers.v2 import pipelines as pipelines_v2
-from app.routers.v2 import graph as graph_v2
-from app.routers.v2 import search as search_v2
-from app.routers.v2 import curated as curated_v2
-from app.routers.v2 import mappings as mappings_v2
-from app.routers.v2 import incremental as incremental_v2
-from app.routers.v2 import logic_actions as logic_actions_v2
-from app.routers.v2 import versions as versions_v2
-from app.routers.v2 import attribute_schemas as attr_schemas_v2
-from app.routers.v2 import inference as inference_v2
-from app.routers.v2 import sync_tasks as sync_tasks_v2
+from app.data_channel.connections import router as connections_v2
+from app.data_channel.datasets import router as datasets_v2
+from app.data_channel.pipelines import router as pipelines_v2
+from app.ontologies.graph import v2_router as graph_v2
+from app.data_channel.datasets import search_router as search_v2
+from app.data_channel.curated import router as curated_v2
+from app.ontologies.mappings import router as mappings_v2
+from app.data_channel.sync_tasks import incremental_router as incremental_v2
+from app.ontologies.logic import v2_router as logic_actions_v2
+from app.ontologies.versions import router as versions_v2
+from app.ontologies.attribute_schemas import router as attr_schemas_v2
+from app.ontologies.inference import router as inference_v2
+from app.data_channel.sync_tasks import router as sync_tasks_v2
 from app.data_channel.pipeline_tasks import router as pipeline_tasks_v2
 from app.data_channel.steward import router as steward_v2
 from app.data_channel.steward import browser_ws as steward_browser_ws
 from app.data_channel.file_assets import router as pipeline_file_assets
-from app.routers.v2 import test_data as test_data_v2
+from app.data_channel.transforms import test_data_router as test_data_v2
 from app.data_channel.access import asset_lake_access_guard
 from app.data_channel.datasets.sharing_router import (
     management_router as manual_sharing_router,

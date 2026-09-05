@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.data_channel.pipeline_tasks.models import PipelineTask
-from app.models.v2.pipeline import Pipeline
+from app.data_channel.pipelines.models import Pipeline
 
 
 def _validate(

@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.data_channel.pipelines.contracts import PipelineCreate, PipelineUpdate
 from app.data_channel.steward.models import STATUS_ARCHIVED, N8nPipeline
-from app.models.v2.pipeline import Pipeline, PipelineRun, PipelineVersion
+from app.data_channel.pipelines.models import Pipeline, PipelineRun, PipelineVersion
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")

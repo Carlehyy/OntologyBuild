@@ -11,7 +11,7 @@ def execute_pipeline(pipeline_id: str, triggered_by: str = "") -> dict:
     from datetime import datetime, timezone
 
     from app.database import SessionLocal
-    from app.models.v2.pipeline import Pipeline, PipelineRun
+    from app.data_channel.pipelines.models import Pipeline, PipelineRun
 
     db = SessionLocal()
     try:

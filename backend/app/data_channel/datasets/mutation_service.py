@@ -13,7 +13,7 @@ from app.data_channel.datasets.manual_contract import (
     CreateTableRequest,
     RowEditsRequest,
 )
-from app.services.v2.dataset_service import DatasetService
+from app.data_channel.datasets.service import DatasetService
 
 
 def dispatch_dataset_import_task(
@@ -530,7 +530,7 @@ def declare_contract(
     """
     from app.data_channel.datasets.lake_gate import (
         LakeGateError, infer_columns_typed, split_pk, validate_pk)
-    from app.services.v2.dataset_service import DatasetReadError
+    from app.data_channel.datasets.service import DatasetReadError
 
     svc = DatasetService(db)
     ds = svc.get_dataset(dataset_id)
@@ -648,8 +648,8 @@ def edit_rows(
     最新版本时返回 409——说明期间有人上传/编辑过，客户端须刷新重做。
     """
     from app.data_channel.datasets.lock import DatasetLockTimeout, dataset_write_lock
-    from app.services.v2.dataset_service import rows_to_csv_bytes
-    from app.models.v2.dataset import DatasetVersion
+    from app.data_channel.datasets.service import rows_to_csv_bytes
+    from app.data_channel.datasets.models import DatasetVersion
     from app.data_channel.datasets.edit_service import build_edited_snapshot
 
     svc = DatasetService(db)
@@ -702,9 +702,9 @@ def delete_dataset(
     被流水线 / 本体映射引用时始终返回 409；force 已禁用，避免数据库外键与页面
     “强删成功”语义不一致。
     若数据集由旧版同步任务（DataSyncTask）驱动，自动禁用该任务防止重建。"""
-    from app.models.v2.dataset import Dataset, DatasetVersion, MediaItem
+    from app.data_channel.datasets.models import Dataset, DatasetVersion, MediaItem
     from app.data_channel.file_assets.models import PipelineFileAsset
-    from app.models.v2.sync_task import DataSyncTask
+    from app.data_channel.sync_tasks.models import DataSyncTask
     from app.data_channel.datasets.service import (
         drain_storage_deletion_outbox,
         enqueue_dataset_storage_deletions,

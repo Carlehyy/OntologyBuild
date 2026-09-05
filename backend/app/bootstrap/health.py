@@ -97,7 +97,7 @@ def readiness_response(
             auth=(settings.neo4j_user, settings.neo4j_password),
         )
         driver.verify_connectivity()
-        from app.services.v2.graph.neo4j_service import Neo4jService
+        from app.ontologies.graph.neo4j_service import Neo4jService
 
         Neo4jService.clear_unavailable_backoff()
         checks["neo4j"] = "ok"
@@ -202,7 +202,7 @@ def readiness_response(
 
     try:
         from app.models.ontology import OntologyProject
-        from app.models.v2.mapping import OntologyMapping
+        from app.ontologies.mappings.models import OntologyMapping
 
         published_ids = [
             item[0]

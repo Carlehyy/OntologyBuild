@@ -37,8 +37,8 @@ class IncrementalOrchestrator:
         from app.data_channel.datasets.automation_policy import (
             manual_dataset_automation_eligibility,
         )
-        from app.models.v2.dataset import Dataset, DatasetVersion
-        from app.models.v2.mapping import OntologyLinkMapping, OntologyMapping
+        from app.data_channel.datasets.models import Dataset, DatasetVersion
+        from app.ontologies.mappings.models import OntologyLinkMapping, OntologyMapping
 
         dataset = self._db.query(Dataset).filter(
             Dataset.id == dataset_id).first()
@@ -130,7 +130,7 @@ class IncrementalOrchestrator:
         - 找到以该 dataset 为输入的所有 Pipeline
         - 若 Pipeline.spec.trigger.on_dataset_version = true，触发增量运行
         """
-        from app.models.v2.pipeline import Pipeline
+        from app.data_channel.pipelines.models import Pipeline
 
         triggered = []
         # 与任务池/链式触发同一道双闸：只有「已发布 + 已启用」的流水线才允许
@@ -163,8 +163,8 @@ class IncrementalOrchestrator:
         - 将其状态重置为 pending_review（供人工审核）
         - 记录增量标记
         """
-        from app.models.v2.pipeline import PipelineRun, Pipeline
-        from app.models.v2.curated import CuratedDataset
+        from app.data_channel.pipelines.models import PipelineRun, Pipeline
+        from app.data_channel.curated.models import CuratedDataset
 
         run = self._db.query(PipelineRun).filter(PipelineRun.id == pipeline_run_id).first()
         if not run or run.status != "success":
@@ -203,8 +203,8 @@ class IncrementalOrchestrator:
         不同的业务事件，不能互相替代：前者消费 curated 审批，后者消费人工
         数据版本发布。无显式审批订阅时保持不触发。
         """
-        from app.models.v2.curated import CuratedReview
-        from app.models.v2.mapping import (
+        from app.data_channel.curated.models import CuratedReview
+        from app.ontologies.mappings.models import (
             OntologyLinkMapping,
             OntologyMapping,
         )
@@ -297,7 +297,7 @@ class IncrementalOrchestrator:
 
     def _trigger_pipeline(self, pipeline_id: str, mode: str = "incremental") -> str | None:
         """触发 Pipeline 运行，返回 run_id"""
-        from app.models.v2.pipeline import PipelineRun
+        from app.data_channel.pipelines.models import PipelineRun
 
         run = PipelineRun(
             pipeline_id=pipeline_id,

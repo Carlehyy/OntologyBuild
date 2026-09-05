@@ -18,7 +18,7 @@ from typing import Optional
 
 from app.database import SessionLocal
 from app.deps import get_current_user
-from app.models.v2.connection import Connection
+from app.data_channel.connections.models import Connection
 from app.services.connection.registry import get_connector
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -142,7 +142,7 @@ def delete_connection(connection_id: str, db: Session = Depends(get_db)):
 @router.post("/{connection_id}/schedule")
 def set_schedule(connection_id: str, cron_expr: str, db: Session = Depends(get_db)):
     """为连接设置 Cron 调度表达式"""
-    from app.services.v2.scheduler.cron_service import CronService
+    from app.data_channel.sync_tasks.cron_service import CronService
     svc = CronService()
     if not svc.validate_cron(cron_expr):
         raise HTTPException(400, f"无效的 cron 表达式: {cron_expr}")

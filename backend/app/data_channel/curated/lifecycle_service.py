@@ -11,8 +11,8 @@ from app.data_channel.datasets.service import (
     enqueue_dataset_storage_deletions,
 )
 from app.data_channel.file_assets.models import PipelineFileAsset
-from app.models.v2.curated import CuratedReview, CuratedRowEdit
-from app.models.v2.dataset import Dataset, DatasetVersion, MediaItem
+from app.data_channel.curated.models import CuratedReview, CuratedRowEdit
+from app.data_channel.datasets.models import Dataset, DatasetVersion, MediaItem
 from app.ontologies.mappings.consumers import dataset_mapping_bindings
 
 

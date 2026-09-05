@@ -29,7 +29,7 @@ INTERRUPTED_RUN_ERROR = "执行中断（进程退出），由对账器收口"
 def reconcile_pipeline_executions(db) -> dict:
     """收口进程退出留下的中断执行，返回 ``{"tasks_failed", "runs_failed"}``。"""
     from app.data_channel.pipeline_tasks.models import PipelineTask
-    from app.models.v2.pipeline import PipelineRun
+    from app.data_channel.pipelines.models import PipelineRun
 
     now = datetime.utcnow()
 

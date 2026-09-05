@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.data_channel.datasets import migration_jobs
-from app.models.v2.dataset import Dataset
+from app.data_channel.datasets.models import Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +199,7 @@ def _run_with_session(db: Session, job_id: str, source_dataset_id: str) -> None:
         read_manifest,
         update_status,
     )
-    from app.services.v2.dataset_service import DatasetService
+    from app.data_channel.datasets.service import DatasetService
 
     def _set(**patch) -> None:
         update_status(job_id, **patch)

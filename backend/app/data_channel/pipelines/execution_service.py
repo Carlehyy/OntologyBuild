@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.data_channel.pipelines import cache as _pl_cache
 from app.data_channel.pipelines.contracts import EnabledBody
-from app.models.v2.pipeline import Pipeline, PipelineRun
+from app.data_channel.pipelines.models import Pipeline, PipelineRun
 
 
 DRY_RUN_BUCKET = "raw-datasets"

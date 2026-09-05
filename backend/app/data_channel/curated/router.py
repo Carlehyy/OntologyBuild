@@ -13,7 +13,7 @@ from app.data_channel.curated import (
 )
 from app.data_channel.curated.contracts import CuratedDatasetResponse
 from app.deps import get_current_user, require_admin
-from app.models.v2.curated import CuratedDataset, CuratedReview
+from app.data_channel.curated.models import CuratedDataset, CuratedReview
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ def _dispatch_approved_review(db: Session, review_id: str) -> dict:
     却没有任何可恢复的下游任务。
     """
     try:
-        from app.models.v2.dataset import DatasetVersionEvent
+        from app.data_channel.datasets.models import DatasetVersionEvent
         review = db.query(CuratedReview).filter(
             CuratedReview.id == review_id).first()
         if review is None or not review.dataset_version_id:
@@ -168,10 +168,10 @@ def review_diff(
 @router.get("/{dataset_id}/quality")
 def get_quality_report(dataset_id: str, db: Session = Depends(get_db)):
     """获取质量报告（支持旧 curated 表和新 v2_datasets curated）"""
-    from app.services.v2.curated.quality_service import QualityService
-    from app.services.v2.dataset_service import DatasetService
+    from app.data_channel.curated.quality_service import QualityService
+    from app.data_channel.datasets.service import DatasetService
 
-    from app.models.v2.dataset import Dataset as Ds2
+    from app.data_channel.datasets.models import Dataset as Ds2
     ds = db.query(Ds2).filter(Ds2.id == dataset_id, Ds2.kind == "curated").first()
     sample_data = []
     if ds:
@@ -230,7 +230,7 @@ class BatchEditRequest(BaseModel):
 @router.post("/{dataset_id}/reviews")
 def start_review(dataset_id: str, db: Session = Depends(get_db)):
     """为数据集启动审核流程"""
-    from app.services.v2.curated.review_service import ReviewService
+    from app.data_channel.curated.review_service import ReviewService
     svc = ReviewService(db)
     review = svc.start_review(dataset_id)
     return {"review_id": review.id, "status": review.status,
@@ -240,7 +240,7 @@ def start_review(dataset_id: str, db: Session = Depends(get_db)):
 @router.get("/reviews/{review_id}")
 def get_review(review_id: str, db: Session = Depends(get_db)):
     """获取审核记录详情"""
-    from app.models.v2.curated import CuratedReview
+    from app.data_channel.curated.models import CuratedReview
     review = db.query(CuratedReview).filter(CuratedReview.id == review_id).first()
     if not review:
         raise HTTPException(404, "Review not found")
@@ -257,7 +257,7 @@ def get_review(review_id: str, db: Session = Depends(get_db)):
 @router.post("/reviews/{review_id}/edits")
 def add_edit(review_id: str, body: BatchEditRequest, db: Session = Depends(get_db)):
     """批量提交行编辑"""
-    from app.services.v2.curated.review_service import ReviewService
+    from app.data_channel.curated.review_service import ReviewService
     svc = ReviewService(db)
     edits = svc.batch_edit_rows(review_id, body.edits)
     return {"saved": len(edits)}
@@ -267,7 +267,7 @@ def add_edit(review_id: str, body: BatchEditRequest, db: Session = Depends(get_d
 def approve_review(review_id: str, notes: str = "", db: Session = Depends(get_db),
                    _admin=Depends(require_admin)):
     """审核通过"""
-    from app.services.v2.curated.review_service import ReviewService
+    from app.data_channel.curated.review_service import ReviewService
     svc = ReviewService(db)
     review = svc.approve(review_id, notes)
     return {
@@ -281,7 +281,7 @@ def approve_review(review_id: str, notes: str = "", db: Session = Depends(get_db
 def reject_review(review_id: str, notes: str = "", db: Session = Depends(get_db),
                   _admin=Depends(require_admin)):
     """审核拒绝"""
-    from app.services.v2.curated.review_service import ReviewService
+    from app.data_channel.curated.review_service import ReviewService
     svc = ReviewService(db)
     review = svc.reject(review_id, notes)
     return {"review_id": review.id, "status": review.status}

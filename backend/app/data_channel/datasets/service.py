@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.v2.dataset import (
+from app.data_channel.datasets.models import (
     Dataset, DatasetVersion, DatasetVersionEvent, StorageDeletionOutbox,
 )
 from app.data_channel.datasets.snapshot_text import (  # noqa: F401 — 再导出
@@ -66,7 +66,7 @@ def detach_run_version_lineage(db, version_ids: list[str]) -> int:
     """
     if not version_ids:
         return 0
-    from app.models.v2.pipeline import PipelineRun
+    from app.data_channel.pipelines.models import PipelineRun
     return db.query(PipelineRun).filter(
         PipelineRun.dataset_version_id.in_(version_ids)
     ).update({PipelineRun.dataset_version_id: None}, synchronize_session=False)
@@ -507,7 +507,7 @@ def enqueue_storage_deletions(db: Session, storage_uris: list[str]) -> list[str]
 
 def enqueue_dataset_storage_deletions(db: Session, dataset_id: str) -> list[str]:
     """收集 DatasetVersion、媒体原件和 OCR 结果 URI 并写入同事务 outbox。"""
-    from app.models.v2.dataset import MediaItem
+    from app.data_channel.datasets.models import MediaItem
     from app.data_channel.file_assets.models import PipelineFileAsset
 
     versions = db.query(DatasetVersion.id, DatasetVersion.storage_uri).filter(
@@ -532,7 +532,7 @@ def enqueue_dataset_storage_deletions(db: Session, dataset_id: str) -> list[str]
 
 def _storage_uri_is_referenced(db: Session, storage_uri: str) -> bool:
     """共享 URI 防护：只要还有任一资产元数据引用，就暂不物理删除。"""
-    from app.models.v2.dataset import MediaItem
+    from app.data_channel.datasets.models import MediaItem
     from app.data_channel.file_assets.models import PipelineFileAsset
 
     if db.query(DatasetVersion.id).filter(
@@ -825,8 +825,8 @@ class DatasetService:
     def _prune_versions(self, dataset_id: str) -> None:
         from app.config import settings
         from app.data_channel.file_assets.models import PipelineFileAsset
-        from app.models.v2.dataset import MediaItem
-        from app.models.v2.curated import CuratedReview
+        from app.data_channel.datasets.models import MediaItem
+        from app.data_channel.curated.models import CuratedReview
 
         keep = int(getattr(settings, "dataset_version_keep", 0) or 0)
         if keep <= 0:

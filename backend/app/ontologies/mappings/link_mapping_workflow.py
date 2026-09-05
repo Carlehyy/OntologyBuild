@@ -42,8 +42,8 @@ def create_link_mapping(
 ) -> dict:
     from app.data_channel.datasets.lake_gate import split_pk
     from app.models.ontology_formal import LinkType
-    from app.models.v2.mapping import OntologyLinkMapping, OntologyMapping
-    from app.services.v2.dataset_service import DatasetService
+    from app.ontologies.mappings.models import OntologyLinkMapping, OntologyMapping
+    from app.data_channel.datasets.service import DatasetService
 
     rules.require_draft_ontology(db, ontology_id)
     rules.reject_reserved_mapping_keys(body.field_mapping, "field_mapping")
@@ -391,7 +391,7 @@ def update_link_mapping_automation(
     rules: LinkMappingRules,
 ) -> dict:
     """Update only the operational subscription; safe for published ontologies."""
-    from app.models.v2.mapping import OntologyLinkMapping
+    from app.ontologies.mappings.models import OntologyLinkMapping
 
     rules.lock_ontology(db, ontology_id)
     mapping = (
@@ -435,7 +435,7 @@ def delete_link_mapping(
     rules: LinkMappingRules,
 ) -> None:
     """删除关系映射并撤销当前态边；Link Fact 历史以墓碑保留。"""
-    from app.models.v2.mapping import OntologyLinkMapping
+    from app.ontologies.mappings.models import OntologyLinkMapping
     from app.ontologies.mappings.mapping_service import (
         MappingApplyError,
         MappingService,
