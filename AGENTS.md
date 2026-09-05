@@ -37,10 +37,9 @@ OntologyBuild 是“本体即服务”平台。前端导航是代码发现入口
 
 后端支撑基础设施不对外独立成业务域：`backend/app/bootstrap/`（健康探针与
 启动生命周期）、`backend/app/shared/`（配置、数据库、存储等共享能力）、
-`backend/app/tasks/`（Celery 任务入口，已列入退役计划：禁止新增任务；新的
-定时/后台任务一律采用「APScheduler 进程内定时 + NATS JetStream 派发 +
-nats_executor 消费」模式，先例见超级助手反思链路 `super_assistant.reflect.*`）；
-`backend/app/engine/` 为空壳预留。
+`backend/app/tasks/`（后台任务体入口，Celery 已退役：全部后台任务经
+「APScheduler 进程内定时 + NATS JetStream 派发 + nats_executor 消费」执行，
+先例见超级助手反思链路 `super_assistant.reflect.*`）；
 模块级导览见 `backend/app/README.md`。
 
 `backend/app/routers/`、`models/`、`schemas/`、`services/` 以迁移期兼容层为主：
@@ -48,7 +47,7 @@ nats_executor 消费」模式，先例见超级助手反思链路 `super_assista
 - 不得假设整个目录都可删除；
 - 除例外台账内的修复外，禁止在兼容层新增业务实现；
 - 新代码直接导入 canonical package；
-- 删除兼容入口前必须证明内部零引用、测试零 patch、Celery 旧任务兼容、
+- 删除兼容入口前必须证明内部零引用、测试零 patch、
   Alembic 历史可运行。
 
 ### 兼容层例外台账
@@ -146,8 +145,8 @@ app/services/v2/graph/neo4j_service.py
 - HTTP 路径、方法、状态码、响应结构和 OpenAPI operation；
 - `navigation.ts`、后端权限和数据库中持久化的 menu key；
 - 数据库表名、约束名、Alembic revision/down_revision；
-- Celery task name、队列名和定时任务标识（Celery 已列入退役计划，
-  存量契约在退役完成前照常受保护）；
+- NATS subject 与 durable consumer 名（Celery 已退役，其任务名/队列契约
+  随退役移除）；
 - 环境变量名、Compose service/volume 名和健康检查入口；
 - HashRouter 深链、公开分享/下载 URL、localStorage key；
 - SSE、WebSocket、API Hub `/api-hub` 与 `/proxy` 协议。
@@ -214,7 +213,6 @@ npm run test:e2e:mocked
 - `alembic heads` 只有一个 head；
 - 全新数据库 `alembic upgrade head`；
 - 受支持的现存数据库副本升级；
-- Celery 旧任务名仍可被 worker 消费；
 - API 启停不会重复启动或泄漏后台 worker。
 
 ### 前端路由、导航、权限或功能迁移
@@ -232,7 +230,7 @@ npm run test:e2e:mocked
 
 涉及以下任一项时，mock 测试不充分：
 
-- PostgreSQL、Redis/Celery worker、Neo4j、MinIO、n8n、Chromium CDP；
+- PostgreSQL、Redis、NATS executor、Neo4j、MinIO、n8n、Chromium CDP；
 - Alembic、对象存储、文件上传下载或公开分享；
 - SSE、WebSocket、浏览器接管、n8n、API Hub proxy；
 - 本体映射/发布、Sentinel 执行动作、生产部署与回滚；

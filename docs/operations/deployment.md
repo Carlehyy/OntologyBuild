@@ -21,7 +21,7 @@
    为准，时长数据见 `backend/.test_durations`；测试环境使用最低 bcrypt
    轮次）与配置中心回归；
 2. 运行 Alembic 新库升级与单 head 检查；
-3. 使用当前已跟踪的生产依赖清单验证 PostgreSQL、Redis/Celery worker、
+3. 使用当前已跟踪的生产依赖清单验证 PostgreSQL、Redis、
    Neo4j、MinIO、n8n 和 Chromium CDP 配置；
 4. 执行文档链接、目录索引与仓库卫生守卫；
 5. 执行前端单元测试、feature boundary、E2E 分类、lint、生产构建和离线
@@ -37,9 +37,9 @@
    先上传；远端替换源码时始终原地保留
    服务器 `.env`，不把秘密复制到固定 `/tmp` 文件；
 10. 服务器部署入口再次校验目录；旧安装如仍使用示例运行密钥，先执行不改密文
-   的密钥解耦，再完成依赖探测、停止旧 backend/Celery worker、数据库迁移和
+   的密钥解耦，再完成依赖探测、停止旧 backend、数据库迁移和
    Compose 启动；
-11. 检查 API 深度 readiness、Celery worker、pipeline executor、PostgreSQL、
+11. 检查 API 深度 readiness、pipeline executor、PostgreSQL、
    Redis、Neo4j、MinIO、n8n、Chromium CDP 和前端静态资源；
 12. 无论成功失败，清理 runner 上的上传压缩包。
 
@@ -58,7 +58,7 @@ PR 到 `nano-ontoprompt` 时，独立的 `.github/workflows/ci.yml` 会并行执
 ## 数据库迁移停机边界
 
 生产迁移是一次有意的短暂停机。依赖连接预检通过后，`deploy/deploy-prod.sh`
-会先对 `backend` 和 `celery_worker` 执行带 30 秒宽限期的停止，再检查 Alembic
+会先对 `backend` 执行带 30 秒宽限期的停止，再检查 Alembic
 单 head 并升级。这样旧版本进程不会在新投影状态迁移期间继续读写数据库。
 前端可能仍能提供静态文件，但 API 在迁移和新版本就绪前不可用。
 
@@ -187,7 +187,7 @@ admin 时的 seed 输入，编辑它不会修改已经存在的管理员密码�
 
 上一节的停机顺序适用于全部生产迁移。会删除或收紧旧应用仍在使用的 schema
 的 Alembic 迁移属于 contract migration；此类部署还必须记录升级前正在运行的
-backend、Celery worker 和 frontend，且不得在旧 API/worker 仍可访问数据库时
+backend 和 frontend，且不得在旧 API 仍可访问数据库时
 删表。
 
 失败恢复同时以迁移是否到达 head、数据库 revision 是否变化为界：

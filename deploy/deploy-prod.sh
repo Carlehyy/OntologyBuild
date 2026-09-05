@@ -170,7 +170,7 @@ restore_previous_runtime_on_exit() {
 trap restore_previous_runtime_on_exit EXIT
 stop_new_runtime_after_failed_deploy() {
   log "stopping the partially started new runtime after a post-migration failure"
-  if ! compose stop --timeout 30 frontend pipeline_executor celery_worker backend; then
+  if ! compose stop --timeout 30 frontend pipeline_executor backend; then
     log "failed to stop the new runtime completely; operator intervention is required"
   fi
 }
@@ -217,11 +217,6 @@ check_frontend_assets() {
   done
 
   rm -f "$index_file" "$main_file"
-}
-check_action_worker() {
-  compose exec -T celery_worker \
-    celery -A app.tasks.celery_app:celery_app inspect ping --timeout=5 \
-    >/dev/null
 }
 check_pipeline_executor() {
   # executor 没有进程内 ping 接口，以容器健康检查（心跳文件 mtime）为准
@@ -1142,7 +1137,7 @@ log "stopping backend and Celery worker before database migrations"
 # Revision 0055 changes the projection readiness contract. Old application
 # processes do not understand that fence, so no API/worker writer may remain
 # active while Alembic upgrades the database.
-run_with_retry compose stop -t 30 backend pipeline_executor celery_worker
+run_with_retry compose stop -t 30 backend pipeline_executor
 log "running database migrations"
 # Never rewrite Alembic history during a normal deploy.  If a legacy database
 # needs a one-off baseline stamp it must be an explicit, audited operation.
@@ -1162,7 +1157,7 @@ migration_head_revision="$(
   exit 1
 }
 running_services="$(compose ps --services --filter status=running 2>/dev/null || true)"
-for runtime_service in backend pipeline_executor celery_worker frontend; do
+for runtime_service in backend pipeline_executor frontend; do
   if grep -Fxq "$runtime_service" <<<"$running_services"; then
     previous_runtime_services+=("$runtime_service")
   fi
@@ -1174,7 +1169,7 @@ if [ "${#previous_runtime_services[@]}" -gt 0 ]; then
   fi
   log "stopping frontend, worker and API before the schema migration"
   runtime_stopped_for_migration=1
-  compose stop --timeout 30 frontend pipeline_executor celery_worker backend
+  compose stop --timeout 30 frontend pipeline_executor backend
 fi
 log "  upgrading to head"
 if ! run_with_retry compose run --rm --no-deps backend alembic upgrade head; then
@@ -1192,10 +1187,9 @@ if ! run_with_retry compose up -d --remove-orphans; then
   log "restore the pre-deploy database/files backup before rolling back the application"
   exit 1
 fi
-log "waiting for backend, action worker, pipeline executor and frontend readiness: ${READINESS_URL}"
+log "waiting for backend, pipeline executor and frontend readiness: ${READINESS_URL}"
 for i in $(seq 1 60); do
   if curl -fsS --connect-timeout 5 --max-time 10 "$READINESS_URL" >/dev/null \
-      && check_action_worker \
       && check_pipeline_executor \
       && check_frontend_assets; then
     log "deployment succeeded"

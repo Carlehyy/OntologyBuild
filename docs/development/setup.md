@@ -6,10 +6,10 @@
 - uv 0.11.14 或与锁文件兼容版本；
 - Node.js 22；
 - npm；
-- PostgreSQL、Redis、Celery worker、NATS、Neo4j、MinIO 和 n8n，以及已明确配置
+- PostgreSQL、Redis、NATS、Neo4j、MinIO 和 n8n，以及已明确配置
   地址的 Chromium CDP。
 
-不存在可用于正常开发的“最小降级模式”。PostgreSQL、Redis/Celery worker、
+不存在可用于正常开发的“最小降级模式”。PostgreSQL、Redis、
 NATS、Neo4j、MinIO 和 n8n 必须提供真实配置并通过连通性检查；Chromium CDP
 地址必须配置，其服务连通检查是提示性的，不可达时 API 可启动用于诊断但深度
 readiness 失败。地址只填写 HTTP(S) 服务根地址（例如 `http://browser:9222`），不要附加
