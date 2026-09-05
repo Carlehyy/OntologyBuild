@@ -57,9 +57,10 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6]
     # xdist 并行 + 测试环境低 bcrypt 轮次 + pytest-split 按时长六分片后，单片
     # 回归在 4 vCPU runner 上约 5-7 分钟（套件随功能持续增长，分片配平数据见
-    # backend/.test_durations）；上限留到 20 分钟，既覆盖 runner 波动余量，
-    # 又能及时掐断真正卡死的任务。
-    timeout-minutes: 20
+    # backend/.test_durations，新增测试需全量跑一次 --store-durations 再合入，
+    # 否则无时长记录的测试会集中落到个别分片）；上限留到 25 分钟，既覆盖
+    # runner 波动余量，又能及时掐断真正卡死的任务。
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:16-alpine
