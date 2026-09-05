@@ -91,7 +91,7 @@
 
 .ontology-login__brand-name {
   display: flex;
-  font-size: clamp(20px, 1.72vw, 27px);
+  font-size: clamp(22px, 1.85vw, 31px);
   font-weight: 650;
   letter-spacing: -0.055em;
 }
@@ -111,7 +111,7 @@
 
 .ontology-login__story h1 {
   margin: 0;
-  font-size: clamp(35px, 3.45vw, 54px);
+  font-size: clamp(32px, 3vw, 46px);
   font-weight: 760;
   line-height: 1.18;
   letter-spacing: -0.055em;
