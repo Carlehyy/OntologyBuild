@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import logging
 import os
 import re
@@ -24,8 +25,9 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.models import User
@@ -35,7 +37,11 @@ from app.model_configs.selector import llm_call_kwargs, select_llm_model_config,
 from app.shared.config import settings
 from app.shared.database import SessionLocal
 from app.super_assistant import palace_graph, palace_workspace, provider, reflection_service
-from app.super_assistant.models import SuperAssistantPalaceBuild, SuperAssistantPalaceFile
+from app.super_assistant.models import (
+    SuperAssistantPalaceBuild,
+    SuperAssistantPalaceFile,
+    SuperAssistantPalaceFolder,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -493,6 +499,27 @@ class PalaceContentUpdate(BaseModel):
     content: str = Field(max_length=5_000_000)
 
 
+class _PalaceBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PalaceFolderCreate(_PalaceBody):
+    path: str = Field(min_length=1, max_length=600)
+
+
+class PalaceFolderRename(_PalaceBody):
+    path: str = Field(min_length=1, max_length=600)
+
+
+class PalaceFileMove(_PalaceBody):
+    folder_path: str = Field(default="", alias="folderPath", max_length=600)
+
+
+class PalaceNoteCreate(_PalaceBody):
+    filename: str = Field(min_length=1, max_length=255)
+    folder_path: str = Field(default="", alias="folderPath", max_length=600)
+
+
 def _extension_of(filename: str | None) -> str:
     return os.path.splitext(str(filename or ""))[1].lower().lstrip(".")
 
@@ -661,9 +688,13 @@ def _create_file_row(
     return row
 
 
-def upload_file(db: Session, current_user: User, upload: UploadFile) -> dict:
+def upload_file(db: Session, current_user: User, upload: UploadFile, raw_folder_path: str = "") -> dict:
     _validate_upload_extension(upload.filename)
     owner_id = current_user.id
+    # folder_path 非空时上传归位到该目录（前端「上传到选中目录」），目录不存在按 mkdir -p 补行
+    folder_path = _validate_folder_path(_normalize_folder_path(raw_folder_path), allow_root=True)
+    if folder_path:
+        _ensure_folder_rows(db, owner_id, folder_path, include_self=True)
     dir_id = palace_workspace.user_dir_id(owner_id)
     workspace = palace_workspace.user_workspace(owner_id)
     image = _is_image(upload.filename)
@@ -689,6 +720,7 @@ def upload_file(db: Session, current_user: User, upload: UploadFile) -> dict:
         raise
     return _file_dict(_create_file_row(
         db, owner_id, artifact, fallback_name=upload.filename or "palace-file",
+        folder_path=folder_path,
     ))
 
 
@@ -937,6 +969,9 @@ def batch_import_files(db: Session, current_user: User, archive: UploadFile) -> 
             created.append(_file_dict(_create_file_row(
                 db, owner_id, artifact, fallback_name=display, folder_path=folder_path,
             )))
+            # 目录一等公民：包内层级同步落目录行（mkdir -p），树中目录可直接拖拽/重命名
+            if folder_path:
+                _ensure_folder_rows(db, owner_id, folder_path, include_self=True)
             accepted += 1
     return {"created": created, "skipped": skipped}
 
@@ -962,11 +997,235 @@ def rebuild_file(db: Session, owner_id: str, file_id: str) -> dict:
     row = _owned_file(db, owner_id, file_id)
     if _is_image(row.filename):
         raise HTTPException(400, "图片文件不参与图谱抽取，无需重建")
+    if row.status == "draft":
+        raise HTTPException(400, "笔记还没有内容，请先编辑保存后再重建")
     if row.status in {"pending", "building"}:
         raise HTTPException(409, "该文件正在抽取队列中，请稍候")
     _check_quotas(db, owner_id)
     result = request_build(row)
     return result
+
+
+# ---------------------------------------------------------------------------
+# 目录管理（一等公民：空目录常驻、整目录移动/重命名）
+# ---------------------------------------------------------------------------
+
+
+def _normalize_folder_path(value: str | None) -> str:
+    """与前端 normalizePalacePath 同口径：斜杠统一、去空段与首尾空白。"""
+    segments = [segment.strip() for segment in str(value or "").replace("\\", "/").split("/")]
+    return "/".join(segment for segment in segments if segment)
+
+
+def _validate_folder_path(path: str, *, allow_root: bool = False) -> str:
+    if not path:
+        if allow_root:
+            return ""
+        raise HTTPException(400, "目录路径不能为空")
+    if len(path) > 500:
+        raise HTTPException(400, "目录路径过长（上限 500 字符）")
+    if any(segment in {".", ".."} for segment in path.split("/")):
+        raise HTTPException(400, "目录名不能是 . 或 ..")
+    return path
+
+
+def _folder_dict(row: SuperAssistantPalaceFolder) -> dict:
+    return {
+        "id": row.id,
+        "path": row.path,
+        "createdAt": row.created_at,
+        "updatedAt": row.updated_at,
+    }
+
+
+def _owned_folder(db: Session, owner_id: str, folder_id: str) -> SuperAssistantPalaceFolder:
+    row = db.get(SuperAssistantPalaceFolder, folder_id)
+    if row is None or row.owner_id != owner_id:
+        raise HTTPException(404, "目录不存在")
+    return row
+
+
+def _folder_ancestors(path: str) -> list[str]:
+    parts = path.split("/")
+    return ["/".join(parts[:depth]) for depth in range(1, len(parts))]
+
+
+def _folder_exists(db: Session, owner_id: str, path: str) -> bool:
+    return (
+        db.query(SuperAssistantPalaceFolder.id)
+        .filter(
+            SuperAssistantPalaceFolder.owner_id == owner_id,
+            SuperAssistantPalaceFolder.path == path,
+        )
+        .first()
+        is not None
+    )
+
+
+def _ensure_folder_rows(
+    db: Session, owner_id: str, path: str, *, include_self: bool = False,
+) -> None:
+    """mkdir -p：按需补齐目录行（默认仅祖先，叶子行由调用方显式建/改名）。
+
+    include_self 供文件/笔记落入选定目录使用：目标目录在树中可见即可落
+    （ZIP 导入等来源的目录只体现在文件 folder_path 上，没有目录行）。
+    """
+    candidates = _folder_ancestors(path) + ([path] if include_self else [])
+    for candidate in candidates:
+        if not _folder_exists(db, owner_id, candidate):
+            db.add(SuperAssistantPalaceFolder(owner_id=owner_id, path=candidate))
+    db.commit()
+
+
+def list_folders(db: Session, owner_id: str) -> list[dict]:
+    rows = (
+        db.query(SuperAssistantPalaceFolder)
+        .filter(SuperAssistantPalaceFolder.owner_id == owner_id)
+        .order_by(SuperAssistantPalaceFolder.path)
+        .all()
+    )
+    return [_folder_dict(row) for row in rows]
+
+
+def create_folder(db: Session, owner_id: str, raw_path: str) -> dict:
+    path = _validate_folder_path(_normalize_folder_path(raw_path))
+    if _folder_exists(db, owner_id, path):
+        raise HTTPException(409, "同名目录已存在")
+    _ensure_folder_rows(db, owner_id, path)
+    row = SuperAssistantPalaceFolder(owner_id=owner_id, path=path)
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        # 并发窗口：检查与提交之间另一请求已建同名目录
+        db.rollback()
+        raise HTTPException(409, "同名目录已存在") from None
+    db.refresh(row)
+    return _folder_dict(row)
+
+
+def rename_folder(db: Session, owner_id: str, folder_id: str, raw_path: str) -> dict:
+    """重命名/移动目录：本目录、子孙目录行与文件 folder_path 前缀批量重写。
+
+    文件量受每用户文件数配额约束，Python 侧前缀匹配（而非 LIKE）以规避
+    路径中 %/_ 通配符歧义。
+    """
+    row = _owned_folder(db, owner_id, folder_id)
+    old = row.path
+    new = _validate_folder_path(_normalize_folder_path(raw_path))
+    if new == old:
+        return _folder_dict(row)
+    if new.startswith(f"{old}/"):
+        raise HTTPException(400, "不能把目录移动到自身或其子目录下")
+    if _folder_exists(db, owner_id, new):
+        raise HTTPException(409, "同名目录已存在")
+    _ensure_folder_rows(db, owner_id, new)
+
+    prefix = f"{old}/"
+    for other in (
+        db.query(SuperAssistantPalaceFolder)
+        .filter(SuperAssistantPalaceFolder.owner_id == owner_id)
+        .all()
+    ):
+        if other.id != row.id and other.path.startswith(prefix):
+            other.path = new + other.path[len(old):]
+    row.path = new
+    for file_row in (
+        db.query(SuperAssistantPalaceFile)
+        .filter(SuperAssistantPalaceFile.owner_id == owner_id)
+        .all()
+    ):
+        if file_row.folder_path == old or file_row.folder_path.startswith(prefix):
+            file_row.folder_path = new + file_row.folder_path[len(old):]
+    db.commit()
+    db.refresh(row)
+    return _folder_dict(row)
+
+
+def delete_folder(db: Session, owner_id: str, folder_id: str) -> None:
+    """删除空目录。文件删除各自触发图谱剥离，静默级联删除会放大误操作
+    影响面，非空目录一律拒绝（前端引导先清空）。"""
+    row = _owned_folder(db, owner_id, folder_id)
+    prefix = f"{row.path}/"
+    has_child = any(
+        other.path.startswith(prefix)
+        for other in (
+            db.query(SuperAssistantPalaceFolder.path)
+            .filter(SuperAssistantPalaceFolder.owner_id == owner_id)
+            .all()
+        )
+    )
+    has_file = any(
+        file_row.folder_path == row.path or file_row.folder_path.startswith(prefix)
+        for file_row in (
+            db.query(SuperAssistantPalaceFile.folder_path)
+            .filter(SuperAssistantPalaceFile.owner_id == owner_id)
+            .all()
+        )
+    )
+    if has_child or has_file:
+        raise HTTPException(409, "目录非空：请先删除其中的文件与子目录")
+    db.delete(row)
+    db.commit()
+
+
+def move_file(db: Session, owner_id: str, file_id: str, raw_folder_path: str) -> dict:
+    """移动文件到目标目录（不改内容、不触发抽取）；空串表示根目录。"""
+    row = _owned_file(db, owner_id, file_id)
+    target = _validate_folder_path(_normalize_folder_path(raw_folder_path), allow_root=True)
+    if target:
+        _ensure_folder_rows(db, owner_id, target, include_self=True)
+    row.folder_path = target
+    db.commit()
+    db.refresh(row)
+    return _file_dict(row)
+
+
+def create_note(db: Session, current_user: User, body: PalaceNoteCreate) -> dict:
+    """新建 md/txt 空笔记并落入选中目录。
+
+    空文本建图必然失败（run_build 对空内容置 failed），因此 status=draft
+    不派发抽取；首次保存内容走 update_file_content 的既有重建链路。
+    """
+    owner_id = current_user.id
+    filename = str(body.filename or "").strip()
+    if not filename:
+        raise HTTPException(400, "文件名不能为空")
+    if "/" in filename or "\\" in filename:
+        raise HTTPException(400, "文件名不能包含路径分隔符")
+    if _extension_of(filename) not in _EDITABLE_EXTENSIONS:
+        raise HTTPException(400, "仅支持新建 .md/.txt 笔记")
+    folder_path = _validate_folder_path(_normalize_folder_path(body.folder_path), allow_root=True)
+    if folder_path:
+        _ensure_folder_rows(db, owner_id, folder_path, include_self=True)
+    _check_quotas(db, owner_id, extra_files=1, reserves_build=False)
+    try:
+        artifact = palace_workspace.user_workspace(owner_id).save_stream(
+            palace_workspace.user_dir_id(owner_id),
+            filename,
+            io.BytesIO(b""),
+            source="palace-note",
+            mime_type="text/markdown" if _extension_of(filename) == "md" else "text/plain",
+            extract=True,
+        )
+    except WorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    row = SuperAssistantPalaceFile(
+        owner_id=owner_id,
+        filename=filename,
+        folder_path=folder_path,
+        artifact_id=str(artifact.get("id")),
+        mime_type=str(artifact.get("mimeType") or "text/plain"),
+        size=int(artifact.get("size") or 0),
+        sha256=str(artifact.get("sha256") or ""),
+        extracted_chars=0,
+        # draft=新建未写入内容：不参与抽取队列与图谱统计
+        status="draft",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _file_dict(row)
 
 
 def search_graph(db: Session, owner_id: str, query: str) -> dict:
@@ -1001,7 +1260,11 @@ def search_graph(db: Session, owner_id: str, query: str) -> dict:
 
 
 def graph_overview(db: Session, owner_id: str) -> dict:
-    """图谱可视化数据；Neo4j 不可用时返回 available=False 而不是 5xx。"""
+    """图谱可视化数据；Neo4j 不可用时返回 available=False 而不是 5xx。
+
+    附带画布下统计条的消费字段：builtFiles/totalFiles（文档口径）与
+    updatedAt（最近一次成功建图完成时间，无则 None）。
+    """
     built = (
         db.query(SuperAssistantPalaceFile)
         .filter(
@@ -1010,14 +1273,32 @@ def graph_overview(db: Session, owner_id: str) -> dict:
         )
         .count()
     )
+    total_files = (
+        db.query(SuperAssistantPalaceFile.id)
+        .filter(SuperAssistantPalaceFile.owner_id == owner_id)
+        .count()
+    )
+    last_built_at = (
+        db.query(func.max(SuperAssistantPalaceBuild.finished_at))
+        .filter(
+            SuperAssistantPalaceBuild.owner_id == owner_id,
+            SuperAssistantPalaceBuild.status == "success",
+        )
+        .scalar()
+    )
+    stats = {
+        "builtFiles": built,
+        "totalFiles": total_files,
+        "updatedAt": last_built_at.isoformat() if last_built_at else None,
+    }
     if not built:
-        return {"available": True, "nodes": [], "edges": [], "totals": {"entities": 0, "relations": 0}, "truncated": False}
+        return {"available": True, "nodes": [], "edges": [], "totals": {"entities": 0, "relations": 0}, "truncated": False, **stats}
     try:
         payload = palace_graph.owner_graph(owner_id)
     except palace_graph.PalaceGraphUnavailable:
         logger.warning("记忆宫殿图谱读取失败：Neo4j 不可用（owner=%s）", owner_id)
-        return {"available": False, "nodes": [], "edges": [], "totals": {"entities": 0, "relations": 0}, "truncated": False}
-    return {"available": True, **payload}
+        return {"available": False, "nodes": [], "edges": [], "totals": {"entities": 0, "relations": 0}, "truncated": False, **stats}
+    return {"available": True, **payload, **stats}
 
 
 # ---------------------------------------------------------------------------

@@ -336,6 +336,26 @@ class SuperAssistantPalaceBuild(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class SuperAssistantPalaceFolder(Base):
+    """记忆宫殿用户级目录（一等公民：支持空目录常驻与整目录移动/重命名）。
+
+    path 与文件行的 folder_path 同口径："/" 分隔的归一路径，根目录为空串
+    且不落行。目录移动/重命名 = 本行 path 连同子孙目录行与文件 folder_path
+    的前缀批量重写（见 palace_service.rename_folder）。
+    """
+
+    __tablename__ = "super_assistant_palace_folders"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "path", name="uq_sa_palace_folders_owner_path"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    owner_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    path: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, onupdate=_now)
+
+
 class SuperAssistantWidgetConfig(Base):
     """悬浮 AI 助手（迷你超级助手）的页面可见范围配置（平台级单例）。
 

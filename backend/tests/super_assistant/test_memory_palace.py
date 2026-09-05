@@ -4,6 +4,7 @@ import io
 import json
 import threading
 import zipfile
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -17,9 +18,18 @@ from app.deps import get_current_user, get_db
 from app.shared.config import settings
 from app.shared.database import Base
 from app.super_assistant import palace_graph, palace_service, palace_tasks, palace_workspace, router, runtime
-from app.super_assistant.models import SuperAssistantPalaceBuild, SuperAssistantPalaceFile
+from app.super_assistant.models import (
+    SuperAssistantPalaceBuild,
+    SuperAssistantPalaceFile,
+    SuperAssistantPalaceFolder,
+)
 
-_TABLES = [User.__table__, SuperAssistantPalaceFile.__table__, SuperAssistantPalaceBuild.__table__]
+_TABLES = [
+    User.__table__,
+    SuperAssistantPalaceFile.__table__,
+    SuperAssistantPalaceBuild.__table__,
+    SuperAssistantPalaceFolder.__table__,
+]
 
 _PREFIX = "/api/v2/super-assistant"
 
@@ -501,6 +511,7 @@ def test_graph_overview_degrades_when_neo4j_unavailable(env, monkeypatch):
     assert response.json() == {
         "available": True, "nodes": [], "edges": [],
         "totals": {"entities": 0, "relations": 0}, "truncated": False,
+        "builtFiles": 0, "totalFiles": 0, "updatedAt": None,
     }
 
 
@@ -1072,3 +1083,193 @@ def test_graph_search_degrades_when_neo4j_unavailable(env, monkeypatch):
     response = env.client.get(f"{_PREFIX}/palace/graph/search", params={"q": "张三"})
     assert response.status_code == 200
     assert response.json() == {"available": False, "entities": [], "relations": []}
+
+
+# ---------------------------------------------------------------------------
+# 目录管理（一等公民）+ 新建笔记 + 文件移动
+# ---------------------------------------------------------------------------
+
+
+def _folders(client: TestClient) -> list[dict]:
+    return client.get(f"{_PREFIX}/palace/folders").json()
+
+
+def _folder_by_path(client: TestClient, path: str) -> dict:
+    return next(row for row in _folders(client) if row["path"] == path)
+
+
+def test_folder_create_mkdir_p_duplicate_and_owner_scope(env):
+    client = env.client
+    response = client.post(f"{_PREFIX}/palace/folders", json={"path": "研发/规格"})
+    assert response.status_code == 201, response.text
+    assert response.json()["path"] == "研发/规格"
+    # mkdir -p：中间目录自动落行
+    assert [row["path"] for row in _folders(client)] == ["研发", "研发/规格"]
+    # 重复创建（归一化后同路径）409
+    assert client.post(f"{_PREFIX}/palace/folders", json={"path": "研发/规格/"}).status_code == 409
+    # 非法路径
+    assert client.post(f"{_PREFIX}/palace/folders", json={"path": "a/../b"}).status_code == 400
+    # 属权隔离：user-2 看不到 user-1 的目录，但可以创建自己的同名目录
+    other = env.make_client(_user("user-2", "other"))
+    assert other.get(f"{_PREFIX}/palace/folders").json() == []
+    assert other.post(f"{_PREFIX}/palace/folders", json={"path": "研发"}).status_code == 201
+
+
+def test_note_create_draft_then_first_save_dispatches(env, monkeypatch):
+    dispatched = _record_dispatch(monkeypatch)
+    client = env.client
+    client.post(f"{_PREFIX}/palace/folders", json={"path": "笔记"})
+    response = client.post(
+        f"{_PREFIX}/palace/files/notes",
+        json={"filename": "会议纪要.md", "folderPath": "笔记"},
+    )
+    assert response.status_code == 201, response.text
+    row = response.json()
+    assert row["status"] == "draft"
+    assert row["path"] == "笔记"
+    assert row["editable"] is True
+    assert dispatched == []  # 空笔记不派发抽取
+    with env.session() as db:
+        assert db.query(SuperAssistantPalaceBuild).count() == 0
+
+    # 仅支持 md/txt；文件名不能带路径分隔符
+    assert client.post(f"{_PREFIX}/palace/files/notes", json={"filename": "a.pdf"}).status_code == 400
+    assert client.post(f"{_PREFIX}/palace/files/notes", json={"filename": "a/b.md"}).status_code == 400
+
+    # draft 不可重建（空文本建图必然失败）
+    assert client.post(f"{_PREFIX}/palace/files/{row['id']}/rebuild").status_code == 400
+
+    # 首次保存内容 → 进入既有重建链路
+    saved = client.put(f"{_PREFIX}/palace/files/{row['id']}/content", json={"content": "# 正文"})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["status"] == "pending"
+    assert dispatched == [("user-1", row["id"])]
+
+
+def test_move_file_between_folders_and_mkdir_p_target(env):
+    client = env.client
+    made = _upload(client, "文档.md", "内容".encode()).json()
+    client.post(f"{_PREFIX}/palace/folders", json={"path": "目标"})
+    response = client.patch(f"{_PREFIX}/palace/files/{made['id']}", json={"folderPath": "目标"})
+    assert response.status_code == 200, response.text
+    assert response.json()["path"] == "目标"
+
+    # 目标目录没有行也能落（ZIP 导入目录只体现在 folder_path 上）：mkdir -p 补行
+    response = client.patch(f"{_PREFIX}/palace/files/{made['id']}", json={"folderPath": "新/子"})
+    assert response.status_code == 200
+    assert {"新", "新/子"} <= {row["path"] for row in _folders(client)}
+
+    # 移回根目录
+    response = client.patch(f"{_PREFIX}/palace/files/{made['id']}", json={"folderPath": ""})
+    assert response.status_code == 200
+    assert response.json()["path"] == ""
+
+    # 属权隔离
+    other = env.make_client(_user("user-2", "other"))
+    assert other.patch(f"{_PREFIX}/palace/files/{made['id']}", json={"folderPath": "x"}).status_code == 404
+
+
+def test_rename_folder_rewrites_descendants(env):
+    client = env.client
+    client.post(f"{_PREFIX}/palace/folders", json={"path": "旧/深"})
+    made = _upload(client, "a.md", "a".encode()).json()
+    client.patch(f"{_PREFIX}/palace/files/{made['id']}", json={"folderPath": "旧/深"})
+
+    folder = _folder_by_path(client, "旧/深")
+    response = client.patch(f"{_PREFIX}/palace/folders/{folder['id']}", json={"path": "新/深处"})
+    assert response.status_code == 200, response.text
+    # 原父目录「旧」按文件系统语义保留为空目录
+    assert {row["path"] for row in _folders(client)} == {"旧", "新", "新/深处"}
+    with env.session() as db:
+        assert db.get(SuperAssistantPalaceFile, made["id"]).folder_path == "新/深处"
+
+    # 环：不能把目录移动到自身或其子目录下（改名进自身子目录同属环，先于重名检查）
+    deep = _folder_by_path(client, "新/深处")
+    assert client.patch(f"{_PREFIX}/palace/folders/{deep['id']}", json={"path": "新/深处/子"}).status_code == 400
+    assert client.patch(f"{_PREFIX}/palace/folders/{_folder_by_path(client, '新')['id']}", json={"path": "新/深处"}).status_code == 400
+    # 同名冲突（跨分支改名撞上已存在目录）
+    assert client.patch(f"{_PREFIX}/palace/folders/{_folder_by_path(client, '旧')['id']}", json={"path": "新/深处"}).status_code == 409
+    # 归属隔离
+    other_client = env.make_client(_user("user-2", "other"))
+    assert other_client.patch(
+        f"{_PREFIX}/palace/folders/{deep['id']}", json={"path": "窃取"},
+    ).status_code == 404
+
+
+def test_delete_folder_only_when_empty(env):
+    client = env.client
+    client.post(f"{_PREFIX}/palace/folders", json={"path": "a/b"})
+    made = _upload(client, "x.md", "x".encode()).json()
+    client.patch(f"{_PREFIX}/palace/files/{made['id']}", json={"folderPath": "a"})
+
+    folder_a = _folder_by_path(client, "a")
+    folder_b = _folder_by_path(client, "a/b")
+    # 有文件 → 409
+    assert client.delete(f"{_PREFIX}/palace/folders/{folder_a['id']}").status_code == 409
+    # 有子目录 → 409
+    client.delete(f"{_PREFIX}/palace/files/{made['id']}")
+    assert client.delete(f"{_PREFIX}/palace/folders/{folder_a['id']}").status_code == 409
+    # 空目录自底向上可删
+    assert client.delete(f"{_PREFIX}/palace/folders/{folder_b['id']}").status_code == 204
+    assert client.delete(f"{_PREFIX}/palace/folders/{folder_a['id']}").status_code == 204
+
+
+def test_graph_overview_reports_file_stats_and_updated_at(env, monkeypatch):
+    client = env.client
+    made = _upload(client, "s.md", "张三 任职 ACME".encode()).json()
+    stats = client.get(f"{_PREFIX}/palace/graph").json()
+    assert stats["builtFiles"] == 0
+    assert stats["totalFiles"] == 1
+    assert stats["updatedAt"] is None
+
+    with env.session() as db:
+        row = db.get(SuperAssistantPalaceFile, made["id"])
+        row.status = "built"
+        db.add(SuperAssistantPalaceBuild(
+            owner_id="user-1", file_id=row.id, content_hash=row.sha256,
+            status="success", finished_at=datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc),
+        ))
+        db.commit()
+
+    monkeypatch.setattr(
+        palace_graph, "owner_graph",
+        lambda owner_id, **kwargs: {
+            "nodes": [], "edges": [],
+            "totals": {"entities": 2, "relations": 1}, "truncated": False,
+        },
+    )
+    payload = client.get(f"{_PREFIX}/palace/graph").json()
+    assert payload["builtFiles"] == 1
+    assert payload["totalFiles"] == 1
+    assert payload["updatedAt"].startswith("2026-09-05T12:00")
+
+
+def test_upload_with_folder_path_lands_in_folder(env):
+    client = env.client
+    made = client.post(
+        f"{_PREFIX}/palace/files",
+        files={"file": ("归档.md", "数据".encode(), "text/markdown")},
+        data={"folder_path": "归/档"},
+    ).json()
+    assert made["path"] == "归/档"
+    assert {"归", "归/档"} <= {row["path"] for row in _folders(client)}
+    # 不带 folder_path 的上传仍落根目录
+    plain = _upload(client, "根.md", b"root").json()
+    assert plain["path"] == ""
+
+
+def test_batch_import_creates_folder_rows(env):
+    client = env.client
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr("子/a.md", "a")
+        zf.writestr("子/b.md", "b")
+    buffer.seek(0)
+    response = client.post(
+        f"{_PREFIX}/palace/files/batch",
+        files={"archive": ("pack.zip", buffer, "application/zip")},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["skipped"] == []
+    # 包内层级（含压缩包顶层目录）落为目录行，可直接拖拽/重命名
+    assert {"pack", "pack/子"} <= {row["path"] for row in _folders(client)}

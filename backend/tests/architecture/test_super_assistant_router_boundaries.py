@@ -210,7 +210,7 @@ ROUTE_PARAMETERS = {
         "current_user",
     ),
     "list_palace_files": ("db", "current_user"),
-    "upload_palace_file": ("file", "db", "current_user"),
+    "upload_palace_file": ("file", "db", "current_user", "folder_path"),
     "delete_palace_file": (
         "file_id",
         "db",
@@ -243,6 +243,35 @@ ROUTE_PARAMETERS = {
     ),
     "search_palace_graph": ("q", "db", "current_user"),
     "consolidate_palace_graph": ("db", "current_user"),
+    # 目录一等公民 + 新建笔记 + 拖拽移动（5 条路径 6 个端点）
+    "list_palace_folders": ("db", "current_user"),
+    "create_palace_folder": (
+        "body",
+        "db",
+        "current_user",
+    ),
+    "create_palace_note": (
+        "body",
+        "db",
+        "current_user",
+    ),
+    "move_palace_file": (
+        "file_id",
+        "body",
+        "db",
+        "current_user",
+    ),
+    "rename_palace_folder": (
+        "folder_id",
+        "body",
+        "db",
+        "current_user",
+    ),
+    "delete_palace_folder": (
+        "folder_id",
+        "db",
+        "current_user",
+    ),
 }
 
 DELEGATES = {
@@ -421,6 +450,10 @@ BODY_TYPES = {
     "request_full_reflection": schemas.ReflectionFullRequest,
     "update_reflection_settings": schemas.ReflectionSettingsUpdate,
     "update_palace_file_content": palace_service.PalaceContentUpdate,
+    "create_palace_folder": palace_service.PalaceFolderCreate,
+    "create_palace_note": palace_service.PalaceNoteCreate,
+    "move_palace_file": palace_service.PalaceFileMove,
+    "rename_palace_folder": palace_service.PalaceFolderRename,
 }
 
 
@@ -670,8 +703,9 @@ def test_super_assistant_router_and_services_stay_bounded():
     limits = {
         # 记忆宫殿新增 /palace/* 5 个端点（3 条路径），router.py 748 → 778；
         # 第二批新增 batch/content/replace/preview/graph-search/consolidate
-        # 6 个端点 → 811
-        "router.py": 850,
+        # 6 个端点 → 811；目录一等公民（folders CRUD/笔记/移动）6 个端点、
+        # multica 外部集成子路由接线 → 860
+        "router.py": 890,
         # 死流回收（_reap_stale_streaming 读取兜底）与启动恢复
         # （recover_interrupted_streams）落地：320 → 360
         "conversation_service.py": 360,
@@ -714,9 +748,13 @@ def test_super_assistant_openapi_matches_pre_extraction_baseline():
     # 内容更新(PUT)/替换/预览、图谱检索与聚类合并 6 个操作（6 条路径）；
     # 三栏重构新增 /palace/files/{id}/raw 原始字节内联读取（图片预览）；
     # multica 外部集成新增 /multica/config 的 GET/PUT 与 /multica/test 的
-    # POST（multica.py 子路由）共 3 个操作（2 条路径）
-    assert len(paths) == 42
-    assert sum(len(item) for item in paths.values()) == 58
+    # POST（multica.py 子路由）共 3 个操作（2 条路径）；
+    # 目录一等公民新增 /palace/folders、/palace/folders/{id}、
+    # /palace/files/notes 三条路径（PATCH /palace/files/{id} 复用旧路径），
+    # 共 6 个新操作：folders list/create、folders/{id} rename/delete、
+    # files/notes POST、files/{id} PATCH（拖拽移动）
+    assert len(paths) == 45
+    assert sum(len(item) for item in paths.values()) == 64
     assert hashlib.sha256(payload).hexdigest() == (
-        "524aaf3365bd05615ebd74de623e75ca1839aca05fea9a7cc281c15a9f71c84c"
+        "8f1ad05e04e47f5dde51232f62cc3d217132e89cb3529be803148649ad271f7c"
     )
