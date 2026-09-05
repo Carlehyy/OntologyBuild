@@ -94,7 +94,7 @@ export interface IngestKey {
   createdAt: string
   lastUsedAt: string | null
   revokedAt: string | null
-  plaintextKey?: string     // 仅创建响应带
+  plaintextKey?: string     // 仅创建响应一次性返回；列表/吊销响应永不携带
 }
 
 export interface IngestKeyListParams {

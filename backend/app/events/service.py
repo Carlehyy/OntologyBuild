@@ -313,7 +313,6 @@ def mint_ingest_key(db: Session, name: str, allowed_source_system: Optional[str]
         name=name.strip(),
         key_prefix=key_prefix,
         key_hash=hash_key(plaintext),
-        secret_plain=plaintext,  # 留存以便反复复制
         enabled=True,
         allowed_source_system=(allowed_source_system or "").strip() or None,
         created_by=getattr(user, "id", None),
@@ -403,9 +402,10 @@ def key_out(k: EventIngestKey, *, plaintext: Optional[str] = None) -> dict:
         "enabled": k.enabled, "allowedSourceSystem": k.allowed_source_system,
         "createdBy": k.created_by, "createdAt": _iso(k.created_at),
         "lastUsedAt": _iso(k.last_used_at), "revokedAt": _iso(k.revoked_at),
-        # 明文密钥随记录返回，前端可随时复制（旧密钥无留存则为 null）
-        "plaintextKey": plaintext if plaintext is not None else k.secret_plain,
     }
+    if plaintext is not None:
+        # 明文仅创建响应一次性返回；列表/吊销响应永不携带
+        out["plaintextKey"] = plaintext
     return out
 
 
