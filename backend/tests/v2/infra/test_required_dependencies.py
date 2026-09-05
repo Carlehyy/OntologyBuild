@@ -82,6 +82,7 @@ def _required_settings(**updates) -> Settings:
         "steward_browser_cdp_url": "http://browser:9222",
         "n8n_api_url": "https://n8n.example.com/api/v1",
         "n8n_api_key": "strong-n8n-api-key",
+        "python_kernel_gateway_auth_token": "strong-kernel-gateway-token",
         "pipeline_file_public_app_base_url": "https://platform.example.com",
         "pipeline_file_public_api_base_url": "https://api.example.com",
         "allow_public_registration": False,

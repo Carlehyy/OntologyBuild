@@ -74,6 +74,7 @@ compose_environment() {
     -u N8N_API_URL \
     -u N8N_API_KEY \
     -u N8N_TIMEOUT_SECONDS \
+    -u PYTHON_KERNEL_GATEWAY_AUTH_TOKEN \
     -u STEWARD_BROWSER_CDP_URL \
     -u CORS_ALLOWED_ORIGINS \
     -u UPLOADS_DIR \
@@ -363,6 +364,8 @@ bootstrap_production_env() {
     /uploads/object-storage "$bootstrap_tmp_path"
   set_env_value_in_file ALLOW_PUBLIC_REGISTRATION false "$bootstrap_tmp_path"
   set_env_value_in_file API_HUB_SYSTEM_MCP_TOKEN \
+    "$(random_hex 32)" "$bootstrap_tmp_path"
+  set_env_value_in_file PYTHON_KERNEL_GATEWAY_AUTH_TOKEN \
     "$(random_hex 32)" "$bootstrap_tmp_path"
   sync "$bootstrap_tmp_path" 2>/dev/null || sync
   # Publishing with a same-directory hard link is atomic and never replaces
@@ -994,6 +997,23 @@ check_secret() {
     exit 1
   fi
 }
+ensure_generated_secret() {
+  # 服务间共享密钥未显式配置或仍是公开默认值（compose 兜底 / .env.example
+  # 示例）时，自动生成强随机值并幂等持久化到服务器 .env——合法部署流程
+  # 零手工配置；后端 production fail-closed 只兜绕过本脚本裸跑 compose 的场景。
+  local key="$1" value
+  value="$(env_value "$key")"
+  case "$value" in
+    ""|dev-python-gateway-token|change-me-python-gateway-token)
+      if ! set_env_value "$key" "$(random_hex 32)"; then
+        log "failed to persist generated $key into ${APP_DIR}/.env"
+        exit 1
+      fi
+      log "$key was not configured or used a public example value; generated a random value into ${APP_DIR}/.env"
+      ;;
+  esac
+}
+ensure_generated_secret PYTHON_KERNEL_GATEWAY_AUTH_TOKEN
 check_secret SECRET_KEY dev-secret-key
 check_secret SECRET_KEY change-me-to-a-random-32-char-string
 check_secret FIRST_ADMIN_PASSWORD admin123

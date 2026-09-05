@@ -85,7 +85,7 @@ def test_wildcard_cors_remains_blocked_but_empty_is_same_origin():
 
 @pytest.mark.parametrize(
     "token",
-    ["", "dev-python-gateway-token"],
+    ["", "dev-python-gateway-token", "change-me-python-gateway-token"],
 )
 def test_production_rejects_missing_or_default_kernel_gateway_token(token):
     errors = production_config_errors(
