@@ -80,13 +80,17 @@ def test_create_mapping_saves_to_db():
     db.commit = MagicMock()
     db.refresh = MagicMock()
     svc = MappingService(db)
-    svc.create_mapping(
+    mapping = svc.create_mapping(
         ontology_id="ont-1",
         curated_dataset_id="ds-1",
         entity_class="Order",
         field_mapping={"order_id": "id"},
     )
-    db.add.assert_called_once()
+    assert mapping.ontology_id == "ont-1"
+    assert mapping.entity_class == "Order"
+    assert mapping.status == "draft"
+    assert mapping.field_mapping == {"order_id": "id"}
+    db.add.assert_called_once_with(mapping)
     db.commit.assert_called_once()
 
 

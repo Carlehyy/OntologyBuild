@@ -66,6 +66,14 @@ def _recover_token(share: ManualDatasetShare) -> str | None:
     return token if secrets.compare_digest(_hash_token(token), share.token_hash) else None
 
 
+def _can_manage_share(share: ManualDatasetShare, user) -> bool:
+    """分享管理权：admin 或分享创建者（对齐 file_assets 的属主语义）；
+    created_by 为空的遗留分享仅管理员可管理。"""
+    if str(getattr(user, "role", "") or "") == "admin":
+        return True
+    return share.created_by is not None and str(user.id) == str(share.created_by)
+
+
 def _as_aware(value: datetime | None) -> datetime | None:
     if value is None or value.tzinfo is not None:
         return value
@@ -145,11 +153,16 @@ def create_share(dataset_id: str, body: CreateShareRequest, db: Session = Depend
 
 
 @management_router.get("/{dataset_id}/shares")
-def list_shares(dataset_id: str, db: Session = Depends(get_db)):
+def list_shares(dataset_id: str, db: Session = Depends(get_db),
+                user=Depends(get_current_user)):
     _dataset(db, dataset_id)
-    rows = db.query(ManualDatasetShare).filter(
+    query = db.query(ManualDatasetShare).filter(
         ManualDatasetShare.dataset_id == dataset_id,
-    ).order_by(ManualDatasetShare.created_at.desc()).all()
+    )
+    if str(getattr(user, "role", "") or "") != "admin":
+        # 列表按属主过滤：普通用户只看到自己创建的分享，解不出他人 token
+        query = query.filter(ManualDatasetShare.created_by == user.id)
+    rows = query.order_by(ManualDatasetShare.created_at.desc()).all()
     return [{
         "id": row.id,
         "token": _recover_token(row),
@@ -162,10 +175,13 @@ def list_shares(dataset_id: str, db: Session = Depends(get_db)):
 
 
 @management_router.delete("/shares/{share_id}")
-def revoke_share(share_id: str, db: Session = Depends(get_db)):
+def revoke_share(share_id: str, db: Session = Depends(get_db),
+                 user=Depends(get_current_user)):
     share = db.query(ManualDatasetShare).filter(ManualDatasetShare.id == share_id).first()
     if not share:
         raise HTTPException(404, "分享记录不存在")
+    if not _can_manage_share(share, user):
+        raise HTTPException(403, "仅分享创建者或管理员可以吊销分享")
     if not share.revoked_at:
         share.revoked_at = _now()
         db.commit()

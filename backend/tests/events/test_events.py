@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from app.events import models as event_models
 from app.events import router as event_router
-from app.events.models import EventAttachment, RegisteredEvent
+from app.events.models import EventAttachment, EventIngestKey, RegisteredEvent
 from app.shared.config import settings
 
 
@@ -324,3 +324,127 @@ def test_event_attachments_accept_mail_formats_and_zip_is_temporary(
         for filename, content in payloads.items():
             assert archive.read(filename) == content
     assert list(archives_dir.iterdir()) == []
+
+
+def test_ingest_key_plaintext_is_one_time_and_never_persisted(client, auth_headers, db):
+    """商用加固回归：密钥明文仅创建响应一次性返回；列表/吊销响应不携带，
+    鉴权只依赖 sha256，明文不落库不影响已有密钥上报。"""
+    created = client.post(
+        "/api/v2/events/ingest-keys",
+        headers=auth_headers,
+        json={"name": "一次性明文测试", "allowedSourceSystem": "MES"},
+    )
+    assert created.status_code == 201
+    key = created.json()["data"]
+    assert key["plaintextKey"].startswith(key["keyPrefix"])
+    assert db.query(EventIngestKey).filter(
+        EventIngestKey.key_hash
+        == hashlib.sha256(key["plaintextKey"].encode()).hexdigest()
+    ).count() == 1
+
+    listed = client.get("/api/v2/events/ingest-keys", headers=auth_headers).json()["data"]
+    assert listed["total"] == 1
+    assert "plaintextKey" not in listed["items"][0]
+
+    ingested = client.post(
+        "/api/v2/ingest/events",
+        headers={"X-API-Key": key["plaintextKey"]},
+        json={"title": "明文不落库回归", "source_system": "MES", "source_ref": "WO-PLAIN-1"},
+    )
+    assert ingested.status_code == 200
+    assert ingested.json()["data"]["idempotent"] is False
+
+    # (source_system, source_ref) 幂等键：重复投递命中既有事件
+    again = client.post(
+        "/api/v2/ingest/events",
+        headers={"X-API-Key": key["plaintextKey"]},
+        json={"title": "明文不落库回归", "source_system": "MES", "source_ref": "WO-PLAIN-1"},
+    )
+    assert again.status_code == 200
+    assert again.json()["data"]["idempotent"] is True
+
+    revoked = client.delete(
+        f"/api/v2/events/ingest-keys/{key['id']}",
+        headers=auth_headers,
+    )
+    assert revoked.status_code == 200
+    assert "plaintextKey" not in revoked.json()["data"]
+
+    # 吊销后密钥立即失效
+    rejected = client.post(
+        "/api/v2/ingest/events",
+        headers={"X-API-Key": key["plaintextKey"]},
+        json={"title": "吊销后上报"},
+    )
+    assert rejected.status_code == 401
+
+
+def test_event_write_paths_full_lifecycle(client, admin_user, auth_headers, db):
+    """写路径回归（此前零覆盖）：POST/PATCH/status/DELETE 全链路 + 审计轨迹 +
+    物理删除的 admin 边界。"""
+    created = client.post(
+        "/api/v2/events",
+        headers=auth_headers,
+        json={"title": "写路径生命周期", "severity": "high", "eventType": "设备异常", "tags": ["产线"]},
+    )
+    assert created.status_code == 201
+    ev = created.json()["data"]
+    assert ev["status"] == "active"
+    assert ev["sourceType"] == "platform"
+    assert ev["severity"] == "high"
+
+    assert client.post(
+        "/api/v2/events", headers=auth_headers, json={"title": "   "},
+    ).status_code == 422
+
+    patched = client.patch(
+        f"/api/v2/events/{ev['id']}",
+        headers=auth_headers,
+        json={"severity": "critical", "description": "升级处理"},
+    )
+    assert patched.status_code == 200
+    body = patched.json()["data"]
+    assert body["severity"] == "critical"
+    assert body["description"] == "升级处理"
+
+    archived = client.post(
+        f"/api/v2/events/{ev['id']}/status",
+        headers=auth_headers,
+        json={"status": "archived", "note": "处置完成"},
+    )
+    assert archived.status_code == 200
+    assert archived.json()["data"]["status"] == "archived"
+    assert client.post(
+        f"/api/v2/events/{ev['id']}/status",
+        headers=auth_headers,
+        json={"status": "unknown"},
+    ).status_code == 422
+
+    # 软删除=归档，对已归档事件幂等
+    soft = client.delete(f"/api/v2/events/{ev['id']}", headers=auth_headers)
+    assert soft.status_code == 200
+    assert soft.json()["data"]["status"] == "archived"
+
+    detail = client.get(f"/api/v2/events/{ev['id']}", headers=auth_headers).json()["data"]
+    actions = [entry["action"] for entry in detail["auditTrail"]]
+    assert set(actions) == {"created", "updated", "status_changed"}
+    assert len(actions) == 3
+
+    # 物理删除仅 admin；viewer 走 soft-delete 语义但 hard=true 被拒
+    viewer = client.post("/api/v1/users", headers=auth_headers, json={
+        "username": "evt_viewer", "email": "evt_viewer@test.com",
+        "password": "viewer123", "role": "viewer",
+    })
+    assert viewer.status_code == 201
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"username": "evt_viewer", "password": "viewer123"},
+    )
+    viewer_headers = {"Authorization": f"Bearer {login.json()['data']['access_token']}"}
+    assert client.delete(
+        f"/api/v2/events/{ev['id']}?hard=true", headers=viewer_headers,
+    ).status_code == 403
+
+    hard = client.delete(f"/api/v2/events/{ev['id']}?hard=true", headers=auth_headers)
+    assert hard.status_code == 200
+    assert client.get(f"/api/v2/events/{ev['id']}", headers=auth_headers).status_code == 404

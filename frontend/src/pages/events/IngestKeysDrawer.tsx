@@ -169,7 +169,7 @@ export default function IngestKeysDrawer({ open, onClose }: { open: boolean; onC
             {newKey?.plaintextKey && (
               <div className="mb-3 rounded-lg border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] p-3">
                 <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[var(--color-success)]">
-                  <ShieldCheck size={13} /> 密钥“{newKey.name}”已生成，可在下方列表继续复制
+                  <ShieldCheck size={13} /> 密钥“{newKey.name}”已生成，请立即复制保存——仅此一次展示
                 </div>
                 <div className="flex items-center gap-2 rounded-md bg-card px-2 py-1.5">
                   <code className="flex-1 break-all text-xs text-foreground">{newKey.plaintextKey}</code>
@@ -290,16 +290,9 @@ export default function IngestKeysDrawer({ open, onClose }: { open: boolean; onC
                         )}
                       </div>
                       {!revoked && (
-                        key.plaintextKey ? (
-                          <div className="mt-2 flex items-center gap-2 rounded-lg border border-border bg-muted px-2 py-1.5">
-                            <code className="flex-1 break-all text-xs text-muted-foreground">{key.plaintextKey}</code>
-                            <CopyBtn text={key.plaintextKey} small />
-                          </div>
-                        ) : (
-                          <div className="mt-2 font-mono text-[11px] text-[var(--color-text-tertiary)]">
-                            {key.keyPrefix}…（旧密钥未留存明文，如需复制请重新生成）
-                          </div>
-                        )
+                        <div className="mt-2 font-mono text-[11px] text-[var(--color-text-tertiary)]">
+                          {key.keyPrefix}…（明文仅生成时展示一次，遗失请吊销后重新生成）
+                        </div>
                       )}
                     </article>
                   )

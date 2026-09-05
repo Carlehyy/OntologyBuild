@@ -275,3 +275,66 @@ def test_management_changes_support_pagination_status_and_search_filters(api, au
         headers=auth_headers,
     )
     assert invalid_status.status_code == 400
+
+
+def _login_user(api, username, password):
+    login = api.post("/api/v1/auth/login", json={"username": username, "password": password})
+    assert login.status_code == 200
+    return {"Authorization": f"Bearer {login.json()['data']['access_token']}"}
+
+
+def _create_user(api, auth_headers, username, password, role):
+    created = api.post("/api/v1/users", headers=auth_headers, json={
+        "username": username,
+        "email": f"{username}@test.com",
+        "password": password,
+        "role": role,
+    })
+    assert created.status_code == 201
+    return _login_user(api, username, password)
+
+
+def test_share_listing_and_revocation_are_scoped_to_creator_or_admin(api, auth_headers, db):
+    """属主语义（对齐 file_assets）：列表按创建者过滤、吊销限创建者/admin。
+    此前任意 data 菜单用户可枚举全部分享并解出 token、吊销任意分享。"""
+    dataset_id = _dataset(api, auth_headers)
+    admin_share = _share(api, auth_headers, dataset_id, "view")
+
+    editor_headers = _create_user(api, auth_headers, "share_editor", "editor123", "editor")
+    editor_share = _share(api, editor_headers, dataset_id, "view")
+    viewer_headers = _create_user(api, auth_headers, "share_viewer", "viewer123", "viewer")
+
+    # viewer（只读）枚举不到任何他人分享与 token
+    viewer_listed = api.get(
+        f"/api/v2/manual-dataset-sharing/{dataset_id}/shares", headers=viewer_headers)
+    assert viewer_listed.status_code == 200
+    assert viewer_listed.json() == []
+
+    # 普通用户列表只见自己创建的分享，token 仅对可见行恢复
+    editor_listed = api.get(
+        f"/api/v2/manual-dataset-sharing/{dataset_id}/shares", headers=editor_headers)
+    assert editor_listed.status_code == 200
+    assert [row["id"] for row in editor_listed.json()] == [editor_share["id"]]
+    assert editor_listed.json()[0]["token"] == editor_share["token"]
+
+    # 普通用户不能吊销他人分享；自己的可吊销
+    denied = api.delete(
+        f"/api/v2/manual-dataset-sharing/shares/{admin_share['id']}",
+        headers=editor_headers,
+    )
+    assert denied.status_code == 403
+    own = api.delete(
+        f"/api/v2/manual-dataset-sharing/shares/{editor_share['id']}",
+        headers=editor_headers,
+    )
+    assert own.status_code == 200
+
+    # admin 全量可见、可吊销任何分享
+    admin_listed = api.get(
+        f"/api/v2/manual-dataset-sharing/{dataset_id}/shares", headers=auth_headers)
+    assert [row["id"] for row in admin_listed.json()] == [editor_share["id"], admin_share["id"]]
+    revoked = api.delete(
+        f"/api/v2/manual-dataset-sharing/shares/{admin_share['id']}",
+        headers=auth_headers,
+    )
+    assert revoked.status_code == 200

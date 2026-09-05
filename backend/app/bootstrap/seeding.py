@@ -169,8 +169,6 @@ def seed_database() -> None:
                 "ALTER TABLE v2_ontology_mappings ADD COLUMN target_object_type_id VARCHAR",
                 # —— 流水线调度任务血缘：run 由哪条任务触发 ——
                 "ALTER TABLE v2_pipeline_runs ADD COLUMN task_id VARCHAR",
-                # —— 事件登记：留存明文密钥以便面板反复复制 ——
-                "ALTER TABLE event_ingest_keys ADD COLUMN secret_plain VARCHAR(120)",
                 # —— 未发布 n8n 执行预览的列样本 → 发布时固化为影子流水线期望列契约 ——
                 "ALTER TABLE v2_n8n_pipelines ADD COLUMN last_test_result JSON",
                 # —— 流水线启用开关：停用后任务池/链式触发不执行 ——

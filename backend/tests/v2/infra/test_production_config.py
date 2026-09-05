@@ -43,6 +43,7 @@ def _production_settings(**updates):
         "steward_browser_cdp_url": "http://browser:9222",
         "n8n_api_url": "https://n8n.example.com/api/v1",
         "n8n_api_key": "strong-n8n-api-key",
+        "python_kernel_gateway_auth_token": "strong-kernel-gateway-token",
         "pipeline_file_public_app_base_url": "https://platform.example.com",
         "pipeline_file_public_api_base_url": "https://api.example.com",
         "allow_public_registration": False,
@@ -80,6 +81,29 @@ def test_wildcard_cors_remains_blocked_but_empty_is_same_origin():
     errors = production_config_errors(
         _production_settings(cors_allowed_origins="*"))
     assert "CORS_ALLOWED_ORIGINS" in errors
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["", "dev-python-gateway-token"],
+)
+def test_production_rejects_missing_or_default_kernel_gateway_token(token):
+    errors = production_config_errors(
+        _production_settings(python_kernel_gateway_auth_token=token))
+    assert "PYTHON_KERNEL_GATEWAY_AUTH_TOKEN" in errors
+
+
+@pytest.mark.parametrize(
+    "redis_url",
+    [
+        "redis://:ontopromptredis123@redis:6379/0",  # compose 弱兜底默认
+        "redis://redis:6379/0",                      # 无密码
+    ],
+)
+def test_production_rejects_default_or_passwordless_redis(redis_url):
+    errors = production_config_errors(
+        _production_settings(redis_url=redis_url))
+    assert "REDIS_URL credentials" in errors
 
 
 def test_production_rejects_non_public_or_malformed_file_link_origins():

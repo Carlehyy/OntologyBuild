@@ -415,8 +415,3 @@ class Neo4jService:
             result = session.run(query, ontology_id=ontology_id)
             record = result.single()
             return record["deleted"] if record else 0
-
-
-def get_neo4j_service() -> Neo4jService:
-    """单例工厂"""
-    return Neo4jService()

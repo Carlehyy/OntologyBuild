@@ -151,8 +151,6 @@ class EventIngestKey(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)          # 密钥名（= 第三方来源标识）
     key_prefix: Mapped[str] = mapped_column(String(32), index=True)          # 明文可见前缀，便于识别
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256(明文)
-    # 明文密钥留存，便于在面板反复复制（内部平台按用户要求，牺牲「只存哈希」的安全约定）
-    secret_plain: Mapped[str | None] = mapped_column(String(120), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     allowed_source_system: Mapped[str | None] = mapped_column(String(200), nullable=True)  # 可选作用域
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
