@@ -40,7 +40,7 @@ import {
 import { SPRING_LAYOUT } from '@/components/motion-ui/ease'
 import { Tooltip } from '@/components/motion-ui/tooltip'
 import { Modal } from '@/components/ui/Modal'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 
 
 type StatusKey = 'success' | 'error' | 'untested'
@@ -196,7 +196,6 @@ function ToolManifestDialog({ server, onClose }: { server: SuperMcpServer; onClo
 }
 
 function ExportToolsDialog({ server, onClose, onDone }: { server: SuperMcpServer; onClose: () => void; onDone: () => void }) {
-  const { toast } = useToast()
   const reduce = useReducedMotion() ?? false
   const tools = server.tool_manifest || []
   const [selected, setSelected] = useState<Set<string>>(() => new Set(tools.map(tool => tool.name)))
@@ -220,11 +219,11 @@ function ExportToolsDialog({ server, onClose, onDone }: { server: SuperMcpServer
       const result = await communityApi.exportMcpTools(server.id, [...selected])
       const parts = [`已生成 ${result.created.length} 个 HTTP 接口`]
       if (result.skipped.length) parts.push(`${result.skipped.length} 个同名已跳过`)
-      toast({
-        tone: result.created.length ? 'success' : 'warning',
-        title: '工具已导出至接口代理',
-        description: `${parts.join('，')}；请前往「接口代理 · 接口管理」的「MCP 插件」分组查看。`,
-      })
+      const notifyExport = result.created.length ? toast.success : toast.warning
+      notifyExport(
+        '工具已导出至接口代理',
+        { description: `${parts.join('，')}；请前往「接口代理 · 接口管理」的「MCP 插件」分组查看。` },
+      )
       onDone()
       onClose()
     } catch (exportError) {
@@ -324,7 +323,6 @@ function EmptyGuide({ onAdd }: { onAdd: () => void }) {
 }
 
 export default function PluginCommunityPage() {
-  const { toast } = useToast()
   const reduce = useReducedMotion() ?? false
   const [servers, setServers] = useState<SuperMcpServer[]>([])
   const [loading, setLoading] = useState(true)
@@ -343,7 +341,7 @@ export default function PluginCommunityPage() {
       setServers(Array.isArray(items) ? items.filter(item => !item.builtin_key) : [])
     } catch (error) {
       setServers([])
-      toast({ tone: 'error', title: 'MCP 清单加载失败', description: errorText(error, '请检查服务连接后重试。') })
+      toast.error('MCP 清单加载失败', { description: errorText(error, '请检查服务连接后重试。') })
     } finally {
       setLoading(false)
     }
@@ -379,13 +377,10 @@ export default function PluginCommunityPage() {
     try {
       const result = await communityApi.testMcpServer(server.id)
       await load()
-      toast({
-        tone: result.ok ? 'success' : 'error',
-        title: result.ok ? 'MCP 连接成功' : 'MCP 连接失败',
-        description: result.message,
-      })
+      const notifyTest = result.ok ? toast.success : toast.error
+      notifyTest(result.ok ? 'MCP 连接成功' : 'MCP 连接失败', { description: result.message })
     } catch (error) {
-      toast({ tone: 'error', title: 'MCP 测试失败', description: errorText(error, '请稍后重试。') })
+      toast.error('MCP 测试失败', { description: errorText(error, '请稍后重试。') })
     } finally {
       setTestingId(null)
     }
@@ -397,10 +392,10 @@ export default function PluginCommunityPage() {
     try {
       await communityApi.deleteMcpServer(deleteTarget.id)
       setServers(current => current.filter(item => item.id !== deleteTarget.id))
-      toast({ tone: 'success', title: 'MCP Server 已删除', description: `「${serverTitle(deleteTarget)}」已从清单移除。` })
+      toast.success('MCP Server 已删除', { description: `「${serverTitle(deleteTarget)}」已从清单移除。` })
       setDeleteTarget(null)
     } catch (error) {
-      toast({ tone: 'error', title: '删除失败', description: errorText(error, '请稍后重试。') })
+      toast.error('删除失败', { description: errorText(error, '请稍后重试。') })
     } finally {
       setDeleting(false)
     }

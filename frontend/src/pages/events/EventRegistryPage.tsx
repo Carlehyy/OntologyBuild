@@ -5,7 +5,7 @@ import { eventsApi } from '../../api/events'
 import type { EventItem, EventStats } from '../../api/events'
 import { Search, Plus, RefreshCcw, Activity, Code2, AlertOctagon, ChevronLeft, ChevronRight, Filter, PlusCircle, ArrowUpRight, Archive, ArchiveRestore, Paperclip, Pencil, Trash2, Download, Loader2 } from 'lucide-react'
 import { ConfirmModal } from '@/components/ui/Modal'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/authStore'
 import { useDebouncedValue } from '@/utils/useDebouncedValue'
 import EventFormModal from './EventFormModal'
@@ -32,7 +32,6 @@ function useList(params: { page: number; pageSize: number; q?: string; sourceTyp
 
 export default function EventRegistryPage() {
   const queryClient = useQueryClient()
-  const { toast } = useToast()
   const isAdmin = useAuthStore(s => s.user?.role === 'admin')
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebouncedValue(search, 300)
@@ -92,9 +91,9 @@ export default function EventRegistryPage() {
         severity: severity || undefined,
         status: status || 'active',
       })
-      toast({ tone: 'success', title: '导出成功', description: '已按当前筛选条件导出 CSV 文件' })
+      toast.success('导出成功', { description: '已按当前筛选条件导出 CSV 文件' })
     } catch (cause: any) {
-      toast({ tone: 'error', title: '导出失败', description: cause?.detail || cause?.message || '请稍后重试' })
+      toast.error('导出失败', { description: cause?.detail || cause?.message || '请稍后重试' })
     } finally {
       setExporting(false)
     }
@@ -105,13 +104,9 @@ export default function EventRegistryPage() {
       eventsApi.changeStatus(id, nextStatus),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['events'] })
-      toast({ tone: 'success', title: variables.status === 'archived' ? '事件已归档' : '事件已恢复' })
+      toast.success(variables.status === 'archived' ? '事件已归档' : '事件已恢复')
     },
-    onError: (cause: any) => toast({
-      tone: 'error',
-      title: '事件状态更新失败',
-      description: cause?.detail || cause?.message || '请稍后重试',
-    }),
+    onError: (cause: any) => toast.error('事件状态更新失败', { description: cause?.detail || cause?.message || '请稍后重试' }),
   })
 
   const deleteMutation = useMutation({
@@ -119,13 +114,9 @@ export default function EventRegistryPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['events'] })
       setDeleteTarget(null)
-      toast({ tone: 'success', title: '事件已删除' })
+      toast.success('事件已删除')
     },
-    onError: (cause: any) => toast({
-      tone: 'error',
-      title: '事件删除失败',
-      description: cause?.detail || cause?.message || '物理删除仅管理员可执行',
-    }),
+    onError: (cause: any) => toast.error('事件删除失败', { description: cause?.detail || cause?.message || '物理删除仅管理员可执行' }),
   })
 
   const apiCoverage = useMemo(() => {

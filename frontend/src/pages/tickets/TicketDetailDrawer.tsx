@@ -12,7 +12,7 @@ import {
   type TicketAttachment, type TicketItem, type TicketStatus,
 } from '@/api/tickets'
 import { useAuthStore } from '@/stores/authStore'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { writeTextToClipboard } from '@/utils/clipboard'
 import { ImagePreviewModal, StatusBadge } from './shared'
 
@@ -51,7 +51,6 @@ function ProgressPanel({
   ticket: TicketItem
   onDone: () => void
 }) {
-  const { toast } = useToast()
   const queryClient = useQueryClient()
   const [status, setStatus] = useState<TicketStatus>(ticket.status)
   const [comment, setComment] = useState('')
@@ -71,7 +70,7 @@ function ProgressPanel({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tickets'] })
-      toast({ tone: 'success', title: '工单已处理', description: `状态已更新为「${TICKET_STATUS_META[status].label}」` })
+      toast.success('工单已处理', { description: `状态已更新为「${TICKET_STATUS_META[status].label}」` })
       setComment('')
       onDone()
     },
@@ -144,7 +143,6 @@ export default function TicketDetailDrawer({
   ticketId: string | null
   onClose: () => void
 }) {
-  const { toast } = useToast()
   const isAdmin = useAuthStore(s => s.user?.role === 'admin')
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   const [previewingId, setPreviewingId] = useState<string | null>(null)
@@ -184,7 +182,7 @@ export default function TicketDetailDrawer({
       const blob = await ticketsApi.fetchAttachmentBlob(ticketId, attachment)
       setPreview({ url: URL.createObjectURL(blob), filename: attachment.filename })
     } catch (cause: any) {
-      toast({ tone: 'error', title: '图片加载失败', description: cause?.detail || cause?.message || '请稍后重试' })
+      toast.error('图片加载失败', { description: cause?.detail || cause?.message || '请稍后重试' })
     } finally {
       setPreviewingId(null)
     }
@@ -203,7 +201,7 @@ export default function TicketDetailDrawer({
     try {
       await ticketsApi.downloadAttachment(ticketId, attachment)
     } catch (cause: any) {
-      toast({ tone: 'error', title: '附件下载失败', description: cause?.detail || cause?.message || '请稍后重试' })
+      toast.error('附件下载失败', { description: cause?.detail || cause?.message || '请稍后重试' })
     } finally {
       setDownloadingId(null)
     }

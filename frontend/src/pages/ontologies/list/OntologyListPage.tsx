@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/Input'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ConfirmDialog } from '../ConfirmDialog'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ICON_OPTIONS, OntologyAvatar } from '@/components/OntologyAvatar'
 import type { OntologyListItem } from '@/types/ontology'
@@ -468,7 +468,6 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
   const fileInputRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const { toast } = useToast()
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['ontologies'],
@@ -525,7 +524,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
     onSuccess: () => {
       refresh()
       setCreateOpen(false)
-      toast({ tone: 'success', title: '本体已创建', description: '现在可以继续维护对象实体、实体关系与版本。' })
+      toast.success('本体已创建', { description: '现在可以继续维护对象实体、实体关系与版本。' })
       if (defaultCreateOpen) navigate('/ontologies', { replace: true })
     },
   })
@@ -534,7 +533,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
     onSuccess: () => {
       refresh()
       setEditTarget(null)
-      toast({ tone: 'success', title: '本体信息已更新' })
+      toast.success('本体信息已更新')
     },
   })
   const deleteMutation = useMutation({
@@ -542,17 +541,17 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
     onSuccess: () => {
       refresh()
       setDeleteTarget(null)
-      toast({ tone: 'success', title: '本体已删除', description: '相关结构、映射与版本数据已一并移除。' })
+      toast.success('本体已删除', { description: '相关结构、映射与版本数据已一并移除。' })
     },
     onError: error => {
-      toast({ tone: 'error', title: '本体删除失败', description: errorMessage(error, '请稍后重试。') })
+      toast.error('本体删除失败', { description: errorMessage(error, '请稍后重试。') })
     },
   })
   const importMutation = useMutation({
     mutationFn: (body: unknown) => ontologyApi.importStructure(body),
     onSuccess: result => {
       refresh()
-      toast({ tone: 'success', title: '本体导入完成', description: `已导入「${result.ontology.name}」，即将打开详情。` })
+      toast.success('本体导入完成', { description: `已导入「${result.ontology.name}」，即将打开详情。` })
       navigate(`/ontologies/${result.ontology.id}`)
     },
   })
@@ -560,11 +559,11 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
   const handleImportFile = async (file?: File) => {
     if (!file) return
     if (!file.name.toLocaleLowerCase().endsWith('.json')) {
-      toast({ tone: 'error', title: '无法导入本体', description: '请选择 JSON 格式的本体结构文件。' })
+      toast.error('无法导入本体', { description: '请选择 JSON 格式的本体结构文件。' })
       return
     }
     if (file.size > 5 * 1024 * 1024) {
-      toast({ tone: 'error', title: '文件超过大小限制', description: '本体结构文件不能超过 5 MB。' })
+      toast.error('文件超过大小限制', { description: '本体结构文件不能超过 5 MB。' })
       return
     }
     try {
@@ -573,7 +572,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
       try {
         body = JSON.parse(text)
       } catch {
-        toast({ tone: 'error', title: '文件内容无法识别', description: '文件不是有效的 JSON，请重新选择本体结构导出文件。' })
+        toast.error('文件内容无法识别', { description: '文件不是有效的 JSON，请重新选择本体结构导出文件。' })
         return
       }
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -581,11 +580,7 @@ export default function OntologyListPage({ defaultCreateOpen = false }: { defaul
       }
       await importMutation.mutateAsync(body)
     } catch (error: unknown) {
-      toast({
-        tone: 'error',
-        title: '本体导入失败',
-        description: errorMessage(error, '请确认文件来自本体结构 JSON 导出。'),
-      })
+      toast.error('本体导入失败', { description: errorMessage(error, '请确认文件来自本体结构 JSON 导出。') })
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = ''
     }

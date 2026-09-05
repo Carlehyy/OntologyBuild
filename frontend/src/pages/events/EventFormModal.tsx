@@ -3,7 +3,7 @@ import { Select as FormSelect, SelectContent as FormSelectContent, SelectItem as
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, FilePlus2, Loader2, Paperclip, RefreshCcw, Trash2, Undo2, Upload } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { ontologyApi } from '@/api/ontologies'
 import { eventsApi, formatBytes, type Attachment, type EventCreateBody, type EventItem } from '@/api/events'
 
@@ -50,7 +50,6 @@ export default function EventFormModal({
   editing?: EventItem | null
 }) {
   const queryClient = useQueryClient()
-  const { toast } = useToast()
   const isEdit = Boolean(editing)
   const [title, setTitle] = useState('')
   const [eventType, setEventType] = useState('')
@@ -172,11 +171,7 @@ export default function EventFormModal({
     },
     onSuccess: (event) => {
       queryClient.invalidateQueries({ queryKey: ['events'] })
-      toast({
-        tone: 'success',
-        title: isEdit ? '事件已保存' : '事件登记成功',
-        description: isEdit ? undefined : `事件编号 ${event.eventNo}，可在详情中复制`,
-      })
+      toast.success(isEdit ? '事件已保存' : '事件登记成功', { description: isEdit ? undefined : `事件编号 ${event.eventNo}，可在详情中复制` })
       onClose()
     },
     onError: (cause: any) => setError(cause?.message || cause?.detail || '保存失败'),

@@ -3,7 +3,7 @@ import { Loader2, X } from 'lucide-react'
 
 import type { McpManagementClient } from '@/api/community'
 import type { McpTransport, SuperMcpServer } from '@/api/superAssistant'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   parseMcpClientConfig,
@@ -26,7 +26,6 @@ export default function McpServerDialog({
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
-  const { toast } = useToast()
   const titleId = useId()
   const descriptionId = useId()
   const dialogRef = useRef<HTMLElement>(null)
@@ -173,11 +172,7 @@ export default function McpServerDialog({
         })
       }
       await onSaved()
-      toast({
-        tone: 'success',
-        title: server ? 'MCP 配置已更新' : 'MCP Server 已添加',
-        description: '配置已登记；建议立即执行连接测试以刷新工具清单。',
-      })
+      toast.success(server ? 'MCP 配置已更新' : 'MCP Server 已添加', { description: '配置已登记；建议立即执行连接测试以刷新工具清单。' })
       onClose()
     } catch (saveError) {
       setError(errorText(saveError, '保存失败'))

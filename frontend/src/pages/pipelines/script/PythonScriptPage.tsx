@@ -14,7 +14,7 @@ import {
 } from 'lucide-react'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline, ScriptExecutionResult, ScriptVersion } from '@/api/v2/pipelines'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
@@ -107,7 +107,6 @@ const EMPTY_RESULT: Omit<ScriptExecutionResult, 'ok' | 'error'> = {
 export default function PythonScriptPage() {
   const { pipelineId } = useParams<{ pipelineId: string }>()
   const navigate = useNavigate()
-  const { toast } = useToast()
 
   const [pipeline, setPipeline] = useState<Pipeline | null>(null)
   const [loading, setLoading] = useState(true)
@@ -216,7 +215,7 @@ export default function PythonScriptPage() {
   const handleExecute = useCallback(async () => {
     if (!pipeline || executing) return
     if (!script.trim()) {
-      toast({ tone: 'warning', title: '脚本内容为空，无法执行' })
+      toast.warning('脚本内容为空，无法执行')
       return
     }
     const controller = new AbortController()
@@ -245,7 +244,7 @@ export default function PythonScriptPage() {
       setExecuting(false)
       abortRef.current = null
     }
-  }, [pipeline, executing, script, toast])
+  }, [pipeline, executing, script])
 
   const handleCancel = useCallback(() => {
     if (!pipeline || !executing) return
@@ -253,17 +252,13 @@ export default function PythonScriptPage() {
     abortRef.current?.abort()
     // 尽力终止内核侧执行；失败不影响前端已取消的事实
     pipelinesApi.cancelScript(pipeline.id).catch(() => {})
-    toast({ tone: 'info', title: '已取消本次执行' })
-  }, [pipeline, executing, toast])
+    toast.info('已取消本次执行')
+  }, [pipeline, executing])
 
   const handleSave = useCallback(async () => {
     if (!pipeline || saving) return
     if (!canSave) {
-      toast({
-        tone: 'warning',
-        title: '当前内容还不能保存',
-        description: '请先执行编辑器中的当前内容，并通过输出格式校验。',
-      })
+      toast.warning('当前内容还不能保存', { description: '请先执行编辑器中的当前内容，并通过输出格式校验。' })
       return
     }
     setSaving(true)
@@ -276,7 +271,7 @@ export default function PythonScriptPage() {
       setResult(res.execution)
       if (res.execution.timeout_seconds) setTimeoutLimit(res.execution.timeout_seconds)
       setShowNextSteps(true)
-      toast({ tone: 'success', title: '脚本已保存', description: `输出 ${res.execution.row_count} 行，格式校验通过。` })
+      toast.success('脚本已保存', { description: `输出 ${res.execution.row_count} 行，格式校验通过。` })
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
       setResult({
@@ -287,7 +282,7 @@ export default function PythonScriptPage() {
     } finally {
       setSaving(false)
     }
-  }, [pipeline, saving, canSave, script, clearDraft, toast])
+  }, [pipeline, saving, canSave, script, clearDraft])
 
   const handleRevert = () => {
     setScript(savedScript || PYTHON_SCRIPT_TEMPLATE)
@@ -305,11 +300,7 @@ export default function PythonScriptPage() {
       setVersions(res.items)
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
-      toast({
-        tone: 'error',
-        title: '历史版本加载失败',
-        description: err?.detail || err?.message || '请稍后重试。',
-      })
+      toast.error('历史版本加载失败', { description: err?.detail || err?.message || '请稍后重试。' })
       setShowVersions(false)
     } finally {
       setVersionsLoading(false)
@@ -321,11 +312,7 @@ export default function PythonScriptPage() {
     setValidatedScript(null)
     setExecutedScript(null)
     setShowVersions(false)
-    toast({
-      tone: 'info',
-      title: `已恢复 v${version.version_no} 到编辑器`,
-      description: '恢复后需重新执行并通过格式校验，才能保存为最新版本。',
-    })
+    toast.info(`已恢复 v${version.version_no} 到编辑器`, { description: '恢复后需重新执行并通过格式校验，才能保存为最新版本。' })
   }
 
   const handleDiscardDraft = () => {
@@ -333,7 +320,7 @@ export default function PythonScriptPage() {
     clearDraft()
     setValidatedScript(null)
     setExecutedScript(null)
-    toast({ tone: 'info', title: '已放弃草稿，恢复为已保存版本' })
+    toast.info('已放弃草稿，恢复为已保存版本')
   }
 
   const jumpToLine = useCallback((lineNo: number) => {
@@ -365,13 +352,13 @@ export default function PythonScriptPage() {
     }
     view.dispatch({ selection: { anchor: view.state.selection.main.head } })
     view.focus()
-    toast({ tone: 'success', title: '已格式化', description: '已自动缩进并整理空白（Tab→空格、行尾空白、多余空行）。' })
-  }, [isPublished, toast])
+    toast.success('已格式化', { description: '已自动缩进并整理空白（Tab→空格、行尾空白、多余空行）。' })
+  }, [isPublished])
 
   // 导出当前编辑器内容为 .py 文件：固定名 + 年月日时分，便于按时间归档
   const handleExport = useCallback(() => {
     if (!script.trim()) {
-      toast({ tone: 'warning', title: '脚本内容为空，无可导出内容' })
+      toast.warning('脚本内容为空，无可导出内容')
       return
     }
     const now = new Date()
@@ -384,8 +371,8 @@ export default function PythonScriptPage() {
     anchor.download = filename
     anchor.click()
     URL.revokeObjectURL(url)
-    toast({ tone: 'success', title: '脚本已导出', description: filename })
-  }, [script, toast])
+    toast.success('脚本已导出', { description: filename })
+  }, [script])
 
   // 快捷键：Ctrl/⌘+Enter 执行，Ctrl/⌘+S 保存
   useEffect(() => {

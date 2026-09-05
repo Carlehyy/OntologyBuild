@@ -21,8 +21,8 @@ import {
   Table,
   Tag,
   Typography,
-  message,
 } from 'antd'
+import { toast } from 'sonner'
 import type { ColumnsType } from 'antd/es/table'
 import { Download, Eye, FlaskConical, Plus, Trash2 } from 'lucide-react'
 import {
@@ -154,7 +154,7 @@ function AssistantEvalPanel() {
       }),
     onSuccess: (task) => {
       void queryClient.invalidateQueries({ queryKey: ['assistant-eval', 'tasks'] })
-      message.success(`评估任务已创建：${task.title}`)
+      toast.success(`评估任务已创建：${task.title}`)
       setSelectedConversationIds([])
     },
   })
@@ -805,7 +805,7 @@ function RubricCreateModal({ open, onClose, onCreated, models }: {
 
   const handleCreate = async () => {
     if (!name.trim() || !taskDescription.trim()) {
-      message.warning('请填写名称与任务描述')
+      toast.warning('请填写名称与任务描述')
       return
     }
     setSubmitting(true)
@@ -818,7 +818,7 @@ function RubricCreateModal({ open, onClose, onCreated, models }: {
         max_score: maxScore,
         model_config_id: modelId ?? null,
       })
-      message.success('评分标准已生成')
+      toast.success('评分标准已生成')
       setName('')
       setTaskDescription('')
       setSamples('')
@@ -827,7 +827,7 @@ function RubricCreateModal({ open, onClose, onCreated, models }: {
       setModelId(undefined)
       onCreated(rubric)
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '生成失败')
+      toast.error(e instanceof Error ? e.message : '生成失败')
     } finally {
       setSubmitting(false)
     }

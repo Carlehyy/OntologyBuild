@@ -7,7 +7,7 @@ import {
   fileAssetsApi,
   type PipelineFileRef,
 } from '@/api/fileAssets'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { writeTextToClipboard } from '@/utils/clipboard'
 
 function formatBytes(size: number): string {
@@ -18,7 +18,6 @@ function formatBytes(size: number): string {
 }
 
 export default function FileRefActions({ file }: { file: PipelineFileRef }) {
-  const { toast } = useToast()
   const [pending, setPending] = useState<
     'download' | 'authenticated' | 'anonymous' | 'revoke' | null
   >(null)
@@ -29,11 +28,7 @@ export default function FileRefActions({ file }: { file: PipelineFileRef }) {
     try {
       await downloadPipelineFile(file)
     } catch {
-      toast({
-        tone: 'error',
-        title: '附件下载失败',
-        description: '附件可能已过期或当前账号无权访问，请刷新执行结果后重试。',
-      })
+      toast.error('附件下载失败', { description: '附件可能已过期或当前账号无权访问，请刷新执行结果后重试。' })
     } finally {
       setPending(null)
     }
@@ -43,17 +38,9 @@ export default function FileRefActions({ file }: { file: PipelineFileRef }) {
     setPending('authenticated')
     try {
       await writeTextToClipboard(authenticatedFileUrl(file))
-      toast({
-        tone: 'success',
-        title: '登录下载地址已复制',
-        description: '在其他设备打开后，登录平台即可继续下载。',
-      })
+      toast.success('登录下载地址已复制', { description: '在其他设备打开后，登录平台即可继续下载。' })
     } catch {
-      toast({
-        tone: 'error',
-        title: '复制失败',
-        description: '浏览器拒绝了剪贴板访问，请稍后重试。',
-      })
+      toast.error('复制失败', { description: '浏览器拒绝了剪贴板访问，请稍后重试。' })
     } finally {
       setPending(null)
     }
@@ -65,17 +52,9 @@ export default function FileRefActions({ file }: { file: PipelineFileRef }) {
       const url = await ensureAnonymousFileUrl(file)
       setHasAnonymousShare(true)
       await writeTextToClipboard(url)
-      toast({
-        tone: 'success',
-        title: '匿名分享地址已复制',
-        description: '该地址长期有效且无需登录，可由平台用户随时吊销。',
-      })
+      toast.success('匿名分享地址已复制', { description: '该地址长期有效且无需登录，可由平台用户随时吊销。' })
     } catch {
-      toast({
-        tone: 'error',
-        title: '匿名分享地址生成失败',
-        description: '当前附件可能已过期、无权分享，或文件服务暂时不可用。',
-      })
+      toast.error('匿名分享地址生成失败', { description: '当前附件可能已过期、无权分享，或文件服务暂时不可用。' })
     } finally {
       setPending(null)
     }
@@ -86,17 +65,9 @@ export default function FileRefActions({ file }: { file: PipelineFileRef }) {
     try {
       await fileAssetsApi.revokeShare(file.id)
       setHasAnonymousShare(false)
-      toast({
-        tone: 'success',
-        title: '匿名分享已吊销',
-        description: '旧地址已立即失效；再次复制匿名链接会生成新的长期地址。',
-      })
+      toast.success('匿名分享已吊销', { description: '旧地址已立即失效；再次复制匿名链接会生成新的长期地址。' })
     } catch {
-      toast({
-        tone: 'error',
-        title: '吊销失败',
-        description: '仅附件所有者或管理员可以管理匿名分享，请稍后重试。',
-      })
+      toast.error('吊销失败', { description: '仅附件所有者或管理员可以管理匿名分享，请稍后重试。' })
     } finally {
       setPending(null)
     }

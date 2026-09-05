@@ -7,7 +7,7 @@ import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { LoadingState, EmptyState } from '@/components/ui/LoadingState'
 import { Modal, ConfirmModal } from '@/components/ui/Modal'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { DomainSettingsViewModel } from '../hooks/useDomainSettings'
 
@@ -42,19 +42,15 @@ export default function DomainSettingsTab({ settings }: DomainSettingsTabProps) 
     handleDeleteDomain,
   } = settings
 
-  const { toast } = useToast()
 
   // 把 hook 内的 domainMsg（成功/失败文案）转成 toast，并清空原值避免残留。
   useEffect(() => {
     if (!domainMsg) return
     const ok = domainMsg.includes('成功')
-    toast({
-      tone: ok ? 'success' : 'error',
-      title: ok ? '领域设置' : '操作失败',
-      description: domainMsg,
-    })
+    const notifyDomain = ok ? toast.success : toast.error
+    notifyDomain(ok ? '领域设置' : '操作失败', { description: domainMsg })
     setDomainMsg('')
-  }, [domainMsg, setDomainMsg, toast])
+  }, [domainMsg, setDomainMsg])
 
   const saving = createDomainMut.isPending || updateDomainMut.isPending
   const list = (domainList as any[])

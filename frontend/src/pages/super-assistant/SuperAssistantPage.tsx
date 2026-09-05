@@ -21,7 +21,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { pickInitialConversationId } from '@/components/assistant-widget/logic'
 import { hasMenuAccess } from '@/config/navigation'
 import { useAuthStore } from '@/stores/authStore'
@@ -58,7 +58,6 @@ function formatFileSize(size: number): string {
 }
 
 export default function SuperAssistantPage() {
-  const { toast } = useToast()
   const dark = useThemeStore(state => state.theme === 'dark')
   const navigate = useNavigate()
   const user = useAuthStore(state => state.user)
@@ -146,11 +145,7 @@ export default function SuperAssistantPage() {
       else failures.push(`MCP：${errorText(serverResult.reason, '加载失败')}`)
 
       if (failures.length) {
-        toast({
-          tone: 'error',
-          title: failures.length === 4 ? '超级助手加载失败' : '超级助手部分功能加载失败',
-          description: failures.join('；'),
-        })
+        toast.error(failures.length === 4 ? '超级助手加载失败' : '超级助手部分功能加载失败', { description: failures.join('；') })
       }
     })
       .finally(() => alive && setLoading(false))
@@ -184,12 +179,12 @@ export default function SuperAssistantPage() {
           }
         : item))
     })
-      .catch(error => toast({ tone: 'error', title: '会话消息加载失败', description: errorText(error) }))
+      .catch(error => toast.error('会话消息加载失败', { description: errorText(error) }))
     superAssistantApi.conversationFiles(selectedId)
       .then(data => { if (alive) setConversationFiles(data) })
       .catch(() => { if (alive) setConversationFiles([]) })
     return () => { alive = false }
-  }, [selectedId, toast])
+  }, [selectedId])
 
   // 已进入页面后，悬浮窗再次跳转携带新的 ?conversation= 时跟随切换。
   // 用 lastAppliedParamRef 记录已消费的参数值：只在参数“变化”时跟随，
@@ -227,7 +222,7 @@ export default function SuperAssistantPage() {
       const item = await superAssistantApi.createConversation({ model_config_id: selectedModelId || null })
       setConversations(current => [item, ...current]); setSelectedId(item.id); setMessages([])
       return item
-    } catch (error) { toast({ tone: 'error', title: '新建会话失败', description: errorText(error) }); return null }
+    } catch (error) { toast.error('新建会话失败', { description: errorText(error) }); return null }
   }
 
   // 「新建任务」去重：当前已在未落地的全新视图、或选中的会话还是空会话（无消息且未在生成）
@@ -249,8 +244,8 @@ export default function SuperAssistantPage() {
       setConversations(next)
       if (selectedId === conversation.id) { setSelectedId(next[0]?.id || null); setMessages([]) }
       setDeletingConversation(null)
-      toast({ tone: 'success', title: '会话已删除' })
-    } catch (error) { toast({ tone: 'error', title: '删除失败', description: errorText(error) }) }
+      toast.success('会话已删除')
+    } catch (error) { toast.error('删除失败', { description: errorText(error) }) }
   }
 
   const setConversationArchived = async (conversationId: string, archived: boolean) => {
@@ -259,9 +254,9 @@ export default function SuperAssistantPage() {
         status: archived ? 'archived' : 'active',
       })
       setConversations(current => current.map(item => item.id === updated.id ? updated : item))
-      toast({ tone: 'success', title: archived ? '会话已归档' : '会话已恢复' })
+      toast.success(archived ? '会话已归档' : '会话已恢复')
     } catch (error) {
-      toast({ tone: 'error', title: archived ? '归档失败' : '恢复失败', description: errorText(error) })
+      toast.error(archived ? '归档失败' : '恢复失败', { description: errorText(error) })
     }
   }
 
@@ -270,14 +265,14 @@ export default function SuperAssistantPage() {
     try {
       const updated = await superAssistantApi.updateConversation(selectedId, { model_config_id: modelId || null })
       setConversations(current => current.map(item => item.id === updated.id ? updated : item))
-    } catch (error) { toast({ tone: 'error', title: '模型切换失败', description: errorText(error) }) }
+    } catch (error) { toast.error('模型切换失败', { description: errorText(error) }) }
   }
 
   const saveTitle = async () => {
     if (!selectedId || savingTitle) return
     const title = titleDraft.trim()
     if (!title) {
-      toast({ tone: 'error', title: '会话名称不能为空' })
+      toast.error('会话名称不能为空')
       return
     }
     if (title === selectedConversation?.title) {
@@ -289,9 +284,9 @@ export default function SuperAssistantPage() {
       const updated = await superAssistantApi.updateConversation(selectedId, { title })
       setConversations(current => current.map(item => item.id === updated.id ? updated : item))
       setEditingTitle(false)
-      toast({ tone: 'success', title: '会话名称已保存' })
+      toast.success('会话名称已保存')
     } catch (error) {
-      toast({ tone: 'error', title: '名称保存失败', description: errorText(error) })
+      toast.error('名称保存失败', { description: errorText(error) })
     } finally {
       setSavingTitle(false)
     }
@@ -342,9 +337,9 @@ export default function SuperAssistantPage() {
         await superAssistantApi.uploadConversationFile(conversationId, file)
         uploaded += 1
       }
-      toast({ tone: 'success', title: '附件已上传', description: '仅当前会话可见' })
+      toast.success('附件已上传', { description: '仅当前会话可见' })
     } catch (error) {
-      toast({ tone: 'error', title: '附件上传失败', description: errorText(error) })
+      toast.error('附件上传失败', { description: errorText(error) })
     }
     if (uploaded > 0 && selectedIdRef.current === conversationId) {
       try {
@@ -360,7 +355,7 @@ export default function SuperAssistantPage() {
       await superAssistantApi.deleteConversationFile(selectedId, fileId)
       setConversationFiles(current => current.filter(file => file.id !== fileId))
     } catch (error) {
-      toast({ tone: 'error', title: '移除附件失败', description: errorText(error) })
+      toast.error('移除附件失败', { description: errorText(error) })
     }
   }
 
@@ -462,14 +457,14 @@ export default function SuperAssistantPage() {
           buffer.content = data.message || '生成失败'
           buffer.status = 'error'
           applyBuffer()
-          toast({ tone: 'error', title: '生成失败', description: data.message })
+          toast.error('生成失败', { description: data.message })
         }
       })
     } catch (error) {
       buffer.content = errorText(error, '生成失败')
       buffer.status = 'error'
       applyBuffer()
-      toast({ tone: 'error', title: '生成失败', description: errorText(error) })
+      toast.error('生成失败', { description: errorText(error) })
     } finally {
       streamsRef.current.delete(conversationId)
       setStreamingIds(current => {
@@ -495,7 +490,7 @@ export default function SuperAssistantPage() {
     if (!selectedId || !runningHere || stopping) return
     setStopping(true)
     try { await superAssistantApi.cancel(selectedId) }
-    catch (error) { setStopping(false); toast({ tone: 'error', title: '停止失败', description: errorText(error) }) }
+    catch (error) { setStopping(false); toast.error('停止失败', { description: errorText(error) }) }
   }
 
   const decide = async (decision: 'approve' | 'deny') => {
@@ -511,7 +506,7 @@ export default function SuperAssistantPage() {
         return next
       })
     }
-    catch (error) { toast({ tone: 'error', title: '确认失败', description: errorText(error) }) }
+    catch (error) { toast.error('确认失败', { description: errorText(error) }) }
     finally { setDecisionBusy(false) }
   }
 

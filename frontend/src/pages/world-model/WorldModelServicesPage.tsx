@@ -35,7 +35,7 @@ import {
 } from '@/api/worldModel'
 import { Button } from '@/components/ui/Button'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip } from '@/components/motion-ui/tooltip'
 import { writeTextToClipboard } from '@/utils/clipboard'
@@ -84,7 +84,6 @@ function statusBadge(status: string) {
 
 export default function WorldModelServicesPage() {
   const reduce = useReducedMotion() ?? false
-  const { toast } = useToast()
   const navigate = useNavigate()
   const [items, setItems] = useState<WorldModelServiceSummary[]>([])
   const [total, setTotal] = useState(0)
@@ -183,11 +182,11 @@ export default function WorldModelServicesPage() {
     try {
       const updated = await worldModelApi.setServiceStatusById(item.id, next)
       setItems(current => current.map(row => row.id === updated.id ? { ...row, ...updated } : row))
-      toast({ tone: 'success', title: next === 'online' ? '服务已上线' : '服务已下线' })
+      toast.success(next === 'online' ? '服务已上线' : '服务已下线')
       setOfflineTarget(null)
       void loadOverview()
     } catch (err) {
-      toast({ tone: 'error', title: '状态切换失败', description: apiError(err) })
+      toast.error('状态切换失败', { description: apiError(err) })
     } finally {
       setTogglingId(null)
     }
@@ -210,7 +209,7 @@ export default function WorldModelServicesPage() {
       window.setTimeout(() => setCopiedId(null), 1400)
     }).catch(() => {
       // 剪贴板写入可能被浏览器拒绝（HTTP 部署/未聚焦）：如实提示手动路径
-      toast({ tone: 'error', title: '未能写入剪贴板', description: '请手动选中端点文本后复制。' })
+      toast.error('未能写入剪贴板', { description: '请手动选中端点文本后复制。' })
     })
   }
 
@@ -219,7 +218,7 @@ export default function WorldModelServicesPage() {
       setCopiedCurl(true)
       window.setTimeout(() => setCopiedCurl(false), 1400)
     }).catch(() => {
-      toast({ tone: 'error', title: '未能写入剪贴板', description: '请手动选中示例文本后复制。' })
+      toast.error('未能写入剪贴板', { description: '请手动选中示例文本后复制。' })
     })
   }
 
@@ -256,7 +255,7 @@ export default function WorldModelServicesPage() {
     const validated = validateJsonObject(invokeInput)
     if (validated.issue) {
       setJsonIssue(validated.issue)
-      toast({ tone: 'error', title: '测试入参不是有效 JSON', description: '错误位置见输入框下方提示。' })
+      toast.error('测试入参不是有效 JSON', { description: '错误位置见输入框下方提示。' })
       return
     }
     setJsonIssue(null)
@@ -276,13 +275,9 @@ export default function WorldModelServicesPage() {
         const payload = result.payload as { trajectory?: unknown; boundary?: unknown } | null
         const emptyTrajectory = !!payload && Array.isArray(payload.trajectory) && payload.trajectory.length === 0
         const boundaryNote = typeof payload?.boundary === 'string' ? payload.boundary : ''
-        toast({
-          tone: 'success',
-          title: '调用成功',
-          description: emptyTrajectory
+        toast.success('调用成功', { description: emptyTrajectory
             ? `耗时 ${result.duration_ms} ms · 注意：未产生预测输出${boundaryNote ? `（${boundaryNote}）` : ''}`
-            : '耗时 ' + result.duration_ms + ' ms',
-        })
+            : '耗时 ' + result.duration_ms + ' ms' })
         setItems(current => current.map(row => row.id === invokeTarget.id
           ? { ...row, call_count: row.call_count + 1 }
           : row))

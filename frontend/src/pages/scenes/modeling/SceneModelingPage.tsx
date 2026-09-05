@@ -21,7 +21,7 @@ import { modelApi } from '@/api/ontologies'
 import { Button } from '@/components/ui/Button'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { ConfirmModal } from '@/components/ui/Modal'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import SessionHistoryPopover, { type SessionHistoryItem } from '@/components/SessionHistoryPopover'
 import { SplitHandle, useSplitLayout } from '@/hooks/useSplitLayout'
 import TargetSceneSelector from './TargetSceneSelector'
@@ -75,7 +75,6 @@ function messagesToTimeline(messages: ConversationMessage[]): TimelineItem[] {
 
 export default function SceneModelingPage() {
   const queryClient = useQueryClient()
-  const { toast } = useToast()
   const { containerRef, sizes, startResize } = useSplitLayout([72, 28])
 
   const draftsQuery = useQuery({
@@ -152,9 +151,9 @@ export default function SceneModelingPage() {
       void queryClient.invalidateQueries({ queryKey: ['scenes'] })
       setSelectedVersionNo(result.version.version_no)
       setRollbackOpen(false)
-      toast({ tone: 'success', title: '已回滚并生成新版本 v' + result.version.version_no })
+      toast.success('已回滚并生成新版本 v' + result.version.version_no)
     },
-    onError: () => toast({ tone: 'error', title: '回滚失败，请稍后重试' }),
+    onError: () => toast.error('回滚失败，请稍后重试'),
   })
 
   useEffect(() => {
@@ -241,7 +240,7 @@ export default function SceneModelingPage() {
       )
     } catch (error) {
       if ((error as Error).name !== 'AbortError') {
-        toast({ tone: 'error', title: errorMessageText(error) })
+        toast.error(errorMessageText(error))
       }
     } finally {
       abortRef.current = null

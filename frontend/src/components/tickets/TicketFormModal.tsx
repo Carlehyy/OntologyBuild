@@ -4,7 +4,7 @@ import {
   AlertTriangle, CheckCircle2, Eye, Megaphone, Paperclip, Trash2, Upload,
 } from 'lucide-react'
 import { Modal } from '@/components/ui/Modal'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import {
   ticketsApi, formatBytes,
   TICKET_CATEGORY_META, TICKET_CATEGORY_ORDER, type TicketCategory, type TicketItem,
@@ -50,7 +50,6 @@ export default function TicketFormModal({
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
-  const { toast } = useToast()
   const [title, setTitle] = useState('')
   const [category, setCategory] = useState<TicketCategory | ''>('')
   const [content, setContent] = useState('')
@@ -106,11 +105,7 @@ export default function TicketFormModal({
     },
     onSuccess: (ticket) => {
       queryClient.invalidateQueries({ queryKey: ['tickets'] })
-      toast({
-        tone: 'success',
-        title: '工单提交成功',
-        description: `工单编号 ${ticket.ticketNo}，当前状态「待处理」`,
-      })
+      toast.success('工单提交成功', { description: `工单编号 ${ticket.ticketNo}，当前状态「待处理」` })
       onClose()
     },
     onError: (cause: any) => {

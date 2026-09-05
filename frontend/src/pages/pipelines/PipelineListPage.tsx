@@ -13,7 +13,7 @@ import { getPipelineEngine } from '@/api/v2/pipelines'
 import { stewardApi } from '@/api/steward'
 import type { StewardStatus } from '@/api/steward'
 import ConfirmDialog from '@/components/ConfirmDialog'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import RunPreviewModal from './RunPreviewModal'
 import PipelineEditWizard from './PipelineEditWizard'
 import PipelineOverviewBar from './PipelineOverviewBar'
@@ -105,7 +105,6 @@ function EnabledSwitch({ on, busy, lockReason, onToggle, onLocked }: {
 
 export default function PipelineListPage() {
   const navigate = useNavigate()
-  const { toast } = useToast()
   const [searchParams] = useSearchParams()
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
   const [overview, setOverview] = useState<PipelineOverview | null>(null)
@@ -149,14 +148,10 @@ export default function PipelineListPage() {
       .catch(() => {
         setPipelines([])
         setTotal(0)
-        toast({
-          tone: 'error',
-          title: '流水线列表加载失败',
-          description: '请检查服务连接后重试。',
-        })
+        toast.error('流水线列表加载失败', { description: '请检查服务连接后重试。' })
       })
       .finally(() => setLoading(false))
-  }, [filterEnabled, filterSource, filterStatus, page, pageSize, search, toast])
+  }, [filterEnabled, filterSource, filterStatus, page, pageSize, search])
 
   useEffect(() => { load() }, [load])
 
@@ -196,13 +191,9 @@ export default function PipelineListPage() {
         setPipelines(current => [pl, ...current.filter(item => item.id !== pl.id)].slice(0, pageSize))
       }
     }
-    toast({
-      tone: 'success',
-      title: toastTitle,
-      description: page === 1 && matchesActiveFilters(pl)
+    toast.success(toastTitle, { description: page === 1 && matchesActiveFilters(pl)
         ? `「${pl.name}」已加入当前列表。`
-        : `「${pl.name}」已创建，可调整筛选或返回第一页查看。`,
-    })
+        : `「${pl.name}」已创建，可调整筛选或返回第一页查看。` })
   }
 
   const updatePipelineLocally = (updated: Pipeline) => {
@@ -214,13 +205,9 @@ export default function PipelineListPage() {
       ? items.map(item => item.id === merged.id ? merged : item)
       : items.filter(item => item.id !== merged.id))
     if (!remainsVisible) setTotal(value => Math.max(0, value - 1))
-    toast({
-      tone: 'success',
-      title: '流水线已更新',
-      description: remainsVisible
+    toast.success('流水线已更新', { description: remainsVisible
         ? `「${merged.name}」的信息已局部更新。`
-        : `「${merged.name}」已更新，并因当前筛选条件从列表中移除。`,
-    })
+        : `「${merged.name}」已更新，并因当前筛选条件从列表中移除。` })
   }
 
   const handleToggleEnabled = async (pl: Pipeline) => {
@@ -234,19 +221,11 @@ export default function PipelineListPage() {
         setPipelines(items => items.filter(item => item.id !== pl.id))
         setTotal(value => Math.max(0, value - 1))
       }
-      toast({
-        tone: 'success',
-        title: next ? '流水线已启用' : '流水线已停用',
-        description: `「${pl.name}」的启用状态已更新。`,
-      })
+      toast.success(next ? '流水线已启用' : '流水线已停用', { description: `「${pl.name}」的启用状态已更新。` })
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
       setPipelines(ps => ps.map(p => p.id === pl.id ? { ...p, enabled: !next } : p))
-      toast({
-        tone: 'error',
-        title: '启用状态更新失败',
-        description: err?.detail || err?.message || '请稍后重试。',
-      })
+      toast.error('启用状态更新失败', { description: err?.detail || err?.message || '请稍后重试。' })
     } finally {
       setTogglingId(null)
     }
@@ -261,20 +240,12 @@ export default function PipelineListPage() {
       setDeleteTarget(null)
       setPipelines(items => items.filter(item => item.id !== target.id))
       setTotal(value => Math.max(0, value - 1))
-      toast({
-        tone: 'success',
-        title: '流水线已归档',
-        description: `「${target.name}」已从当前列表移除。`,
-      })
+      toast.success('流水线已归档', { description: `「${target.name}」已从当前列表移除。` })
     } catch (e: unknown) {
       // 典型场景：被调度任务引用（后端引用保护 400）
       const err = e as { detail?: string; message?: string }
       setDeleteTarget(null)
-      toast({
-        tone: 'error',
-        title: '流水线归档失败',
-        description: err?.detail || err?.message || '请稍后重试。',
-      })
+      toast.error('流水线归档失败', { description: err?.detail || err?.message || '请稍后重试。' })
     } finally {
       setDeleting(false)
     }
@@ -291,11 +262,7 @@ export default function PipelineListPage() {
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
       setCloneTarget(null)
-      toast({
-        tone: 'error',
-        title: '流水线克隆失败',
-        description: err?.detail || err?.message || '请稍后重试。',
-      })
+      toast.error('流水线克隆失败', { description: err?.detail || err?.message || '请稍后重试。' })
     } finally {
       setCloning(false)
     }
@@ -515,11 +482,7 @@ export default function PipelineListPage() {
                           busy={togglingId === pl.id}
                           lockReason={enableLockReason}
                           onToggle={() => handleToggleEnabled(pl)}
-                          onLocked={() => enableLockReason && toast({
-                            tone: 'warning',
-                            title: '当前无法切换启用状态',
-                            description: enableLockReason,
-                          })}
+                          onLocked={() => enableLockReason && toast.warning('当前无法切换启用状态', { description: enableLockReason })}
                         />
                         <span className={`text-xs whitespace-nowrap ${enabled ? 'text-brand-ink' : 'text-[var(--color-text-tertiary)]'}`}>
                           {enabled ? '已启用' : '未启用'}
@@ -747,7 +710,6 @@ function PipelineCreateModal({
   onCreated?: (pl: Pipeline) => void
   onSaved?: () => void
 }) {
-  const { toast } = useToast()
   const isEdit = !!pipeline
   const n8nReady = Boolean(
     n8nStatus?.configured && n8nStatus.enabled && n8nStatus.reachable !== false,
@@ -763,15 +725,11 @@ function PipelineCreateModal({
 
   const handleSubmit = async () => {
     if (!name.trim()) {
-      toast({ tone: 'warning', title: '请填写流水线名称' })
+      toast.warning('请填写流水线名称')
       return
     }
     if (!isEdit && mode === 'n8n' && !n8nReady) {
-      toast({
-        tone: 'warning',
-        title: 'n8n 当前不可用',
-        description: '请联系管理员检查部署环境的 N8N_* 启动配置并重启平台。',
-      })
+      toast.warning('n8n 当前不可用', { description: '请联系管理员检查部署环境的 N8N_* 启动配置并重启平台。' })
       return
     }
     setSaving(true)
@@ -807,11 +765,7 @@ function PipelineCreateModal({
       }
     } catch (e: unknown) {
       const err = e as { detail?: string; message?: string }
-      toast({
-        tone: 'error',
-        title: isEdit ? '流水线保存失败' : '流水线创建失败',
-        description: err?.detail || err?.message || '请稍后重试。',
-      })
+      toast.error(isEdit ? '流水线保存失败' : '流水线创建失败', { description: err?.detail || err?.message || '请稍后重试。' })
     } finally {
       setSaving(false)
     }

@@ -13,6 +13,7 @@
 | 单选下拉、弹窗、按钮、卡片、输入等基础与交互件 | ReUI / shadcn 语义组件 | [`ui/`](./ui/) |
 | 可搜索单选、多选、日期、看板、甘特等复合控件 | ReUI（reui.io）按需引入 | 引入后入 `ui/` 或独立目录 |
 | 表格、树、穿梭、级联等重数据交互 | antd 6（ConfigProvider 已对齐平台色） | 全局 |
+| 瞬时消息提示（toast） | sonner（`import { toast } from 'sonner'`；全局 Toaster 见 [ui/sonner.tsx](./ui/sonner.tsx)） | [ui/](./ui/) |
 | 动效例外层（morph 弹窗、弹簧手势、AnimatedNumber） | vendored beUI 存量 | [`motion-ui/`](./motion-ui/)、[`availability-scheduler/`](./availability-scheduler/) |
 | 本体图谱编辑画布 | palantir-graph 业务单元（独立设计作用域） | [`../palantir-graph/`](../palantir-graph/) |
 | 悬浮助手、收件箱、工单等域组件 | 各业务域组件目录 | 各子目录 |
@@ -27,6 +28,8 @@
 - **新代码禁止 import `motion-ui/` / `availability-scheduler/`（beUI 例外层），
   禁止在白名单外的新文件使用原生 `<select>`**——由
   `npm run check:component-convergence` 在 CI 强制，白名单只减不增；
+- 瞬时消息提示统一走 sonner（全局 Toaster 已挂载于 `App.tsx`），禁止引入
+  react-hot-toast / react-toastify / antd message 等平行实现（同一门禁强制）；
 - 组件选型以 [`component-catalog.ts`](./component-catalog.ts) 为单一事实源，
   表中没有的场景先补 catalog 条目（PR 内讨论定案）再写代码。
 

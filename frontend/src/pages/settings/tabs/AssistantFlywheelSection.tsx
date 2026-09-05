@@ -9,8 +9,9 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert, Button, Drawer, Input, InputNumber, Modal, Popconfirm, Progress,
-  Select, Space, Switch, Table, Tag, TimePicker, Typography, message,
+  Select, Space, Switch, Table, Tag, TimePicker, Typography,
 } from 'antd'
+import { toast } from 'sonner'
 import type { ColumnsType } from 'antd/es/table'
 import {
   Activity, FlaskConical, Gauge, History,
@@ -151,19 +152,19 @@ function BenchmarkView() {
       task_id: fromTaskId, include: fromInclude,
     }),
     onSuccess: () => {
-      message.success('基准集已从评估任务沉淀')
+      toast.success('基准集已从评估任务沉淀')
       setFromTaskOpen(false)
       queryClient.invalidateQueries({ queryKey: ['assistant-eval', 'benchmarks'] })
     },
-    onError: (error: Error) => message.error(error.message),
+    onError: (error: Error) => toast.error(error.message),
   })
   const deleteMutation = useMutation({
     mutationFn: (id: string) => assistantEvaluationApi.deleteBenchmark(id),
     onSuccess: () => {
-      message.success('基准集已删除')
+      toast.success('基准集已删除')
       queryClient.invalidateQueries({ queryKey: ['assistant-eval', 'benchmarks'] })
     },
-    onError: (error: Error) => message.error(error.message),
+    onError: (error: Error) => toast.error(error.message),
   })
 
   const columns: ColumnsType<BenchmarkSet> = [
@@ -282,11 +283,11 @@ function CalibrationView() {
       dimension_keys: [],
     }),
     onSuccess: () => {
-      message.success('校准任务已发起（同一批会话重复评分度量方差）')
+      toast.success('校准任务已发起（同一批会话重复评分度量方差）')
       setOpen(false)
       queryClient.invalidateQueries({ queryKey: ['assistant-eval', 'calibrations'] })
     },
-    onError: (error: Error) => message.error(error.message),
+    onError: (error: Error) => toast.error(error.message),
   })
 
   const columns: ColumnsType<Calibration> = [
@@ -389,29 +390,29 @@ function ProposalView() {
         : { model_config_id: modelConfigId },
     }),
     onSuccess: () => {
-      message.success('提案已创建（草稿）')
+      toast.success('提案已创建（草稿）')
       setCreateOpen(false)
       queryClient.invalidateQueries({ queryKey: ['assistant-eval', 'proposals'] })
     },
-    onError: (error: Error) => message.error(error.message),
+    onError: (error: Error) => toast.error(error.message),
   })
   const experimentMutation = useMutation({
     mutationFn: () => assistantEvaluationApi.createExperiment({
       proposal_id: experimentProposalId, benchmark_set_id: benchmarkSetId, threshold,
     }),
     onSuccess: () => {
-      message.success('双臂实验已发起（沙箱回放 + 留出集门禁）')
+      toast.success('双臂实验已发起（沙箱回放 + 留出集门禁）')
       queryClient.invalidateQueries({ queryKey: ['assistant-eval', 'proposals'] })
     },
-    onError: (error: Error) => message.error(error.message),
+    onError: (error: Error) => toast.error(error.message),
   })
   const applyMutation = useMutation({
     mutationFn: (id: string) => assistantEvaluationApi.applyProposal(id),
     onSuccess: () => {
-      message.success('已投产（版本快照已登记，可回退）')
+      toast.success('已投产（版本快照已登记，可回退）')
       queryClient.invalidateQueries({ queryKey: ['assistant-eval', 'proposals'] })
     },
-    onError: (error: Error) => message.error(error.message),
+    onError: (error: Error) => toast.error(error.message),
   })
 
   const ontologyName = useMemo(() => new Map(
@@ -633,24 +634,24 @@ function AutopilotView() {
       threshold, max_applies_per_week: maxApplies,
     }),
     onSuccess: () => {
-      message.success(enabled ? '值守已开启' : '值守配置已保存')
+      toast.success(enabled ? '值守已开启' : '值守配置已保存')
       queryClient.invalidateQueries({ queryKey: ['assistant-eval', 'autopilot', ontologyId] })
     },
-    onError: (error: Error) => message.error(error.message),
+    onError: (error: Error) => toast.error(error.message),
   })
   const triggerMutation = useMutation({
     mutationFn: () => assistantEvaluationApi.triggerAutopilot(ontologyId),
-    onSuccess: () => message.success('已派发一轮值守循环（NATS）'),
-    onError: (error: Error) => message.error(error.message),
+    onSuccess: () => toast.success('已派发一轮值守循环（NATS）'),
+    onError: (error: Error) => toast.error(error.message),
   })
   const rollbackMutation = useMutation({
     mutationFn: (versionId: string) => assistantEvaluationApi.rollbackVersion(versionId, '管理员手动回退'),
     onSuccess: () => {
-      message.success('已回退到上一版本')
+      toast.success('已回退到上一版本')
       queryClient.invalidateQueries({ queryKey: ['assistant-eval', 'versions', ontologyId] })
       queryClient.invalidateQueries({ queryKey: ['assistant-eval', 'autopilot', ontologyId] })
     },
-    onError: (error: Error) => message.error(error.message),
+    onError: (error: Error) => toast.error(error.message),
   })
 
   const versionColumns: ColumnsType<ProfileVersion> = [

@@ -10,7 +10,7 @@ import {
   type ReflectionSettings,
   type SuperMemory,
 } from '@/api/superAssistant'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
@@ -44,7 +44,6 @@ function ConfidenceTag({ confidence }: { confidence: string }) {
 
 /** 待审批：反思产出的 memory/skill/conflict 候选 */
 export function ApprovalTab({ conversationId }: { conversationId: string | null }) {
-  const { toast } = useToast()
   const [candidates, setCandidates] = useState<ReflectionCandidate[]>([])
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -54,7 +53,7 @@ export function ApprovalTab({ conversationId }: { conversationId: string | null 
     try {
       setCandidates(await superAssistantApi.reflectionCandidates('pending'))
     } catch (error) {
-      toast({ tone: 'error', title: '加载待审批候选失败', description: errorText(error) })
+      toast.error('加载待审批候选失败', { description: errorText(error) })
     } finally {
       setLoading(false)
     }
@@ -72,10 +71,10 @@ export function ApprovalTab({ conversationId }: { conversationId: string | null 
     setBusyId(candidate.id)
     try {
       await superAssistantApi.decideReflectionCandidate(candidate.id, decision)
-      toast({ tone: 'success', title: decision === 'accept' || decision === 'new_supersedes' ? '已接受' : '已处理' })
+      toast.success(decision === 'accept' || decision === 'new_supersedes' ? '已接受' : '已处理')
       await refresh()
     } catch (error) {
-      toast({ tone: 'error', title: '审批操作失败', description: errorText(error) })
+      toast.error('审批操作失败', { description: errorText(error) })
     } finally {
       setBusyId(null)
     }
@@ -86,10 +85,10 @@ export function ApprovalTab({ conversationId }: { conversationId: string | null 
     setReflecting(true)
     try {
       await superAssistantApi.runFullReflection(conversationId)
-      toast({ tone: 'success', title: '反思已在后台执行', description: '产出的候选会稍后出现在这里' })
+      toast.success('反思已在后台执行', { description: '产出的候选会稍后出现在这里' })
       window.setTimeout(refresh, 3000)
     } catch (error) {
-      toast({ tone: 'error', title: '触发反思失败', description: errorText(error) })
+      toast.error('触发反思失败', { description: errorText(error) })
     } finally {
       setReflecting(false)
     }
@@ -192,7 +191,6 @@ export function ApprovalTab({ conversationId }: { conversationId: string | null 
 
 /** 记忆：浏览/搜索/pin/删除/手动新增 + auto-accept 开关 */
 export function MemoryTab() {
-  const { toast } = useToast()
   const [memories, setMemories] = useState<SuperMemory[]>([])
   const [settings, setSettings] = useState<ReflectionSettings | null>(null)
   const [loading, setLoading] = useState(true)
@@ -218,7 +216,7 @@ export function MemoryTab() {
       setMemories(memoryList)
       setSettings(reflectionSettings)
     } catch (error) {
-      toast({ tone: 'error', title: '加载记忆失败', description: errorText(error) })
+      toast.error('加载记忆失败', { description: errorText(error) })
     } finally {
       setLoading(false)
     }
@@ -234,7 +232,7 @@ export function MemoryTab() {
       const report = await superAssistantApi.distillReport()
       setDistillClusters(report.clusters || [])
     } catch (error) {
-      toast({ tone: 'error', title: '加载蒸馏报告失败', description: errorText(error) })
+      toast.error('加载蒸馏报告失败', { description: errorText(error) })
     } finally {
       setDistillLoading(false)
     }
@@ -251,11 +249,11 @@ export function MemoryTab() {
     setDistillBusy(`${cluster.cluster_key}:${useLLM}`)
     try {
       await superAssistantApi.applyDistill(distillMergeBody(cluster, useLLM))
-      toast({ tone: 'success', title: useLLM ? '已通过 LLM 融合合并' : '记忆已合并' })
+      toast.success(useLLM ? '已通过 LLM 融合合并' : '记忆已合并')
       setDistillLoading(true)
       await Promise.all([loadDistillReport(), refresh()])
     } catch (error) {
-      toast({ tone: 'error', title: '蒸馏合并失败', description: errorText(error) })
+      toast.error('蒸馏合并失败', { description: errorText(error) })
     } finally {
       setDistillBusy(null)
     }
@@ -268,7 +266,7 @@ export function MemoryTab() {
       const updated = await superAssistantApi.updateReflectionSettings({ auto_accept_enabled: !settings.auto_accept_enabled })
       setSettings(updated)
     } catch (error) {
-      toast({ tone: 'error', title: '设置更新失败', description: errorText(error) })
+      toast.error('设置更新失败', { description: errorText(error) })
     } finally {
       setTogglingAuto(false)
     }
@@ -279,7 +277,7 @@ export function MemoryTab() {
       await superAssistantApi.updateMemory(memory.id, { pinned: !memory.pinned })
       await refresh()
     } catch (error) {
-      toast({ tone: 'error', title: '更新失败', description: errorText(error) })
+      toast.error('更新失败', { description: errorText(error) })
     }
   }
 
@@ -287,10 +285,10 @@ export function MemoryTab() {
     setRemoveBusy(true)
     try {
       await superAssistantApi.deleteMemory(memory.id)
-      toast({ tone: 'success', title: '记忆已删除' })
+      toast.success('记忆已删除')
       await refresh()
     } catch (error) {
-      toast({ tone: 'error', title: '删除失败', description: errorText(error) })
+      toast.error('删除失败', { description: errorText(error) })
     } finally {
       setRemoveBusy(false)
       setRemovingMemory(null)
@@ -306,16 +304,16 @@ export function MemoryTab() {
         zone: draft.zone,
         pinned: draft.pinned,
       })
-      toast({ tone: 'success', title: '记忆已保存' })
+      toast.success('记忆已保存')
       setCreating(false)
       setDraft({ content: '', zone: 'general', pinned: false })
       await refresh()
     } catch (error: any) {
       const conflict = memoryConflictDescription(error)
       if (conflict) {
-        toast({ tone: 'error', title: '与现有记忆过于相似', description: conflict })
+        toast.error('与现有记忆过于相似', { description: conflict })
       } else {
-        toast({ tone: 'error', title: '保存失败', description: errorText(error) })
+        toast.error('保存失败', { description: errorText(error) })
       }
     } finally {
       setSaving(false)

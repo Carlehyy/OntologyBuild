@@ -7,7 +7,7 @@ import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline, DryRunResult } from '@/api/v2/pipelines'
 import { pipelineFileRefsIn } from '@/api/fileAssets'
 import FileRefActions from '@/components/pipelines/FileRefActions'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 
 function displayValue(value: unknown): string {
   if (value == null) return ''
@@ -25,7 +25,6 @@ export default function RunPreviewModal({ pipeline, onClose }: {
   pipeline: Pipeline
   onClose: () => void
 }) {
-  const { toast } = useToast()
   const [phase, setPhase] = useState<'running' | 'preview' | 'error'>('running')
   const [result, setResult] = useState<DryRunResult | null>(null)
   const [error, setError] = useState('')
@@ -42,11 +41,7 @@ export default function RunPreviewModal({ pipeline, onClose }: {
       const message = err?.detail || err?.message || '请稍后重试。'
       setError(message)
       setPhase('error')
-      toast({
-        tone: 'error',
-        title: '流水线试执行失败',
-        description: message,
-      })
+      toast.error('流水线试执行失败', { description: message })
     }
   }
 

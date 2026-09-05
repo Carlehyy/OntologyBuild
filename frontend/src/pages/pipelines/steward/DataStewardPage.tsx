@@ -26,7 +26,7 @@ import { modelApi } from '@/api/ontologies'
 import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
 import type { ModelConfig } from '@/types/ontology'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import SessionHistoryPopover from '@/components/SessionHistoryPopover'
 import PipelineEditWizard from '../PipelineEditWizard'
@@ -49,7 +49,6 @@ const nextId = () => `m${Date.now()}_${msgSeq++}`
 
 export default function DataStewardPage() {
   const [searchParams] = useSearchParams()
-  const { toast } = useToast()
 
   const [status, setStatus] = useState<StewardStatus | null>(null)
   const [messages, setMessages] = useState<StewardChatMessage[]>([])
@@ -238,17 +237,9 @@ export default function DataStewardPage() {
     setExportingConversationId(cid)
     try {
       const payload = await downloadStewardConversation(cid, conversation.title)
-      toast({
-        tone: 'success',
-        title: '会话 JSON 已导出',
-        description: `已保存 ${payload.conversation.messageCount} 条完整消息及执行轨迹。`,
-      })
+      toast.success('会话 JSON 已导出', { description: `已保存 ${payload.conversation.messageCount} 条完整消息及执行轨迹。` })
     } catch (error: unknown) {
-      toast({
-        tone: 'error',
-        title: '会话导出失败',
-        description: errorText(error, '无法读取完整会话，请稍后重试。'),
-      })
+      toast.error('会话导出失败', { description: errorText(error, '无法读取完整会话，请稍后重试。') })
     } finally {
       setExportingConversationId(null)
     }

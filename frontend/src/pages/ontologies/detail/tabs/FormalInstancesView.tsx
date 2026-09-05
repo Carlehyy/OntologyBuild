@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import { apiClientV2 } from '@/api/client'
 import { ConfirmDialog } from '../../ConfirmDialog'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/authStore'
 import type {
   AssociatedDataset,
@@ -118,7 +118,6 @@ export default function FormalInstancesView({
   const queryClient = useQueryClient()
   const [searchParams] = useSearchParams()
   const isAdmin = useAuthStore(state => state.user?.role === 'admin')
-  const { toast } = useToast()
   const [selection, setSelection] = useState<Selection | null>(null)
   const [draftKeyword, setDraftKeyword] = useState('')
   const [keyword, setKeyword] = useState('')
@@ -160,11 +159,7 @@ export default function FormalInstancesView({
     },
     onSuccess: async () => {
       setShowAdoptConfirm(false)
-      toast({
-        tone: 'success',
-        title: '历史实例已安全归属',
-        description: `已归属到当前发布版本 ${catalog?.release.version || ''}，实例目录已刷新。`,
-      })
+      toast.success('历史实例已安全归属', { description: `已归属到当前发布版本 ${catalog?.release.version || ''}，实例目录已刷新。` })
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['instance-browser-catalog', ontologyId] }),
         queryClient.invalidateQueries({ queryKey: ['instance-browser-page', ontologyId] }),

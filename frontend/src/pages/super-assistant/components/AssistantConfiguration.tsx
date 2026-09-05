@@ -11,7 +11,7 @@ import {
   type SuperMcpServer,
   type SuperSkill,
 } from '@/api/superAssistant'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
@@ -59,7 +59,6 @@ function DialogShell({ title, description, size = 'default', onClose, children }
   )
 }
 function SkillCreateDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => Promise<void> }) {
-  const { toast } = useToast()
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [content, setContent] = useState('')
@@ -82,7 +81,7 @@ function SkillCreateDialog({ onClose, onSaved }: { onClose: () => void; onSaved:
         always_active: alwaysActive,
       })
       await onSaved()
-      toast({ tone: 'success', title: 'Skill 已创建', description: '已生成标准目录和 SKILL.md' })
+      toast.success('Skill 已创建', { description: '已生成标准目录和 SKILL.md' })
       onClose()
     } catch (error) { setError(errorText(error, '创建失败')) } finally { setBusy(false) }
   }
@@ -121,7 +120,6 @@ function SkillCreateDialog({ onClose, onSaved }: { onClose: () => void; onSaved:
 }
 
 function SkillEditor({ skill, onClose, onSaved }: { skill: SuperSkill; onClose: () => void; onSaved: () => Promise<void> }) {
-  const { toast } = useToast()
   const [files, setFiles] = useState<SkillFile[]>(skill.manifest)
   const [revision, setRevision] = useState(skill.revision)
   const [selectedPath, setSelectedPath] = useState('SKILL.md')
@@ -150,7 +148,7 @@ function SkillEditor({ skill, onClose, onSaved }: { skill: SuperSkill; onClose: 
       setFiles(result.manifest || files)
       setRevision(result.revision || revision)
       await onSaved()
-      toast({ tone: 'success', title: '文件已保存', description: `${selectedPath} · revision ${result.revision}` })
+      toast.success('文件已保存', { description: `${selectedPath} · revision ${result.revision}` })
     } catch (error) { setError(errorText(error, '保存失败')) } finally { setSaving(false) }
   }
 
@@ -167,7 +165,7 @@ function SkillEditor({ skill, onClose, onSaved }: { skill: SuperSkill; onClose: 
       await superAssistantApi.deleteSkillFile(skill.id, selectedPath)
       const next = await superAssistantApi.skillFiles(skill.id)
       setFiles(next); await loadFile('SKILL.md'); await onSaved()
-      toast({ tone: 'success', title: '文件已删除' })
+      toast.success('文件已删除')
     } catch (error) { setError(errorText(error, '删除失败')) } finally {
       setRemoving(false); setConfirmingRemove(false)
     }
@@ -237,7 +235,6 @@ function McpDialog({ server, onClose, onSaved }: {
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
-  const { toast } = useToast()
   const [name, setName] = useState(server?.name || '')
   const [transport, setTransport] = useState<McpTransport>(server?.transport || 'streamable_http')
   const [url, setUrl] = useState(server?.url || '')
@@ -333,7 +330,7 @@ function McpDialog({ server, onClose, onSaved }: {
         })
       }
       await onSaved()
-      toast({ tone: 'success', title: server ? 'MCP 配置已更新' : 'MCP Server 已添加', description: '请执行连接测试以发现工具清单' })
+      toast.success(server ? 'MCP 配置已更新' : 'MCP Server 已添加', { description: '请执行连接测试以发现工具清单' })
       onClose()
     } catch (error) { setError(errorText(error, '保存失败')) } finally { setBusy(false) }
   }
@@ -476,7 +473,6 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
   refreshServers: () => Promise<void>
   conversationId: string | null
 }) {
-  const { toast } = useToast()
   const [tab, setTab] = useState<'skills' | 'mcp' | 'approval' | 'memory'>('skills')
   const [creatingSkill, setCreatingSkill] = useState(false)
   const [editingSkill, setEditingSkill] = useState<SuperSkill | null>(null)
@@ -495,8 +491,8 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
     try {
       await superAssistantApi.importSkill(file)
       await refreshSkills()
-      toast({ tone: 'success', title: 'Skill 文件夹已导入', description: file.name })
-    } catch (error) { toast({ tone: 'error', title: '导入失败', description: errorText(error) }) }
+      toast.success('Skill 文件夹已导入', { description: file.name })
+    } catch (error) { toast.error('导入失败', { description: errorText(error) }) }
     if (uploadRef.current) uploadRef.current.value = ''
   }
 
@@ -507,7 +503,7 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
       await superAssistantApi.updateSkill(skill.id, { enabled: !skill.enabled })
       await refreshSkills()
     } catch (error) {
-      toast({ tone: 'error', title: 'Skill 设置更新失败', description: errorText(error) })
+      toast.error('Skill 设置更新失败', { description: errorText(error) })
     } finally {
       setUpdatingSkillId(null)
     }
@@ -520,7 +516,7 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
       await superAssistantApi.updateSkill(skill.id, { always_active: !skill.always_active })
       await refreshSkills()
     } catch (error) {
-      toast({ tone: 'error', title: 'Skill 设置更新失败', description: errorText(error) })
+      toast.error('Skill 设置更新失败', { description: errorText(error) })
     } finally {
       setUpdatingSkillId(null)
     }
@@ -528,8 +524,8 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
 
   const removeSkill = async (skill: SuperSkill) => {
     setRemoveBusy(true)
-    try { await superAssistantApi.deleteSkill(skill.id); await refreshSkills(); toast({ tone: 'success', title: 'Skill 已删除' }) }
-    catch (error) { toast({ tone: 'error', title: '删除失败', description: errorText(error) }) }
+    try { await superAssistantApi.deleteSkill(skill.id); await refreshSkills(); toast.success('Skill 已删除') }
+    catch (error) { toast.error('删除失败', { description: errorText(error) }) }
     finally { setRemoveBusy(false); setRemovingSkill(null) }
   }
 
@@ -538,8 +534,9 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
     try {
       const result = await superAssistantApi.testMcpServer(server.id)
       await refreshServers()
-      toast({ tone: result.ok ? 'success' : 'error', title: result.ok ? 'MCP 连接成功' : 'MCP 连接失败', description: result.message })
-    } catch (error) { toast({ tone: 'error', title: 'MCP 测试失败', description: errorText(error) }) }
+      const notifyTest = result.ok ? toast.success : toast.error
+      notifyTest(result.ok ? 'MCP 连接成功' : 'MCP 连接失败', { description: result.message })
+    } catch (error) { toast.error('MCP 测试失败', { description: errorText(error) }) }
     finally { setTestingId(null) }
   }
 
@@ -555,7 +552,7 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
       await superAssistantApi.updateMcpServer(server.id, patch)
       await refreshServers()
     } catch (error) {
-      toast({ tone: 'error', title: 'MCP 设置更新失败', description: errorText(error) })
+      toast.error('MCP 设置更新失败', { description: errorText(error) })
     } finally {
       setUpdatingServerSetting(null)
     }
@@ -563,8 +560,8 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
 
   const removeServer = async (server: SuperMcpServer) => {
     setRemoveBusy(true)
-    try { await superAssistantApi.deleteMcpServer(server.id); await refreshServers(); toast({ tone: 'success', title: 'MCP Server 已删除' }) }
-    catch (error) { toast({ tone: 'error', title: '删除失败', description: errorText(error) }) }
+    try { await superAssistantApi.deleteMcpServer(server.id); await refreshServers(); toast.success('MCP Server 已删除') }
+    catch (error) { toast.error('删除失败', { description: errorText(error) }) }
     finally { setRemoveBusy(false); setRemovingServer(null) }
   }
 

@@ -5,7 +5,7 @@ import type { ColumnsType } from 'antd/es/table'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import { Activity, Copy, Gauge, Info, RefreshCw, Timer, TriangleAlert } from 'lucide-react'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { writeTextToClipboard } from '@/utils/clipboard'
 import {
   monitoringApi,
@@ -268,7 +268,6 @@ export default function MonitoringTab() {
   const [slowRoute, setSlowRoute] = useState('')
   const [traceRequest, setTraceRequest] = useState<SlowRequestItem | null>(null)
   const [promptText, setPromptText] = useState<string | null>(null)
-  const { toast } = useToast()
 
   const copyAnalysisPrompt = async () => {
     if (!traceRequest) return
@@ -279,17 +278,9 @@ export default function MonitoringTab() {
     setPromptText(text)
     try {
       await writeTextToClipboard(text)
-      toast({
-        tone: 'success',
-        title: '已尝试写入剪贴板',
-        description: '若粘贴没有内容，请在弹出框中按 ⌘C / Ctrl+C 手动复制（文本已全选）',
-      })
+      toast.success('已尝试写入剪贴板', { description: '若粘贴没有内容，请在弹出框中按 ⌘C / Ctrl+C 手动复制（文本已全选）' })
     } catch {
-      toast({
-        tone: 'warning',
-        title: '自动复制不可用',
-        description: '请在弹出的文本框中使用 ⌘C / Ctrl+C 复制，或直接下载 .md 文件',
-      })
+      toast.warning('自动复制不可用', { description: '请在弹出的文本框中使用 ⌘C / Ctrl+C 复制，或直接下载 .md 文件' })
     }
   }
 

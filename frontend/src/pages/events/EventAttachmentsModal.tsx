@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import { eventsApi, formatBytes, type Attachment } from '@/api/events'
 import { Modal } from '@/components/ui/Modal'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 
 const MAIL_EXTENSIONS = new Set(['eml', 'msg', 'mbox', 'oft', 'ics', 'vcf'])
 const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tif', 'tiff', 'svg', 'heic', 'heif'])
@@ -58,7 +58,6 @@ export default function EventAttachmentsModal({
   eventId: string | null
   onClose: () => void
 }) {
-  const { toast } = useToast()
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   const [downloadingAll, setDownloadingAll] = useState(false)
   const eventQuery = useQuery({
@@ -79,11 +78,7 @@ export default function EventAttachmentsModal({
     try {
       await eventsApi.downloadAttachment(eventId, attachment)
     } catch (cause: any) {
-      toast({
-        tone: 'error',
-        title: '附件下载失败',
-        description: errorDetail(cause),
-      })
+      toast.error('附件下载失败', { description: errorDetail(cause) })
     } finally {
       setDownloadingId(null)
     }
@@ -94,17 +89,9 @@ export default function EventAttachmentsModal({
     setDownloadingAll(true)
     try {
       await eventsApi.downloadAttachmentsZip(eventId, `${event.eventNo}-附件.zip`)
-      toast({
-        tone: 'success',
-        title: '压缩包已开始下载',
-        description: `${attachments.length} 个附件已临时打包，服务器不会永久保存该压缩包。`,
-      })
+      toast.success('压缩包已开始下载', { description: `${attachments.length} 个附件已临时打包，服务器不会永久保存该压缩包。` })
     } catch (cause: any) {
-      toast({
-        tone: 'error',
-        title: '附件打包下载失败',
-        description: errorDetail(cause),
-      })
+      toast.error('附件打包下载失败', { description: errorDetail(cause) })
     } finally {
       setDownloadingAll(false)
     }

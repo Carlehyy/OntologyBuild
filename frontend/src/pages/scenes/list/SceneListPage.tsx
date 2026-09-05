@@ -12,7 +12,7 @@ import { scenesApi } from '@/api/scenes'
 import type { SceneSummary } from '@/types/scene'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { ConfirmModal } from '@/components/ui/Modal'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { SceneFormModal } from '../components/SceneFormModal'
 
 function formatChangedAt(value: string | null) {
@@ -160,7 +160,6 @@ function SceneCard({ scene, onEdit, onDetail, onClone, onDelete }: {
 export default function SceneListPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { toast } = useToast()
   const [nameFilter, setNameFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
@@ -189,9 +188,9 @@ export default function SceneListPage() {
     onSuccess: () => {
       refresh()
       setCreateOpen(false)
-      toast({ tone: 'success', title: '场景已创建', description: '当前为草稿态，可在详情页或场景助手中继续完善。' })
+      toast.success('场景已创建', { description: '当前为草稿态，可在详情页或场景助手中继续完善。' })
     },
-    onError: error => toast({ tone: 'error', title: '创建失败', description: apiErrorText(error) }),
+    onError: error => toast.error('创建失败', { description: apiErrorText(error) }),
   })
   const updateMutation = useMutation({
     mutationFn: ({ id, value }: { id: string; value: { name: string; description: string } }) =>
@@ -199,28 +198,28 @@ export default function SceneListPage() {
     onSuccess: () => {
       refresh()
       setEditTarget(null)
-      toast({ tone: 'success', title: '场景信息已更新' })
+      toast.success('场景信息已更新')
     },
-    onError: error => toast({ tone: 'error', title: '更新失败', description: apiErrorText(error) }),
+    onError: error => toast.error('更新失败', { description: apiErrorText(error) }),
   })
   const cloneMutation = useMutation({
     mutationFn: (id: string) => scenesApi.clone(id),
     onSuccess: created => {
       refresh()
       setCloneTarget(null)
-      toast({ tone: 'success', title: '已克隆为新草稿场景', description: '版本历史从 v1 开始。' })
+      toast.success('已克隆为新草稿场景', { description: '版本历史从 v1 开始。' })
       navigate('/scenes/' + created.id)
     },
-    onError: error => { setCloneTarget(null); toast({ tone: 'error', title: '克隆失败', description: apiErrorText(error) }) },
+    onError: error => { setCloneTarget(null); toast.error('克隆失败', { description: apiErrorText(error) }) },
   })
   const deleteMutation = useMutation({
     mutationFn: (id: string) => scenesApi.remove(id),
     onSuccess: () => {
       refresh()
       setDeleteTarget(null)
-      toast({ tone: 'success', title: '场景已删除', description: '相关版本定义与运行日志已一并移除。' })
+      toast.success('场景已删除', { description: '相关版本定义与运行日志已一并移除。' })
     },
-    onError: error => toast({ tone: 'error', title: '删除失败', description: apiErrorText(error) }),
+    onError: error => toast.error('删除失败', { description: apiErrorText(error) }),
   })
 
   return (

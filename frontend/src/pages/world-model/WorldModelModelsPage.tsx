@@ -25,7 +25,7 @@ import { LoadingState } from '@/components/ui/LoadingState'
 import { ConfirmModal, Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { useDebouncedValue } from '@/utils/useDebouncedValue'
 import { motion, useReducedMotion } from 'motion/react'
 import { SPRING_LAYOUT } from '@/components/motion-ui/ease'
@@ -310,7 +310,6 @@ export default function WorldModelModelsPage() {
   const [deleteTarget, setDeleteTarget] = useState<WorldModelProjectSummary | null>(null)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const { toast } = useToast()
 
   // 输入防抖后再发服务端筛选请求，避免每次击键都查询
   const keyword = useDebouncedValue(nameFilter.trim(), 300)
@@ -346,7 +345,7 @@ export default function WorldModelModelsPage() {
     onSuccess: project => {
       refresh()
       setCreateOpen(false)
-      toast({ tone: 'success', title: '推演模型已创建', description: '即将进入开发页编写推演脚本。' })
+      toast.success('推演模型已创建', { description: '即将进入开发页编写推演脚本。' })
       navigate(`/world-model/models/${project.id}/develop`)
     },
   })
@@ -355,7 +354,7 @@ export default function WorldModelModelsPage() {
     onSuccess: () => {
       refresh()
       setEditTarget(null)
-      toast({ tone: 'success', title: '模型信息已更新' })
+      toast.success('模型信息已更新')
     },
   })
   const deleteMutation = useMutation({
@@ -363,10 +362,10 @@ export default function WorldModelModelsPage() {
     onSuccess: () => {
       refresh()
       setDeleteTarget(null)
-      toast({ tone: 'success', title: '推演模型已删除', description: '相关脚本与版本记录已一并移除。' })
+      toast.success('推演模型已删除', { description: '相关脚本与版本记录已一并移除。' })
     },
     onError: error => {
-      toast({ tone: 'error', title: '删除失败', description: apiError(error) })
+      toast.error('删除失败', { description: apiError(error) })
     },
   })
 

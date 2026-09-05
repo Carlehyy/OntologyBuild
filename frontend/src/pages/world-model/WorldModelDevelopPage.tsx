@@ -43,7 +43,7 @@ import PublishServiceDialog from './PublishServiceDialog'
 import TrajectoryPreview from './TrajectoryPreview'
 import { extractTrajectorySummary } from './trajectorySummary'
 import { validateTestInputText } from './testInputValidation'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { writeTextToClipboard } from '@/utils/clipboard'
 import {
@@ -109,7 +109,6 @@ function formatDateTime(iso?: string | null): string {
 export default function WorldModelDevelopPage() {
   const { modelId } = useParams<{ modelId: string }>()
   const navigate = useNavigate()
-  const { toast } = useToast()
 
   const [project, setProject] = useState<WorldModelProjectDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -162,12 +161,12 @@ export default function WorldModelDevelopPage() {
     try {
       const parsed = JSON.parse(testInputText || '{}')
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        toast({ tone: 'error', title: '测试入参格式不正确', description: '测试入参必须是 JSON 对象。' })
+        toast.error('测试入参格式不正确', { description: '测试入参必须是 JSON 对象。' })
         return null
       }
       return parsed as TestInput
     } catch {
-      toast({ tone: 'error', title: '测试入参不是有效 JSON', description: '请检查测试入参的语法。' })
+      toast.error('测试入参不是有效 JSON', { description: '请检查测试入参的语法。' })
       return null
     }
   }
@@ -245,13 +244,13 @@ export default function WorldModelDevelopPage() {
       if ((error as { name?: string })?.name !== 'AbortError') {
         setValidatedKey(null)
         setResult(null)
-        toast({ tone: 'error', title: '执行失败', description: apiError(error) })
+        toast.error('执行失败', { description: apiError(error) })
       }
     } finally {
       setExecuting(false)
       abortRef.current = null
     }
-  }, [modelId, executing, script, testInputText, toast])
+  }, [modelId, executing, script, testInputText])
 
   const save = useCallback(async () => {
     if (!modelId || !canSave) return
@@ -263,7 +262,7 @@ export default function WorldModelDevelopPage() {
       if (!saveResult.ok) {
         setResult(saveResult.execution)
         setValidatedKey(null)
-        toast({ tone: 'error', title: '保存前复核未通过', description: saveResult.execution.error ?? '脚本执行失败，未保存。' })
+        toast.error('保存前复核未通过', { description: saveResult.execution.error ?? '脚本执行失败，未保存。' })
         return
       }
       setSavedScript(script)
@@ -275,13 +274,13 @@ export default function WorldModelDevelopPage() {
         ...current,
         version_count: Math.max(current.version_count ?? 0, saveResult.version_no ?? 0),
       } : current)
-      toast({ tone: 'success', title: `已保存为版本 v${saveResult.version_no}` })
+      toast.success(`已保存为版本 v${saveResult.version_no}`)
     } catch (error) {
-      toast({ tone: 'error', title: '保存失败', description: apiError(error) })
+      toast.error('保存失败', { description: apiError(error) })
     } finally {
       setSaving(false)
     }
-  }, [modelId, canSave, script, toast])
+  }, [modelId, canSave, script])
 
   const openVersions = useCallback(async () => {
     if (!modelId) return
@@ -291,11 +290,11 @@ export default function WorldModelDevelopPage() {
     try {
       setVersions(await worldModelApi.listVersions(modelId))
     } catch (error) {
-      toast({ tone: 'error', title: '版本列表加载失败', description: apiError(error) })
+      toast.error('版本列表加载失败', { description: apiError(error) })
     } finally {
       setVersionsLoading(false)
     }
-  }, [modelId, toast])
+  }, [modelId])
 
   const restoreVersion = useCallback(async (versionId: string) => {
     if (!modelId) return
@@ -309,13 +308,13 @@ export default function WorldModelDevelopPage() {
       setDraftRestoredAt(null)
       setPreviewVersionId(null)
       setShowVersions(false)
-      toast({ tone: 'success', title: `已恢复 v${detail.version_no} 的脚本内容`, description: '恢复后请重新执行并保存。' })
+      toast.success(`已恢复 v${detail.version_no} 的脚本内容`, { description: '恢复后请重新执行并保存。' })
     } catch (error) {
-      toast({ tone: 'error', title: '版本恢复失败', description: apiError(error) })
+      toast.error('版本恢复失败', { description: apiError(error) })
     } finally {
       setConfirmRestoreVersionId(null)
     }
-  }, [modelId, toast])
+  }, [modelId])
 
   // 取消执行：中断客户端等待（内核随服务端收尾销毁），编辑内容不受影响
   const cancelExecution = useCallback(() => {
@@ -357,9 +356,9 @@ export default function WorldModelDevelopPage() {
       setPublishVersions(await worldModelApi.listVersions(modelId))
       setPublishOpen(true)
     } catch (error) {
-      toast({ tone: 'error', title: '版本列表加载失败', description: apiError(error) })
+      toast.error('版本列表加载失败', { description: apiError(error) })
     }
-  }, [modelId, toast])
+  }, [modelId])
 
   // 插入官方时序推演示例（ARIMA/SARIMA）：脚本与默认测试入参一并替换，
   // 未保存修改先确认再覆盖；插入后需重新执行并保存（与版本恢复同一纪律）。
@@ -372,17 +371,13 @@ export default function WorldModelDevelopPage() {
       setTestInputText(JSON.stringify(template.test_input, null, 2))
       setValidatedKey(null)
       setConfirmInsertTs(false)
-      toast({
-        tone: 'success',
-        title: '已插入时序推演示例（ARIMA/SARIMA）',
-        description: '已同步替换默认测试入参（36 点季节序列），执行通过后保存即可发布。',
-      })
+      toast.success('已插入时序推演示例（ARIMA/SARIMA）', { description: '已同步替换默认测试入参（36 点季节序列），执行通过后保存即可发布。' })
     } catch (error) {
-      toast({ tone: 'error', title: '时序示例加载失败', description: apiError(error) })
+      toast.error('时序示例加载失败', { description: apiError(error) })
     } finally {
       setInsertingTs(false)
     }
-  }, [modelId, insertingTs, toast])
+  }, [modelId, insertingTs])
 
   const requestInsertTs = useCallback(() => {
     if (dirty) {
@@ -397,9 +392,9 @@ export default function WorldModelDevelopPage() {
     try {
       const updated = await worldModelApi.setServiceStatusById(svc.id, next)
       setServices(current => current.map(item => (item.id === svc.id ? { ...item, status: updated.status } : item)))
-      toast({ tone: 'success', title: next === 'online' ? '服务已上线' : '服务已下线' })
+      toast.success(next === 'online' ? '服务已上线' : '服务已下线')
     } catch (error) {
-      toast({ tone: 'error', title: '状态切换失败', description: apiError(error) })
+      toast.error('状态切换失败', { description: apiError(error) })
     }
   }, [toast])
 

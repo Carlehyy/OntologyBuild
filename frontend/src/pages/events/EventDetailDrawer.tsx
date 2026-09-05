@@ -8,7 +8,7 @@ import {
   AUDIT_ACTION_LABEL, eventsApi, formatBytes, type AuditEntry, type EventItem,
 } from '@/api/events'
 import { ontologyApi } from '@/api/ontologies'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { writeTextToClipboard } from '@/utils/clipboard'
 import { fmt, SeverityBadge } from './shared'
 
@@ -113,7 +113,6 @@ export default function EventDetailDrawer({
   onClose: () => void
   onEdit: (event: EventItem) => void
 }) {
-  const { toast } = useToast()
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   const detailQuery = useQuery({
     queryKey: ['events', 'detail', eventId],
@@ -143,7 +142,7 @@ export default function EventDetailDrawer({
     try {
       await eventsApi.downloadAttachment(eventId, attachment)
     } catch (cause: any) {
-      toast({ tone: 'error', title: '附件下载失败', description: cause?.detail || cause?.message || '请稍后重试' })
+      toast.error('附件下载失败', { description: cause?.detail || cause?.message || '请稍后重试' })
     } finally {
       setDownloadingId(null)
     }

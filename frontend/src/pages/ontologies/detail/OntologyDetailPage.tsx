@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { ontologyApi } from '@/api/ontologies'
 import { apiClientV2 } from '@/api/client'
 import { LoadingState } from '@/components/ui/LoadingState'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import type { OntologyDetail } from '@/types/ontology'
 import OverviewDashboard from './tabs/OverviewDashboard'
 import GovernanceTab from './tabs/GovernanceTab'
@@ -76,7 +76,6 @@ export default function OntologyDetailPage() {
   const [indicatorPos, setIndicatorPos] = useState({ left: 0, width: 0 })
   const [tabsMoreRight, setTabsMoreRight] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
-  const { toast } = useToast()
   const [showVersionModal, setShowVersionModal] = useState(false)
 
   useEffect(() => {
@@ -109,7 +108,7 @@ export default function OntologyDetailPage() {
     try {
       await ontologyApi.exportOntology(id, ontology.name, ontology.version)
       // 反馈走全局右下角 toast 浮层：不再在页面文档流里插入横幅，避免把内容区往下顶。
-      toast({ tone: 'success', title: '本体结构 JSON 已下载' })
+      toast.success('本体结构 JSON 已下载')
     } catch (error: unknown) {
       const candidate = typeof error === 'object' && error !== null
         ? error as { detail?: unknown; message?: unknown }
@@ -119,7 +118,7 @@ export default function OntologyDetailPage() {
         : detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
           ? detail.message
           : typeof candidate?.message === 'string' ? candidate.message : '导出失败，请稍后重试'
-      toast({ tone: 'error', title: '本体结构导出失败', description: message })
+      toast.error('本体结构导出失败', { description: message })
     } finally {
       setIsExporting(false)
     }

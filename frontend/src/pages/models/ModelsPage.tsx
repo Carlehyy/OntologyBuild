@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import type { ModelConfig } from '@/types/ontology'
 import ConfirmDialog from '@/components/ConfirmDialog'
-import ToastContainer from './components/Toast'
+import { toast } from 'sonner'
 import ModelDetailDrawer from './components/ModelDetailDrawer'
 import ModelHeatStrip from './components/ModelHeatStrip'
 import { useMockModels, type RunStatus } from './hooks/useMockModels'
@@ -169,19 +169,6 @@ export default function ModelsPage() {
   // Test States
   const [testStatus, setTestStatus] = useState<Record<string, 'idle' | 'testing' | 'success' | 'error'>>({})
 
-  // Toast
-  const [toasts, setToasts] = useState<Array<{ id: string; type: 'success' | 'error' | 'warning' | 'info'; message: string }>>([])
-  const toastIdRef = useRef(0)
-
-  const addToast = useCallback((type: 'success' | 'error' | 'warning' | 'info', message: string) => {
-    const id = `toast-${++toastIdRef.current}`
-    setToasts(prev => [...prev, { id, type, message }])
-  }, [])
-
-  const removeToast = useCallback((id: string) => {
-    setToasts(prev => prev.filter(t => t.id !== id))
-  }, [])
-
   // Export/Import
   const handleExport = useCallback(() => {
     const exportData = models.map(m => ({
@@ -199,8 +186,8 @@ export default function ModelsPage() {
     a.download = `model-configs-${new Date().toISOString().split('T')[0]}.json`
     a.click()
     URL.revokeObjectURL(url)
-    addToast('success', `已导出 ${models.length} 个模型配置`)
-  }, [models, addToast])
+    toast.success(`已导出 ${models.length} 个模型配置`)
+  }, [models])
 
   const handleImport = useCallback((file: File) => {
     const reader = new FileReader()
@@ -210,14 +197,14 @@ export default function ModelsPage() {
         const items = Array.isArray(data) ? data : data?.configs
         if (!Array.isArray(items) || items.length === 0) throw new Error('导入文件中没有模型配置')
         const result = await importModels(items)
-        addToast('success', `成功导入 ${result.imported} 个模型配置`)
-        addToast('warning', result.warning)
+        toast.success(`成功导入 ${result.imported} 个模型配置`)
+        toast.warning(result.warning)
       } catch (error: any) {
-        addToast('error', String(error?.detail || error?.message || '导入模型配置失败'))
+        toast.error(String(error?.detail || error?.message || '导入模型配置失败'))
       }
     }
     reader.readAsText(file)
-  }, [importModels, addToast])
+  }, [importModels])
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -251,9 +238,9 @@ export default function ModelsPage() {
       await createModel(buildPayload(data))
       setShowCreate(false)
       reset()
-      addToast('success', `模型 "${data.name}" 创建成功，请测试后启用`)
+      toast.success(`模型 "${data.name}" 创建成功，请测试后启用`)
     } catch {
-      addToast('error', `模型 "${data.name}" 创建失败`)
+      toast.error(`模型 "${data.name}" 创建失败`)
     }
   }
 
@@ -262,9 +249,9 @@ export default function ModelsPage() {
     try {
       await updateModel(editTarget.id, buildPayload(data, 'update'))
       setEditTarget(null)
-      addToast('success', '模型更新成功')
+      toast.success('模型更新成功')
     } catch {
-      addToast('error', '模型更新失败')
+      toast.error('模型更新失败')
     }
   }
 
@@ -274,9 +261,9 @@ export default function ModelsPage() {
       await deleteModel(deleteTarget.id)
       if (detailModel?.id === deleteTarget.id) setDetailModel(null)
       setDeleteTarget(null)
-      addToast('success', '模型已删除')
+      toast.success('模型已删除')
     } catch {
-      addToast('error', '模型删除失败')
+      toast.error('模型删除失败')
     }
   }
 
@@ -284,8 +271,8 @@ export default function ModelsPage() {
     setTestStatus(prev => ({ ...prev, [id]: 'testing' }))
     const result = await testConnection(id)
     setTestStatus(prev => ({ ...prev, [id]: result.ok ? 'success' : 'error' }))
-    if (result.ok) addToast('success', result.message)
-    else addToast('error', result.message)
+    if (result.ok) toast.success(result.message)
+    else toast.error(result.message)
     setTimeout(() => setTestStatus(prev => ({ ...prev, [id]: 'idle' })), 3000)
   }
 
@@ -313,8 +300,6 @@ export default function ModelsPage() {
 
   return (
     <div className="min-h-full">
-      {/* Toast Container */}
-      <ToastContainer toasts={toasts} onRemove={removeToast} />
 
       {/* 搜索、筛选、操作按钮 */}
       <div className="flex items-center gap-3 bg-card rounded-xl border border-border px-4 py-3 flex-wrap mb-5 shadow-sm/50">
@@ -460,9 +445,9 @@ export default function ModelsPage() {
                       onClick={async () => {
                         try {
                           await toggleEnabled(m.id)
-                          addToast('info', `"${m.name}" 已${enabled ? '停用' : '启用'}`)
+                          toast.info(`"${m.name}" 已${enabled ? '停用' : '启用'}`)
                         } catch {
-                          addToast('error', `"${m.name}" 状态更新失败`)
+                          toast.error(`"${m.name}" 状态更新失败`)
                         }
                       }}
                       title={enabled ? '点击停用' : '点击启用'}
@@ -548,9 +533,9 @@ export default function ModelsPage() {
                       onClick={async () => {
                         try {
                           await setDefault(m.id)
-                          addToast('success', `"${m.name}" 已设为默认模型`)
+                          toast.success(`"${m.name}" 已设为默认模型`)
                         } catch {
-                          addToast('error', `"${m.name}" 设置默认失败`)
+                          toast.error(`"${m.name}" 设置默认失败`)
                         }
                       }}
                       className="inline-flex shrink-0 whitespace-nowrap items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-muted text-foreground hover:bg-[var(--color-bg-active)] transition-colors"

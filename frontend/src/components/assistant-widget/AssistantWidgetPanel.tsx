@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 
 import type { SuperMessage } from '@/api/superAssistant'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { WIDGET_PANEL_BOTTOM, WIDGET_Z, buildChainSteps, widgetAnchor } from '@/components/assistant-widget/logic'
 import { useAssistantWidgetStore } from '@/stores/assistantWidgetStore'
 import { useThemeStore } from '@/stores/themeStore'
@@ -124,7 +124,6 @@ const headerButtonClass = 'flex h-8 w-8 shrink-0 items-center justify-center rou
 export default function AssistantWidgetPanel() {
   const dark = useThemeStore(state => state.theme === 'dark')
   const navigate = useNavigate()
-  const { toast } = useToast()
   const anchor = widgetAnchor(useLocation().pathname)
   const panelBottomClass = WIDGET_PANEL_BOTTOM[anchor]
   const panelZClass = WIDGET_Z[anchor]
@@ -152,9 +151,9 @@ export default function AssistantWidgetPanel() {
 
   useEffect(() => {
     if (!actionError) return
-    toast({ tone: 'error', title: actionError })
+    toast.error(actionError)
     clearActionError()
-  }, [actionError, clearActionError, toast])
+  }, [actionError, clearActionError])
 
   const bubbleRoles = useMemo(() => ({
     ai: {

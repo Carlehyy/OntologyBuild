@@ -19,7 +19,7 @@ import { scenesApi } from '@/api/scenes'
 import type { SceneDefinition, SceneDetail } from '@/types/scene'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { ConfirmModal } from '@/components/ui/Modal'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { SceneFormModal } from '../components/SceneFormModal'
 import { DisplayTab } from './DisplayTab'
 import { LogsTab } from './LogsTab'
@@ -47,7 +47,6 @@ export default function SceneDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { toast } = useToast()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const activePanel: PanelKey = normalizePanelKey(searchParams.get('tab'))
@@ -87,30 +86,30 @@ export default function SceneDetailPage() {
     mutationFn: () => scenesApi.publish(id ?? ''),
     onSuccess: published => {
       invalidate()
-      toast({ tone: 'success', title: '发布成功', description: 'v' + published.published_version_no + ' 已冻结为对外生效版本。' })
+      toast.success('发布成功', { description: 'v' + published.published_version_no + ' 已冻结为对外生效版本。' })
     },
     onError: error => {
       const detail = (error as { detail?: { message?: string } }).detail
-      toast({ tone: 'error', title: '发布失败', description: detail?.message ?? '请稍后重试' })
+      toast.error('发布失败', { description: detail?.message ?? '请稍后重试' })
     },
   })
   const cloneMutation = useMutation({
     mutationFn: () => scenesApi.clone(id ?? ''),
     onSuccess: created => {
       invalidate()
-      toast({ tone: 'success', title: '已克隆为新草稿场景' })
+      toast.success('已克隆为新草稿场景')
       navigate('/scenes/' + created.id)
     },
-    onError: () => toast({ tone: 'error', title: '克隆失败' }),
+    onError: () => toast.error('克隆失败'),
   })
   const removeMutation = useMutation({
     mutationFn: () => scenesApi.remove(id ?? ''),
     onSuccess: () => {
       invalidate()
-      toast({ tone: 'success', title: '场景已删除' })
+      toast.success('场景已删除')
       navigate('/scenes')
     },
-    onError: () => toast({ tone: 'error', title: '删除失败' }),
+    onError: () => toast.error('删除失败'),
   })
 
   const [editOpen, setEditOpen] = useState(false)
@@ -120,10 +119,10 @@ export default function SceneDetailPage() {
 
   useEffect(() => {
     if (sceneQuery.isError && !sceneQuery.isLoading) {
-      toast({ tone: 'error', title: '场景不存在或已被删除' })
+      toast.error('场景不存在或已被删除')
       navigate('/scenes', { replace: true })
     }
-  }, [sceneQuery.isError, sceneQuery.isLoading, navigate, toast])
+  }, [sceneQuery.isError, sceneQuery.isLoading, navigate])
 
   if (sceneQuery.isLoading || !sceneQuery.data || !id) {
     return <div className="p-6"><LoadingState /></div>
@@ -242,7 +241,7 @@ export default function SceneDetailPage() {
           await scenesApi.updateBasicInfo(scene.id, value)
           await queryClient.invalidateQueries({ queryKey: ['scenes'] })
           setEditOpen(false)
-          toast({ tone: 'success', title: '场景信息已更新' })
+          toast.success('场景信息已更新')
         }}
       />
       <ConfirmModal

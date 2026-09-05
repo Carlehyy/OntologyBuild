@@ -12,7 +12,7 @@ import {
   type PalaceImportResult,
 } from '@/api/superAssistant'
 import { Button } from '@/components/ui/Button'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import {
   Dialog,
   DialogContent,
@@ -75,7 +75,6 @@ const palaceError = (err: unknown, fallback: string): string => {
  * 节点，点节点定位来源文档）。
  */
 export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceDialogProps) {
-  const { toast } = useToast()
   const [files, setFiles] = useState<PalaceFile[]>([])
   const [graph, setGraph] = useState<PalaceGraph | null>(null)
   const [loading, setLoading] = useState(false)
@@ -98,7 +97,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
 
   /** 错误统一走 toast（error 音调自动 6s 消失）：内联横幅插拔会把三栏顶得上下跳动 */
   const showError = useCallback((err: unknown, fallback: string) => {
-    toast({ tone: 'error', title: fallback, description: palaceError(err, '') || undefined })
+    toast.error(fallback, { description: palaceError(err, '') || undefined })
   }, [toast])
 
   const refresh = useCallback(async () => {
@@ -205,7 +204,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
     setBusy(true)
     try {
       await superAssistantApi.replacePalaceFile(targetId, file)
-      toast({ tone: 'success', title: '文件已替换', description: '新文件将自动重新抽取实体与关系。' })
+      toast.success('文件已替换', { description: '新文件将自动重新抽取实体与关系。' })
       await refresh()
     } catch (err) {
       showError(err, '替换失败')    } finally {
@@ -262,7 +261,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
     try {
       await superAssistantApi.updatePalaceFileContent(editor.fileId, editor.draft)
       setEditor(null)
-      toast({ tone: 'success', title: '已保存，图谱重建已排队', description: '新内容将自动重新抽取实体与关系。' })
+      toast.success('已保存，图谱重建已排队', { description: '新内容将自动重新抽取实体与关系。' })
       await refresh()
     } catch (err) {
       setEditor(prev => prev ? { ...prev, saving: false } : prev)

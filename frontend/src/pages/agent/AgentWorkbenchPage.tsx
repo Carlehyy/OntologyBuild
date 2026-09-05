@@ -15,7 +15,7 @@ import {
   Sparkles, Square, User, Workflow, X,
 } from 'lucide-react'
 import { LoadingState } from '@/components/ui/LoadingState'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import SessionHistoryPopover from '@/components/SessionHistoryPopover'
 import { ontologyApi, modelApi } from '@/api/ontologies'
 import { useAuthStore } from '@/stores/authStore'
@@ -75,7 +75,6 @@ export default function AgentWorkbenchPage() {
   const isAdmin = useAuthStore(s => s.user?.role === 'admin')
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const { toast } = useToast()
   const { containerRef, sizes, startResize } = useAssistantLayout()
 
   // -- 本体 / 模型选择 --
@@ -327,19 +326,14 @@ export default function AgentWorkbenchPage() {
       const data = await agentApi.exportConversation(oid, cid)
       downloadJson(data, safeExportFilename(data.conversation.title, cid))
       const legacyCount = data.summary.contentCompleteness.legacyTruncatedToolResultCount
-      toast({
-        tone: legacyCount > 0 ? 'warning' : 'success',
-        title: '会话记录已导出',
+      const notifyExport = legacyCount > 0 ? toast.warning : toast.success
+      notifyExport('会话记录已导出', {
         description: legacyCount > 0
           ? `JSON 已包含全部消息；其中 ${legacyCount} 个旧工具结果在历史存储时已截断，文件内已标注。`
           : `已导出 ${data.summary.messageCount} 条消息和 ${data.summary.toolStepCount} 个工具步骤。`,
       })
     } catch (cause: any) {
-      toast({
-        tone: 'error',
-        title: '会话导出失败',
-        description: cause?.detail || cause?.message || '请稍后重试。',
-      })
+      toast.error('会话导出失败', { description: cause?.detail || cause?.message || '请稍后重试。' })
     } finally {
       setExportingConversationId(null)
     }
@@ -493,11 +487,7 @@ export default function AgentWorkbenchPage() {
         setBackgroundRun(null)
         if (convId) await loadConversation(convId).catch(() => {})
         else {
-          toast({
-            tone: 'info',
-            title: '后台消息已结束',
-            description: '未找到处理中的会话，可在历史会话中查看结果。',
-          })
+          toast.info('后台消息已结束', { description: '未找到处理中的会话，可在历史会话中查看结果。' })
         }
         return
       }
@@ -524,11 +514,7 @@ export default function AgentWorkbenchPage() {
         if (!contextAlive(convId)) return
         // 等待上限内未到终态（terminal 仍为 unknown）：如实提示，不在前端伪造终态
         if (terminal === 'unknown') {
-          toast({
-            tone: 'info',
-            title: '后台消息仍在处理',
-            description: '已超出本次等待上限，稍后可在历史会话中查看结果。',
-          })
+          toast.info('后台消息仍在处理', { description: '已超出本次等待上限，稍后可在历史会话中查看结果。' })
         }
       }
       // 3. 终态：重新装载会话，占位气泡被落库的完整回答替换
@@ -546,11 +532,7 @@ export default function AgentWorkbenchPage() {
         }
       }
     } catch {
-      toast({
-        tone: 'error',
-        title: '恢复后台消息失败',
-        description: '请稍后在历史会话中查看结果。',
-      })
+      toast.error('恢复后台消息失败', { description: '请稍后在历史会话中查看结果。' })
     } finally {
       runIdRef.current = null
       if (turnOwnerRef.current === 'resume') {

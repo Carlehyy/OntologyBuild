@@ -22,7 +22,7 @@ import { modelApi, ontologyApi } from '@/api/ontologies'
 import { ontologyVersionApi } from '@/api/v2/ontology-versions'
 import MermaidBlock from '@/components/MermaidBlock'
 import { ConfirmModal } from '@/components/ui/Modal'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import { writeTextToClipboard } from '@/utils/clipboard'
 import Md from './Md'
 import CanvasPanel from './CanvasPanel'
@@ -217,7 +217,6 @@ const viewLoadingFallback = (
 
 export default function ExplorationPage() {
   const { containerRef, sizes, startResize } = useSplitLayout()
-  const { toast } = useToast()
   const queryClient = useQueryClient()
   // -- URL 绑定锚点（/explore?ontologyId=…&versionId=…，来自版本试跑门禁的补齐
   //    入口与页头「绑定本体」选择器） --
@@ -327,7 +326,7 @@ export default function ExplorationPage() {
         setCopiedMessageId(current => current === message.id ? null : current)
       }, 1500)
     } catch (error: unknown) {
-      toast({ tone: 'error', title: '复制失败', description: errorMessage(error, '请稍后重试。') })
+      toast.error('复制失败', { description: errorMessage(error, '请稍后重试。') })
     }
   }
 
@@ -444,9 +443,9 @@ export default function ExplorationPage() {
       }
       setDeleteSessionTarget(null)
       await refetchSessions()
-      toast({ tone: 'success', title: '会话已删除' })
+      toast.success('会话已删除')
     } catch (error: unknown) {
-      toast({ tone: 'error', title: '会话删除失败', description: errorMessage(error, '请稍后重试。') })
+      toast.error('会话删除失败', { description: errorMessage(error, '请稍后重试。') })
     } finally {
       setDeletingSession(false)
     }

@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 
 interface OntologyOption {
   id: string
@@ -38,7 +38,6 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
   service: WorldModelServiceInfo | null
   onPublished: (service: WorldModelServiceInfo) => void
 }) {
-  const { toast } = useToast()
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [versionId, setVersionId] = useState('')
@@ -109,7 +108,7 @@ export default function PublishServiceDialog({ open, onClose, project, versions,
         applicable_object_type_ids: objectTypeIds,
         preconditions: preconditions.filter(item => item.object_type_id),
       })
-      toast({ tone: 'success', title: service ? '已重新发布并上线' : '发布成功，服务已上线' })
+      toast.success(service ? '已重新发布并上线' : '发布成功，服务已上线')
       onPublished(published)
       onClose()
     } catch (err) {
