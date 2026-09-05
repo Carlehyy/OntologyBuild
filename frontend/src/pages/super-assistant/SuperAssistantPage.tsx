@@ -10,6 +10,7 @@ import {
 import { modelApi } from '@/api/ontologies'
 import {
   superAssistantApi,
+  type MulticaConfig,
   type SuperConversation,
   type SuperConversationFile,
   type SuperMcpServer,
@@ -17,6 +18,7 @@ import {
   type SuperSkill,
   type ToolStep,
 } from '@/api/superAssistant'
+import { matchMulticaCommands } from '@/lib/multicaCommands'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -72,6 +74,7 @@ export default function SuperAssistantPage() {
   const [models, setModels] = useState<ModelConfig[]>([])
   const [skills, setSkills] = useState<SuperSkill[]>([])
   const [servers, setServers] = useState<SuperMcpServer[]>([])
+  const [multicaConfig, setMulticaConfig] = useState<MulticaConfig | null>(null)
   const [input, setInput] = useState('')
   // 流式生成按会话隔离：只有「当前选中会话正在生成」时，输入区才表现为发送中
   const [streamingIds, setStreamingIds] = useState<ReadonlySet<string>>(new Set())
@@ -114,6 +117,14 @@ export default function SuperAssistantPage() {
   }, [])
   const refreshSkills = useCallback(async () => setSkills(await superAssistantApi.skills()), [])
   const refreshServers = useCallback(async () => setServers(await superAssistantApi.mcpServers()), [])
+  // multica 外部集成：commands 由后端下发；未配置/未启用时不提供任何命令提示。
+  // 加载失败不打扰工作台（配置入口在「外部集成」弹层内，会单独报错）。
+  const refreshMulticaConfig = useCallback(async () => {
+    try {
+      setMulticaConfig(await superAssistantApi.multicaConfig())
+    } catch { /* 非关键配置，静默降级为无命令提示 */ }
+  }, [])
+  useEffect(() => { void refreshMulticaConfig() }, [refreshMulticaConfig])
 
   useEffect(() => {
     let alive = true
@@ -569,6 +580,26 @@ export default function SuperAssistantPage() {
             ))}
           </div>
         )}
+        {multicaConfig?.enabled && matchMulticaCommands(input, multicaConfig.commands).length > 0 && (
+          <div data-testid="multica-command-hints" className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 px-2.5 py-2">
+            <span className="text-[10px] text-slate-400">multica 命令</span>
+            {matchMulticaCommands(input, multicaConfig.commands).map(hint => (
+              <button
+                key={hint.command}
+                type="button"
+                data-multica-command={hint.command}
+                onClick={() => {
+                  setInput(`/multica:${hint.command}${hint.write ? ' ' : ''}`)
+                  senderRef.current?.focus()
+                }}
+                className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50/70 px-2 py-1 text-[11px] text-teal-800 transition-colors hover:border-teal-400 hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-300"
+              >
+                <code className="font-mono">/multica:{hint.command}</code>
+                <span className="text-teal-600">{hint.title}{hint.write ? ' · 需确认' : ''}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="px-3 pb-1 pt-2.5">
           <Sender
             ref={senderRef}
@@ -679,6 +710,7 @@ export default function SuperAssistantPage() {
         }}
         onSetArchived={(id, archived) => void setConversationArchived(id, archived)}
         onOpenSearch={() => setSearchOpen(true)}
+        onIntegrationsSaved={() => void refreshMulticaConfig()}
       />
       <section className="flex min-w-0 flex-1 flex-col bg-white">
         <header className="relative z-10 flex h-[4.3125rem] shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 sm:px-4">

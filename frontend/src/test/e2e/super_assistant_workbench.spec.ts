@@ -6,7 +6,8 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 // 会话附件上传/移除/位于输入框上方与跨会话隔离、流式生成跨会话隔离、ReUI 模型选择器、
 // 删除确认弹窗、新建任务空会话去重、空态品牌文案与占位符、配置面板白底、
 // 重命名 blur 取消、记忆宫殿页签弹窗（文件库上传/删除/预览/在线编辑/ZIP 导入 +
-// 知识图谱过滤/节点详情/邻域检索高亮）、外部集成占位、⌘K/Ctrl+K 唤起全局搜索、输入草稿按会话缓存、
+// 知识图谱过滤/节点详情/邻域检索高亮）、外部集成（multica 配置弹窗 + /multica:
+// 命令提示的配置门控）、⌘K/Ctrl+K 唤起全局搜索、输入草稿按会话缓存、
 // 全局搜索 Command 面板检索与跳转、历史分组 shadcn Sidebar 原语、空态品牌字号。
 
 const json = (route: Route, data: unknown, status = 200) => route.fulfill({
@@ -53,6 +54,23 @@ const palaceGraphFixture = {
   truncated: false,
 }
 
+const multicaCommandsFixture = [
+  { command: 'list_agents', title: '查看智能体', description: '列出 multica 工作台的全部智能体及其运行时绑定状态。', usage: '/multica:list_agents', write: false },
+  { command: 'list_tasks', title: '查看任务清单', description: '查看当前工作台的任务清单，可按状态或负责人过滤。', usage: '/multica:list_tasks [过滤条件]', write: false },
+  { command: 'create_task', title: '下发任务', description: '在 multica 创建任务并指派给指定智能体（写操作，需用户确认）。', usage: '/multica:create_task 任务描述…', write: true },
+]
+
+const multicaUnconfiguredFixture = {
+  configured: false, enabled: false, base_url: '', workspace_id: '', token_set: false,
+  commands: [], last_test_status: null, last_test_message: null, last_tested_at: null,
+}
+
+const multicaEnabledFixture = {
+  configured: true, enabled: true, base_url: 'http://127.0.0.1:8080', workspace_id: 'ws-1',
+  token_set: true, commands: multicaCommandsFixture,
+  last_test_status: 'success', last_test_message: '连接成功', last_tested_at: at(0, 8),
+}
+
 async function seedAuth(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'e2e-token')
@@ -69,6 +87,8 @@ async function seedAuth(page: Page) {
 interface MockOptions {
   /** chat SSE 响应的延迟毫秒数：用于模拟「生成中」窗口期 */
   chatDelayMs?: number
+  /** GET /super-assistant/multica/config 的返回（默认未配置态） */
+  multicaConfig?: Record<string, unknown>
 }
 
 async function mockApis(page: Page, options: MockOptions = {}) {
@@ -80,6 +100,8 @@ async function mockApis(page: Page, options: MockOptions = {}) {
   const chatCalls: string[] = []
   const searchQueries: string[] = []
   const createdConvs: Array<Record<string, unknown>> = []
+  const multicaPuts: Array<Record<string, unknown>> = []
+  const multicaTests: Array<Record<string, unknown>> = []
   let chatDone = false
   const filesByConv: Record<string, Array<Record<string, unknown>>> = {
     'c-today': [{
@@ -316,6 +338,33 @@ async function mockApis(page: Page, options: MockOptions = {}) {
     }
     if (path === '/api/v2/super-assistant/skills') return json(route, [])
     if (path === '/api/v2/super-assistant/mcp-servers') return json(route, [])
+    // multica 外部集成：配置读写与连接测试（PUT 后按提交值回显已启用态）
+    if (path === '/api/v2/super-assistant/multica/config') {
+      if (request.method() === 'PUT') {
+        const body = request.postDataJSON() as Record<string, unknown>
+        multicaPuts.push(body)
+        return json(route, {
+          ...multicaUnconfiguredFixture,
+          ...body,
+          configured: true,
+          token_set: true,
+          commands: body.enabled === false ? [] : multicaCommandsFixture,
+        })
+      }
+      return json(route, options.multicaConfig ?? multicaUnconfiguredFixture)
+    }
+    if (path === '/api/v2/super-assistant/multica/test') {
+      multicaTests.push(request.postDataJSON() as Record<string, unknown>)
+      return json(route, {
+        ok: true,
+        message: '连接成功：admin，可见 2 个工作区',
+        account_name: 'admin',
+        workspaces: [
+          { id: 'ws-1', name: 'My Workspace', slug: 'my-workspace' },
+          { id: 'ws-2', name: 'E2E 工作区', slug: 'e2e' },
+        ],
+      })
+    }
     // 全局搜索：会话标题 + 消息内容（查询词含「需求」时命中 c-today 的标题与一条消息）
     if (path === '/api/v2/super-assistant/search/conversations') {
       const q = new URL(request.url()).searchParams.get('q') || ''
@@ -351,6 +400,8 @@ async function mockApis(page: Page, options: MockOptions = {}) {
     fileDeletes,
     chatCalls,
     searchQueries,
+    multicaPuts,
+    multicaTests,
     palaceUploads,
     palaceDeletes,
     palacePreviews,
@@ -461,6 +512,39 @@ test('定时任务为如实占位的即将上线弹窗，全局搜索打开真�
 
   await page.getByRole('button', { name: '定时任务' }).click()
   await expect(page.getByText(/即将上线/).first()).toBeVisible()
+})
+
+test('multica 命令提示：未配置/未启用时输入框不提供任何命令', async ({ page }) => {
+  await seedAuth(page)
+  await mockApis(page)
+  await page.goto('/#/super-assistant')
+
+  const composer = page.getByRole('textbox', { name: '向超级助手发送消息' })
+  await composer.fill('/multica')
+  await expect(page.getByTestId('multica-command-hints')).toHaveCount(0)
+  await composer.fill('/multica:list_agents')
+  await expect(page.getByTestId('multica-command-hints')).toHaveCount(0)
+})
+
+test('multica 命令提示：配置启用后前缀过滤、点选填充，未知片段收起', async ({ page }) => {
+  await seedAuth(page)
+  await mockApis(page, { multicaConfig: multicaEnabledFixture })
+  await page.goto('/#/super-assistant')
+
+  const composer = page.getByRole('textbox', { name: '向超级助手发送消息' })
+  await composer.fill('/multica')
+  const hints = page.getByTestId('multica-command-hints')
+  await expect(hints).toBeVisible()
+  await expect(hints.getByRole('button')).toHaveCount(3)
+  await expect(hints.getByText('需确认')).toBeVisible()
+
+  await composer.fill('/multica:list_a')
+  await expect(hints.getByRole('button')).toHaveCount(1)
+  await hints.getByRole('button', { name: /list_agents/ }).click()
+  await expect(composer).toHaveValue('/multica:list_agents')
+
+  await composer.fill('/multica:warp')
+  await expect(page.getByTestId('multica-command-hints')).toHaveCount(0)
 })
 
 test('历史分组默认限量 10 条，展开全部后显示完整列表且可收起', async ({ page }) => {
@@ -718,7 +802,7 @@ test('重命名会话：点击其它处自动取消，Enter 仍可保存', async
   expect(JSON.parse(mocks.patchBodies[0])).toMatchObject({ title: '新名称' })
 })
 
-test('记忆宫殿：三栏工作台（文件树|内容|图谱），上传删除联动，外部集成为如实占位', async ({ page }) => {
+test('记忆宫殿：三栏工作台（文件树|内容|图谱），上传删除联动，外部集成打开 multica 配置弹窗', async ({ page }) => {
   await seedAuth(page)
   const mocks = await mockApis(page)
   await page.goto('/#/super-assistant')
@@ -763,11 +847,32 @@ test('记忆宫殿：三栏工作台（文件树|内容|图谱），上传删除
   await page.keyboard.press('Escape')
   await expect(dialog).toHaveCount(0)
 
-  // 外部集成仍是如实占位的「即将上线」弹窗
+  // 外部集成已是真实功能：打开 multica 配置弹窗，走通「测试连接 → 选工作区 → 保存」
   await page.getByRole('button', { name: '外部集成' }).click()
-  await expect(page.getByRole('dialog')).toBeVisible()
-  await expect(page.getByRole('dialog').getByRole('heading', { name: '外部集成' })).toBeVisible()
-  await expect(page.getByRole('dialog').getByText(/邮箱、GitHub/)).toBeVisible()
+  const integrationsDialog = page.getByRole('dialog')
+  await expect(integrationsDialog.getByRole('heading', { name: '外部集成' })).toBeVisible()
+  await expect(integrationsDialog.getByTestId('multica-config-card')).toBeVisible()
+  await expect(integrationsDialog.getByText(/更多集成/)).toBeVisible()
+
+  await integrationsDialog.getByTestId('multica-base-url').fill('http://127.0.0.1:8080')
+  await integrationsDialog.getByTestId('multica-token').fill('mul-e2e-token')
+  await integrationsDialog.getByTestId('multica-test-button').click()
+  await expect(integrationsDialog.getByTestId('multica-test-result')).toContainText('连接成功')
+  await expect.poll(() => mocks.multicaTests.length).toBe(1)
+  expect(mocks.multicaTests[0]).toMatchObject({ base_url: 'http://127.0.0.1:8080', token: 'mul-e2e-token' })
+
+  await integrationsDialog.getByRole('combobox', { name: 'multica 工作区' }).click()
+  await page.getByRole('option', { name: 'E2E 工作区' }).click()
+  await integrationsDialog.getByRole('checkbox', { name: '启用集成' }).check()
+  await integrationsDialog.getByTestId('multica-save-button').click()
+  await expect.poll(() => mocks.multicaPuts.length).toBe(1)
+  expect(mocks.multicaPuts[0]).toMatchObject({
+    base_url: 'http://127.0.0.1:8080',
+    token: 'mul-e2e-token',
+    workspace_id: 'ws-2',
+    enabled: true,
+  })
+  await expect(integrationsDialog).toHaveCount(0)
 })
 
 test('记忆宫殿：选中即预览，md 在线编辑保存触发 PUT content，图片走原图预览', async ({ page }) => {

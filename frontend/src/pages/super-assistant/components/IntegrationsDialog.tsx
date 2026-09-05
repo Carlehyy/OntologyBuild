@@ -1,0 +1,224 @@
+import { useEffect, useState } from 'react'
+import { Loader2, PlugZap, Save, ShieldCheck } from 'lucide-react'
+
+import {
+  superAssistantApi,
+  type MulticaConfig,
+  type MulticaTestResult,
+} from '@/api/superAssistant'
+import { useToast } from '@/components/ui/Toast'
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select'
+import { errorText } from './assistantPanelUtils'
+import { DialogShell } from './AssistantConfiguration'
+
+/** 外部集成面板：multica 是首个落地的集成（配置生效后输入框提供 /multica: 命令）。
+ *  DialogShell 为常开弹层，调用方以条件挂载控制显隐（同 McpDialog 用法）。
+ */
+export default function IntegrationsDialog({ onClose, onSaved }: {
+  onClose: () => void
+  onSaved?: () => void | Promise<void>
+}) {
+  const { toast } = useToast()
+  const [config, setConfig] = useState<MulticaConfig | null>(null)
+  const [baseUrl, setBaseUrl] = useState('')
+  const [token, setToken] = useState('')
+  const [workspaceId, setWorkspaceId] = useState('')
+  const [enabled, setEnabled] = useState(false)
+  const [workspaces, setWorkspaces] = useState<MulticaTestResult['workspaces']>([])
+  const [testResult, setTestResult] = useState<MulticaTestResult | null>(null)
+  const [testing, setTesting] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    setError('')
+    setTestResult(null)
+    superAssistantApi.multicaConfig()
+      .then(data => {
+        setConfig(data)
+        setBaseUrl(data.base_url)
+        setWorkspaceId(data.workspace_id)
+        setEnabled(data.enabled)
+        setToken('')
+        setWorkspaces(data.configured && data.workspace_id
+          ? [{ id: data.workspace_id, name: data.workspace_id, slug: '' }]
+          : [])
+      })
+      .catch(err => setError(errorText(err, '配置加载失败')))
+  }, [])
+
+  const testConnection = async () => {
+    if (testing) return
+    setTesting(true)
+    setError('')
+    try {
+      const result = await superAssistantApi.testMultica({
+        base_url: baseUrl.trim() || null,
+        token: token.trim() || null,
+      })
+      setTestResult(result)
+      if (result.ok) setWorkspaces(result.workspaces)
+    } catch (err) {
+      setError(errorText(err, '连接测试失败'))
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const save = async () => {
+    if (saving) return
+    if (!baseUrl.trim() || !workspaceId) {
+      setError('请填写服务地址并选择工作区（可先执行连接测试获取工作区列表）')
+      return
+    }
+    if (enabled && !token.trim() && !config?.token_set) {
+      setError('启用集成前请先填写 API Token')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      const saved = await superAssistantApi.updateMulticaConfig({
+        base_url: baseUrl.trim(),
+        token: token.trim() || null,
+        workspace_id: workspaceId,
+        enabled,
+      })
+      setConfig(saved)
+      await onSaved?.()
+      toast({
+        tone: 'success',
+        title: 'multica 配置已保存',
+        description: saved.enabled ? '现在可以在输入框使用 /multica: 命令' : '集成已停用',
+      })
+      onClose()
+    } catch (err) {
+      setError(errorText(err, '保存失败'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <DialogShell
+      size="large"
+      title="外部集成"
+      description="把外部平台接入超级助手；配置生效后可在输入框使用对应命令。"
+      onClose={onClose}
+    >
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-5 [scrollbar-gutter:stable] sm:p-6">
+        <section data-testid="multica-config-card" className="rounded-xl border border-[var(--color-border)] p-4">
+          <div className="flex items-start gap-2">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-700"><PlugZap size={16} /></div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <p className="text-xs font-semibold text-[var(--color-text-primary)]">multica</p>
+                <span className={`h-2 w-2 rounded-full ${config?.last_test_status === 'success' ? 'bg-emerald-500' : config?.last_test_status === 'error' ? 'bg-red-500' : 'bg-slate-300'}`} />
+                {config?.enabled && <span className="rounded bg-teal-50 px-1.5 py-0.5 text-[9px] text-teal-700">已启用</span>}
+              </div>
+              <p className="mt-1 text-[11px] leading-5 text-[var(--color-text-tertiary)]">
+                多智能体协作工作台：查看智能体、下发任务、查看任务清单。配置后输入 <code className="font-mono">/multica:</code> 使用命令。
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-3 space-y-3">
+            <label className="block text-xs text-[var(--color-text-secondary)]">服务地址 <span className="text-red-500">*</span>
+              <input
+                data-testid="multica-base-url"
+                value={baseUrl}
+                onChange={event => setBaseUrl(event.target.value)}
+                placeholder="http://127.0.0.1:8080"
+                className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+              />
+              <span className="mt-1 block text-[10px] leading-4 text-[var(--color-text-tertiary)]">
+                自托管实例的 API 地址（默认端口 8080）；生产环境按 SSRF 策略拒绝内网地址。
+              </span>
+            </label>
+            <label className="block text-xs text-[var(--color-text-secondary)]">API Token
+              <input
+                data-testid="multica-token"
+                type="password"
+                value={token}
+                onChange={event => setToken(event.target.value)}
+                placeholder={config?.token_set ? '已保存（留空保留）' : 'mul_…（在 multica 网页 Settings → API Token 创建）'}
+                className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 font-mono text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+              />
+              <span className="mt-1 block text-[10px] leading-4 text-[var(--color-text-tertiary)]">
+                加密存储、永不回显；只用 PAT，不保存登录验证码。
+              </span>
+            </label>
+            <label className="block text-xs text-[var(--color-text-secondary)]">工作区 <span className="text-red-500">*</span>
+              <Select value={workspaceId} onValueChange={setWorkspaceId}>
+                <SelectTrigger aria-label="multica 工作区" className="mt-1.5 min-h-11 text-sm">
+                  <SelectValue placeholder="连接测试后选择" />
+                </SelectTrigger>
+                <SelectContent>
+                  {workspaces.map(workspace => (
+                    <SelectItem key={workspace.id} value={workspace.id}>
+                      {workspace.name || workspace.slug || workspace.id}
+                    </SelectItem>
+                  ))}
+                  {!workspaces.some(workspace => workspace.id === workspaceId) && workspaceId && (
+                    <SelectItem value={workspaceId}>{workspaceId}</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            </label>
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                data-testid="multica-test-button"
+                onClick={() => void testConnection()}
+                disabled={testing || !baseUrl.trim()}
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-white px-3 text-xs text-teal-700 transition-colors hover:bg-teal-50 disabled:opacity-50"
+              >
+                {testing ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />} 测试连接
+              </button>
+              <label className="flex min-h-10 items-center gap-2 rounded-lg border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)]">
+                <input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} className="h-4 w-4 accent-teal-700" />
+                启用集成
+              </label>
+            </div>
+            {testResult && (
+              <p role="status" data-testid="multica-test-result" className={`rounded-lg px-3 py-2 text-[11px] leading-5 ${testResult.ok ? 'bg-teal-50 text-teal-800' : 'bg-red-50 text-red-700'}`}>
+                {testResult.message}
+              </p>
+            )}
+            {config?.enabled && config.commands.length > 0 && (
+              <div className="rounded-lg bg-[var(--color-bg-base)] p-3">
+                <p className="text-[10px] font-medium text-[var(--color-text-secondary)]">可用命令</p>
+                <ul className="mt-1 space-y-1">
+                  {config.commands.map(command => (
+                    <li key={command.command} className="flex items-baseline gap-2 text-[11px] leading-5">
+                      <code className="font-mono text-teal-700">{command.usage.split(' ', 1)[0]}</code>
+                      <span className="text-[var(--color-text-secondary)]">{command.title}{command.write ? ' · 执行前需确认' : ''}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <p className="text-center text-[11px] leading-5 text-[var(--color-text-tertiary)]">
+          更多集成（邮箱、GitHub 等）将陆续开放。
+        </p>
+        {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
+      </div>
+      <footer className="flex shrink-0 justify-center gap-3 border-t border-[var(--color-border)] px-5 py-4">
+        <button onClick={onClose} className="min-h-10 min-w-24 rounded-lg px-4 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">取消</button>
+        <button
+          onClick={() => void save()}
+          data-testid="multica-save-button"
+          disabled={saving || !baseUrl.trim()}
+          className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50"
+        >
+          {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />} 保存
+        </button>
+      </footer>
+    </DialogShell>
+  )
+}

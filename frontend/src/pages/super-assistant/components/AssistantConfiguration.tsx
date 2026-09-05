@@ -31,7 +31,8 @@ export { errorText }
 
 // 薄封装 ui/dialog：统一配置域弹层的头部与尺寸语言；
 // 遮罩、Esc 关闭与焦点管理交给 Radix，不再自绘 fixed 弹层和焦点陷阱。
-function DialogShell({ title, description, size = 'default', onClose, children }: {
+// （外部集成弹层等同语言复用，故导出）
+export function DialogShell({ title, description, size = 'default', onClose, children }: {
   title: string
   description?: string
   size?: 'default' | 'large' | 'wide'
