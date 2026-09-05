@@ -207,6 +207,9 @@ export default function FormalInstancesView({
       'instance-browser-page', ontologyId, selection?.kind, selection?.id,
       page, pageSize, keyword, serializedFilters, sourceFilter,
     ],
+    // 交互式过滤/翻页面：切换筛选组合必须立即取最新数据，
+    // 显式退回全局 30s staleTime 之外（改动前的默认语义）。
+    staleTime: 0,
     enabled: Boolean(selection),
     placeholderData: (previousData, previousQuery) => {
       const previousKey = previousQuery?.queryKey

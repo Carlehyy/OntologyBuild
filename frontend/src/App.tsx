@@ -48,7 +48,15 @@ import { AccessDeniedPage, NoAssignedPagesPage } from '@/pages/errors/AccessDeni
 import { canAccessPath, defaultLandingPath, firstAccessiblePath } from '@/config/navigation'
 
 const qc = new QueryClient({
-  defaultOptions: { queries: { retry: 1 } }
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      // 全局默认 30s 内复用查询缓存，页面往返/挂载不再重复请求后端；
+      // 轮询（refetchInterval）与写后失效（invalidateQueries）不受影响，
+      // 个别页面已有的更长 staleTime 覆盖保持不变。
+      staleTime: 30_000,
+    },
+  },
 })
 
 // 组件预览路由懒加载：motion（动效依赖）随之隔离出主包
