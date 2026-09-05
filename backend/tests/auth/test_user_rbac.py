@@ -310,3 +310,29 @@ def test_last_admin_cannot_remove_own_access(client, admin_user, auth_headers):
         headers=auth_headers,
     )
     assert response.status_code == 400
+
+
+def test_non_admin_cannot_manage_users(client, admin_user, auth_headers):
+    _create_editor(client, auth_headers)
+    editor_headers = _login(client, "team_editor", "editor123")
+
+    assert client.post(
+        "/api/v1/users",
+        json={
+            "username": "extra_user",
+            "email": "extra_user@example.com",
+            "password": "extra123",
+            "role": "viewer",
+        },
+        headers=editor_headers,
+    ).status_code == 403
+    assert client.get("/api/v1/users", headers=editor_headers).status_code == 403
+    assert client.put(
+        f"/api/v1/users/{admin_user.id}",
+        json={"role": "viewer"},
+        headers=editor_headers,
+    ).status_code == 403
+    assert client.delete(
+        f"/api/v1/users/{admin_user.id}",
+        headers=editor_headers,
+    ).status_code == 403
