@@ -243,6 +243,8 @@ class MulticaConfigOut(BaseModel):
     enabled: bool
     base_url: str
     workspace_id: str
+    # 工作区显示名（保存/测试连接时回填）：配置弹窗下拉兜底显示名称而非裸 UUID
+    workspace_name: str = ""
     token_set: bool
     # 命令目录由后端统一下发：未配置/未启用时为空，前端据此决定
     # 输入框是否展示 /multica: 命令提示（未配置不可用）
@@ -257,6 +259,8 @@ class MulticaConfigUpdate(BaseModel):
     # token 留空/缺省表示保留已保存凭据（不回显、不覆盖）
     token: str | None = Field(default=None, max_length=500)
     workspace_id: str = Field(min_length=1, max_length=100)
+    # 工作区显示名：前端从测试连接返回的工作区列表带回（可选，纯展示用途）
+    workspace_name: str | None = Field(default=None, max_length=200)
     enabled: bool = True
 
     @field_validator("base_url", "workspace_id", mode="before")
@@ -268,6 +272,11 @@ class MulticaConfigUpdate(BaseModel):
     @classmethod
     def strip_token(cls, value: str | None) -> str | None:
         return None if value is None else str(value).strip()
+
+    @field_validator("workspace_name", mode="before")
+    @classmethod
+    def strip_workspace_name(cls, value: str | None) -> str | None:
+        return None if value is None else str(value).strip() or None
 
 
 class MulticaTestRequest(BaseModel):

@@ -297,6 +297,8 @@ export interface MulticaConfig {
   enabled: boolean
   base_url: string
   workspace_id: string
+  /** 工作区显示名（保存/测试连接时回填）：下拉兜底显示名称而非裸 UUID */
+  workspace_name: string
   token_set: boolean
   commands: MulticaCommand[]
   last_test_status: 'success' | 'error' | null
@@ -519,7 +521,7 @@ export const superAssistantApi = {
     apiClientV2.put<AssistantWidgetConfig>('/super-assistant/widget-config', { hidden_menu_keys: hiddenMenuKeys }),
 
   multicaConfig: () => apiClientV2.get<MulticaConfig>('/super-assistant/multica/config'),
-  updateMulticaConfig: (body: { base_url: string; token?: string | null; workspace_id: string; enabled: boolean }) =>
+  updateMulticaConfig: (body: { base_url: string; token?: string | null; workspace_id: string; workspace_name?: string | null; enabled: boolean }) =>
     apiClientV2.put<MulticaConfig>('/super-assistant/multica/config', body),
   testMultica: (body: { base_url?: string | null; token?: string | null } = {}) =>
     apiClientV2.post<MulticaTestResult>('/super-assistant/multica/test', body),

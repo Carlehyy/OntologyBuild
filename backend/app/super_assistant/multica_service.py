@@ -181,6 +181,9 @@ def save_config(db: Session, owner_id: str, body: MulticaConfigUpdate) -> SuperA
         db.add(config)
     config.base_url = base_url
     config.workspace_id = body.workspace_id.strip()
+    # 显示名由前端从测试连接的工作区列表带回；缺省保留已存名称
+    # （新建行属性 flush 前为 None，需兜底空串避免非空列写入 None）
+    config.workspace_name = (body.workspace_name or "").strip() or (config.workspace_name or "")
     if body.token:
         config.token_encrypted = encrypt(body.token)
     if body.enabled and not config.token_encrypted:
@@ -212,6 +215,7 @@ def config_view(config: SuperAssistantMulticaConfig | None) -> MulticaConfigOut:
         enabled=enabled,
         base_url=config.base_url,
         workspace_id=config.workspace_id,
+        workspace_name=config.workspace_name,
         token_set=bool(config.token_encrypted),
         commands=(
             [MulticaCommandOut(
@@ -269,6 +273,18 @@ def test_connection(
         return MulticaTestOut(ok=False, message=str(exc))
     account_name = str(me.get("name") or me.get("email") or "")
     message = f"连接成功：{account_name}，可见 {len(workspaces)} 个工作区"
+    # 顺带回填当前工作区的显示名（工作区改名后经测试连接自动刷新）
+    if config is not None and config.workspace_id:
+        matched = next(
+            (
+                str(item.get("name") or "")
+                for item in workspaces
+                if str(item.get("id") or "") == config.workspace_id
+            ),
+            "",
+        )
+        if matched and matched != config.workspace_name:
+            config.workspace_name = matched
     _record(True, message)
     return MulticaTestOut(
         ok=True,

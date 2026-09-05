@@ -42,6 +42,7 @@ def _enabled_config(db, **overrides):
         db.add(config)
     config.base_url = overrides.get("base_url", "http://127.0.0.1:8080")
     config.workspace_id = overrides.get("workspace_id", "ws-1")
+    config.workspace_name = overrides.get("workspace_name", "My Workspace")
     config.token_encrypted = overrides.get(
         "token_encrypted", multica_service.encrypt("mul-token"),
     )
@@ -90,10 +91,11 @@ def test_guidance_text_lists_available_commands():
 def test_save_config_encrypts_token_and_normalizes_base_url(session):
     body = MulticaConfigUpdate(
         base_url="http://127.0.0.1:8080/", token="mul-secret",
-        workspace_id="ws-1", enabled=True,
+        workspace_id="ws-1", workspace_name="My Workspace", enabled=True,
     )
     config = multica_service.save_config(session, "user-1", body)
     assert config.base_url == "http://127.0.0.1:8080"
+    assert config.workspace_name == "My Workspace"
     assert config.token_encrypted and config.token_encrypted != "mul-secret"
     assert multica_service.decrypt_token(config) == "mul-secret"
 
@@ -107,6 +109,8 @@ def test_save_config_keeps_existing_token_when_blank(session):
     config = multica_service.save_config(session, "user-1", body)
     assert multica_service.decrypt_token(config) == "mul-token"
     assert config.workspace_id == "ws-2"
+    # workspace_name 缺省时保留已存名称（不被置空）
+    assert config.workspace_name == "My Workspace"
 
 
 def test_save_config_rejects_enabling_without_token(session):
@@ -139,6 +143,7 @@ def test_config_view_gates_commands_by_availability(session):
     enabled = _enabled_config(session)
     view = multica_service.config_view(enabled)
     assert view.enabled is True and view.token_set is True
+    assert view.workspace_name == "My Workspace"
     assert [item.command for item in view.commands] == [
         "list_agents", "list_tasks", "create_task",
     ]
@@ -176,6 +181,8 @@ def test_connection_success_records_status_and_workspaces(session, monkeypatch):
     assert result.workspaces[0].id == "ws-1"
     config = multica_service.get_config(session, "user-1")
     assert config.last_test_status == "success"
+    # 连接测试顺带回填当前工作区的显示名（下拉不再显示裸 UUID）
+    assert config.workspace_name == "My Workspace"
 
 
 def test_connection_failure_returns_ok_false(session, monkeypatch):
