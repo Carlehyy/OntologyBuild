@@ -12,11 +12,14 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.deps import get_db, get_current_user
 from app.ontologies.agent_runtime import schemas as S
 from app.ontologies.agent_runtime.boundary import ToolError
+from app.ontologies.network import cache as network_cache
 from app.ontologies.network import service
 
 
@@ -34,7 +37,20 @@ def get_overview(
     _=Depends(get_current_user),
 ):
     """全部本体的发布口径与规模统计，供页面数据范围选择器使用。"""
-    return _ok(service.list_overview(db, fresh=fresh))
+    # 全局聚合读：短 TTL 响应缓存 + 写路径 bump 版本换键（fail-open）；
+    # fresh 手动刷新完全绕过，直查语义与现状一致。
+    if fresh:
+        return _ok(service.list_overview(db, fresh=True))
+
+    def build():
+        # jsonable_encoder 归一 datetime 等，保证缓存命中与直查逐字节一致。
+        return jsonable_encoder(_ok(service.list_overview(db, fresh=False)))
+
+    return network_cache.cached_call(
+        network_cache.overview_cache_key(),
+        settings.ontology_network_cache_ttl_seconds,
+        build,
+    )
 
 
 @router.get("/graph")
@@ -49,19 +65,40 @@ def get_network_graph(
     _=Depends(get_current_user),
 ):
     """跨本体全局图：各本体子图叠加 + 可选同名类型虚线桥接。"""
+    # 跨本体聚合读：参数维度进缓存键，短 TTL + 写路径 bump 失效（fail-open）；
+    # fresh 手动刷新完全绕过。
     try:
-        data = service.build_network_graph(
-            db,
-            ontology_ids=ontology_ids.split(","),
-            level=level,
-            query=query,
-            limit_per_type=limit_per_type,
-            bridge_same_name=bridge_same_name,
-            fresh=fresh,
+        if fresh:
+            return _ok(service.build_network_graph(
+                db,
+                ontology_ids=ontology_ids.split(","),
+                level=level,
+                query=query,
+                limit_per_type=limit_per_type,
+                bridge_same_name=bridge_same_name,
+                fresh=True,
+            ))
+
+        def build():
+            return jsonable_encoder(_ok(service.build_network_graph(
+                db,
+                ontology_ids=ontology_ids.split(","),
+                level=level,
+                query=query,
+                limit_per_type=limit_per_type,
+                bridge_same_name=bridge_same_name,
+                fresh=False,
+            )))
+
+        return network_cache.cached_call(
+            network_cache.graph_cache_key(
+                ontology_ids, level, query, limit_per_type, bridge_same_name
+            ),
+            settings.ontology_network_cache_ttl_seconds,
+            build,
         )
     except ToolError as error:
         raise HTTPException(422, str(error)) from error
-    return _ok(data)
 
 
 @router.get("/{ontology_id}/instances/{instance_id}")

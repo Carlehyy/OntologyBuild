@@ -13,6 +13,9 @@ os.environ["PIPELINE_TASK_CACHE_ENABLED"] = "false"
 # 本体详情页缓存同理：默认关闭，缓存语义由 test_ontology_detail_cache.py
 # 用假客户端按需开启验证。
 os.environ["ONTOLOGY_DETAIL_CACHE_ENABLED"] = "false"
+# 本体网络缓存同理：默认关闭，缓存语义由 test_network_cache.py
+# 用假客户端按需开启验证。
+os.environ["ONTOLOGY_NETWORK_CACHE_ENABLED"] = "false"
 # 版本事件 drain 默认内联执行（历史语义）；异步派发路径由
 # test_version_automation_events.py 用 patch 单独验证。
 os.environ["DATASET_EVENT_DISPATCH_MODE"] = "sync"

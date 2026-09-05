@@ -14,6 +14,7 @@ from app.ontologies.versions.snapshot_contract import (
 from app.ontologies.versions.release_service import resolve_current_release
 from app.ontologies.access import require_ontology_access
 from app.ontologies import cache as ontology_cache
+from app.ontologies.network import cache as network_cache
 from app.ontologies.export.schemas import OntologyStructurePackage
 from app.ontologies.export.service import import_structure_package
 from app.ontologies.projection_state import mark_failed, mark_projecting
@@ -168,6 +169,7 @@ def create_ontology(body: OntologyCreate, db: Session = Depends(get_db), current
         description="系统创建的完整空结构基线",
     )
     db.commit(); db.refresh(project)
+    network_cache.invalidate_network()
     return {"data": _project_payload(project, OntologyOut, root)}
 
 
@@ -180,7 +182,9 @@ def import_ontology_structure(
     """Create a published v0 ontology from a local structure JSON package."""
     if getattr(current_user, "role", "") not in ("admin", "editor"):
         raise HTTPException(403, "Viewer role is read-only")
-    return {"data": import_structure_package(db, body, current_user=current_user)}
+    result = import_structure_package(db, body, current_user=current_user)
+    network_cache.invalidate_network()
+    return {"data": result}
 
 @router.get("/{ontology_id}")
 def get_ontology(ontology_id: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
@@ -249,6 +253,7 @@ def update_ontology(ontology_id: str, body: OntologyUpdate, db: Session = Depend
         setattr(p, k, v)
     db.commit(); db.refresh(p)
     ontology_cache.invalidate_detail()
+    network_cache.invalidate_network()
     release = _resolved_release_map(db, [p]).get(p.current_release_id)
     return {"data": _project_payload(p, OntologyOut, release)}
 
@@ -309,6 +314,7 @@ def delete_ontology(ontology_id: str, db: Session = Depends(get_db), current_use
                 ontology_cache.invalidate_overview()
                 ontology_cache.invalidate_instance_counts()
                 ontology_cache.invalidate_pending()
+                network_cache.invalidate_network()
                 return None
             mark_failed(
                 db,
@@ -328,3 +334,4 @@ def delete_ontology(ontology_id: str, db: Session = Depends(get_db), current_use
             ontology_cache.invalidate_overview()
             ontology_cache.invalidate_instance_counts()
             ontology_cache.invalidate_pending()
+            network_cache.invalidate_network()

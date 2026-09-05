@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     ontology_detail_cache_ttl_seconds: int = Field(default=60, ge=1, le=300)
     ontology_overview_cache_ttl_seconds: int = Field(default=20, ge=1, le=60)
     ontology_pending_cache_ttl_seconds: int = Field(default=15, ge=1, le=60)
+    # 本体网络读接口缓存（fail-open 加速层，可整体关闭；键落 db 1）。
+    # /overview 与 /graph 为跨本体全局聚合：项目身份与发布指针变更走
+    # 版本键失效，后台灌数的实例计数漂移由短 TTL 兜底；fresh 完全绕过。
+    ontology_network_cache_enabled: bool = True
+    ontology_network_cache_ttl_seconds: int = Field(default=60, ge=1, le=300)
     # 数据资产湖读缓存（fail-open 加速层，可整体关闭；键落 db 1）。
     # 版本级数据键携带 version id 自然换键；总览用短 TTL + 写路径 bump 失效。
     dataset_cache_enabled: bool = True
