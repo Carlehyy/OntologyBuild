@@ -344,8 +344,9 @@ def test_navigation_allows_success_and_download_without_response():
     class Response:
         status = 200
 
-    _validate_navigation_response(Response(), "https://example.com/all")
-    _validate_navigation_response(None, "https://example.com/download")
+    # 校验器只以异常表达拒绝；放行路径显式断言无返回值
+    assert _validate_navigation_response(Response(), "https://example.com/all") is None
+    assert _validate_navigation_response(None, "https://example.com/download") is None
 
 
 @pytest.mark.parametrize(

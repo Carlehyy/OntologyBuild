@@ -416,7 +416,3 @@ class Neo4jService:
             record = result.single()
             return record["deleted"] if record else 0
 
-
-def get_neo4j_service() -> Neo4jService:
-    """单例工厂"""
-    return Neo4jService()
