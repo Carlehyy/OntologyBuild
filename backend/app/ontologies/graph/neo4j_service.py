@@ -415,4 +415,3 @@ class Neo4jService:
             result = session.run(query, ontology_id=ontology_id)
             record = result.single()
             return record["deleted"] if record else 0
-
