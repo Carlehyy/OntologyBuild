@@ -69,7 +69,7 @@ function ConversationRow({ item, current, archived, onSelect, onDelete, onSetArc
     <div
       data-workbench-conversation={item.id}
       className={`group flex items-center gap-1 rounded-lg px-2 py-1.5 transition-colors ${current
-        ? 'bg-teal-50/70'
+        ? 'bg-brand-soft/70'
         : 'hover:bg-[var(--color-bg-hover)]'}`}
     >
       <button
@@ -79,7 +79,7 @@ function ConversationRow({ item, current, archived, onSelect, onDelete, onSetArc
         className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none"
       >
         <span className={`block min-w-0 flex-1 truncate text-sm ${current
-          ? 'font-medium text-teal-900'
+          ? 'font-medium text-brand-ink'
           : 'text-[var(--color-text-primary)]'}`}
         >
           {title}
@@ -165,7 +165,7 @@ export default function WorkbenchSidebar({
         data-workbench-group-toggle={key}
         aria-expanded={expanded}
         onClick={() => toggleGroupExpanded(key)}
-        className="mt-0.5 flex w-full items-center justify-center rounded-lg px-2 py-1 text-[10px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
+        className="mt-0.5 flex w-full items-center justify-center rounded-lg px-2 py-1 text-[10px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
       >
         {expanded ? '收起' : `展开全部（还有 ${hiddenCount} 条）`}
       </button>

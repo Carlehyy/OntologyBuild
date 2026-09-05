@@ -1163,7 +1163,7 @@ test('全局搜索：检索会话标题与消息内容，命中消息可跳转�
   // 选中消息命中：面板关闭并切到该会话
   await page.getByTestId('global-search-message-hit').click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  await expect(page.locator('[data-workbench-conversation="c-today"]')).toHaveClass(/bg-teal-50/)
+  await expect(page.locator('[data-workbench-conversation="c-today"]')).toHaveClass(/bg-brand-soft/)
 
   // 无结果文案
   await page.keyboard.press('Control+k')
@@ -1350,3 +1350,4 @@ test('记忆宫殿：拖拽文件至目录归位与画布下统计条', async ({
   await expect.poll(() => mocks.palaceMoves.length).toBe(2)
   expect(mocks.palaceMoves[1]).toBe('pf-1:设计图->')
 })
+

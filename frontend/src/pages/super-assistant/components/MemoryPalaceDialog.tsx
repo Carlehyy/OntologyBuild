@@ -38,7 +38,7 @@ const STATUS_META: Record<string, { label: string; className: string }> = {
   draft: { label: '草稿', className: 'bg-slate-100 text-slate-500' },
   pending: { label: '待抽取', className: 'bg-slate-100 text-slate-500' },
   building: { label: '抽取中', className: 'bg-amber-50 text-amber-600' },
-  built: { label: '已建图', className: 'bg-teal-50 text-teal-700' },
+  built: { label: '已建图', className: 'bg-brand-soft text-brand-ink' },
   failed: { label: '失败', className: 'bg-red-50 text-red-600' },
 }
 
@@ -558,13 +558,13 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
           aria-label={maximized ? '退出全屏' : '全屏'}
           title={maximized ? '退出全屏' : '全屏'}
           onClick={() => setMaximized(value => !value)}
-          className="absolute right-12 top-4 flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+          className="absolute right-12 top-4 flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
         </button>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Brain size={16} className="text-teal-700" /> 记忆宫殿
+            <Brain size={16} className="text-brand-ink" /> 记忆宫殿
             {building && (
               <span className="ml-2 flex items-center gap-1 text-xs font-normal text-amber-600">
                 <Loader2 size={12} className="animate-spin" /> 图谱构建中…
@@ -695,7 +695,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
               <div
                 role="status"
                 data-testid="palace-import-result"
-                className="flex flex-col gap-1 border-b border-[var(--color-border)] bg-teal-50 px-3 py-2 text-xs text-teal-800"
+                className="flex flex-col gap-1 border-b border-[var(--color-border)] bg-brand-soft px-3 py-2 text-xs text-brand-ink"
               >
                 <div className="flex items-center gap-2">
                   <CheckCircle2 size={13} className="shrink-0" />
@@ -705,7 +705,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
                       type="button"
                       onClick={() => setShowSkipped(value => !value)}
                       aria-expanded={showSkipped}
-                      className="rounded-md px-1.5 py-0.5 text-[11px] text-teal-700 transition-colors hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                      className="rounded-md px-1.5 py-0.5 text-[11px] text-brand-ink transition-colors hover:bg-brand-mist focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       {showSkipped ? '收起跳过原因' : '查看跳过原因'}
                     </button>
@@ -714,13 +714,13 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
                     type="button"
                     onClick={() => setImportResult(null)}
                     aria-label="关闭导入结果"
-                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-teal-600 transition-colors hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-brand-ink transition-colors hover:bg-brand-mist focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <X size={12} />
                   </button>
                 </div>
                 {showSkipped && importResult.skipped.length > 0 && (
-                  <ul className="ml-5 list-disc space-y-0.5 text-[11px] text-teal-700">
+                  <ul className="ml-5 list-disc space-y-0.5 text-[11px] text-brand-ink">
                     {importResult.skipped.map(item => (
                       <li key={item.filename}>{item.filename}：{item.reason}</li>
                     ))}

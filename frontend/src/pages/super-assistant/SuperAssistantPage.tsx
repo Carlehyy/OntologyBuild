@@ -549,8 +549,8 @@ export default function SuperAssistantPage() {
       />
       <div
         data-testid="super-assistant-composer"
-        className={`relative overflow-visible rounded-xl border border-teal-400 bg-white ring-1 ring-teal-100 transition-colors focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-200/80 ${prominent
-          ? 'shadow-[0_18px_50px_rgba(15,118,110,0.12)]'
+        className={`relative overflow-visible rounded-xl border border-brand bg-white ring-1 ring-brand-mist transition-colors focus-within:border-brand-deep focus-within:ring-2 focus-within:ring-ring/30 ${prominent
+          ? 'shadow-[0_18px_50px_rgba(5,150,105,0.12)]'
           : 'shadow-[0_8px_28px_rgba(15,23,42,0.08)]'}`}
       >
         {conversationFiles.length > 0 && (
@@ -591,10 +591,10 @@ export default function SuperAssistantPage() {
                     setInput(`${slashCommandToken(hint)}${hint.write ? ' ' : ''}`)
                     senderRef.current?.focus()
                   }}
-                  className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50/70 px-2 py-1 text-[11px] text-teal-800 transition-colors hover:border-teal-400 hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-300"
+                  className="inline-flex items-center gap-1 rounded-lg border border-brand-line bg-brand-soft/70 px-2 py-1 text-[11px] text-brand-ink transition-colors hover:border-brand hover:bg-brand-mist focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <code className="font-mono">{slashCommandToken(hint)}</code>
-                  <span className="text-teal-600">{hint.title}{hint.write ? ' · 需确认' : ''}</span>
+                  <span className="text-brand-ink">{hint.title}{hint.write ? ' · 需确认' : ''}</span>
                 </button>
               ))}
             </div>
@@ -632,7 +632,7 @@ export default function SuperAssistantPage() {
             disabled={uploading}
             title="上传会话附件（仅本会话可见）"
             aria-label="上传会话附件"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-50 hover:text-teal-600 active:scale-[0.98] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-50 hover:text-brand-ink active:scale-[0.98] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {uploading ? <Loader2 size={16} className="animate-spin" /> : <Paperclip size={16} />}
           </button>
@@ -644,7 +644,7 @@ export default function SuperAssistantPage() {
               </button>
             ) : (
               <button type="button" onClick={() => void send()} disabled={!canSend} aria-label="发送消息" title="发送消息"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white transition-all hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1">
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand text-white transition-all hover:bg-brand-deep active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1">
                 <Send size={14} />
               </button>
             )}
@@ -655,8 +655,8 @@ export default function SuperAssistantPage() {
                   disabled={myMessages.length === 0}
                   title="我发送的消息 · 快速跳转"
                   aria-label="查看我发送的消息"
-                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showMessageHistory
-                    ? 'border-teal-300 bg-teal-50 text-teal-700'
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${showMessageHistory
+                    ? 'border-brand bg-brand-soft text-brand-ink'
                     : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
                 >
                   <List size={15} />
@@ -742,11 +742,11 @@ export default function SuperAssistantPage() {
                     if (event.key === 'Escape') setEditingTitle(false)
                   }}
                   aria-label="编辑会话名称"
-                  className="h-9 min-w-0 flex-1 rounded-lg border border-teal-300 bg-[var(--color-bg-base)] px-2.5 text-sm font-semibold text-[var(--color-text-primary)] outline-none ring-2 ring-teal-100"
+                  className="h-9 min-w-0 flex-1 rounded-lg border border-brand bg-[var(--color-bg-base)] px-2.5 text-sm font-semibold text-[var(--color-text-primary)] outline-none ring-2 ring-brand-mist"
                 />
                 <button type="submit" disabled={savingTitle} aria-label="保存会话名称"
                   onMouseDown={event => event.preventDefault()}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-700 text-white transition-colors hover:bg-teal-800 disabled:opacity-50">
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand text-white transition-colors hover:bg-brand-deep disabled:opacity-50">
                   {savingTitle ? <Loader2 size={14} className="animate-spin" /> : <Check size={15} />}
                 </button>
                 <button type="button" onClick={() => setEditingTitle(false)} aria-label="取消编辑会话名称"
@@ -766,7 +766,7 @@ export default function SuperAssistantPage() {
                   setEditingTitle(true)
                 }}
                 title={selectedConversation ? '点击编辑会话名称' : undefined}
-                className="group flex max-w-full items-center gap-1.5 rounded-md py-1 text-left text-sm font-semibold text-[var(--color-text-primary)] outline-none transition-colors hover:text-teal-800 focus-visible:ring-2 focus-visible:ring-teal-400 disabled:cursor-default disabled:hover:text-[var(--color-text-primary)]"
+                className="group flex max-w-full items-center gap-1.5 rounded-md py-1 text-left text-sm font-semibold text-[var(--color-text-primary)] outline-none transition-colors hover:text-brand-ink focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:hover:text-[var(--color-text-primary)]"
               >
                 <span className="truncate">{selectedConversation?.title || '新的超级助手会话'}</span>
                 {selectedConversation && <Pencil size={12} className="shrink-0 opacity-0 transition-opacity group-hover:opacity-70 group-focus-visible:opacity-70" />}
@@ -786,7 +786,7 @@ export default function SuperAssistantPage() {
             {/* 与左侧「上下文」框同一语言：1px 绿色细边框、浅绿底、无阴影 */}
             <SelectTrigger
               aria-label="会话模型"
-              className="h-9 w-48 border-teal-200 bg-teal-50/80 text-xs shadow-none hover:border-teal-300 focus:border-teal-400 sm:w-64 xl:w-80"
+              className="h-9 w-48 border-brand-line bg-brand-soft/80 text-xs shadow-none hover:border-brand focus:border-brand sm:w-64 xl:w-80"
             >
               <SelectValue placeholder={models.length === 0 ? '无可用模型' : '选择模型'} />
             </SelectTrigger>
@@ -798,7 +798,7 @@ export default function SuperAssistantPage() {
               ))}
               {hasMenuAccess(user, 'models') && (
                 <SelectItem value={MANAGE_MODELS_VALUE} className="mt-1 border-t border-border pt-1.5 text-xs">
-                  <span className="flex items-center gap-1.5"><Cpu size={13} className="shrink-0 text-teal-700" /> 管理模型</span>
+                  <span className="flex items-center gap-1.5"><Cpu size={13} className="shrink-0 text-brand-ink" /> 管理模型</span>
                 </SelectItem>
               )}
             </SelectContent>
@@ -809,9 +809,9 @@ export default function SuperAssistantPage() {
             aria-label={configOpen ? '关闭助手配置' : '打开助手配置'}
             aria-expanded={configOpen}
             title="助手配置"
-            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${configOpen
-              ? 'border-teal-300 bg-teal-50 text-teal-700'
-              : 'border-slate-200 bg-white text-slate-500 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700'}`}
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${configOpen
+              ? 'border-brand bg-brand-soft text-brand-ink'
+              : 'border-slate-200 bg-white text-slate-500 hover:border-brand hover:bg-brand-soft hover:text-brand-ink'}`}
           >
             <Settings2 size={15} />
           </button>
@@ -825,7 +825,7 @@ export default function SuperAssistantPage() {
         >
           <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
             {loading ? (
-              <div className="flex flex-1 items-center justify-center"><Loader2 size={22} className="animate-spin text-teal-600" /></div>
+              <div className="flex flex-1 items-center justify-center"><Loader2 size={22} className="animate-spin text-brand-ink" /></div>
             ) : !hasMessages ? (
               <div className="flex flex-1 items-center justify-center px-4 sm:px-8">
                 <div className="relative w-full max-w-3xl -translate-y-14 sm:-translate-y-20">
