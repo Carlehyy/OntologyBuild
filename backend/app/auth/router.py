@@ -37,7 +37,8 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     user = authenticate_user(db, body.username, body.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    token = create_access_token({"sub": user.id, "role": user.role})
+    token = create_access_token(
+        {"sub": user.id, "role": user.role, "ver": user.token_version})
     return {"data": {"access_token": token, "token_type": "bearer"}, "message": "ok"}
 
 @router.post("/register", status_code=201)
@@ -78,6 +79,8 @@ def change_password(body: PasswordChangeRequest, db: Session = Depends(get_db), 
     if not verify_password(body.current_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="Current password incorrect")
     current_user.password_hash = hash_password(body.new_password)
+    # 改密即吊销全部已签发 token（token_version 会话吊销）
+    current_user.token_version = (current_user.token_version or 0) + 1
     db.commit()
     return {"message": "Password updated"}
 
