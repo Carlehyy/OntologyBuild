@@ -436,11 +436,15 @@ def production_config_errors(current: Settings) -> list[str]:
         _insecure.append("DATABASE_URL must use canonical postgresql://")
     if current.neo4j_password == "ontoprompt123":
         _insecure.append("NEO4J_PASSWORD")
-    # Python kernel gateway 以共享 token 鉴权，空值或 compose 兜底默认值都意味着
-    # 内网任意调用方可执行任意 Python（内核网关服务在 compose 中始终启动）。
+    # Python kernel gateway 以共享 token 鉴权，空值或公开默认值（compose 兜底
+    # 与 .env.example 示例）都意味着内网任意调用方可执行任意 Python；部署脚本
+    # 会对缺失/默认值自动生成强随机值，此处兜住绕过脚本裸跑 compose 的场景。
     if (
         not str(current.python_kernel_gateway_auth_token or "").strip()
-        or current.python_kernel_gateway_auth_token == "dev-python-gateway-token"
+        or current.python_kernel_gateway_auth_token in {
+            "dev-python-gateway-token",
+            "change-me-python-gateway-token",
+        }
     ):
         _insecure.append("PYTHON_KERNEL_GATEWAY_AUTH_TOKEN")
     # compose 对 REDIS_URL 也有弱兜底；生产要求显式带密码（deploy 脚本同口径）。

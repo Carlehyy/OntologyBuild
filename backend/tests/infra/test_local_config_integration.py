@@ -79,6 +79,7 @@ def test_clean_checkout_production_uses_process_environment(
         "STEWARD_BROWSER_CDP_URL": "https://browser.example.test:9222",
         "N8N_API_URL": "https://n8n.example.test",
         "N8N_API_KEY": "a-secure-n8n-api-key",
+        "PYTHON_KERNEL_GATEWAY_AUTH_TOKEN": "a-secure-kernel-gateway-token",
         "PIPELINE_FILE_PUBLIC_APP_BASE_URL": "https://app.example.test",
         "PIPELINE_FILE_PUBLIC_API_BASE_URL": "https://api.example.test",
         "ALLOW_PUBLIC_REGISTRATION": "false",
