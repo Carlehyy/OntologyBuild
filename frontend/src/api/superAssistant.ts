@@ -62,7 +62,7 @@ export interface SuperSearchResult {
   conversations: SuperSearchConversationHit[]
 }
 
-/** 记忆宫殿文件（用户级长期资产）：图谱抽取状态机 pending→building→built/failed */
+/** 记忆宫殿文件（用户级长期资产）：图谱抽取状态机 draft→pending→building→built/failed */
 export interface PalaceFile {
   id: string
   filename: string
@@ -72,7 +72,7 @@ export interface PalaceFile {
   size: number
   sha256: string
   extractedChars: number
-  status: 'pending' | 'building' | 'built' | 'failed' | string
+  status: 'draft' | 'pending' | 'building' | 'built' | 'failed' | string
   error: string | null
   entityCount: number
   relationCount: number
@@ -80,6 +80,14 @@ export interface PalaceFile {
   editable: boolean
   /** 图片只入库+预览（/raw 原图），不参与图谱抽取，状态直接定格 built */
   isImage: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+/** 记忆宫殿目录（一等公民）：path 为 "/" 分隔归一路径，根目录不落行 */
+export interface PalaceFolder {
+  id: string
+  path: string
   createdAt: string
   updatedAt: string
 }
@@ -112,6 +120,10 @@ export interface PalaceGraph {
   edges: PalaceGraphEdge[]
   totals: { entities: number; relations: number }
   truncated: boolean
+  /** 画布下统计条：已建图/全部文档数与最近一次成功建图完成时间（无则 null） */
+  builtFiles: number
+  totalFiles: number
+  updatedAt: string | null
 }
 
 /** 单文件预览（GET preview）：previewable=false 表示该格式不支持预览 */
@@ -389,11 +401,26 @@ export const superAssistantApi = {
   searchConversations: (q: string, limit = 20) =>
     apiClientV2.get<SuperSearchResult>('/super-assistant/search/conversations', { params: { q, limit } }),
   palaceFiles: () => apiClientV2.get<PalaceFile[]>('/super-assistant/palace/files'),
-  uploadPalaceFile: (file: File) => {
+  /** folderPath 非空时上传归位到该目录（目录不存在时后端按 mkdir -p 补行） */
+  uploadPalaceFile: (file: File, folderPath = '') => {
     const form = new FormData()
     form.append('file', file)
+    if (folderPath) form.append('folder_path', folderPath)
     return apiClientV2.post<PalaceFile>('/super-assistant/palace/files', form)
   },
+  palaceFolders: () => apiClientV2.get<PalaceFolder[]>('/super-assistant/palace/folders'),
+  createPalaceFolder: (path: string) =>
+    apiClientV2.post<PalaceFolder>('/super-assistant/palace/folders', { path }),
+  renamePalaceFolder: (folderId: string, path: string) =>
+    apiClientV2.patch<PalaceFolder>(`/super-assistant/palace/folders/${folderId}`, { path }),
+  deletePalaceFolder: (folderId: string) =>
+    apiClientV2.delete(`/super-assistant/palace/folders/${folderId}`),
+  /** 新建 md/txt 空笔记（status=draft，首次保存内容才触发图谱抽取） */
+  createPalaceNote: (filename: string, folderPath: string) =>
+    apiClientV2.post<PalaceFile>('/super-assistant/palace/files/notes', { filename, folderPath }),
+  /** 拖拽移动文件（不改内容、不触发抽取）；folderPath 空串表示根目录 */
+  movePalaceFile: (fileId: string, folderPath: string) =>
+    apiClientV2.patch<PalaceFile>(`/super-assistant/palace/files/${fileId}`, { folderPath }),
   deletePalaceFile: (fileId: string) =>
     apiClientV2.delete(`/super-assistant/palace/files/${fileId}`),
   rebuildPalaceFile: (fileId: string) =>

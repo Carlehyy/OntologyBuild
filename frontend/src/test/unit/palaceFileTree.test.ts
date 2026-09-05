@@ -96,3 +96,53 @@ describe('buildPalaceTree', () => {
     assert.deepEqual(model.children[palaceDirId('导入/子目录')], [palaceFileId('fx')])
   })
 })
+
+// ----- 目录一等公民：目录行建树 + 路径纯函数 ---------------------------------
+
+import { joinPalacePath } from '../../pages/super-assistant/components/palaceTreeModel.ts'
+import type { PalaceFolder } from '../../api/superAssistant'
+
+function makeFolder(partial: Partial<PalaceFolder> & { path: string }): PalaceFolder {
+  seq += 1
+  return {
+    id: partial.id ?? `fd-${seq}`,
+    path: partial.path,
+    createdAt: '2026-09-05T00:00:00Z',
+    updatedAt: '2026-09-05T00:00:00Z',
+  }
+}
+
+describe('buildPalaceTree（目录行）', () => {
+  it('空目录（无文件）也是树节点，携带目录行 id', () => {
+    const model = buildPalaceTree([], [makeFolder({ id: 'fd-1', path: '空目录' })])
+    assert.deepEqual(model.children[PALACE_TREE_ROOT], [palaceDirId('空目录')])
+    assert.equal(model.items[palaceDirId('空目录')].dirId, 'fd-1')
+    assert.equal(model.items[palaceDirId('空目录')].path, '空目录')
+    assert.deepEqual(palaceTreeDirIds(model), ['dir:空目录'])
+  })
+
+  it('目录行与文件路径同时存在时合并，目录行 id 保留；祖先目录补齐', () => {
+    const model = buildPalaceTree(
+      [makeFile({ id: 'fa', filename: 'a.md', path: 'x/y' })],
+      [makeFolder({ id: 'fd-y', path: 'x/y' })],
+    )
+    assert.equal(model.items[palaceDirId('x/y')].dirId, 'fd-y')
+    // 文件路径的祖先 x 没有行：树里仍补齐（path 有值、dirId 缺省）
+    assert.equal(model.items[palaceDirId('x')].path, 'x')
+    assert.equal(model.items[palaceDirId('x')].dirId, undefined)
+    assert.deepEqual(model.children[palaceDirId('x/y')], [palaceFileId('fa')])
+  })
+
+  it('文件路径派生的目录不含 dirId', () => {
+    const model = buildPalaceTree([makeFile({ id: 'fb', filename: 'b.md', path: 'derived' })])
+    assert.equal(model.items[palaceDirId('derived')].dirId, undefined)
+  })
+})
+
+describe('路径纯函数', () => {
+  it('joinPalacePath 拼接落点目录与新名称', () => {
+    assert.equal(joinPalacePath('a', 'b'), 'a/b')
+    assert.equal(joinPalacePath('', 'b'), 'b')
+    assert.equal(joinPalacePath(' a / ', ' b '), 'a/b')
+  })
+})

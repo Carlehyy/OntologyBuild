@@ -28,6 +28,9 @@ function makeGraph(overrides: Partial<PalaceGraph> = {}): PalaceGraph {
     ],
     totals: { entities: 3, relations: 1 },
     truncated: false,
+    builtFiles: 2,
+    totalFiles: 2,
+    updatedAt: '2026-09-05T06:00:00Z',
     ...overrides,
   }
 }
@@ -120,6 +123,9 @@ describe('palaceGraphOption', () => {
       edges: [],
       totals: { entities: 0, relations: 0 },
       truncated: false,
+      builtFiles: 0,
+      totalFiles: 0,
+      updatedAt: null,
     }) as unknown as {
       legend: { show: boolean }
       series: Array<{ data: unknown[]; links: unknown[] }>

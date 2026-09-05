@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Loader2, PlugZap, Save, ShieldCheck } from 'lucide-react'
+import { GitPullRequest, Loader2, PlugZap, Save, ShieldCheck } from 'lucide-react'
 
 import {
   superAssistantApi,
@@ -13,13 +13,22 @@ import {
 import { errorText } from './assistantPanelUtils'
 import { DialogShell } from './AssistantConfiguration'
 
-/** 外部集成面板：multica 是首个落地的集成（配置生效后输入框提供 /multica: 命令）。
- *  DialogShell 为常开弹层，调用方以条件挂载控制显隐（同 McpDialog 用法）。
+type IntegrationTab = 'multica' | 'github'
+
+const INTEGRATION_TABS: Array<{ key: IntegrationTab; label: string; soon?: boolean }> = [
+  { key: 'multica', label: 'multica' },
+  { key: 'github', label: 'GitHub', soon: true },
+]
+
+/** 外部集成面板：左侧集成类型 tabs，multica 为首个落地集成，GitHub 为
+ *  结构化占位（后续新集成在此追加 tab）。DialogShell 为常开弹层，调用方
+ *  以条件挂载控制显隐（同 McpDialog 用法）。
  */
 export default function IntegrationsDialog({ onClose, onSaved }: {
   onClose: () => void
   onSaved?: () => void | Promise<void>
 }) {
+  const [tab, setTab] = useState<IntegrationTab>('multica')
   const [config, setConfig] = useState<MulticaConfig | null>(null)
   const [baseUrl, setBaseUrl] = useState('')
   const [token, setToken] = useState('')
@@ -105,8 +114,29 @@ export default function IntegrationsDialog({ onClose, onSaved }: {
       description="把外部平台接入超级助手；配置生效后可在输入框使用对应命令。"
       onClose={onClose}
     >
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-5 [scrollbar-gutter:stable] sm:p-6">
-        <section data-testid="multica-config-card" className="rounded-xl border border-[var(--color-border)] p-4">
+      <div className="flex min-h-0 flex-1">
+        <nav aria-label="集成类型" className="flex w-28 shrink-0 flex-col gap-1 border-r border-[var(--color-border)] p-2 sm:w-32">
+          {INTEGRATION_TABS.map(item => (
+            <button
+              key={item.key}
+              type="button"
+              role="tab"
+              aria-selected={tab === item.key}
+              data-integrations-tab={item.key}
+              onClick={() => setTab(item.key)}
+              className={`flex min-h-10 items-center gap-1.5 rounded-lg px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${tab === item.key
+                ? 'bg-teal-50 font-medium text-teal-800'
+                : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'}`}
+            >
+              {item.key === 'multica' ? <PlugZap size={14} className="shrink-0" /> : <GitPullRequest size={14} className="shrink-0" />}
+              <span className="min-w-0 truncate">{item.label}</span>
+              {item.soon && <span className="ml-auto shrink-0 rounded bg-slate-100 px-1 py-0.5 text-[9px] text-slate-400">规划中</span>}
+            </button>
+          ))}
+        </nav>
+        {tab === 'multica' ? (
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 [scrollbar-gutter:stable] sm:p-6">
+            <section data-testid="multica-config-card" className="rounded-xl border border-[var(--color-border)] p-4">
           <div className="flex items-start gap-2">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-700"><PlugZap size={16} /></div>
             <div className="min-w-0 flex-1">
@@ -198,23 +228,31 @@ export default function IntegrationsDialog({ onClose, onSaved }: {
               </div>
             )}
           </div>
-        </section>
-
-        <p className="text-center text-[11px] leading-5 text-[var(--color-text-tertiary)]">
-          更多集成（邮箱、GitHub 等）将陆续开放。
-        </p>
-        {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
+            </section>
+            {error && <p role="alert" className="mt-4 text-xs text-red-600">{error}</p>}
+          </div>
+        ) : (
+          <div data-testid="integrations-github-placeholder" className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-50 text-slate-300"><GitPullRequest size={20} /></div>
+            <p className="text-xs font-medium text-[var(--color-text-secondary)]">GitHub 集成规划中</p>
+            <p className="max-w-64 text-[11px] leading-5 text-[var(--color-text-tertiary)]">
+              计划支持 Issue 查询与创建、仓库事件接入；上线后在此配置，输入框将同步提供对应命令。
+            </p>
+          </div>
+        )}
       </div>
       <footer className="flex shrink-0 justify-center gap-3 border-t border-[var(--color-border)] px-5 py-4">
         <button onClick={onClose} className="min-h-10 min-w-24 rounded-lg px-4 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">取消</button>
-        <button
-          onClick={() => void save()}
-          data-testid="multica-save-button"
-          disabled={saving || !baseUrl.trim()}
-          className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50"
-        >
-          {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />} 保存
-        </button>
+        {tab === 'multica' && (
+          <button
+            onClick={() => void save()}
+            data-testid="multica-save-button"
+            disabled={saving || !baseUrl.trim()}
+            className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50"
+          >
+            {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />} 保存
+          </button>
+        )}
       </footer>
     </DialogShell>
   )

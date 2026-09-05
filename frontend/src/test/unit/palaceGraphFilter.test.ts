@@ -32,6 +32,9 @@ function makeGraph(): PalaceGraph {
     ],
     totals: { entities: 3, relations: 2 },
     truncated: false,
+    builtFiles: 2,
+    totalFiles: 2,
+    updatedAt: '2026-09-05T06:00:00Z',
   }
 }
 

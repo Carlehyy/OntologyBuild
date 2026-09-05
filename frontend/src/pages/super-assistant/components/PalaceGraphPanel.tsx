@@ -5,6 +5,7 @@ import { AlertCircle, Brain, Crosshair, Loader2, Maximize, Minus, RefreshCw, Rot
 import { superAssistantApi, type PalaceFile, type PalaceGraph, type PalaceGraphNode } from '@/api/superAssistant'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { parseServerTime } from '@/utils/datetime'
 import { filterPalaceGraph, palaceFileNodeIds, palaceOneHopNeighbors } from './palaceGraphFilter'
 import { palaceGraphOption } from './palaceGraphOption'
 
@@ -27,7 +28,19 @@ interface PalaceGraphPanelProps {
 }
 
 const EMPTY_GRAPH: PalaceGraph = {
-  available: false, nodes: [], edges: [], totals: { entities: 0, relations: 0 }, truncated: false,
+  available: false, nodes: [], edges: [],
+  totals: { entities: 0, relations: 0 }, truncated: false,
+  builtFiles: 0, totalFiles: 0, updatedAt: null,
+}
+
+/** 统计条时间：naive UTC 串按 UTC 解析（parseServerTime），格式化为本地 YYYY/MM/DD HH:mm */
+const formatStatTime = (iso: string | null): string => {
+  if (!iso) return '—'
+  const date = parseServerTime(iso)
+  if (!date) return '—'
+  return date.toLocaleString('zh-CN', {
+    hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  })
 }
 
 /**
@@ -205,14 +218,7 @@ export default function PalaceGraphPanel({
       className="flex min-h-0 flex-1 flex-col"
     >
       <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5">
-        <h3 className="text-xs font-medium text-[var(--color-text-secondary)]">
-          知识图谱
-          {graph && graph.totals.entities > 0 && (
-            <span className="ml-1 tabular-nums text-[var(--color-text-tertiary)]">
-              （{graph.totals.entities} 实体 / {graph.totals.relations} 关系{graph.truncated ? '，按提及数展示前 ' + graph.nodes.length : ''}）
-            </span>
-          )}
-        </h3>
+        <h3 className="text-xs font-medium text-[var(--color-text-secondary)]">知识图谱</h3>
         <div className="flex items-center gap-2">
           {graph?.available && graph.nodes.length > 0 && (
             <div className="w-40">
@@ -423,6 +429,24 @@ export default function PalaceGraphPanel({
             )}
           </div>
         </>
+      )}
+
+      {/* 画布下统计条：消化右栏竖向空间，替代原标题行小字统计 */}
+      {graph?.available && (
+        <div
+          data-testid="palace-graph-stats"
+          className="mt-2 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-0.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-[11px] tabular-nums text-[var(--color-text-secondary)]"
+        >
+          <span className="font-medium text-[var(--color-text-primary)]">{graph.totals.entities} 实体</span>
+          <span>{graph.totals.relations} 关系</span>
+          <span>已建图文档 {graph.builtFiles}/{graph.totalFiles}</span>
+          {graph.truncated && (
+            <span className="text-[var(--color-text-tertiary)]" title="图谱过大，画布按提及数只展示部分实体">
+              仅展示前 {graph.nodes.length} 个实体
+            </span>
+          )}
+          <span className="ml-auto text-[var(--color-text-tertiary)]">上次更新：{formatStatTime(graph.updatedAt ?? null)}</span>
+        </div>
       )}
     </section>
   )

@@ -18,7 +18,7 @@ import {
   type SuperSkill,
   type ToolStep,
 } from '@/api/superAssistant'
-import { matchMulticaCommands } from '@/lib/multicaCommands'
+import { matchSlashCommands, slashCommandToken } from '@/lib/slashCommands'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -575,26 +575,31 @@ export default function SuperAssistantPage() {
             ))}
           </div>
         )}
-        {multicaConfig?.enabled && matchMulticaCommands(input, multicaConfig.commands).length > 0 && (
-          <div data-testid="multica-command-hints" className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 px-2.5 py-2">
-            <span className="text-[10px] text-slate-400">multica 命令</span>
-            {matchMulticaCommands(input, multicaConfig.commands).map(hint => (
-              <button
-                key={hint.command}
-                type="button"
-                data-multica-command={hint.command}
-                onClick={() => {
-                  setInput(`/multica:${hint.command}${hint.write ? ' ' : ''}`)
-                  senderRef.current?.focus()
-                }}
-                className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50/70 px-2 py-1 text-[11px] text-teal-800 transition-colors hover:border-teal-400 hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-300"
-              >
-                <code className="font-mono">/multica:{hint.command}</code>
-                <span className="text-teal-600">{hint.title}{hint.write ? ' · 需确认' : ''}</span>
-              </button>
-            ))}
-          </div>
-        )}
+        {/* slash 命令提示：目录由已启用的外部集成下发，输入 / 即列出全部可选；
+            未配置/未启用时目录为空，不出现任何提示 */}
+        {(() => {
+          const slashHints = multicaConfig?.enabled ? matchSlashCommands(input, multicaConfig.commands) : []
+          return slashHints.length > 0 && (
+            <div data-testid="multica-command-hints" className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 px-2.5 py-2">
+              <span className="text-[10px] text-slate-400">命令</span>
+              {slashHints.map(hint => (
+                <button
+                  key={hint.command}
+                  type="button"
+                  data-multica-command={hint.command}
+                  onClick={() => {
+                    setInput(`${slashCommandToken(hint)}${hint.write ? ' ' : ''}`)
+                    senderRef.current?.focus()
+                  }}
+                  className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50/70 px-2 py-1 text-[11px] text-teal-800 transition-colors hover:border-teal-400 hover:bg-teal-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-300"
+                >
+                  <code className="font-mono">{slashCommandToken(hint)}</code>
+                  <span className="text-teal-600">{hint.title}{hint.write ? ' · 需确认' : ''}</span>
+                </button>
+              ))}
+            </div>
+          )
+        })()}
         <div className="px-3 pb-1 pt-2.5">
           <Sender
             ref={senderRef}

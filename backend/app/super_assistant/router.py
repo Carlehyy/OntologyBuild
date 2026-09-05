@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -25,7 +25,13 @@ from app.super_assistant import memory_service
 from app.super_assistant import palace_consolidate
 from app.super_assistant import palace_service
 from app.super_assistant import reflection_service
-from app.super_assistant.palace_service import PalaceContentUpdate
+from app.super_assistant.palace_service import (
+    PalaceContentUpdate,
+    PalaceFileMove,
+    PalaceFolderCreate,
+    PalaceFolderRename,
+    PalaceNoteCreate,
+)
 from app.super_assistant import skill_service as _skill_service
 from app.super_assistant.models import (
     SuperAssistantConversation,
@@ -280,8 +286,9 @@ def list_palace_files(db: Session = Depends(get_db),
 
 @router.post("/palace/files", status_code=201)
 async def upload_palace_file(file: UploadFile = File(...),
-                             db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return palace_service.upload_file(db, current_user, file)
+                             db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
+                             folder_path: str = Form("")):
+    return palace_service.upload_file(db, current_user, file, folder_path)
 
 @router.post("/palace/files/batch", status_code=201)
 def batch_import_palace_files(archive: UploadFile = File(...),
@@ -319,6 +326,36 @@ def delete_palace_file(file_id: str, db: Session = Depends(get_db),
 def rebuild_palace_file(file_id: str, db: Session = Depends(get_db),
                         current_user: User = Depends(get_current_user)):
     return palace_service.rebuild_file(db, current_user.id, file_id)
+
+@router.get("/palace/folders")
+def list_palace_folders(db: Session = Depends(get_db),
+                        current_user: User = Depends(get_current_user)):
+    return palace_service.list_folders(db, current_user.id)
+
+@router.post("/palace/folders", status_code=201)
+def create_palace_folder(body: PalaceFolderCreate, db: Session = Depends(get_db),
+                         current_user: User = Depends(get_current_user)):
+    return palace_service.create_folder(db, current_user.id, body.path)
+
+@router.post("/palace/files/notes", status_code=201)
+def create_palace_note(body: PalaceNoteCreate, db: Session = Depends(get_db),
+                       current_user: User = Depends(get_current_user)):
+    return palace_service.create_note(db, current_user, body)
+
+@router.patch("/palace/files/{file_id}")
+def move_palace_file(file_id: str, body: PalaceFileMove, db: Session = Depends(get_db),
+                     current_user: User = Depends(get_current_user)):
+    return palace_service.move_file(db, current_user.id, file_id, body.folder_path)
+
+@router.patch("/palace/folders/{folder_id}")
+def rename_palace_folder(folder_id: str, body: PalaceFolderRename, db: Session = Depends(get_db),
+                         current_user: User = Depends(get_current_user)):
+    return palace_service.rename_folder(db, current_user.id, folder_id, body.path)
+
+@router.delete("/palace/folders/{folder_id}", status_code=204)
+def delete_palace_folder(folder_id: str, db: Session = Depends(get_db),
+                         current_user: User = Depends(get_current_user)):
+    palace_service.delete_folder(db, current_user.id, folder_id)
 
 @router.get("/palace/graph")
 def palace_graph_view(db: Session = Depends(get_db),

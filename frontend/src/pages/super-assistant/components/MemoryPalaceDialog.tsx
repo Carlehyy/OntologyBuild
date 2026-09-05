@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  AlertCircle, Brain, CheckCircle2, Clock, FileArchive, FileText, Image as ImageIcon,
-  Loader2, Maximize2, Minimize2, Pencil, RefreshCw, Trash2, Upload, X,
+  AlertCircle, Brain, CheckCircle2, Clock, FileArchive, FilePlus2, FileText, FolderPlus,
+  FolderPen, FolderMinus, Image as ImageIcon, Loader2, Maximize2, Minimize2, Pencil,
+  RefreshCw, Trash2, Upload, X,
 } from 'lucide-react'
 
 import {
   superAssistantApi,
   type PalaceFile,
   type PalaceFilePreview,
+  type PalaceFolder,
   type PalaceGraph,
   type PalaceImportResult,
 } from '@/api/superAssistant'
@@ -19,9 +21,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import PalaceFileTree from './PalaceFileTree'
+import PalaceFileTree, { type PalaceInlineAction } from './PalaceFileTree'
 import PalaceGraphPanel from './PalaceGraphPanel'
 import PalaceMarkdown from './palaceMarkdown'
+import { joinPalacePath } from './palaceTreeModel'
 
 interface MemoryPalaceDialogProps {
   open: boolean
@@ -32,6 +35,7 @@ interface MemoryPalaceDialogProps {
 const PALACE_ACCEPT = '.csv,.xlsx,.xls,.json,.xml,.pdf,.docx,.doc,.pptx,.ppt,.md,.txt,.png,.jpg,.jpeg,.gif,.webp'
 
 const STATUS_META: Record<string, { label: string; className: string }> = {
+  draft: { label: '草稿', className: 'bg-slate-100 text-slate-500' },
   pending: { label: '待抽取', className: 'bg-slate-100 text-slate-500' },
   building: { label: '抽取中', className: 'bg-amber-50 text-amber-600' },
   built: { label: '已建图', className: 'bg-teal-50 text-teal-700' },
@@ -76,10 +80,15 @@ const palaceError = (err: unknown, fallback: string): string => {
  */
 export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceDialogProps) {
   const [files, setFiles] = useState<PalaceFile[]>([])
+  const [folders, setFolders] = useState<PalaceFolder[]>([])
   const [graph, setGraph] = useState<PalaceGraph | null>(null)
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null)
+  /** 当前选中目录（空串=根目录）：新建目录/笔记/上传的落点 */
+  const [selectedDirPath, setSelectedDirPath] = useState('')
+  /** 树内联输入行（新建目录/新建笔记/目录重命名），由工具栏按钮驱动 */
+  const [inline, setInline] = useState<PalaceInlineAction | null>(null)
   const [preview, setPreview] = useState<PalacePreviewState | null>(null)
   const [editor, setEditor] = useState<PalaceEditorState | null>(null)
   const [imageUrl, setImageUrl] = useState<{ fileId: string; url: string } | null>(null)
@@ -103,11 +112,13 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      const [fileRows, graphData] = await Promise.all([
+      const [fileRows, folderRows, graphData] = await Promise.all([
         superAssistantApi.palaceFiles(),
+        superAssistantApi.palaceFolders(),
         superAssistantApi.palaceGraph(),
       ])
       setFiles(fileRows)
+      setFolders(folderRows)
       setGraph(graphData)
     } catch (err) {
       showError(err, '记忆宫殿加载失败')
@@ -124,6 +135,8 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
   useEffect(() => {
     if (!open) {
       setSelectedFileId(null)
+      setSelectedDirPath('')
+      setInline(null)
       setPreview(null)
       setEditor(null)
       setImportResult(null)
@@ -162,7 +175,15 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
   const handleSelectFile = useCallback((file: PalaceFile) => {
     if (editor && editor.fileId !== file.id && !requestLeaveEditor()) return
     setSelectedFileId(file.id)
+    // 选中文件即把「当前目录」对齐到其归属目录（新建/上传落点跟随）
+    setSelectedDirPath(file.path ?? '')
   }, [editor])
+
+  /** 选中目录（树点击）：清掉文件选中，中间栏回到空态 */
+  const handleSelectDir = useCallback((path: string) => {
+    setSelectedFileId(null)
+    setSelectedDirPath(path)
+  }, [])
 
   const handleUpload = async (list: FileList | null) => {
     if (!list || list.length === 0) return
@@ -170,7 +191,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
     try {
       let last: PalaceFile | null = null
       for (const file of Array.from(list)) {
-        last = await superAssistantApi.uploadPalaceFile(file)
+        last = await superAssistantApi.uploadPalaceFile(file, selectedDirPath)
       }
       await refresh()
       if (last) setSelectedFileId(last.id)
@@ -266,6 +287,112 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
     } catch (err) {
       setEditor(prev => prev ? { ...prev, saving: false } : prev)
       showError(err, '保存失败')    }
+  }
+
+  // ----- 目录管理（新建/重命名/删除/拖拽移动）与内联输入行 -----------------
+
+  const selectedDirRow = folders.find(folder => folder.path === selectedDirPath) ?? null
+
+  const handleCreateFolder = async (parentPath: string, name: string) => {
+    setBusy(true)
+    try {
+      const created = await superAssistantApi.createPalaceFolder(joinPalacePath(parentPath, name))
+      await refresh()
+      setSelectedFileId(null)
+      setSelectedDirPath(created.path)
+    } catch (err) {
+      showError(err, '新建目录失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleCreateNote = async (dirPath: string, filename: string) => {
+    setBusy(true)
+    try {
+      const created = await superAssistantApi.createPalaceNote(filename, dirPath)
+      await refresh()
+      setSelectedFileId(created.id)
+      setSelectedDirPath(created.path)
+      void handleEdit(created)
+    } catch (err) {
+      showError(err, '新建笔记失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleRenameFolder = async (folderId: string, newPath: string) => {
+    setBusy(true)
+    try {
+      const updated = await superAssistantApi.renamePalaceFolder(folderId, newPath)
+      await refresh()
+      setSelectedFileId(null)
+      setSelectedDirPath(updated.path)
+    } catch (err) {
+      showError(err, '目录重命名失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleDeleteFolder = async () => {
+    const row = selectedDirRow
+    if (!row) return
+    if (!window.confirm(`确定删除目录「${row.path}」吗？目录下仍有文件或子目录时将无法删除。`)) return
+    setBusy(true)
+    try {
+      await superAssistantApi.deletePalaceFolder(row.id)
+      setSelectedDirPath('')
+      await refresh()
+    } catch (err) {
+      showError(err, '删除目录失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleMoveFile = async (fileId: string, targetPath: string) => {
+    setBusy(true)
+    try {
+      await superAssistantApi.movePalaceFile(fileId, targetPath)
+      await refresh()
+    } catch (err) {
+      showError(err, '移动文件失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleMoveFolder = async (folderId: string, targetPath: string) => {
+    const source = folders.find(folder => folder.id === folderId)
+    if (!source) return
+    const name = source.path.slice(source.path.lastIndexOf('/') + 1)
+    setBusy(true)
+    try {
+      await superAssistantApi.renamePalaceFolder(folderId, joinPalacePath(targetPath, name))
+      await refresh()
+    } catch (err) {
+      showError(err, '移动目录失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** 内联输入行提交：按动作分发（目录名/文件名在各自 handler 内再做校验） */
+  const handleInlineSubmit = (value: string) => {
+    const action = inline
+    setInline(null)
+    const name = value.trim()
+    if (!action || !name || busy) return
+    if (action.kind === 'new-folder') void handleCreateFolder(action.targetPath, name)
+    else if (action.kind === 'new-note') void handleCreateNote(action.targetPath, name)
+    else if (action.dirId) {
+      const parent = action.targetPath.includes('/')
+        ? action.targetPath.slice(0, action.targetPath.lastIndexOf('/'))
+        : ''
+      void handleRenameFolder(action.dirId, joinPalacePath(parent, name))
+    }
   }
 
   // 选中文档（非图片、非编辑态）时自动加载抽取文本预览
@@ -505,6 +632,65 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
               </Button>
               <span className="ml-auto text-[10px] tabular-nums text-[var(--color-text-tertiary)]">{files.length} 个文件</span>
             </div>
+            <div
+              data-testid="palace-dir-toolbar"
+              className="flex items-center gap-0.5 border-b border-[var(--color-border)] px-2 py-1"
+            >
+              <span
+                className="min-w-0 flex-1 truncate text-[10px] text-[var(--color-text-tertiary)]"
+                title={selectedDirPath ? selectedDirPath : '根目录'}
+              >
+                当前目录：/{selectedDirPath}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="h-6 w-6 text-slate-400 hover:text-[var(--color-text-primary)]"
+                onClick={() => setInline({ kind: 'new-folder', targetPath: selectedDirPath })}
+                disabled={busy || inline !== null}
+                title="在当前目录下新建子目录"
+                aria-label="新建子目录"
+                data-testid="palace-new-folder"
+              >
+                <FolderPlus size={13} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="h-6 w-6 text-slate-400 hover:text-[var(--color-text-primary)]"
+                onClick={() => setInline({ kind: 'new-note', targetPath: selectedDirPath })}
+                disabled={busy || inline !== null}
+                title="在当前目录下新建 md/txt 笔记"
+                aria-label="新建笔记"
+                data-testid="palace-new-note"
+              >
+                <FilePlus2 size={13} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="h-6 w-6 text-slate-400 hover:text-[var(--color-text-primary)]"
+                onClick={() => selectedDirRow && setInline({ kind: 'rename', targetPath: selectedDirRow.path, dirId: selectedDirRow.id })}
+                disabled={busy || inline !== null || !selectedDirRow}
+                title={selectedDirRow ? `重命名目录 ${selectedDirRow.path}` : '先在树中选中一个目录'}
+                aria-label="重命名目录"
+                data-testid="palace-rename-folder"
+              >
+                <FolderPen size={13} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="h-6 w-6 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                onClick={() => { void handleDeleteFolder() }}
+                disabled={busy || !selectedDirRow}
+                title={selectedDirRow ? `删除空目录 ${selectedDirRow.path}` : '先在树中选中一个目录（仅可删除空目录）'}
+                aria-label="删除目录"
+                data-testid="palace-delete-folder"
+              >
+                <FolderMinus size={13} />
+              </Button>
+            </div>
             {importResult && (
               <div
                 role="status"
@@ -542,7 +728,7 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
                 )}
               </div>
             )}
-            {files.length === 0 ? (
+            {files.length === 0 && folders.length === 0 ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-1 px-3 py-6 text-center">
                 <FileText size={18} className="text-[var(--color-text-tertiary)]" />
                 <p className="text-xs text-[var(--color-text-tertiary)]">
@@ -552,8 +738,16 @@ export default function MemoryPalaceDialog({ open, onOpenChange }: MemoryPalaceD
             ) : (
               <PalaceFileTree
                 files={files}
+                folders={folders}
                 selectedFileId={selectedFileId}
+                selectedDirPath={selectedDirPath}
                 onSelectFile={handleSelectFile}
+                onSelectDir={handleSelectDir}
+                onMoveFile={(fileId, targetPath) => { void handleMoveFile(fileId, targetPath) }}
+                onMoveFolder={(folderId, targetPath) => { void handleMoveFolder(folderId, targetPath) }}
+                inline={inline}
+                onInlineSubmit={handleInlineSubmit}
+                onInlineCancel={() => setInline(null)}
               />
             )}
           </aside>
