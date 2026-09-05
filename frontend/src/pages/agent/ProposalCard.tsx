@@ -40,42 +40,42 @@ export function ProposalCard({ oid, proposal }: { oid: string; proposal: AgentAc
     if (!result) return null
     if (result.pendingApproval || result.status === 'pending') {
       return (
-        <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-50 text-xs font-medium text-amber-700">
+        <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--color-warning-bg)] text-xs font-medium text-[var(--color-warning)]">
           <Clock3 size={13} /> 已提交，等待人工审批 — 批准后才会真正落库
         </div>
       )
     }
     if (result.status === 'success') {
       return (
-        <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-50 text-xs font-medium text-emerald-700">
+        <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--color-success-bg)] text-xs font-medium text-[var(--color-success)]">
           <CheckCircle2 size={13} /> 已执行成功，变更已写入事实流（可在实例历史中溯源）
         </div>
       )
     }
     return (
-      <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-red-50 text-xs font-medium text-red-600">
+      <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--color-danger-bg)] text-xs font-medium text-[var(--color-danger)]">
         <XCircle size={13} /> 执行失败：{result.errorMessage || (result.validationErrors || []).join('；')}
       </div>
     )
   }
 
   return (
-    <div className="mt-3 rounded-xl border border-indigo-200/70 bg-gradient-to-b from-indigo-50/40 to-transparent overflow-hidden">
+    <div className="mt-3 rounded-xl border border-viz-indigo-soft bg-gradient-to-b from-viz-indigo-soft to-transparent overflow-hidden">
       {/* 头部 */}
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2.5 border-b border-indigo-100/80">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2.5 border-b border-viz-indigo-soft">
         <div className="flex flex-wrap items-center gap-2 min-w-0">
-          <div className="w-6 h-6 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
-            <FlaskConical size={12} className="text-indigo-600" />
+          <div className="w-6 h-6 rounded-lg bg-viz-indigo-soft flex items-center justify-center shrink-0">
+            <FlaskConical size={12} className="text-viz-indigo" />
           </div>
           <span className="text-sm font-semibold text-[var(--color-text-primary)] truncate">
             {proposal.actionName}
           </span>
           <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium shrink-0 ${dryRunOk
-            ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'}`}>
+            ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'}`}>
             预演{dryRunOk ? '通过' : '未通过'}
           </span>
           {proposal.requiresApproval && (
-            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-amber-50 text-amber-600 shrink-0">
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-[var(--color-warning-bg)] text-[var(--color-warning)] shrink-0">
               <ShieldCheck size={9} />需审批
             </span>
           )}
@@ -111,7 +111,7 @@ export function ProposalCard({ oid, proposal }: { oid: string; proposal: AgentAc
             <div className="space-y-1">
               {proposal.effects.map((e, i) => (
                 <div key={i} className="flex items-start gap-2 text-xs text-[var(--color-text-secondary)]">
-                  <span className="mt-1.5 w-1 h-1 rounded-full bg-indigo-400 shrink-0" />
+                  <span className="mt-1.5 w-1 h-1 rounded-full bg-viz-indigo shrink-0" />
                   {e.description || e.type}
                 </div>
               ))}
@@ -120,14 +120,14 @@ export function ProposalCard({ oid, proposal }: { oid: string; proposal: AgentAc
         )}
 
         {proposal.validationErrors.length > 0 && (
-          <div className="text-xs text-red-500 space-y-0.5">
+          <div className="text-xs text-[var(--color-danger)] space-y-0.5">
             {proposal.validationErrors.map((e, i) => <div key={i}>· {e}</div>)}
           </div>
         )}
 
         {resultBanner()}
         {error && (
-          <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-red-50 text-xs font-medium text-red-600">
+          <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--color-danger-bg)] text-xs font-medium text-[var(--color-danger)]">
             <XCircle size={13} />{error}
           </div>
         )}

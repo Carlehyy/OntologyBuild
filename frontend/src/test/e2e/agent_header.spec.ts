@@ -294,13 +294,13 @@ test('智能助手顶栏只保留有色历史会话入口', async ({ page }) => 
 
   await expect(page.getByText('创建新会话')).toHaveCount(0)
   const historyButton = page.getByTestId('agent-session-history-button')
-  await expect(historyButton).toHaveCSS('background-color', 'rgb(240, 253, 250)')
-  await expect(historyButton).toHaveCSS('color', 'rgb(13, 148, 136)')
+  await expect(historyButton).toHaveCSS('background-color', 'rgb(236, 253, 245)')
+  await expect(historyButton).toHaveCSS('color', 'rgb(4, 120, 87)')
 
   await historyButton.click()
   await expect(page.getByRole('dialog', { name: '历史会话' })).toBeVisible()
   await expect(page.getByRole('button', { name: '新建' })).toBeVisible()
-  await expect(historyButton).toHaveCSS('background-color', 'rgb(204, 251, 241)')
+  await expect(historyButton).toHaveCSS('background-color', 'rgb(209, 250, 229)')
 })
 
 test('历史会话可从删除按钮左侧导出完整 JSON', async ({ page }) => {

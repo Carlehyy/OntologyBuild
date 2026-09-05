@@ -227,18 +227,18 @@ export function OntologyCardCarousel({
 
   if (count === 0) {
     return (
-      <div className="flex h-full flex-col items-center justify-center bg-gradient-to-br from-slate-50 via-sky-50/60 to-emerald-50/50 px-6 text-center dark:from-[#121820] dark:via-[#121820] dark:to-[#121820]">
-        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-sky-100 bg-white text-sky-500 shadow-sm">
+      <div className="flex h-full flex-col items-center justify-center bg-gradient-to-br from-muted via-[var(--color-info-bg)] to-[var(--color-success-bg)] px-6 text-center dark:from-[#121820] dark:via-[#121820] dark:to-[#121820]">
+        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-card text-[var(--color-info)] shadow-sm">
           <Network size={24} />
         </div>
-        <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">暂无已发布本体</h3>
-        <p className="mt-1 max-w-xs text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+        <h3 className="text-sm font-semibold text-foreground dark:text-foreground">暂无已发布本体</h3>
+        <p className="mt-1 max-w-xs text-xs leading-relaxed text-muted-foreground dark:text-[var(--color-text-tertiary)]">
           先在本体管理中创建并发布一个本体，再回到这里开始智能对话。
         </p>
         <button
           type="button"
           onClick={() => navigate('/ontologies')}
-          className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-4 py-2 text-sm font-medium text-teal-600 transition-colors hover:bg-teal-100"
+          className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-brand-line bg-brand-soft px-4 py-2 text-sm font-medium text-brand-ink transition-colors hover:bg-brand-soft"
         >
           前往本体管理
         </button>
@@ -247,7 +247,7 @@ export function OntologyCardCarousel({
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-gradient-to-b from-slate-50/80 via-[#f8fbff] to-sky-50/50 dark:from-[#121820] dark:via-[#121820] dark:to-[#121820]">
+    <div className="flex h-full flex-col overflow-hidden bg-gradient-to-b from-muted via-[#f8fbff] to-[var(--color-info-bg)] dark:from-[#121820] dark:via-[#121820] dark:to-[#121820]">
       <div
         ref={stageRef}
         data-testid="ontology-card-carousel"
@@ -262,7 +262,7 @@ export function OntologyCardCarousel({
         onPointerCancel={handlePointerCancel}
         // isolate：卡片/箭头的 z-index（最高 110）只在舞台内部竞争。若不隔离，
         // 它们会进入根层叠上下文并压过全局悬浮 AI 助手面板（z-40）。
-        className="isolate scrollbar-none relative min-h-0 flex-1 cursor-grab touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-teal-300 active:cursor-grabbing"
+        className="isolate scrollbar-none relative min-h-0 flex-1 cursor-grab touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
       >
         {ranked.map((item, index) => {
           const pos = circularCardPosition(index, focus, count)
@@ -302,10 +302,10 @@ export function OntologyCardCarousel({
               aria-selected={index === activeIndex}
               aria-label={`本体卡片 ${item.name}`}
               style={style}
-              className={`absolute flex flex-col overflow-hidden rounded-2xl border bg-white shadow-xl will-change-transform dark:bg-slate-800 ${
+              className={`absolute flex flex-col overflow-hidden rounded-2xl border bg-card shadow-xl will-change-transform dark:bg-accent ${
                 index === activeIndex
-                  ? 'border-teal-200 shadow-2xl ring-1 ring-teal-400/30 dark:border-teal-600'
-                  : 'border-slate-200 dark:border-slate-700'
+                  ? 'border-brand-line shadow-2xl ring-1 ring-ring dark:border-brand'
+                  : 'border-border dark:border-[var(--color-border-hover)]'
               }`}
             >
               <div className="flex items-start gap-3 px-4 pb-3 pt-4">
@@ -313,23 +313,23 @@ export function OntologyCardCarousel({
                 <div className="min-w-0 flex-1">
                   <div
                     data-testid="ontology-card-name"
-                    className="truncate text-[15px] font-semibold text-slate-800 dark:text-slate-100"
+                    className="truncate text-[15px] font-semibold text-foreground dark:text-foreground"
                     title={item.name}
                   >
                     {item.name}
                   </div>
                   <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
-                    <span className="inline-flex min-w-0 max-w-full truncate rounded-md border border-teal-100 bg-teal-50 px-2 py-0.5 text-[11px] font-medium leading-4 text-teal-700">
+                    <span className="inline-flex min-w-0 max-w-full truncate rounded-md border border-brand-line bg-brand-soft px-2 py-0.5 text-[11px] font-medium leading-4 text-brand-ink">
                       {item.domain || '未设置领域'}
                     </span>
-                    <span className="inline-flex shrink-0 rounded-md border border-violet-100 bg-violet-50 px-2 py-0.5 font-mono text-[11px] font-medium leading-4 text-violet-600">
+                    <span className="inline-flex shrink-0 rounded-md border border-viz-violet-soft bg-viz-violet-soft px-2 py-0.5 font-mono text-[11px] font-medium leading-4 text-viz-violet">
                       {item.current_release_version || item.version}
                     </span>
                     {clicks > 0 && (
                       <span
                         data-testid="ontology-card-clicks"
                         title={`已被选用 ${clicks} 次`}
-                        className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-600"
+                        className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--color-warning)]"
                       >
                         <Flame size={11} />×{clicks}
                       </span>
@@ -339,7 +339,7 @@ export function OntologyCardCarousel({
               </div>
 
               <p
-                className="min-h-[40px] px-4 text-xs leading-5 text-slate-500 dark:text-slate-400"
+                className="min-h-[40px] px-4 text-xs leading-5 text-muted-foreground dark:text-[var(--color-text-tertiary)]"
                 style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
                 title={item.description || '暂无描述'}
               >
@@ -348,9 +348,9 @@ export function OntologyCardCarousel({
 
               <div className="mt-3 grid grid-cols-4 gap-1.5 px-4">
                 {cardMetrics(item).map(metric => (
-                  <div key={metric.label} className="min-w-0 rounded-xl bg-slate-50 px-0.5 py-2 text-center dark:bg-slate-700/60">
-                    <p className="whitespace-nowrap text-[10px] font-medium text-slate-400">{metric.label}</p>
-                    <p className="mt-0.5 text-base font-semibold tabular-nums text-slate-800 dark:text-slate-100">{metric.value}</p>
+                  <div key={metric.label} className="min-w-0 rounded-xl bg-muted px-0.5 py-2 text-center dark:bg-accent">
+                    <p className="whitespace-nowrap text-[10px] font-medium text-[var(--color-text-tertiary)]">{metric.label}</p>
+                    <p className="mt-0.5 text-base font-semibold tabular-nums text-foreground dark:text-foreground">{metric.value}</p>
                   </div>
                 ))}
               </div>
@@ -360,8 +360,8 @@ export function OntologyCardCarousel({
                   data-testid={index === activeIndex ? 'ontology-card-confirm' : undefined}
                   className={`flex h-9 items-center justify-center gap-1.5 rounded-lg text-sm font-medium transition-colors duration-300 ${
                     index === activeIndex
-                      ? 'bg-teal-600 text-white shadow-sm'
-                      : 'bg-slate-100 text-slate-400 dark:bg-slate-700'
+                      ? 'bg-brand text-[var(--color-text-inverse)] shadow-sm'
+                      : 'bg-muted text-[var(--color-text-tertiary)] dark:bg-accent'
                   }`}
                 >
                   {index === activeIndex ? (
@@ -382,7 +382,7 @@ export function OntologyCardCarousel({
               aria-label="上一张本体卡片"
               disabled={!looped && activeIndex === 0}
               onClick={() => snapTo(Math.round(focusRef.current) - 1)}
-              className="absolute left-3 top-1/2 z-[110] flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-slate-500 shadow-md backdrop-blur transition-all hover:border-teal-300 hover:text-teal-600 disabled:cursor-not-allowed disabled:opacity-30 dark:border-slate-700 dark:bg-slate-800/90"
+              className="absolute left-3 top-1/2 z-[110] flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-md backdrop-blur transition-all hover:border-brand-line hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-30 dark:border-[var(--color-border-hover)] dark:bg-accent"
             >
               <ChevronLeft size={16} />
             </button>
@@ -391,7 +391,7 @@ export function OntologyCardCarousel({
               aria-label="下一张本体卡片"
               disabled={!looped && activeIndex >= count - 1}
               onClick={() => snapTo(Math.round(focusRef.current) + 1)}
-              className="absolute right-3 top-1/2 z-[110] flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white/90 text-slate-500 shadow-md backdrop-blur transition-all hover:border-teal-300 hover:text-teal-600 disabled:cursor-not-allowed disabled:opacity-30 dark:border-slate-700 dark:bg-slate-800/90"
+              className="absolute right-3 top-1/2 z-[110] flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-md backdrop-blur transition-all hover:border-brand-line hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-30 dark:border-[var(--color-border-hover)] dark:bg-accent"
             >
               <ChevronRight size={16} />
             </button>
@@ -409,8 +409,8 @@ export function OntologyCardCarousel({
               onClick={() => focusCard(index)}
               className={`h-1.5 rounded-full transition-all duration-300 ${
                 index === activeIndex
-                  ? 'w-5 bg-teal-600'
-                  : 'w-1.5 bg-slate-300 hover:bg-slate-400 dark:bg-slate-600'
+                  ? 'w-5 bg-brand'
+                  : 'w-1.5 bg-accent hover:bg-accent dark:bg-accent'
               }`}
             />
           ))}

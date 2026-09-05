@@ -49,17 +49,17 @@ export function SentinelProposalCard({ oid, proposal }: {
   }
 
   return (
-    <div className="mt-3 overflow-hidden rounded-xl border border-teal-200/80 bg-gradient-to-b from-teal-50/50 to-transparent">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-teal-100 px-4 py-2.5">
+    <div className="mt-3 overflow-hidden rounded-xl border border-brand-line bg-gradient-to-b from-brand-soft to-transparent">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-line px-4 py-2.5">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-teal-100 text-teal-700">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand-ink">
             <BellRing size={12} />
           </span>
           <span className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
             {operationLabel[proposal.operation]} · {proposal.sentinelName}
           </span>
           <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium ${valid
-            ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'}`}>
+            ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'}`}>
             强校验{valid ? '通过' : '未通过'}
           </span>
         </div>
@@ -68,7 +68,7 @@ export function SentinelProposalCard({ oid, proposal }: {
             type="button"
             onClick={execute}
             disabled={!valid || executing}
-            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg bg-teal-600 px-3 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30"
+            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg bg-brand px-3 text-xs font-medium text-[var(--color-text-inverse)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30"
           >
             {executing ? <Loader2 size={11} className="animate-spin" /> : <ShieldCheck size={11} />}
             确认{operationLabel[proposal.operation]}
@@ -87,17 +87,17 @@ export function SentinelProposalCard({ oid, proposal }: {
           </div>
         )}
         {proposal.validationErrors.length > 0 && (
-          <div className="space-y-0.5 text-red-500">
+          <div className="space-y-0.5 text-[var(--color-danger)]">
             {proposal.validationErrors.map((item, index) => <div key={index}>· {item}</div>)}
           </div>
         )}
         {done && (
-          <div className="flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 font-medium text-emerald-700">
+          <div className="flex items-center gap-1.5 rounded-lg bg-[var(--color-success-bg)] px-3 py-2 font-medium text-[var(--color-success)]">
             <CheckCircle2 size={13} />{completionText[proposal.operation]}
           </div>
         )}
         {error && (
-          <div className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 font-medium text-red-600">
+          <div className="flex items-center gap-1.5 rounded-lg bg-[var(--color-danger-bg)] px-3 py-2 font-medium text-[var(--color-danger)]">
             <XCircle size={13} />{error}
           </div>
         )}

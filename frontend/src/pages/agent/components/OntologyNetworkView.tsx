@@ -261,17 +261,17 @@ export function OntologyNetworkView({
   if (objectTypes.length === 0) {
     // 未选择本体时页面层已切换为卡片轮播，这里只剩「已选但无结构」的空态。
     return (
-      <div className="flex h-full flex-col items-center justify-center bg-gradient-to-br from-slate-50 via-sky-50/60 to-emerald-50/50 px-6 text-center dark:from-[#121820] dark:via-[#121820] dark:to-[#121820]">
-        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-sky-100 bg-white text-sky-500 shadow-sm">
+      <div className="flex h-full flex-col items-center justify-center bg-gradient-to-br from-muted via-[var(--color-info-bg)] to-[var(--color-success-bg)] px-6 text-center dark:from-[#121820] dark:via-[#121820] dark:to-[#121820]">
+        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-card text-[var(--color-info)] shadow-sm">
           <Network size={24} />
         </div>
-        <h3 className="text-sm font-semibold text-slate-800">当前本体暂无可视化对象</h3>
-        <p className="mt-1 text-xs text-slate-500">
+        <h3 className="text-sm font-semibold text-foreground">当前本体暂无可视化对象</h3>
+        <p className="mt-1 text-xs text-muted-foreground">
           在建模工作区配置对象实体和实体关系后，这里将自动展示本体拓扑图
         </p>
         <button
           onClick={() => navigate(`/ontologies/${oid}`)}
-          className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-4 py-2 text-sm font-medium text-teal-600 transition-colors hover:bg-teal-100"
+          className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-brand-line bg-brand-soft px-4 py-2 text-sm font-medium text-brand-ink transition-colors hover:bg-brand-soft"
         >
           <ExternalLink size={14} />前往本体模型工作台
         </button>
@@ -283,10 +283,10 @@ export function OntologyNetworkView({
     <div className="workspace-topology-surface relative h-full overflow-hidden">
       <div className="absolute inset-x-4 top-4 z-10 flex flex-nowrap items-center justify-center gap-2">
         {[
-          { icon: Boxes, label: `${objectTypes.length} 对象实体`, className: 'border-sky-100 bg-white/88 text-sky-700' },
-          { icon: Link2, label: `${linkTypes.length} 实体关系`, className: 'border-cyan-100 bg-white/88 text-cyan-700' },
-          { icon: Zap, label: `${actions.length} 执行动作`, className: 'border-amber-100 bg-white/88 text-amber-700' },
-          { icon: FunctionSquare, label: `${functions.length} 激活函数`, className: 'border-violet-100 bg-white/88 text-violet-700' },
+          { icon: Boxes, label: `${objectTypes.length} 对象实体`, className: 'border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-card text-[var(--color-info)]' },
+          { icon: Link2, label: `${linkTypes.length} 实体关系`, className: 'border-viz-cyan-soft bg-card text-viz-cyan' },
+          { icon: Zap, label: `${actions.length} 执行动作`, className: 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-card text-[var(--color-warning)]' },
+          { icon: FunctionSquare, label: `${functions.length} 激活函数`, className: 'border-viz-violet-soft bg-card text-viz-violet' },
         ].map(stat => (
           <span key={stat.label} className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-medium shadow-sm backdrop-blur ${stat.className}`}>
             <stat.icon size={12} />{stat.label}
@@ -294,23 +294,23 @@ export function OntologyNetworkView({
         ))}
       </div>
 
-      <div className="absolute bottom-6 left-1/2 z-10 flex -translate-x-1/2 items-center overflow-hidden rounded-lg border border-slate-200 bg-white/90 shadow-sm backdrop-blur">
+      <div className="absolute bottom-6 left-1/2 z-10 flex -translate-x-1/2 items-center overflow-hidden rounded-lg border border-border bg-card shadow-sm backdrop-blur">
         <button
           type="button"
           onClick={() => setZoomLevel(zoom - 0.1)}
-          className="flex h-8 w-8 items-center justify-center text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900"
+          className="flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           title="缩小"
           aria-label="缩小网络图"
         >
           <Minus size={14} />
         </button>
-        <div data-testid="ontology-zoom-level" className="min-w-12 border-x border-slate-100 px-2 text-center text-[11px] font-semibold tabular-nums text-slate-600">
+        <div data-testid="ontology-zoom-level" className="min-w-12 border-x border-border px-2 text-center text-[11px] font-semibold tabular-nums text-muted-foreground">
           {zoomPercent}%
         </div>
         <button
           type="button"
           onClick={() => setZoomLevel(zoom + 0.1)}
-          className="flex h-8 w-8 items-center justify-center text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900"
+          className="flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           title="放大"
           aria-label="放大网络图"
         >
@@ -319,7 +319,7 @@ export function OntologyNetworkView({
         <button
           type="button"
           onClick={resetViewport}
-          className="flex h-8 w-8 items-center justify-center border-l border-slate-100 text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900"
+          className="flex h-8 w-8 items-center justify-center border-l border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           title="重置视图"
           aria-label="重置网络图视图"
         >
@@ -327,7 +327,7 @@ export function OntologyNetworkView({
         </button>
       </div>
 
-      <div className="pointer-events-none absolute bottom-6 left-4 z-10 hidden items-center gap-1.5 rounded-md border border-slate-200/80 bg-white/80 px-2.5 py-1.5 text-[10px] font-medium text-slate-500 shadow-sm backdrop-blur lg:flex">
+      <div className="pointer-events-none absolute bottom-6 left-4 z-10 hidden items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5 text-[10px] font-medium text-muted-foreground shadow-sm backdrop-blur lg:flex">
         滚轮缩放 · 按住拖拽 · 双击复位
       </div>
 
@@ -418,7 +418,7 @@ export function OntologyNetworkView({
                     x={labelX}
                     y={labelY - 8}
                     textAnchor="middle"
-                    className="fill-slate-500 text-[10px] font-medium"
+                    className="fill-foreground text-[10px] font-medium"
                   >
                     <title>{`${sourceObject ? itemLabel(sourceObject) : link.sourceObjectTypeId} → ${targetObject ? itemLabel(targetObject) : link.targetObjectTypeId}`}</title>
                     {trimLabel(label, 12)}
@@ -455,7 +455,7 @@ export function OntologyNetworkView({
                 <div
                   data-testid="ontology-network-node"
                   data-object-type-id={objectType.id}
-                  className="flex h-full flex-col overflow-hidden rounded-[18px] border bg-white shadow-[0_18px_42px_rgba(15,23,42,0.12)] backdrop-blur transition-transform duration-200 hover:-translate-y-0.5"
+                  className="flex h-full flex-col overflow-hidden rounded-[18px] border bg-card shadow-[0_18px_42px_rgba(15,23,42,0.12)] backdrop-blur transition-transform duration-200 hover:-translate-y-0.5"
                   style={{ borderColor: palette.stroke, background: `linear-gradient(145deg, ${palette.fill} 0%, rgba(255,255,255,0.98) 58%, #ffffff 100%)` }}
                   title={`${itemLabel(objectType)} · ${objectType.properties.length} 属性 · ${degree} 关系`}
                 >
@@ -464,7 +464,7 @@ export function OntologyNetworkView({
                     style={{ borderColor: `${palette.stroke}55`, background: `linear-gradient(135deg, ${palette.soft}, rgba(255,255,255,0.72))` }}
                   >
                     <div
-                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white shadow-sm"
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-[var(--color-text-inverse)] shadow-sm"
                       style={{ backgroundColor: objectType.color || palette.accent }}
                     >
                       <span aria-hidden="true" data-testid="ontology-network-node-icon" className="text-[19px] leading-none">{iconGlyph}</span>
@@ -472,17 +472,17 @@ export function OntologyNetworkView({
                     <div className="min-w-0 flex-1">
                       <div className="flex min-w-0 items-center justify-between gap-2">
                         <div className="min-w-0">
-                          <div className="truncate text-[15px] font-semibold text-slate-900">{trimLabel(itemLabel(objectType), 18)}</div>
-                          <div className="truncate font-mono text-[11px] text-slate-500">{trimLabel(objectType.name, 24)}</div>
+                          <div className="truncate text-[15px] font-semibold text-foreground">{trimLabel(itemLabel(objectType), 18)}</div>
+                          <div className="truncate font-mono text-[11px] text-muted-foreground">{trimLabel(objectType.name, 24)}</div>
                         </div>
                         <button
                           onClick={(e) => { e.stopPropagation(); setInstanceModal({ open: true, objectTypeId: objectType.id, objectTypeLabel: itemLabel(objectType) }); setInstanceModalPage(0); setInstanceModalFilterCol(''); setInstanceModalFilterKw(''); setInstanceModalPageSize(20); setInstanceModalJump('') }}
-                          className="shrink-0 rounded-full bg-white/75 px-2 py-0.5 text-[10px] font-semibold text-slate-500 shadow-sm hover:bg-teal-50 hover:text-teal-600 transition-colors cursor-pointer">
+                          className="shrink-0 rounded-full bg-card px-2 py-0.5 text-[10px] font-semibold text-muted-foreground shadow-sm hover:bg-brand-soft hover:text-brand-ink transition-colors cursor-pointer">
                           {instances} 实例
                         </button>
                       </div>
                       {objectType.description && (
-                        <div className="mt-1 truncate text-[10px] text-slate-500">{trimLabel(objectType.description, 32)}</div>
+                        <div className="mt-1 truncate text-[10px] text-muted-foreground">{trimLabel(objectType.description, 32)}</div>
                       )}
                     </div>
                   </div>
@@ -491,69 +491,69 @@ export function OntologyNetworkView({
                       关系/动作/函数三行推出卡片（MYW-61 裁切缺陷的结构性护栏）。 */}
                   <div className="min-h-0 flex-1 overflow-hidden px-4 py-3">
                     <div className="mb-2 flex items-center justify-between">
-                      <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">实体属性</span>
-                      <span className="text-[10px] font-medium text-slate-400">{objectType.properties.length} 项</span>
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">实体属性</span>
+                      <span className="text-[10px] font-medium text-[var(--color-text-tertiary)]">{objectType.properties.length} 项</span>
                     </div>
                     <div className="space-y-1.5">
                       {visibleProperties.map(prop => {
                         const isPrimary = prop.id === objectType.primaryKey || prop.name === objectType.primaryKey
                         return (
-                          <div key={prop.id} className="flex items-center justify-between gap-2 rounded-lg bg-white/70 px-2.5 py-1.5 text-[11px] shadow-sm ring-1 ring-slate-200/70">
+                          <div key={prop.id} className="flex items-center justify-between gap-2 rounded-lg bg-card px-2.5 py-1.5 text-[11px] shadow-sm ring-1 ring-[var(--color-border-hover)]">
                             <div className="flex min-w-0 items-center gap-1.5">
-                              {isPrimary && <KeyRound size={12} className="shrink-0 text-amber-500" />}
-                              <span className={`truncate ${prop.required ? 'font-medium text-slate-700' : 'text-slate-500'}`}>{propertyLabel(prop)}</span>
+                              {isPrimary && <KeyRound size={12} className="shrink-0 text-[var(--color-warning)]" />}
+                              <span className={`truncate ${prop.required ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>{propertyLabel(prop)}</span>
                             </div>
-                            <span className="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">{prop.type}</span>
+                            <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">{prop.type}</span>
                           </div>
                         )
                       })}
                       {remainingProperties > 0 && (
-                        <div className="pl-1 text-[10px] font-medium text-slate-400">+ {remainingProperties} 更多实体属性</div>
+                        <div className="pl-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">+ {remainingProperties} 更多实体属性</div>
                       )}
                       {objectType.properties.length === 0 && (
-                        <div className="rounded-lg border border-dashed border-slate-200 bg-white/50 px-2.5 py-2 text-[11px] text-slate-400">暂无实体属性</div>
+                        <div className="rounded-lg border border-dashed border-border bg-card px-2.5 py-2 text-[11px] text-[var(--color-text-tertiary)]">暂无实体属性</div>
                       )}
                     </div>
                   </div>
 
-                  <div className="space-y-2 border-t border-slate-200/70 bg-white/72 px-4 py-3">
+                  <div className="space-y-2 border-t border-border bg-card px-4 py-3">
                     <div className="flex min-w-0 items-center gap-1.5">
-                      <Link2 size={12} className="shrink-0 text-cyan-500" />
-                      <span className="shrink-0 text-[10px] font-semibold text-slate-400">实体关系</span>
+                      <Link2 size={12} className="shrink-0 text-viz-cyan" />
+                      <span className="shrink-0 text-[10px] font-semibold text-[var(--color-text-tertiary)]">实体关系</span>
                       <div className="flex min-w-0 flex-1 gap-1 overflow-hidden">
                         {relatedLinks.slice(0, 2).map(link => (
-                          <span key={link.id} className="truncate rounded-full border border-cyan-100 bg-cyan-50 px-2 py-0.5 text-[10px] font-medium text-cyan-700">
+                          <span key={link.id} className="truncate rounded-full border border-viz-cyan-soft bg-viz-cyan-soft px-2 py-0.5 text-[10px] font-medium text-viz-cyan">
                             {trimLabel(itemLabel(link), 8)}
                           </span>
                         ))}
-                        {relatedLinks.length === 0 && <span className="text-[10px] text-slate-400">暂无实体关系</span>}
-                        {relatedLinks.length > 2 && <span className="text-[10px] font-medium text-slate-400">+{relatedLinks.length - 2}</span>}
+                        {relatedLinks.length === 0 && <span className="text-[10px] text-[var(--color-text-tertiary)]">暂无实体关系</span>}
+                        {relatedLinks.length > 2 && <span className="text-[10px] font-medium text-[var(--color-text-tertiary)]">+{relatedLinks.length - 2}</span>}
                       </div>
                     </div>
                       <div className="flex min-w-0 items-center gap-1.5">
-                      <Zap size={12} className="shrink-0 text-amber-500" />
-                      <span className="shrink-0 text-[10px] font-semibold text-slate-400">执行动作</span>
+                      <Zap size={12} className="shrink-0 text-[var(--color-warning)]" />
+                      <span className="shrink-0 text-[10px] font-semibold text-[var(--color-text-tertiary)]">执行动作</span>
                       <div className="flex min-w-0 flex-1 gap-1 overflow-hidden">
                         {actionItems.slice(0, 2).map(action => (
-                          <span key={action.id} className="truncate rounded-full border border-amber-100 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                          <span key={action.id} className="truncate rounded-full border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-warning)]">
                             {trimLabel(itemLabel(action), 8)}
                           </span>
                         ))}
-                        {actionItems.length === 0 && <span className="text-[10px] text-slate-400">暂无执行动作</span>}
-                        {actionItems.length > 2 && <span className="text-[10px] font-medium text-slate-400">+{actionItems.length - 2}</span>}
+                        {actionItems.length === 0 && <span className="text-[10px] text-[var(--color-text-tertiary)]">暂无执行动作</span>}
+                        {actionItems.length > 2 && <span className="text-[10px] font-medium text-[var(--color-text-tertiary)]">+{actionItems.length - 2}</span>}
                       </div>
                     </div>
                     <div className="flex min-w-0 items-center gap-1.5">
-                      <FunctionSquare size={12} className="shrink-0 text-violet-500" />
-                      <span className="shrink-0 text-[10px] font-semibold text-slate-400">激活函数</span>
+                      <FunctionSquare size={12} className="shrink-0 text-viz-violet" />
+                      <span className="shrink-0 text-[10px] font-semibold text-[var(--color-text-tertiary)]">激活函数</span>
                       <div className="flex min-w-0 flex-1 gap-1 overflow-hidden">
                         {functionItems.slice(0, 2).map(fn => (
-                          <span key={fn.id} className="truncate rounded-full border border-violet-100 bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700">
+                          <span key={fn.id} className="truncate rounded-full border border-viz-violet-soft bg-viz-violet-soft px-2 py-0.5 text-[10px] font-medium text-viz-violet">
                             {trimLabel(itemLabel(fn), 8)}
                           </span>
                         ))}
-                        {functionItems.length === 0 && <span className="text-[10px] text-slate-400">暂无激活函数</span>}
-                        {functionItems.length > 2 && <span className="text-[10px] font-medium text-slate-400">+{functionItems.length - 2}</span>}
+                        {functionItems.length === 0 && <span className="text-[10px] text-[var(--color-text-tertiary)]">暂无激活函数</span>}
+                        {functionItems.length > 2 && <span className="text-[10px] font-medium text-[var(--color-text-tertiary)]">+{functionItems.length - 2}</span>}
               </div>
             </div>
           </div>
@@ -565,8 +565,8 @@ export function OntologyNetworkView({
       </svg>
 
       {instanceModal.open && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/60 backdrop-blur-sm" onClick={() => setInstanceModal({ open: false, objectTypeId: '', objectTypeLabel: '' })}>
-          <div className="mx-4 max-h-[75vh] w-full max-w-3xl overflow-hidden rounded-xl border border-slate-200 bg-gradient-to-b from-white to-slate-50/50 shadow-lg" onClick={e => e.stopPropagation()}>
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-card backdrop-blur-sm" onClick={() => setInstanceModal({ open: false, objectTypeId: '', objectTypeLabel: '' })}>
+          <div className="mx-4 max-h-[75vh] w-full max-w-3xl overflow-hidden rounded-xl border border-border bg-gradient-to-b from-white to-muted shadow-lg" onClick={e => e.stopPropagation()}>
             {(() => {
               const objType = objectTypes.find(o => o.id === instanceModal.objectTypeId)
               const displayProperties = objType?.properties?.slice(0, 8) || []
@@ -602,21 +602,21 @@ export function OntologyNetworkView({
 
               return (
                 <div className="flex max-h-[75vh] flex-col">
-                  <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-slate-100">
-                    <h3 className="text-base font-semibold text-slate-700">
+                  <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-border">
+                    <h3 className="text-base font-semibold text-foreground">
                       {instanceModal.objectTypeLabel} · 实例数据
                     </h3>
                     <button onClick={() => setInstanceModal({ open: false, objectTypeId: '', objectTypeLabel: '' })}
-                      className="flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600">
+                      className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-muted hover:text-muted-foreground">
                       <X size={16} />
                     </button>
                   </div>
 
-                  <div className="flex items-center gap-2 px-5 py-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2 px-5 py-2 border-b border-border">
                     <select
                       value={instanceModalFilterCol}
                       onChange={e => setInstanceModalFilterCol(e.target.value)}
-                      className="h-8 w-40 cursor-pointer appearance-none rounded-md border border-slate-200 bg-white pl-2.5 pr-6 text-xs text-slate-600 outline-none focus:border-teal-300 focus:ring-1 focus:ring-teal-100"
+                      className="h-8 w-40 cursor-pointer appearance-none rounded-md border border-border bg-card pl-2.5 pr-6 text-xs text-muted-foreground outline-none focus:border-brand-line focus:ring-1 focus:ring-ring"
                       style={{ backgroundImage: `url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 6px center' }}
                     >
                       <option value="">全部列</option>
@@ -630,12 +630,12 @@ export function OntologyNetworkView({
                       onKeyDown={e => { if (e.key === 'Enter' && instanceModalFilterCol) applyFilter() }}
                       placeholder={instanceModalFilterCol ? '输入关键词筛选…' : '请先选择筛选列'}
                       disabled={!instanceModalFilterCol}
-                      className="h-8 flex-1 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-600 outline-none placeholder:text-slate-300 focus:border-teal-300 focus:ring-1 focus:ring-teal-100 disabled:bg-slate-50 disabled:text-slate-400"
+                      className="h-8 flex-1 rounded-md border border-border bg-card px-3 text-xs text-muted-foreground outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-brand-line focus:ring-1 focus:ring-ring disabled:bg-muted disabled:text-[var(--color-text-tertiary)]"
                     />
                     <button
                       onClick={applyFilter}
                       disabled={!instanceModalFilterCol}
-                      className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-400 transition-colors hover:border-teal-200 hover:bg-teal-50 hover:text-teal-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="flex h-8 w-8 items-center justify-center rounded-md border border-border text-[var(--color-text-tertiary)] transition-colors hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <Search size={14} />
                     </button>
@@ -657,10 +657,10 @@ export function OntologyNetworkView({
                         XLSX.writeFile(wb, filename)
                       }}
                       disabled={filteredInstances.length === 0}
-                      className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-400 transition-colors hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed"
+                      className="group/tip relative flex h-8 w-8 items-center justify-center rounded-md border border-border text-[var(--color-text-tertiary)] transition-colors hover:border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] hover:bg-[var(--color-success-bg)] hover:text-[var(--color-success)] disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       <Download size={14} />
-                      <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-800 px-2 py-0.5 text-[11px] text-white opacity-0 transition-opacity group-hover/tip:opacity-100">导出 Excel</span>
+                      <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-accent px-2 py-0.5 text-[11px] text-[var(--color-text-inverse)] opacity-0 transition-opacity group-hover/tip:opacity-100">导出 Excel</span>
                     </button>
                   </div>
 
@@ -676,33 +676,33 @@ export function OntologyNetworkView({
                     onMouseLeave={() => { resizeRef.current = null }}
                   >
                     {instanceRowsQuery.isPending ? (
-                      <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-400">
-                        <Loader2 size={16} className="animate-spin text-teal-600" />正在加载实例数据…
+                      <div className="flex items-center justify-center gap-2 py-10 text-sm text-[var(--color-text-tertiary)]">
+                        <Loader2 size={16} className="animate-spin text-brand-ink" />正在加载实例数据…
                       </div>
                     ) : instanceRowsQuery.isError ? (
-                      <div className="rounded-lg border border-dashed border-red-200 bg-red-50/60 px-4 py-8 text-center text-sm text-red-500">
+                      <div className="rounded-lg border border-dashed border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-4 py-8 text-center text-sm text-[var(--color-danger)]">
                         实例数据加载失败：{String((instanceRowsQuery.error as any)?.detail || (instanceRowsQuery.error as any)?.message || '未知错误')}
                         <button
                           onClick={() => instanceRowsQuery.refetch()}
-                          className="ml-2 rounded-md border border-red-200 bg-white px-2 py-0.5 text-xs text-red-500 transition-colors hover:bg-red-50"
+                          className="ml-2 rounded-md border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-card px-2 py-0.5 text-xs text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger-bg)]"
                         >重试</button>
                       </div>
                     ) : filteredInstances.length === 0 ? (
-                      <div className="rounded-lg border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
+                      <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-[var(--color-text-tertiary)]">
                         {instanceModalFilterKw ? '无匹配实例' : '暂无实例数据'}
                       </div>
                     ) : (
                       <table className="w-full border-collapse text-xs table-fixed">
                         <thead>
-                          <tr className="bg-slate-50">
+                          <tr className="bg-muted">
                             {displayProperties.map(prop => (
                               <th key={prop.name}
-                                className="relative px-3 py-2 text-left font-medium text-slate-500 border-b border-slate-200 whitespace-nowrap select-none"
+                                className="relative px-3 py-2 text-left font-medium text-muted-foreground border-b border-border whitespace-nowrap select-none"
                                 style={{ width: columnWidths[prop.name] || 'auto' }}
                               >
                                 {headerLabel(prop)}
                                 <div
-                                  className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize border-r-2 border-slate-200 transition-colors hover:border-teal-300"
+                                  className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize border-r-2 border-border transition-colors hover:border-brand-line"
                                   onMouseDown={(e) => {
                                     e.preventDefault()
                                     const colEl = (e.target as HTMLElement).parentElement
@@ -715,9 +715,9 @@ export function OntologyNetworkView({
                         </thead>
                         <tbody>
                           {pageInstances.map((inst, idx) => (
-                            <tr key={inst.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
+                            <tr key={inst.id} className={idx % 2 === 0 ? 'bg-card' : 'bg-muted'}>
                               {displayProperties.map(prop => (
-                                <td key={prop.name} className="px-3 py-1.5 border-b border-slate-100 text-slate-600 truncate"
+                                <td key={prop.name} className="px-3 py-1.5 border-b border-border text-muted-foreground truncate"
                                   style={{ maxWidth: columnWidths[prop.name] || undefined }}>
                                   {valueLabel(inst, prop)}
                                 </td>
@@ -729,37 +729,37 @@ export function OntologyNetworkView({
                     )}
                   </div>
 
-                  <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-slate-100 bg-white">
+                  <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-border bg-card">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-400">每页</span>
+                      <span className="text-xs text-[var(--color-text-tertiary)]">每页</span>
                       <select
                         value={instanceModalPageSize}
                         onChange={e => { setInstanceModalPageSize(Number(e.target.value)); setInstanceModalPage(0) }}
-                        className="h-7 cursor-pointer rounded border border-slate-200 bg-white px-1.5 text-xs text-slate-500 outline-none"
+                        className="h-7 cursor-pointer rounded border border-border bg-card px-1.5 text-xs text-muted-foreground outline-none"
                       >
                         {[10, 20, 50, 100].map(n => (
                           <option key={n} value={n}>{n}</option>
                         ))}
                       </select>
-                      <span className="text-xs text-slate-400">条</span>
+                      <span className="text-xs text-[var(--color-text-tertiary)]">条</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => setInstanceModalPage(p => Math.max(0, p - 1))}
                         disabled={safePage === 0}
-                        className="px-2 py-1 rounded border border-slate-200 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        className="px-2 py-1 rounded border border-border text-xs text-muted-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                       >上一页</button>
-                      <span className="text-xs text-slate-500">
+                      <span className="text-xs text-muted-foreground">
                         {safePage + 1} / {totalPages}
                       </span>
                       <button
                         onClick={() => setInstanceModalPage(p => Math.min(totalPages - 1, p + 1))}
                         disabled={safePage >= totalPages - 1}
-                        className="px-2 py-1 rounded border border-slate-200 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        className="px-2 py-1 rounded border border-border text-xs text-muted-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                       >下一页</button>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-slate-400">跳至</span>
+                      <span className="text-xs text-[var(--color-text-tertiary)]">跳至</span>
                       <input
                         value={instanceModalJump}
                         onChange={e => setInstanceModalJump(e.target.value)}
@@ -770,9 +770,9 @@ export function OntologyNetworkView({
                           }
                         }}
                         placeholder={String(safePage + 1)}
-                        className="h-7 w-12 rounded border border-slate-200 bg-white px-1.5 text-center text-xs text-slate-500 outline-none"
+                        className="h-7 w-12 rounded border border-border bg-card px-1.5 text-center text-xs text-muted-foreground outline-none"
                       />
-                      <span className="text-xs text-slate-400">页</span>
+                      <span className="text-xs text-[var(--color-text-tertiary)]">页</span>
                     </div>
                   </div>
                 </div>
