@@ -6,7 +6,7 @@ import {
   type MulticaConfig,
   type MulticaTestResult,
 } from '@/api/superAssistant'
-import { useToast } from '@/components/ui/Toast'
+import { toast } from 'sonner'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
@@ -20,7 +20,6 @@ export default function IntegrationsDialog({ onClose, onSaved }: {
   onClose: () => void
   onSaved?: () => void | Promise<void>
 }) {
-  const { toast } = useToast()
   const [config, setConfig] = useState<MulticaConfig | null>(null)
   const [baseUrl, setBaseUrl] = useState('')
   const [token, setToken] = useState('')
@@ -88,9 +87,7 @@ export default function IntegrationsDialog({ onClose, onSaved }: {
       })
       setConfig(saved)
       await onSaved?.()
-      toast({
-        tone: 'success',
-        title: 'multica 配置已保存',
+      toast.success('multica 配置已保存', {
         description: saved.enabled ? '现在可以在输入框使用 /multica: 命令' : '集成已停用',
       })
       onClose()
