@@ -116,7 +116,7 @@ export default function StewardComposer({
   }
 
   return (
-    <div className="relative bg-white px-4 pb-4 pt-3">
+    <div className="relative bg-card px-4 pb-4 pt-3">
       <input
         ref={fileInputRef}
         type="file"
@@ -132,18 +132,18 @@ export default function StewardComposer({
         }}
       />
       {fileError && (
-        <div className="mb-1.5 truncate text-[11px] text-red-600" title={fileError}>
+        <div className="mb-1.5 truncate text-[11px] text-[var(--color-danger)]" title={fileError}>
           {fileError}
         </div>
       )}
       <div
         ref={targetPickerRef}
         data-testid="steward-composer-shell"
-        className="relative overflow-visible rounded-xl border border-teal-400 bg-white ring-1 ring-teal-100 transition-colors focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-200/80"
+        className="relative overflow-visible rounded-xl border border-brand bg-card ring-1 ring-ring transition-colors focus-within:border-brand focus-within:ring-2 focus-within:ring-ring"
       >
-        <div className="flex min-h-10 items-center gap-2 border-b border-slate-100 px-3.5 py-2">
-          <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-slate-500">
-            <Workflow size={12} className="text-teal-700" /> 操作目标
+        <div className="flex min-h-10 items-center gap-2 border-b border-border px-3.5 py-2">
+          <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+            <Workflow size={12} className="text-brand-ink" /> 操作目标
           </span>
           <button
             type="button"
@@ -156,15 +156,15 @@ export default function StewardComposer({
             }}
             className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1 text-left text-xs transition ${
               selectedRecord
-                ? 'bg-teal-50 text-teal-800 hover:bg-teal-100'
-                : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'
+                ? 'bg-brand-soft text-brand-ink hover:bg-brand-soft'
+                : 'text-[var(--color-text-tertiary)] hover:bg-muted hover:text-muted-foreground'
             } disabled:cursor-not-allowed disabled:opacity-60`}
           >
             <span className="min-w-0 flex-1 truncate">
               {selectedRecord ? selectedRecord.name : recordsLoading ? '正在加载可编排流水线…' : '选择一条可编排流水线（可选）'}
             </span>
             {!recordsLoading && (
-              <span className="shrink-0 text-[10px] text-slate-400">
+              <span className="shrink-0 text-[10px] text-[var(--color-text-tertiary)]">
                 {selectedRecord ? `${selectedRecord.summary.node_count} 个节点` : `${records.length} 条`}
               </span>
             )}
@@ -181,7 +181,7 @@ export default function StewardComposer({
               }}
               aria-label="清除目标流水线"
               title="清除目标流水线"
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition hover:bg-muted hover:text-foreground disabled:opacity-50"
             >
               <X size={13} />
             </button>
@@ -189,10 +189,10 @@ export default function StewardComposer({
         </div>
 
         {targetMenuOpen && !busy && (
-          <div className="absolute bottom-[calc(100%+8px)] left-0 right-0 z-40 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_18px_52px_rgba(15,23,42,0.16)]">
-            <div className="border-b border-slate-100 p-2.5">
+          <div className="absolute bottom-[calc(100%+8px)] left-0 right-0 z-40 overflow-hidden rounded-2xl border border-border bg-card shadow-[0_18px_52px_rgba(15,23,42,0.16)]">
+            <div className="border-b border-border p-2.5">
               <div className="relative">
-                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
                 <input
                   autoFocus
                   value={targetSearch}
@@ -202,17 +202,17 @@ export default function StewardComposer({
                     event.stopPropagation()
                   }}
                   placeholder="搜索流水线名称或描述"
-                  className="h-9 w-full rounded-xl border border-slate-200 bg-slate-50 pl-8 pr-3 text-xs outline-none transition focus:border-teal-400 focus:bg-white"
+                  className="h-9 w-full rounded-xl border border-border bg-muted pl-8 pr-3 text-xs outline-none transition focus:border-brand focus:bg-card"
                 />
               </div>
             </div>
             <div role="listbox" aria-label="可编排流水线" className="max-h-64 overflow-y-auto p-1.5">
               {recordsLoading ? (
-                <div className="flex items-center justify-center gap-2 py-8 text-xs text-slate-400">
+                <div className="flex items-center justify-center gap-2 py-8 text-xs text-[var(--color-text-tertiary)]">
                   <Loader2 size={13} className="animate-spin" /> 正在加载
                 </div>
               ) : filteredTargetRecords.length === 0 ? (
-                <div className="px-4 py-8 text-center text-xs leading-5 text-slate-400">
+                <div className="px-4 py-8 text-center text-xs leading-5 text-[var(--color-text-tertiary)]">
                   {records.length === 0 ? '当前没有可编排流水线，可先让数据管家新建一条。' : '没有匹配的可编排流水线。'}
                 </div>
               ) : filteredTargetRecords.map(record => (
@@ -229,25 +229,25 @@ export default function StewardComposer({
                   }}
                   className={`flex w-full items-start gap-2.5 rounded-xl px-3 py-2.5 text-left transition ${
                     selectedRecordId === record.id
-                      ? 'bg-teal-50 text-teal-900'
-                      : 'text-slate-700 hover:bg-slate-50'
+                      ? 'bg-brand-soft text-brand-ink'
+                      : 'text-foreground hover:bg-muted'
                   }`}
                 >
                   <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
-                    selectedRecordId === record.id ? 'bg-white text-teal-700' : 'bg-slate-100 text-slate-500'
+                    selectedRecordId === record.id ? 'bg-card text-brand-ink' : 'bg-muted text-muted-foreground'
                   }`}>
                     <Workflow size={13} />
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-2">
                       <span className="truncate text-xs font-semibold">{record.name}</span>
-                      <span className="shrink-0 text-[10px] text-slate-400">{record.summary.node_count} 个节点</span>
+                      <span className="shrink-0 text-[10px] text-[var(--color-text-tertiary)]">{record.summary.node_count} 个节点</span>
                     </span>
-                    <span className="mt-0.5 block truncate text-[10px] text-slate-400">
+                    <span className="mt-0.5 block truncate text-[10px] text-[var(--color-text-tertiary)]">
                       {record.description || '暂未设置描述'}
                     </span>
                   </span>
-                  {selectedRecordId === record.id && <CheckCircle2 size={14} className="mt-1 shrink-0 text-teal-600" />}
+                  {selectedRecordId === record.id && <CheckCircle2 size={14} className="mt-1 shrink-0 text-brand-ink" />}
                 </button>
               ))}
             </div>
@@ -274,7 +274,7 @@ export default function StewardComposer({
             disabled={busy}
             aria-label="数据管家消息"
             data-testid="steward-composer"
-            className="scrollbar-thin block min-h-7 w-full resize-none bg-transparent py-1 text-sm leading-5 outline-none placeholder:text-slate-400 disabled:opacity-50"
+            className="scrollbar-thin block min-h-7 w-full resize-none bg-transparent py-1 text-sm leading-5 outline-none placeholder:text-[var(--color-text-tertiary)] disabled:opacity-50"
           />
         </div>
         <div
@@ -287,7 +287,7 @@ export default function StewardComposer({
               onClick={() => fileInputRef.current?.click()}
               title="上传会话附件（仅本会话可见）"
               aria-label="上传会话附件"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-50 hover:text-teal-600 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition-colors hover:bg-muted hover:text-brand-ink active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <Paperclip size={16} />
             </button>
@@ -297,13 +297,13 @@ export default function StewardComposer({
               aria-pressed={webSearch}
               data-testid="steward-web-search-toggle"
               title={webSearch ? '联网搜索已开启，点击关闭' : '联网搜索已关闭，点击开启'}
-              className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${webSearch
-                ? 'border-teal-300 bg-teal-50 text-teal-700'
-                : 'border-transparent text-slate-400 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-600'}`}
+              className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${webSearch
+                ? 'border-brand-line bg-brand-soft text-brand-ink'
+                : 'border-transparent text-[var(--color-text-tertiary)] hover:border-border hover:bg-muted hover:text-muted-foreground'}`}
             >
               <Globe2 size={15} />
               <span>联网</span>
-              <span className={`h-1.5 w-1.5 rounded-full transition-colors ${webSearch ? 'bg-teal-500' : 'bg-slate-200'}`} />
+              <span className={`h-1.5 w-1.5 rounded-full transition-colors ${webSearch ? 'bg-brand' : 'bg-[var(--color-bg-active)]'}`} />
             </button>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -313,7 +313,7 @@ export default function StewardComposer({
               disabled={busy || !input.trim()}
               title="发送消息"
               aria-label="发送消息"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white transition-all hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand text-[var(--color-text-inverse)] transition-all hover:bg-brand-deep active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
             >
               {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
             </button>
@@ -325,9 +325,9 @@ export default function StewardComposer({
               aria-label="查看我发送的消息"
               aria-expanded={showMessageHistory}
               data-testid="steward-message-history-button"
-              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${showMessageHistory
-                ? 'border-teal-300 bg-teal-50 text-teal-700'
-                : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}
+              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${showMessageHistory
+                ? 'border-brand-line bg-brand-soft text-brand-ink'
+                : 'border-border text-[var(--color-text-tertiary)] hover:bg-muted hover:text-muted-foreground'}`}
             >
               <List size={15} />
             </button>
@@ -336,10 +336,10 @@ export default function StewardComposer({
         {showMessageHistory && (
           <>
             <div className="fixed inset-0 z-20" onClick={() => onShowMessageHistoryChange(false)} />
-            <div className="absolute bottom-full right-0 z-30 mb-2 w-72 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
-              <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
-                <span className="text-[11px] font-medium text-slate-600">我发送的消息</span>
-                <span className="text-[10px] text-slate-400">点击跳转 · 共 {myMessages.length} 条</span>
+            <div className="absolute bottom-full right-0 z-30 mb-2 w-72 overflow-hidden rounded-lg border border-border bg-card shadow-lg">
+              <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                <span className="text-[11px] font-medium text-muted-foreground">我发送的消息</span>
+                <span className="text-[10px] text-[var(--color-text-tertiary)]">点击跳转 · 共 {myMessages.length} 条</span>
               </div>
               <div className="scrollbar-thin max-h-64 overflow-auto py-1">
                 {[...myMessages].reverse().map((message, index) => (
@@ -348,10 +348,10 @@ export default function StewardComposer({
                     key={message.id}
                     onClick={() => jumpToMessage(message.id)}
                     title={message.content}
-                    className="flex w-full items-start gap-2 px-3 py-1.5 text-left transition-colors hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none"
+                    className="flex w-full items-start gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
                   >
-                    <span className="mt-0.5 shrink-0 font-mono text-[10px] text-slate-400">#{myMessages.length - index}</span>
-                    <span className="min-w-0 flex-1 truncate text-xs text-slate-600">{message.content}</span>
+                    <span className="mt-0.5 shrink-0 font-mono text-[10px] text-[var(--color-text-tertiary)]">#{myMessages.length - index}</span>
+                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{message.content}</span>
                   </button>
                 ))}
               </div>

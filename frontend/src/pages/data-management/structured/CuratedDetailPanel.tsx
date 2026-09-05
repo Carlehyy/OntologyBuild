@@ -6,7 +6,7 @@ import {
   Info, Save,
 } from 'lucide-react'
 import curatedApi, { type ReviewDiff, type ReviewRowEdit } from '@/api/v2/curated'
-import { PageSizeSelect } from './PageSizeSelect'
+import { PageSizeSelect } from '@/components/PageSizeSelect'
 import datasetsApi, { FIELD_TYPE_LABELS, type DatasetSchemaColumn } from '@/api/v2/datasets'
 
 interface Props {

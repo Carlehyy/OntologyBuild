@@ -387,10 +387,10 @@ export default function DataStewardPage() {
   const n8nReady = !!status && status.n8n.configured && status.n8n.enabled && status.n8n.reachable !== false
 
   return (
-    <div className="flex h-full flex-col bg-slate-50/70">
+    <div className="flex h-full flex-col bg-muted">
       {/* 前置条件提示 */}
       {status && !n8nReady && (
-        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-800 shrink-0">
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] text-sm text-[var(--color-warning)] shrink-0">
           <AlertTriangle size={15} className="shrink-0" />
           <span className="flex-1">
             {!status.n8n.configured ? '启动配置缺少 n8n 地址或 API Key：请通过配置中心补齐 N8N_* 并重启平台。'
@@ -400,11 +400,11 @@ export default function DataStewardPage() {
         </div>
       )}
       {status && n8nReady && !status.llmReady && (
-        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-800 shrink-0">
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] text-sm text-[var(--color-warning)] shrink-0">
           <AlertTriangle size={15} className="shrink-0" />
           <span className="flex-1">尚未配置对话模型：数据管家需要一个 LLM 才能工作。</span>
           <Link to="/models"
-            className="flex items-center gap-1 text-xs px-2.5 py-1 bg-white border border-amber-300 rounded-lg hover:bg-amber-100 shrink-0">
+            className="flex items-center gap-1 text-xs px-2.5 py-1 bg-card border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] rounded-lg hover:bg-[var(--color-warning-bg)] shrink-0">
             去模型配置
           </Link>
         </div>
@@ -414,12 +414,12 @@ export default function DataStewardPage() {
       <div ref={chatContainerRef} className="flex min-h-0 flex-1 gap-0 p-1 max-xl:flex-col max-xl:gap-1">
         {/* 对话区 */}
         <section style={isWide ? { width: `${chatWidthPct}%` } : undefined}
-          className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)] max-xl:min-h-[55%] max-xl:w-full">
+          className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-[0_8px_30px_rgba(15,23,42,0.04)] max-xl:min-h-[55%] max-xl:w-full">
           {/* 抬头：标题 + 操作按钮 */}
-          <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-3.5">
+          <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3.5">
             <div>
-              <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-700 text-white"><Sparkles size={14} /></span>
+              <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand-deep text-[var(--color-text-inverse)]"><Sparkles size={14} /></span>
                 数据管家
               </h2>
             </div>
@@ -429,7 +429,7 @@ export default function DataStewardPage() {
                 onChange={event => setModelId(event.target.value)}
                 aria-label="选择数据管家对话模型"
                 title="对话模型"
-                className="h-8 cursor-pointer rounded-md border border-slate-200 bg-slate-50 px-2 text-xs text-slate-700 outline-none transition-colors hover:border-teal-300 focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
+                className="h-8 cursor-pointer rounded-md border border-border bg-muted px-2 text-xs text-foreground outline-none transition-colors hover:border-brand-line focus:border-brand focus:ring-2 focus:ring-ring"
               >
                 <option value="">默认模型</option>
                 {llmModels.map(model => (
@@ -440,11 +440,11 @@ export default function DataStewardPage() {
                 onClick={openFiles}
                 title="查看会话文件"
                 aria-label="查看会话文件"
-                className="group relative inline-flex h-8 w-8 items-center justify-center rounded-md border border-teal-200 bg-teal-50 text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                className="group relative inline-flex h-8 w-8 items-center justify-center rounded-md border border-brand-line bg-brand-soft text-brand-ink transition-colors hover:border-brand-line hover:bg-brand-soft active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <FolderOpen size={15} />
                 {files.length > 0 && (
-                  <span className="absolute -right-1.5 -top-1.5 flex min-w-4 items-center justify-center rounded-full bg-teal-600 px-1 text-[9px] font-semibold leading-4 text-white">
+                  <span className="absolute -right-1.5 -top-1.5 flex min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[9px] font-semibold leading-4 text-[var(--color-text-inverse)]">
                     {files.length > 99 ? '99+' : files.length}
                   </span>
                 )}
@@ -453,7 +453,7 @@ export default function DataStewardPage() {
                 onClick={openBrowser}
                 title={browserDisplay === 'pip' ? '恢复实时浏览器大窗口' : '打开实时浏览器'}
                 aria-label={browserDisplay === 'pip' ? '恢复实时浏览器大窗口' : '打开实时浏览器'}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-sky-200 bg-sky-50 text-sky-700 transition-colors hover:border-sky-300 hover:bg-sky-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] text-[var(--color-info)] transition-colors hover:border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] hover:bg-[var(--color-info-bg)] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-info)]"
               >
                 <Monitor size={15} />
               </button>
@@ -467,9 +467,9 @@ export default function DataStewardPage() {
                   title="查看会话记录"
                   aria-label="查看会话记录"
                   aria-expanded={showHistory}
-                  className={`inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${showHistory
-                    ? 'border-violet-400 bg-violet-100 text-violet-800'
-                    : 'border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300 hover:bg-violet-100'}`}
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-viz-violet ${showHistory
+                    ? 'border-viz-violet bg-viz-violet-soft text-viz-violet'
+                    : 'border-viz-violet-soft bg-viz-violet-soft text-viz-violet hover:border-viz-violet-soft hover:bg-viz-violet-soft'}`}
                 >
                   <History size={15} />
                 </button>
@@ -530,7 +530,7 @@ export default function DataStewardPage() {
           onMouseDown={startResize}
           className="hidden w-1 shrink-0 cursor-col-resize items-center justify-center xl:flex"
         >
-          <div className="h-16 w-1 rounded-full bg-slate-200 transition-all hover:h-24 hover:bg-teal-400" />
+          <div className="h-16 w-1 rounded-full bg-[var(--color-bg-active)] transition-all hover:h-24 hover:bg-brand" />
         </div>
 
         {/* 受管流水线面板 */}

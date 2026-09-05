@@ -48,16 +48,16 @@ function KpiCard({
   pulse?: boolean
 }) {
   const toneMap = {
-    slate:   { text: 'text-slate-900',   iconBg: 'bg-slate-100 text-slate-500' },
-    rose:    { text: 'text-rose-600',    iconBg: 'bg-rose-50 text-rose-500' },
-    emerald: { text: 'text-emerald-600', iconBg: 'bg-emerald-50 text-emerald-500' },
-    teal:    { text: 'text-teal-700',    iconBg: 'bg-teal-50 text-teal-600' },
-    cyan:    { text: 'text-cyan-600',    iconBg: 'bg-cyan-50 text-cyan-500' },
+    slate:   { text: 'text-foreground',   iconBg: 'bg-muted text-muted-foreground' },
+    rose:    { text: 'text-viz-rose',    iconBg: 'bg-viz-rose-soft text-viz-rose' },
+    emerald: { text: 'text-[var(--color-success)]', iconBg: 'bg-[var(--color-success-bg)] text-[var(--color-success)]' },
+    teal:    { text: 'text-brand-ink',    iconBg: 'bg-brand-soft text-brand-ink' },
+    cyan:    { text: 'text-viz-cyan',    iconBg: 'bg-viz-cyan-soft text-viz-cyan' },
   }[tone]
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50">
+    <div className="rounded-xl border border-border bg-card px-4 py-3 shadow-sm/50">
       <div className="flex items-center justify-between gap-2">
-        <span className="truncate text-[11px] font-medium text-slate-500">{label}</span>
+        <span className="truncate text-[11px] font-medium text-muted-foreground">{label}</span>
         <span className={`relative grid h-6 w-6 shrink-0 place-items-center rounded-md ${toneMap.iconBg}`}>
           {icon}
           {pulse && (
@@ -66,7 +66,7 @@ function KpiCard({
         </span>
       </div>
       <p className={`mt-0.5 text-xl font-semibold leading-none tracking-tight tabular-nums ${toneMap.text}`}>{value}</p>
-      <p className="mt-1 truncate text-[10px] text-slate-400" title={note}>{note}</p>
+      <p className="mt-1 truncate text-[10px] text-[var(--color-text-tertiary)]" title={note}>{note}</p>
     </div>
   )
 }

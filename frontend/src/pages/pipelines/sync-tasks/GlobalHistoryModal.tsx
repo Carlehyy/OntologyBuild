@@ -15,11 +15,11 @@ type TriggerFilter = '' | 'manual' | 'scheduled'
 const PAGE_SIZE_OPTIONS = [10, 20, 50]
 const TRIGGER_LABEL: Record<string, string> = { manual: '手动', scheduled: '定时' }
 const STATUS_META: Record<string, { label: string; className: string; icon: 'success' | 'failed' | 'running' | 'pending' }> = {
-  pending: { label: '排队中', className: 'bg-slate-100 text-slate-600', icon: 'pending' },
-  running: { label: '执行中', className: 'bg-blue-50 text-blue-600', icon: 'running' },
-  success: { label: '成功', className: 'bg-emerald-50 text-emerald-700', icon: 'success' },
-  failed: { label: '失败', className: 'bg-rose-50 text-rose-700', icon: 'failed' },
-  cancelled: { label: '已取消', className: 'bg-amber-50 text-amber-700', icon: 'failed' },
+  pending: { label: '排队中', className: 'bg-muted text-muted-foreground', icon: 'pending' },
+  running: { label: '执行中', className: 'bg-[var(--color-info-bg)] text-[var(--color-info)]', icon: 'running' },
+  success: { label: '成功', className: 'bg-[var(--color-success-bg)] text-[var(--color-success)]', icon: 'success' },
+  failed: { label: '失败', className: 'bg-viz-rose-soft text-viz-rose', icon: 'failed' },
+  cancelled: { label: '已取消', className: 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]', icon: 'failed' },
 }
 
 function formatDate(iso: string | null | undefined): string {
@@ -56,15 +56,15 @@ function StatusBadge({ status }: { status: string }) {
 
 function LakeImpact({ run }: { run: PipelineTaskGlobalRun }) {
   const impact = run.lake_impact
-  if (!impact) return <span className="text-slate-300">—</span>
+  if (!impact) return <span className="text-[var(--color-text-tertiary)]">—</span>
   if (impact.added === 0 && impact.updated === 0 && impact.deleted === 0) {
-    return <span className="text-slate-400">无变更</span>
+    return <span className="text-[var(--color-text-tertiary)]">无变更</span>
   }
   return (
     <span className="inline-flex items-center justify-center gap-1.5 tabular-nums">
-      {impact.added > 0 && <span className="text-emerald-600">+{impact.added}</span>}
-      {impact.updated > 0 && <span className="text-amber-600">~{impact.updated}</span>}
-      {impact.deleted > 0 && <span className="text-rose-600">-{impact.deleted}</span>}
+      {impact.added > 0 && <span className="text-[var(--color-success)]">+{impact.added}</span>}
+      {impact.updated > 0 && <span className="text-[var(--color-warning)]">~{impact.updated}</span>}
+      {impact.deleted > 0 && <span className="text-viz-rose">-{impact.deleted}</span>}
     </span>
   )
 }
@@ -164,52 +164,52 @@ export default function GlobalHistoryModal({
   const hasFilters = Boolean(searchInput || search || pipelineId || statusFilter || triggerFilter || dateFrom || dateTo)
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-accent p-4 backdrop-blur-sm">
       <div
         data-testid="all-history-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="all-history-modal-title"
-        className="flex min-h-[min(520px,88vh)] max-h-[min(760px,88vh)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-emerald-100 bg-white shadow-[0_24px_70px_rgba(6,78,59,0.18)]"
+        className="flex min-h-[min(520px,88vh)] max-h-[min(760px,88vh)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-card shadow-[0_24px_70px_rgba(6,78,59,0.18)]"
       >
-        <div className="relative shrink-0 border-b border-emerald-100 bg-emerald-50/35 px-6 py-5">
+        <div className="relative shrink-0 border-b border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] px-6 py-5">
           <div className="flex min-w-0 items-center gap-3 pr-10">
-            <History size={18} className="shrink-0 text-emerald-600" />
-            <h3 id="all-history-modal-title" className="text-lg font-semibold text-slate-800">历史记录</h3>
-            <p className="min-w-0 truncate text-xs text-slate-400">
+            <History size={18} className="shrink-0 text-[var(--color-success)]" />
+            <h3 id="all-history-modal-title" className="text-lg font-semibold text-foreground">历史记录</h3>
+            <p className="min-w-0 truncate text-xs text-[var(--color-text-tertiary)]">
               汇总展示任务池全部执行记录，可按任务、流水线、状态、触发方式和执行日期筛选
             </p>
           </div>
-          <button type="button" onClick={onClose} aria-label="关闭历史记录弹窗" className="absolute right-5 top-5 rounded-lg p-1 text-slate-400 transition-colors hover:bg-emerald-100 hover:text-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30">
+          <button type="button" onClick={onClose} aria-label="关闭历史记录弹窗" className="absolute right-5 top-5 rounded-lg p-1 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-success-bg)] hover:text-[var(--color-success)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-success)]">
             <X size={18} />
           </button>
         </div>
 
-        <div className="shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
+        <div className="shrink-0 border-b border-border bg-muted px-6 py-3">
           <div className="flex flex-wrap items-end gap-2.5">
-            <label className="min-w-[210px] flex-1 space-y-1 text-[11px] text-slate-500">
+            <label className="min-w-[210px] flex-1 space-y-1 text-[11px] text-muted-foreground">
               <span className="block">任务或流水线</span>
               <span className="relative block">
-                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
                 <input aria-label="搜索历史任务或流水线" value={searchInput} onChange={event => setSearchInput(event.target.value)} placeholder="输入任务名或流水线名"
-                  className="h-8 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-7 text-xs text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
+                  className="h-8 w-full rounded-lg border border-border bg-card pl-8 pr-7 text-xs text-foreground outline-none transition focus:border-[var(--color-success)] focus:ring-2 focus:ring-[var(--color-success)]" />
                 {searchInput && (
-                  <button type="button" aria-label="清除历史搜索" onClick={() => setSearchInput('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X size={12} /></button>
+                  <button type="button" aria-label="清除历史搜索" onClick={() => setSearchInput('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)] hover:text-muted-foreground"><X size={12} /></button>
                 )}
               </span>
             </label>
-            <label className="space-y-1 text-[11px] text-slate-500">
+            <label className="space-y-1 text-[11px] text-muted-foreground">
               <span className="block">关联流水线</span>
               <select aria-label="历史记录流水线筛选" value={pipelineId} onChange={event => { setPipelineId(event.target.value); setPage(1) }}
-                className="h-8 max-w-[180px] rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-emerald-500">
+                className="h-8 max-w-[180px] rounded-lg border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-[var(--color-success)]">
                 <option value="">全部流水线</option>
                 {pipelineOptions.map(option => <option key={option.id} value={option.id}>{option.name}</option>)}
               </select>
             </label>
-            <label className="space-y-1 text-[11px] text-slate-500">
+            <label className="space-y-1 text-[11px] text-muted-foreground">
               <span className="block">执行状态</span>
               <select aria-label="全部历史执行状态筛选" value={statusFilter} onChange={event => { setStatusFilter(event.target.value as StatusFilter); setPage(1) }}
-                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-emerald-500">
+                className="h-8 rounded-lg border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-[var(--color-success)]">
                 <option value="">全部状态</option>
                 <option value="pending">排队中</option>
                 <option value="running">执行中</option>
@@ -218,27 +218,27 @@ export default function GlobalHistoryModal({
                 <option value="cancelled">已取消</option>
               </select>
             </label>
-            <label className="space-y-1 text-[11px] text-slate-500">
+            <label className="space-y-1 text-[11px] text-muted-foreground">
               <span className="block">触发方式</span>
               <select aria-label="全部历史触发方式筛选" value={triggerFilter} onChange={event => { setTriggerFilter(event.target.value as TriggerFilter); setPage(1) }}
-                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-emerald-500">
+                className="h-8 rounded-lg border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-[var(--color-success)]">
                 <option value="">全部方式</option>
                 <option value="manual">手动</option>
                 <option value="scheduled">定时</option>
               </select>
             </label>
-            <label className="space-y-1 text-[11px] text-slate-500">
+            <label className="space-y-1 text-[11px] text-muted-foreground">
               <span className="block">开始日期</span>
               <input aria-label="全部历史开始日期" type="date" value={dateFrom} max={dateTo || undefined} onChange={event => { setDateFrom(event.target.value); setPage(1) }}
-                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-emerald-500" />
+                className="h-8 rounded-lg border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-[var(--color-success)]" />
             </label>
-            <label className="space-y-1 text-[11px] text-slate-500">
+            <label className="space-y-1 text-[11px] text-muted-foreground">
               <span className="block">结束日期</span>
               <input aria-label="全部历史结束日期" type="date" value={dateTo} min={dateFrom || undefined} onChange={event => { setDateTo(event.target.value); setPage(1) }}
-                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-emerald-500" />
+                className="h-8 rounded-lg border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-[var(--color-success)]" />
             </label>
             {hasFilters && (
-              <button type="button" onClick={resetFilters} className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs text-slate-500 transition hover:bg-white hover:text-rose-600">
+              <button type="button" onClick={resetFilters} className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs text-muted-foreground transition hover:bg-card hover:text-viz-rose">
                 <FilterX size={13} />清除筛选
               </button>
             )}
@@ -246,7 +246,7 @@ export default function GlobalHistoryModal({
         </div>
 
         {loadError && (
-          <div className="mx-6 mt-3 flex shrink-0 items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+          <div className="mx-6 mt-3 flex shrink-0 items-center gap-2 rounded-lg border border-viz-rose-soft bg-viz-rose-soft px-3 py-2 text-xs text-viz-rose">
             <XCircle size={13} /><span className="flex-1">{loadError}</span>
             <button type="button" onClick={() => setReloadKey(value => value + 1)} className="font-medium hover:underline">重试</button>
           </div>
@@ -254,14 +254,14 @@ export default function GlobalHistoryModal({
 
         <div data-testid="all-history-scroll" className="min-h-0 flex-1 overflow-auto px-6 py-3 scrollbar-thin">
           {loading ? (
-            <div className="flex min-h-48 items-center justify-center gap-2 text-sm text-slate-400"><Loader2 size={15} className="animate-spin" />加载历史记录...</div>
+            <div className="flex min-h-48 items-center justify-center gap-2 text-sm text-[var(--color-text-tertiary)]"><Loader2 size={15} className="animate-spin" />加载历史记录...</div>
           ) : items.length === 0 ? (
-            <div className="flex min-h-48 items-center justify-center text-sm text-slate-400">{hasFilters ? '当前筛选条件下暂无执行记录' : '暂无执行记录'}</div>
+            <div className="flex min-h-48 items-center justify-center text-sm text-[var(--color-text-tertiary)]">{hasFilters ? '当前筛选条件下暂无执行记录' : '暂无执行记录'}</div>
           ) : (
-            <div className="overflow-hidden rounded-xl border border-slate-200">
+            <div className="overflow-hidden rounded-xl border border-border">
               <table className="w-full min-w-[980px] table-fixed text-center text-xs">
-                <thead className="sticky top-0 z-10 bg-slate-50 text-slate-600">
-                  <tr className="border-b border-slate-200">
+                <thead className="sticky top-0 z-10 bg-muted text-muted-foreground">
+                  <tr className="border-b border-border">
                     <th className="w-[160px] px-3 py-2.5 font-medium">执行时间</th>
                     <th className="w-[190px] px-3 py-2.5 font-medium">任务 / 流水线</th>
                     <th className="w-[84px] px-3 py-2.5 font-medium">状态</th>
@@ -272,23 +272,23 @@ export default function GlobalHistoryModal({
                     <th className="px-3 py-2.5 font-medium">错误信息</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
+                <tbody className="divide-y border-border bg-card">
                   {items.map(run => (
-                    <tr key={run.id} data-testid={`global-history-record-${run.id}`} className="transition-colors hover:bg-slate-50/80">
-                      <td className="px-3 py-3 text-slate-500 tabular-nums">{formatDate(run.started_at || run.created_at)}</td>
+                    <tr key={run.id} data-testid={`global-history-record-${run.id}`} className="transition-colors hover:bg-muted">
+                      <td className="px-3 py-3 text-muted-foreground tabular-nums">{formatDate(run.started_at || run.created_at)}</td>
                       <td className="px-3 py-3">
-                        <div className="truncate font-medium text-slate-800" title={run.task_name}>{run.task_name}</div>
-                        <div className="mt-0.5 truncate text-[10.5px] text-slate-400" title={run.pipeline_name}>{run.pipeline_name}</div>
+                        <div className="truncate font-medium text-foreground" title={run.task_name}>{run.task_name}</div>
+                        <div className="mt-0.5 truncate text-[10.5px] text-[var(--color-text-tertiary)]" title={run.pipeline_name}>{run.pipeline_name}</div>
                       </td>
                       <td className="px-3 py-3"><StatusBadge status={run.status} /></td>
-                      <td className="px-3 py-3 text-slate-500">{TRIGGER_LABEL[run.trigger_type] || run.trigger_type}</td>
-                      <td className="px-3 py-3 text-slate-500 tabular-nums">{formatDuration(run.started_at, run.finished_at)}</td>
-                      <td className="px-3 py-3 text-slate-600 tabular-nums">{run.rows_out ?? 0}</td>
+                      <td className="px-3 py-3 text-muted-foreground">{TRIGGER_LABEL[run.trigger_type] || run.trigger_type}</td>
+                      <td className="px-3 py-3 text-muted-foreground tabular-nums">{formatDuration(run.started_at, run.finished_at)}</td>
+                      <td className="px-3 py-3 text-muted-foreground tabular-nums">{run.rows_out ?? 0}</td>
                       <td className="px-3 py-3"><LakeImpact run={run} /></td>
                       <td className="px-3 py-3 text-left">
                         {run.error_message ? (
-                          <span className="block truncate text-rose-600" title={run.error_message}>{run.error_message}</span>
-                        ) : <span className="block text-center text-slate-300">—</span>}
+                          <span className="block truncate text-viz-rose" title={run.error_message}>{run.error_message}</span>
+                        ) : <span className="block text-center text-[var(--color-text-tertiary)]">—</span>}
                       </td>
                     </tr>
                   ))}
@@ -298,22 +298,22 @@ export default function GlobalHistoryModal({
           )}
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-3 border-t border-slate-100 bg-slate-50/70 px-6 py-3">
-          <span className="mr-auto text-[11px] tabular-nums text-slate-400">显示 {rangeStart}–{rangeEnd} / {total} 条记录</span>
-          <label className="flex items-center gap-1.5 text-xs text-slate-500">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-3 border-t border-border bg-muted px-6 py-3">
+          <span className="mr-auto text-[11px] tabular-nums text-[var(--color-text-tertiary)]">显示 {rangeStart}–{rangeEnd} / {total} 条记录</span>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
             每页
             <select aria-label="全部历史每页条数" value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}
-              className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-emerald-500">
+              className="h-8 rounded-lg border border-border bg-card px-2 text-xs outline-none focus:border-[var(--color-success)]">
               {PAGE_SIZE_OPTIONS.map(size => <option key={size} value={size}>{size}</option>)}
             </select>
             条
           </label>
-          <span className="min-w-20 text-center text-xs tabular-nums text-slate-500">第 {page} / {totalPages} 页</span>
+          <span className="min-w-20 text-center text-xs tabular-nums text-muted-foreground">第 {page} / {totalPages} 页</span>
           <div className="flex items-center gap-1">
             <button type="button" aria-label="全部执行记录上一页" onClick={() => setPage(current => Math.max(1, current - 1))} disabled={page <= 1 || loading}
-              className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-emerald-200 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-35"><ChevronLeft size={13} /></button>
+              className="grid h-8 w-8 place-items-center rounded-lg border border-border bg-card text-muted-foreground transition hover:border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] hover:text-[var(--color-success)] disabled:cursor-not-allowed disabled:opacity-35"><ChevronLeft size={13} /></button>
             <button type="button" aria-label="全部执行记录下一页" onClick={() => setPage(current => Math.min(totalPages, current + 1))} disabled={page >= totalPages || loading}
-              className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-emerald-200 hover:text-emerald-700 disabled:cursor-not-allowed disabled:opacity-35"><ChevronRight size={13} /></button>
+              className="grid h-8 w-8 place-items-center rounded-lg border border-border bg-card text-muted-foreground transition hover:border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] hover:text-[var(--color-success)] disabled:cursor-not-allowed disabled:opacity-35"><ChevronRight size={13} /></button>
           </div>
         </div>
       </div>

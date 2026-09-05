@@ -177,35 +177,35 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
   const show = (s: number) => step === s
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
-      <div data-testid="pipeline-task-modal" role="dialog" aria-modal="true" aria-labelledby="pipeline-task-modal-title" className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-emerald-100 bg-white shadow-[0_24px_70px_rgba(6,78,59,0.18)]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-accent p-4 backdrop-blur-sm">
+      <div data-testid="pipeline-task-modal" role="dialog" aria-modal="true" aria-labelledby="pipeline-task-modal-title" className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-card shadow-[0_24px_70px_rgba(6,78,59,0.18)]">
         {/* 头部（居中） */}
-        <div className="relative border-b border-emerald-100 bg-emerald-50/35 px-6 py-5 text-center">
-          <h3 id="pipeline-task-modal-title" className="text-lg font-semibold text-slate-800">
+        <div className="relative border-b border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] px-6 py-5 text-center">
+          <h3 id="pipeline-task-modal-title" className="text-lg font-semibold text-foreground">
             {isEdit ? '编辑调度任务' : '新建调度任务'}
           </h3>
-          <p className="text-xs text-slate-400 mt-1 max-w-lg mx-auto">
+          <p className="text-xs text-[var(--color-text-tertiary)] mt-1 max-w-lg mx-auto">
             任务按计划触发已发布的流水线，并把最终产物按入库方式写进数据资产湖
           </p>
-          <button type="button" onClick={onClose} aria-label="关闭弹窗" className="absolute right-5 top-5 rounded-lg p-1 text-slate-400 transition-colors hover:bg-emerald-100 hover:text-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30">
+          <button type="button" onClick={onClose} aria-label="关闭弹窗" className="absolute right-5 top-5 rounded-lg p-1 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-success-bg)] hover:text-[var(--color-success)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-success)]">
             <X size={18} />
           </button>
         </div>
 
         {/* 新建与编辑共用同一套分步信息架构，避免编辑时把全部配置堆在一页。 */}
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-center flex-wrap gap-y-2">
+        <div className="px-6 py-4 border-b border-border flex items-center justify-center flex-wrap gap-y-2">
           {STEPS.map((label, i) => (
             <div key={i} className="flex items-center">
               <div className="flex items-center gap-1.5">
                 <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-colors
-                  ${i < step ? 'bg-emerald-100 text-emerald-600'
-                    : i === step ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/25'
-                    : 'bg-slate-100 text-slate-400'}`}>
+                  ${i < step ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]'
+                    : i === step ? 'bg-[var(--color-success)] text-[var(--color-text-inverse)] shadow-sm'
+                    : 'bg-muted text-[var(--color-text-tertiary)]'}`}>
                   {i < step ? <Check size={12} /> : i + 1}
                 </div>
-                <span className={`text-xs whitespace-nowrap ${i === step ? 'text-slate-800 font-medium' : 'text-slate-400'}`}>{label}</span>
+                <span className={`text-xs whitespace-nowrap ${i === step ? 'text-foreground font-medium' : 'text-[var(--color-text-tertiary)]'}`}>{label}</span>
               </div>
-              {i < STEPS.length - 1 && <div className={`w-6 h-px mx-2 ${i < step ? 'bg-emerald-300' : 'bg-slate-200'}`} />}
+              {i < STEPS.length - 1 && <div className={`w-6 h-px mx-2 ${i < step ? 'bg-[var(--color-success-bg)]' : 'bg-[var(--color-bg-active)]'}`} />}
             </div>
           ))}
         </div>
@@ -213,7 +213,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
         {/* 内容 */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {error && (
-            <div className="max-w-xl mx-auto mb-4 flex items-start gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-sm text-red-600">
+            <div className="max-w-xl mx-auto mb-4 flex items-start gap-2 p-3 bg-[var(--color-danger-bg)] border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] rounded-xl text-sm text-[var(--color-danger)]">
               <AlertCircle size={14} className="mt-0.5 shrink-0" />
               <span>{error}</span>
             </div>
@@ -225,12 +225,12 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
               <Field label="任务名称" required>
                 <input type="text" aria-label="任务名称" value={form.name} onChange={e => update('name', e.target.value)}
                   placeholder="例如：订单数据每日入湖" autoFocus={!isEdit}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 transition" />
+                  className="w-full px-3 py-2 border border-border rounded-xl text-sm focus:outline-none focus:border-[var(--color-success)] focus:ring-2 focus:ring-[var(--color-success)] transition" />
               </Field>
               <Field label="任务描述" required>
                 <textarea aria-label="任务描述" value={form.description} onChange={e => update('description', e.target.value)}
                   placeholder="例如：每天同步订单数据，为经营分析提供最新资产" rows={2}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 resize-none transition" />
+                  className="w-full px-3 py-2 border border-border rounded-xl text-sm focus:outline-none focus:border-[var(--color-success)] focus:ring-2 focus:ring-[var(--color-success)] resize-none transition" />
               </Field>
             </StepShell>
           )}
@@ -239,23 +239,23 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
           {show(1) && (
             <StepShell wide>
               {pipelinesLoading ? (
-                <div className="text-sm text-slate-400 flex items-center justify-center gap-1.5 py-8">
+                <div className="text-sm text-[var(--color-text-tertiary)] flex items-center justify-center gap-1.5 py-8">
                   <Loader2 size={14} className="animate-spin" />加载可用流水线...
                 </div>
               ) : pipelinesError ? (
-                <div className="text-sm text-red-600 p-5 bg-red-50 border border-red-100 rounded-xl text-center space-y-2">
-                  <AlertCircle size={22} className="mx-auto text-red-400" />
+                <div className="text-sm text-[var(--color-danger)] p-5 bg-[var(--color-danger-bg)] border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] rounded-xl text-center space-y-2">
+                  <AlertCircle size={22} className="mx-auto text-[var(--color-danger)]" />
                   <p>{pipelinesError}</p>
                   <button type="button" onClick={() => window.location.reload()}
-                    className="text-xs px-3 py-1.5 border border-red-200 rounded-lg hover:bg-white">重新加载</button>
+                    className="text-xs px-3 py-1.5 border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] rounded-lg hover:bg-card">重新加载</button>
                 </div>
               ) : pipelines.length === 0 ? (
-                <div className="text-sm text-slate-500 p-5 bg-slate-50 rounded-xl text-center space-y-2">
-                  <Database size={22} className="mx-auto text-slate-300" />
+                <div className="text-sm text-muted-foreground p-5 bg-muted rounded-xl text-center space-y-2">
+                  <Database size={22} className="mx-auto text-[var(--color-text-tertiary)]" />
                   <p>还没有「已发布且已启用」的流水线。</p>
-                  <p className="text-xs text-slate-400">请先在编辑向导中发布流水线，再回到流水线列表打开启用开关。</p>
+                  <p className="text-xs text-[var(--color-text-tertiary)]">请先在编辑向导中发布流水线，再回到流水线列表打开启用开关。</p>
                   <button onClick={() => navigate('/data/pipelines')}
-                    className="mt-1 inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50">
+                    className="mt-1 inline-flex items-center gap-1 rounded-lg border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] px-3 py-1.5 text-xs text-[var(--color-success)] hover:bg-[var(--color-success-bg)]">
                     去流水线 <ArrowRight size={11} />
                   </button>
                 </div>
@@ -268,26 +268,26 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
               )}
 
               {initialPipelineId && form.pipeline_id === initialPipelineId && (
-                <div className="text-xs text-emerald-600 mt-2 text-center">已自动选中刚发布的流水线</div>
+                <div className="text-xs text-[var(--color-success)] mt-2 text-center">已自动选中刚发布的流水线</div>
               )}
 
               {selectedPipeline && <PipelineSchemaPanel pipeline={selectedPipeline} />}
 
               {/* 成品数据集选择 + 数据预览 */}
               {selectedPipeline && activeCurated && (
-                <div className="mt-4 border border-slate-100 rounded-xl overflow-hidden">
-                  <div className="px-3.5 py-2.5 bg-slate-50/70 flex items-center gap-2 flex-wrap">
-                    <Table2 size={13} className="text-slate-400 shrink-0" />
-                    <span className="text-xs text-slate-500">预览成品数据集</span>
+                <div className="mt-4 border border-border rounded-xl overflow-hidden">
+                  <div className="px-3.5 py-2.5 bg-muted flex items-center gap-2 flex-wrap">
+                    <Table2 size={13} className="text-[var(--color-text-tertiary)] shrink-0" />
+                    <span className="text-xs text-muted-foreground">预览成品数据集</span>
                     {curatedList.length > 1 ? (
                       <select value={activeCurated.id} onChange={e => setActiveCuratedId(e.target.value)}
-                        className="text-xs px-2 py-1 border border-slate-200 rounded-lg bg-white focus:outline-none focus:border-emerald-500">
+                        className="text-xs px-2 py-1 border border-border rounded-lg bg-card focus:outline-none focus:border-[var(--color-success)]">
                         {curatedList.map(c => <option key={c.id} value={c.id}>{c.name}（{c.rowcount} 行）</option>)}
                       </select>
                     ) : (
-                      <span className="text-xs font-medium text-slate-700">{activeCurated.name}</span>
+                      <span className="text-xs font-medium text-foreground">{activeCurated.name}</span>
                     )}
-                    <span className="text-xs text-slate-400 ml-auto">共 {activeCurated.rowcount} 行 · {activeCurated.columns.length} 列</span>
+                    <span className="text-xs text-[var(--color-text-tertiary)] ml-auto">共 {activeCurated.rowcount} 行 · {activeCurated.columns.length} 列</span>
                   </div>
                   <CuratedDataPreview key={activeCurated.id} datasetId={activeCurated.id} totalRows={activeCurated.rowcount} contractColumns={contractColumns} reviewStatus={activeCurated.review_status} />
                 </div>
@@ -295,9 +295,9 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
 
               {/* 尚未产出数据但有字段契约：首次入湖提示 */}
               {selectedPipeline && !activeCurated && contract && (
-                <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50/45 p-3.5">
-                  <div className="flex items-center gap-1.5 text-xs text-slate-500">
-                    <Database size={13} className="text-emerald-600" />
+                <div className="mt-4 rounded-xl border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] p-3.5">
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Database size={13} className="text-[var(--color-success)]" />
                     该流水线还没有产出过数据——创建任务后，首次执行将按上述字段契约完成首次入湖。
                   </div>
                 </div>
@@ -319,30 +319,30 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 </div>
               </Field>
 
-              <div className={`space-y-3 p-3.5 rounded-xl border ${contractPk ? 'bg-emerald-50/40 border-emerald-100' : 'bg-slate-50/60 border-slate-100'}`}>
-                <div className="flex items-center gap-1.5 text-sm font-medium text-slate-700">
-                  <KeyRound size={13} className="text-slate-400" />
+              <div className={`space-y-3 p-3.5 rounded-xl border ${contractPk ? 'bg-[var(--color-success-bg)] border-[color-mix(in_srgb,var(--color-success)_35%,transparent)]' : 'bg-muted border-border'}`}>
+                <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                  <KeyRound size={13} className="text-[var(--color-text-tertiary)]" />
                   流水线主键契约
-                  <span className="ml-1 rounded-full border border-emerald-100 bg-emerald-50 px-1.5 py-0.5 text-[11px] text-emerald-700">
+                  <span className="ml-1 rounded-full border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] px-1.5 py-0.5 text-[11px] text-[var(--color-success)]">
                     发布时封版 · 任务只读
                   </span>
                 </div>
                 {contractPk ? (
                   <div className="flex flex-wrap gap-1.5">
                     {splitPk(contractPk).map(col => (
-                      <span key={col} className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-white px-2 py-1 font-mono text-xs text-emerald-700">
+                      <span key={col} className="inline-flex items-center gap-1 rounded-lg border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-card px-2 py-1 font-mono text-xs text-[var(--color-success)]">
                         <KeyRound size={10} />{col}
                       </span>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-xs text-amber-600 leading-relaxed">
+                  <p className="text-xs text-[var(--color-warning)] leading-relaxed">
                     当前流水线发布契约未声明主键，因此不能使用「主键合并」。如业务记录需要稳定身份，请返回流水线补齐主键后重新发布。
                   </p>
                 )}
 
                 {pkMismatch && (
-                  <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg p-2.5">
+                  <div className="text-xs text-[var(--color-danger)] bg-[var(--color-danger-bg)] border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] rounded-lg p-2.5">
                     检测到历史资产主键「{declaredPk}」与流水线契约「{contractPk}」不一致，已阻止创建任务，避免错误合并。
                   </div>
                 )}
@@ -351,14 +351,14 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                   <Field label="软删除列（可选）" hint="产物中的逻辑删除标识列；命中的行会打上 __deleted__ 标记而非物理删除">
                     {contractColumns.length > 0 ? (
                       <select value={form.soft_delete_column ?? ''} onChange={e => update('soft_delete_column', e.target.value)}
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:border-emerald-500">
+                        className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-card focus:outline-none focus:border-[var(--color-success)]">
                         <option value="">— 不使用 —</option>
                         {contractColumns.map(c => <option key={c.name} value={c.name}>{c.field_name}（{c.name}）</option>)}
                       </select>
                     ) : (
                       <input type="text" value={form.soft_delete_column ?? ''} onChange={e => update('soft_delete_column', e.target.value)}
                         placeholder="例如：is_deleted"
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:border-emerald-500" />
+                        className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono focus:outline-none focus:border-[var(--color-success)]" />
                     )}
                   </Field>
                 )}
@@ -366,33 +366,33 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 <Field label="增量游标列（可选）" hint="声明后每次运行只拉取游标之后的新数据（词法可比较列：ISO8601 时间戳/自增 ID）；平台在运行成功时自动推进水位">
                   {contractColumns.length > 0 ? (
                     <select data-testid="cursor-column-select" value={form.cursor_column ?? ''} onChange={e => update('cursor_column', e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:border-emerald-500">
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-card focus:outline-none focus:border-[var(--color-success)]">
                       <option value="">— 每次全量 —</option>
                       {contractColumns.map(c => <option key={c.name} value={c.name}>{c.field_name}（{c.name}）</option>)}
                     </select>
                   ) : (
                     <input type="text" data-testid="cursor-column-input" value={form.cursor_column ?? ''} onChange={e => update('cursor_column', e.target.value)}
                       placeholder="例如：updated_at"
-                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:border-emerald-500" />
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm font-mono focus:outline-none focus:border-[var(--color-success)]" />
                   )}
                 </Field>
                 {form.cursor_column && form.write_mode === 'overwrite' && (
-                  <div className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-2.5 leading-relaxed">
+                  <div className="text-xs text-[var(--color-warning)] bg-[var(--color-warning-bg)] border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] rounded-lg p-2.5 leading-relaxed">
                     注意：增量游标 + 全量覆盖意味着资产湖每次只保留当次拉取窗口的数据（滚动窗口语义）。如需累积历史，请改用「主键合并」或「去重追加」。
                   </div>
                 )}
                 {form.cursor_column && (
-                  <p className="text-xs text-slate-400 leading-relaxed">
+                  <p className="text-xs text-[var(--color-text-tertiary)] leading-relaxed">
                     漏数时可在任务列表使用「全量回填」：当次运行忽略水位全量拉取，成功后水位推进到最新。
                   </p>
                 )}
               </div>
 
-              <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
-                <input type="checkbox" checked={form.skip_empty ?? true} onChange={e => update('skip_empty', e.target.checked)} className="mt-0.5 accent-emerald-600" />
+              <label className="flex items-start gap-2 text-sm text-foreground cursor-pointer">
+                <input type="checkbox" checked={form.skip_empty ?? true} onChange={e => update('skip_empty', e.target.checked)} className="mt-0.5 accent-[var(--color-success)]" />
                 <span>
                   空输出保护
-                  <span className="block text-xs text-slate-400">流水线本次输出 0 行时跳过入库，防止源端异常导致资产被清空（建议开启）</span>
+                  <span className="block text-xs text-[var(--color-text-tertiary)]">流水线本次输出 0 行时跳过入库，防止源端异常导致资产被清空（建议开启）</span>
                 </span>
               </label>
             </StepShell>
@@ -413,7 +413,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 <Field label="Cron 表达式" required hint="5 段格式：分 时 日 月 周。如 0 2 * * * 表示每天凌晨 2 点">
                   <input type="text" value={form.cron_expression} onChange={e => update('cron_expression', e.target.value)}
                     placeholder="0 2 * * *"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 transition" />
+                    className="w-full px-3 py-2 border border-border rounded-xl text-sm font-mono focus:outline-none focus:border-[var(--color-success)] focus:ring-2 focus:ring-[var(--color-success)] transition" />
                 </Field>
               )}
 
@@ -421,12 +421,12 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
                 <Field label="间隔秒数" required hint="最小 10 秒">
                   <input type="number" min={10} value={form.interval_seconds}
                     onChange={e => update('interval_seconds', parseInt(e.target.value) || 0)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 transition" />
+                    className="w-full px-3 py-2 border border-border rounded-xl text-sm focus:outline-none focus:border-[var(--color-success)] focus:ring-2 focus:ring-[var(--color-success)] transition" />
                 </Field>
               )}
 
-              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                <input type="checkbox" checked={form.enabled} onChange={e => update('enabled', e.target.checked)} className="accent-emerald-600" />
+              <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
+                <input type="checkbox" checked={form.enabled} onChange={e => update('enabled', e.target.checked)} className="accent-[var(--color-success)]" />
                 {isEdit ? '启用任务' : '创建后立即启用'}
               </label>
             </StepShell>
@@ -435,7 +435,7 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
           {/* Step 4: 确认配置 */}
           {step === 4 && (
             <StepShell>
-              <div className="rounded-xl border border-slate-100 bg-slate-50/60 divide-y divide-slate-100">
+              <div className="rounded-xl border border-border bg-muted divide-y border-border">
                 <SummaryRow label="任务名" value={form.name} />
                 <SummaryRow label="任务描述" value={form.description} />
                 <SummaryRow label="流水线" value={selectedPipeline ? `${selectedPipeline.name}${selectedPipeline.version ? ` (v${selectedPipeline.version})` : ''}` : '-'} />
@@ -454,39 +454,39 @@ export default function TaskFormModal({ initialTask, initialPipelineId, onClose,
               </div>
 
               {/* 预期效果（自然语言） */}
-              <div className="mt-4 rounded-xl border border-emerald-100 bg-gradient-to-br from-emerald-50/80 to-teal-50/50 p-4">
-                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-emerald-700">
+              <div className="mt-4 rounded-xl border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-gradient-to-br from-[var(--color-success-bg)] to-brand-soft p-4">
+                <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[var(--color-success)]">
                   <Sparkles size={13} /> 预期效果
                 </div>
-                <p className="text-sm text-slate-600 leading-relaxed">{buildEffectText()}</p>
+                <p className="text-sm text-muted-foreground leading-relaxed">{buildEffectText()}</p>
               </div>
             </StepShell>
           )}
         </div>
 
         {/* 底部 */}
-        <div className="flex items-center justify-between px-6 py-3.5 border-t border-slate-100 bg-slate-50/60">
+        <div className="flex items-center justify-between px-6 py-3.5 border-t border-border bg-muted">
           <div className="flex items-center gap-2">
             {step === 0 && (
-              <button type="button" onClick={onClose} className="rounded-lg px-4 py-1.5 text-sm text-slate-500 transition hover:bg-slate-100 hover:text-slate-700">取消</button>
+              <button type="button" onClick={onClose} className="rounded-lg px-4 py-1.5 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground">取消</button>
             )}
             {step > 0 && (
               <button type="button" onClick={() => { setStep(s => s - 1); setError('') }}
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm text-slate-500 hover:text-slate-800">
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
                 <ChevronLeft size={14} /> 上一步
               </button>
             )}
           </div>
           <div className="flex gap-2">
-            {step > 0 && <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-slate-500 hover:bg-slate-100 rounded-lg transition">取消</button>}
+            {step > 0 && <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-muted-foreground hover:bg-muted rounded-lg transition">取消</button>}
             {step < STEPS.length - 1 ? (
               <button type="button" onClick={handleNext}
-                className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-4 py-1.5 text-sm text-white shadow-sm shadow-emerald-600/25 transition hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/35">
+                className="inline-flex items-center gap-1 rounded-lg bg-[var(--color-success)] px-4 py-1.5 text-sm text-[var(--color-text-inverse)] shadow-sm transition hover:bg-[var(--color-success)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-success)]">
                 下一步 <ChevronRight size={14} />
               </button>
             ) : (
               <button type="button" onClick={handleSubmit} disabled={submitting}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-1.5 text-sm text-white shadow-sm shadow-emerald-600/25 transition hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/35 disabled:opacity-50">
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-success)] px-4 py-1.5 text-sm text-[var(--color-text-inverse)] shadow-sm transition hover:bg-[var(--color-success)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-success)] disabled:opacity-50">
                 {submitting && <Loader2 size={13} className="animate-spin" />}
                 {isEdit ? '保存修改' : '创建任务'}
               </button>
@@ -506,8 +506,8 @@ function StepShell({ title, subtitle, wide, children }: {
     <div className={`mx-auto w-full ${wide ? 'max-w-2xl' : 'max-w-lg'}`}>
       {(title || subtitle) && (
         <div className="text-center mb-4">
-          {title && <h4 className="text-base font-semibold text-slate-800">{title}</h4>}
-          {subtitle && <p className="text-xs text-slate-400 mt-1">{subtitle}</p>}
+          {title && <h4 className="text-base font-semibold text-foreground">{title}</h4>}
+          {subtitle && <p className="text-xs text-[var(--color-text-tertiary)] mt-1">{subtitle}</p>}
         </div>
       )}
       <div className="space-y-4">{children}</div>
@@ -521,27 +521,27 @@ function PipelineCard({ pipeline, active, onClick }: {
   return (
     <button type="button" onClick={onClick}
       className={`w-full text-left p-3.5 rounded-xl border-2 transition-all
-        ${active ? 'border-emerald-500 bg-emerald-50/45 shadow-sm' : 'border-slate-200 bg-white hover:border-emerald-200 hover:bg-emerald-50/20'}`}>
+        ${active ? 'border-[var(--color-success)] bg-[var(--color-success-bg)] shadow-sm' : 'border-border bg-card hover:border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] hover:bg-[var(--color-success-bg)]'}`}>
       <div className="flex items-center gap-2">
-        <GitBranch size={14} className={active ? 'text-emerald-600' : 'text-slate-400'} />
-        <span className="text-sm font-medium text-slate-800 truncate">{pipeline.name}</span>
-        {pipeline.version ? <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">v{pipeline.version}</span> : null}
-        {active && <CheckCircle2 size={15} className="text-emerald-600 ml-auto shrink-0" />}
+        <GitBranch size={14} className={active ? 'text-[var(--color-success)]' : 'text-[var(--color-text-tertiary)]'} />
+        <span className="text-sm font-medium text-foreground truncate">{pipeline.name}</span>
+        {pipeline.version ? <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">v{pipeline.version}</span> : null}
+        {active && <CheckCircle2 size={15} className="text-[var(--color-success)] ml-auto shrink-0" />}
       </div>
-      <div className="flex items-center gap-2 mt-1.5 text-[11px] text-slate-400 flex-wrap">
-        {pipeline.domain && <span className="px-1.5 py-0.5 rounded-full bg-slate-50 border border-slate-100">{pipeline.domain}</span>}
+      <div className="flex items-center gap-2 mt-1.5 text-[11px] text-[var(--color-text-tertiary)] flex-wrap">
+        {pipeline.domain && <span className="px-1.5 py-0.5 rounded-full bg-muted border border-border">{pipeline.domain}</span>}
         {pipeline.contract && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-100 bg-emerald-50 px-1.5 py-0.5 text-emerald-700">
+          <span className="inline-flex items-center gap-1 rounded-full border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] px-1.5 py-0.5 text-[var(--color-success)]">
             <KeyRound size={9} /> 字段契约{pipeline.contract.primary_key ? `（主键 ${pipeline.contract.primary_key}）` : ''}
           </span>
         )}
         {pipeline.curated_datasets.length > 0 ? (
           <>
             <span className="inline-flex items-center gap-1"><Database size={10} />{pipeline.curated_datasets.length} 个成品集</span>
-            <span className="text-emerald-500">已产出 {pipeline.total_rows.toLocaleString()} 行</span>
+            <span className="text-[var(--color-success)]">已产出 {pipeline.total_rows.toLocaleString()} 行</span>
           </>
         ) : (
-          <span className="text-slate-400">尚未产出数据 · 首次入湖由任务完成</span>
+          <span className="text-[var(--color-text-tertiary)]">尚未产出数据 · 首次入湖由任务完成</span>
         )}
       </div>
     </button>
@@ -567,37 +567,37 @@ function PipelineSchemaPanel({ pipeline }: { pipeline: SelectablePipeline }) {
 
   if (columns.length === 0) return null
   return (
-    <div className="mt-4 overflow-hidden rounded-xl border border-emerald-100 bg-white">
-      <div className="flex items-center justify-between gap-3 border-b border-emerald-100 bg-emerald-50/45 px-3.5 py-2.5">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-800">
+    <div className="mt-4 overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-card">
+      <div className="flex items-center justify-between gap-3 border-b border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] px-3.5 py-2.5">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-success)]">
           <Table2 size={13} /> 完整字段契约
         </div>
-        <span className="text-[11px] text-emerald-700/70">{columns.length} 列 · 发布版本只读</span>
+        <span className="text-[11px] text-[var(--color-success)]">{columns.length} 列 · 发布版本只读</span>
       </div>
       <div className="max-h-64 overflow-auto scrollbar-thin">
         <table className="w-full min-w-[560px] border-collapse text-xs">
-          <thead className="sticky top-0 z-10 bg-slate-50">
-            <tr className="border-b border-slate-100 text-slate-500">
+          <thead className="sticky top-0 z-10 bg-muted">
+            <tr className="border-b border-border text-muted-foreground">
               <th className="px-3 py-2 text-left font-medium">中文名称</th>
               <th className="px-3 py-2 text-left font-medium">字段标识</th>
               <th className="px-3 py-2 text-left font-medium">数据类型</th>
               <th className="px-3 py-2 text-left font-medium">字段约束</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-50">
+          <tbody className="divide-y border-border">
             {columns.map(column => (
-              <tr key={column.name} className="hover:bg-emerald-50/25">
-                <td className="px-3 py-2 font-medium text-slate-700">{column.field_name || column.name}</td>
-                <td className="px-3 py-2 font-mono text-slate-600">{column.name}</td>
-                <td className="px-3 py-2 text-slate-500">{column.type}</td>
+              <tr key={column.name} className="hover:bg-[var(--color-success-bg)]">
+                <td className="px-3 py-2 font-medium text-foreground">{column.field_name || column.name}</td>
+                <td className="px-3 py-2 font-mono text-muted-foreground">{column.name}</td>
+                <td className="px-3 py-2 text-muted-foreground">{column.type}</td>
                 <td className="px-3 py-2">
                   <div className="flex flex-wrap items-center gap-1.5">
                     {column.is_primary_key && (
-                      <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800">
+                      <span className="inline-flex items-center gap-1 rounded-md bg-[var(--color-success-bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-success)]">
                         <KeyRound size={9} /> 主键
                       </span>
                     )}
-                    <span className={`rounded-md px-1.5 py-0.5 text-[10px] ${column.nullable ? 'bg-slate-100 text-slate-500' : 'bg-amber-50 text-amber-700'}`}>
+                    <span className={`rounded-md px-1.5 py-0.5 text-[10px] ${column.nullable ? 'bg-muted text-muted-foreground' : 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]'}`}>
                       {column.nullable ? '可为空' : '非空'}
                     </span>
                   </div>
@@ -649,35 +649,35 @@ function CuratedDataPreview({ datasetId, totalRows, contractColumns, reviewStatu
       <button type="button" onClick={() => setOpen(true)}
         disabled={!previewable}
         title={previewable ? undefined : '当前版本未通过审核'}
-        className="flex w-full items-center justify-center gap-1.5 py-2.5 text-xs text-emerald-700 transition hover:bg-emerald-50/60 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-transparent">
+        className="flex w-full items-center justify-center gap-1.5 py-2.5 text-xs text-[var(--color-success)] transition hover:bg-[var(--color-success-bg)] disabled:cursor-not-allowed disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent">
         <Table2 size={12} /> 查看实际数据（分页预览）
       </button>
     )
   }
 
   return (
-    <div className="bg-white">
+    <div className="bg-card">
       <div className="overflow-x-auto max-h-64 overflow-y-auto">
         {loading ? (
-          <div className="py-10 text-center text-xs text-slate-400 flex items-center justify-center gap-1.5">
+          <div className="py-10 text-center text-xs text-[var(--color-text-tertiary)] flex items-center justify-center gap-1.5">
             <Loader2 size={13} className="animate-spin" /> 加载数据...
           </div>
         ) : !data || data.rows.length === 0 ? (
-          <div className="py-10 text-center text-xs text-slate-400">该页没有数据</div>
+          <div className="py-10 text-center text-xs text-[var(--color-text-tertiary)]">该页没有数据</div>
         ) : (
           <table className="w-full text-xs border-collapse">
-            <thead className="sticky top-0 bg-slate-50 z-10">
+            <thead className="sticky top-0 bg-muted z-10">
               <tr>
-                <th className="px-2 py-1.5 text-left text-slate-400 font-medium border-b border-slate-100 whitespace-nowrap">#</th>
+                <th className="px-2 py-1.5 text-left text-[var(--color-text-tertiary)] font-medium border-b border-border whitespace-nowrap">#</th>
                 {columns.map(c => {
                   const meta = contractColumns.find(column => column.name === c)
                   return (
-                    <th key={c} className="min-w-28 whitespace-nowrap border-b border-slate-100 px-2.5 py-2 text-left font-medium text-slate-500">
-                      <div className="font-sans text-slate-700">{meta?.field_name || c}</div>
-                      <div className="mt-0.5 flex items-center gap-1 font-mono text-[10px] font-normal text-slate-400">
+                    <th key={c} className="min-w-28 whitespace-nowrap border-b border-border px-2.5 py-2 text-left font-medium text-muted-foreground">
+                      <div className="font-sans text-foreground">{meta?.field_name || c}</div>
+                      <div className="mt-0.5 flex items-center gap-1 font-mono text-[10px] font-normal text-[var(--color-text-tertiary)]">
                         {c}
-                        {meta?.is_primary_key && <span className="rounded bg-emerald-100 px-1 font-sans text-[9px] text-emerald-700">主键</span>}
-                        {meta && !meta.nullable && <span className="rounded bg-amber-50 px-1 font-sans text-[9px] text-amber-700">非空</span>}
+                        {meta?.is_primary_key && <span className="rounded bg-[var(--color-success-bg)] px-1 font-sans text-[9px] text-[var(--color-success)]">主键</span>}
+                        {meta && !meta.nullable && <span className="rounded bg-[var(--color-warning-bg)] px-1 font-sans text-[9px] text-[var(--color-warning)]">非空</span>}
                       </div>
                     </th>
                   )
@@ -686,12 +686,12 @@ function CuratedDataPreview({ datasetId, totalRows, contractColumns, reviewStatu
             </thead>
             <tbody>
               {data.rows.map((row, ri) => (
-                <tr key={ri} className="hover:bg-slate-50/60">
-                  <td className="px-2 py-1.5 text-slate-300 border-b border-slate-50 whitespace-nowrap tabular-nums">
+                <tr key={ri} className="hover:bg-muted">
+                  <td className="px-2 py-1.5 text-[var(--color-text-tertiary)] border-b border-border whitespace-nowrap tabular-nums">
                     {(page - 1) * pageSize + ri + 1}
                   </td>
                   {columns.map(c => (
-                    <td key={c} className="px-2.5 py-1.5 text-slate-600 border-b border-slate-50 whitespace-nowrap max-w-[220px] truncate" title={fmtCell(row[c])}>
+                    <td key={c} className="px-2.5 py-1.5 text-muted-foreground border-b border-border whitespace-nowrap max-w-[220px] truncate" title={fmtCell(row[c])}>
                       {fmtCell(row[c])}
                     </td>
                   ))}
@@ -702,13 +702,13 @@ function CuratedDataPreview({ datasetId, totalRows, contractColumns, reviewStatu
         )}
       </div>
       {/* 分页条 */}
-      <div className="flex items-center justify-between px-3 py-2 border-t border-slate-100 bg-slate-50/50 text-xs text-slate-400">
+      <div className="flex items-center justify-between px-3 py-2 border-t border-border bg-muted text-xs text-[var(--color-text-tertiary)]">
         <span>共 {total.toLocaleString()} 行 · 第 {page}/{totalPages} 页</span>
         <div className="flex items-center gap-1">
           <button disabled={page <= 1 || loading} onClick={() => setPage(p => Math.max(1, p - 1))}
-            className="p-1 rounded hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"><ChevronLeft size={14} /></button>
+            className="p-1 rounded hover:bg-card disabled:opacity-40 disabled:cursor-not-allowed"><ChevronLeft size={14} /></button>
           <button disabled={page >= totalPages || loading} onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-            className="p-1 rounded hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"><ChevronRight size={14} /></button>
+            className="p-1 rounded hover:bg-card disabled:opacity-40 disabled:cursor-not-allowed"><ChevronRight size={14} /></button>
         </div>
       </div>
     </div>
@@ -726,11 +726,11 @@ function Field({ label, required, hint, children }: {
 }) {
   return (
     <div>
-      <label className="block text-sm font-medium text-slate-700 mb-1">
-        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+      <label className="block text-sm font-medium text-foreground mb-1">
+        {label}{required && <span className="text-[var(--color-danger)] ml-0.5">*</span>}
       </label>
       {children}
-      {hint && <div className="text-xs text-slate-400 mt-1">{hint}</div>}
+      {hint && <div className="text-xs text-[var(--color-text-tertiary)] mt-1">{hint}</div>}
     </div>
   )
 }
@@ -741,10 +741,10 @@ function ModeCard({ active, onClick, title, desc, disabled = false }: {
   return (
     <button type="button" onClick={onClick} disabled={disabled}
       className={`text-left p-3 rounded-xl border-2 transition-all
-        ${disabled ? 'border-slate-100 bg-slate-50 opacity-55 cursor-not-allowed'
-          : active ? 'border-emerald-500 bg-emerald-50/45' : 'border-slate-200 hover:border-emerald-200 hover:bg-emerald-50/20'}`}>
-      <div className={`text-sm font-medium ${active ? 'text-emerald-700' : 'text-slate-800'}`}>{title}</div>
-      <div className="text-xs text-slate-500 mt-0.5">{disabled ? `${desc}（流水线未声明主键）` : desc}</div>
+        ${disabled ? 'border-border bg-muted opacity-55 cursor-not-allowed'
+          : active ? 'border-[var(--color-success)] bg-[var(--color-success-bg)]' : 'border-border hover:border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] hover:bg-[var(--color-success-bg)]'}`}>
+      <div className={`text-sm font-medium ${active ? 'text-[var(--color-success)]' : 'text-foreground'}`}>{title}</div>
+      <div className="text-xs text-muted-foreground mt-0.5">{disabled ? `${desc}（流水线未声明主键）` : desc}</div>
     </button>
   )
 }
@@ -752,8 +752,8 @@ function ModeCard({ active, onClick, title, desc, disabled = false }: {
 function SummaryRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex justify-between py-2 px-3.5 text-sm">
-      <span className="text-slate-500">{label}</span>
-      <span className={`text-slate-800 font-medium text-right max-w-[62%] truncate ${mono ? 'font-mono' : ''}`}>{value || '-'}</span>
+      <span className="text-muted-foreground">{label}</span>
+      <span className={`text-foreground font-medium text-right max-w-[62%] truncate ${mono ? 'font-mono' : ''}`}>{value || '-'}</span>
     </div>
   )
 }

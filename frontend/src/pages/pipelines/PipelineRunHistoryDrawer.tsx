@@ -14,14 +14,14 @@ import type { Pipeline, PipelineRunItem } from '@/api/v2/pipelines'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 
 const STATUS_META: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
-  pending: { icon: <Clock size={13} />, color: 'text-slate-500 bg-slate-100', label: '排队中' },
-  running: { icon: <Loader2 size={13} className="animate-spin" />, color: 'text-blue-600 bg-blue-50', label: '执行中' },
-  success: { icon: <CheckCircle2 size={13} />, color: 'text-emerald-600 bg-emerald-50', label: '成功' },
-  failed:  { icon: <XCircle size={13} />, color: 'text-rose-600 bg-rose-50', label: '失败' },
+  pending: { icon: <Clock size={13} />, color: 'text-muted-foreground bg-muted', label: '排队中' },
+  running: { icon: <Loader2 size={13} className="animate-spin" />, color: 'text-[var(--color-info)] bg-[var(--color-info-bg)]', label: '执行中' },
+  success: { icon: <CheckCircle2 size={13} />, color: 'text-[var(--color-success)] bg-[var(--color-success-bg)]', label: '成功' },
+  failed:  { icon: <XCircle size={13} />, color: 'text-viz-rose bg-viz-rose-soft', label: '失败' },
 }
 
 const statusMeta = (status: string) => STATUS_META[status] ?? {
-  icon: <Clock size={13} />, color: 'text-slate-500 bg-slate-100', label: status || '未知',
+  icon: <Clock size={13} />, color: 'text-muted-foreground bg-muted', label: status || '未知',
 }
 
 function formatDate(iso: string | null): string {
@@ -93,17 +93,17 @@ export default function PipelineRunHistoryDrawer({
         </SheetHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {loading ? (
-            <div className="flex h-40 flex-col items-center justify-center gap-2 text-slate-400">
-              <Loader2 size={18} className="animate-spin text-teal-600" />
+            <div className="flex h-40 flex-col items-center justify-center gap-2 text-[var(--color-text-tertiary)]">
+              <Loader2 size={18} className="animate-spin text-brand-ink" />
               <span className="text-xs">加载执行历史...</span>
             </div>
           ) : loadError ? (
-            <div className="flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            <div className="flex items-center gap-2 rounded-lg border border-viz-rose-soft bg-viz-rose-soft px-3 py-2 text-xs text-viz-rose">
               <AlertCircle size={13} className="shrink-0" />
               <span className="flex-1">{loadError}</span>
             </div>
           ) : runs.length === 0 ? (
-            <div className="flex h-40 flex-col items-center justify-center gap-1.5 text-slate-400">
+            <div className="flex h-40 flex-col items-center justify-center gap-1.5 text-[var(--color-text-tertiary)]">
               <Clock size={22} className="opacity-40" />
               <p className="text-sm">暂无运行记录</p>
               <p className="text-xs">该流水线还未执行过，可在编辑向导或任务池中触发</p>
@@ -116,7 +116,7 @@ export default function PipelineRunHistoryDrawer({
                 const isOpen = expanded.has(run.id)
                 const errorState = errors[run.id]
                 return (
-                  <li key={run.id} className="rounded-xl border border-slate-200 bg-white">
+                  <li key={run.id} className="rounded-xl border border-border bg-card">
                     <button
                       type="button"
                       disabled={!isFailed}
@@ -128,28 +128,28 @@ export default function PipelineRunHistoryDrawer({
                         {meta.icon}
                       </span>
                       <span className={`w-12 shrink-0 text-xs font-medium ${meta.color.split(' ')[0]}`}>{meta.label}</span>
-                      <span className="min-w-0 flex-1 truncate text-xs text-slate-500">
+                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                         {formatDate(run.started_at)}
                       </span>
-                      <span className="shrink-0 text-xs tabular-nums text-slate-400">
+                      <span className="shrink-0 text-xs tabular-nums text-[var(--color-text-tertiary)]">
                         耗时 {formatDuration(run.started_at, run.finished_at)}
                       </span>
                       {isFailed && (
-                        <span className="shrink-0 text-slate-400">
+                        <span className="shrink-0 text-[var(--color-text-tertiary)]">
                           {isOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                         </span>
                       )}
                     </button>
                     {isFailed && isOpen && (
-                      <div className="border-t border-slate-100 px-3.5 py-2.5">
+                      <div className="border-t border-border px-3.5 py-2.5">
                         {!errorState || errorState.state === 'loading' ? (
-                          <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
+                          <span className="inline-flex items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
                             <Loader2 size={12} className="animate-spin" /> 加载错误日志...
                           </span>
                         ) : errorState.state === 'error' ? (
-                          <span className="text-xs text-rose-500">错误日志加载失败，请稍后重试。</span>
+                          <span className="text-xs text-viz-rose">错误日志加载失败，请稍后重试。</span>
                         ) : (
-                          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950/[0.03] px-3 py-2 text-xs leading-relaxed text-slate-600">{errorState.text}</pre>
+                          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-accent px-3 py-2 text-xs leading-relaxed text-muted-foreground">{errorState.text}</pre>
                         )}
                       </div>
                     )}

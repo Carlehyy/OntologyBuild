@@ -201,38 +201,38 @@ export default function WorkspaceModal({ conversationId, onClose, formatBytes, e
   }
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-5" onClick={onClose}>
-      <div className="flex h-[76vh] min-h-[520px] w-[1040px] max-w-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[var(--color-bg-overlay)] p-5" onClick={onClose}>
+      <div className="flex h-[76vh] min-h-[520px] w-[1040px] max-w-full flex-col overflow-hidden rounded-2xl bg-card shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b px-5 py-3.5">
           <div>
-            <h3 className="flex items-center gap-2 text-sm font-semibold"><FolderOpen size={16} className="text-teal-600" />会话隔离空间</h3>
-            <p className="mt-0.5 text-[11px] text-gray-400">上传件和网页下载件仅在此会话可见；打包不包含浏览器登录态</p>
+            <h3 className="flex items-center gap-2 text-sm font-semibold"><FolderOpen size={16} className="text-brand-ink" />会话隔离空间</h3>
+            <p className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">上传件和网页下载件仅在此会话可见；打包不包含浏览器登录态</p>
           </div>
-          <button aria-label="关闭会话文件" onClick={onClose} className="text-gray-400 hover:text-gray-700"><X size={17} /></button>
+          <button aria-label="关闭会话文件" onClick={onClose} className="text-[var(--color-text-tertiary)] hover:text-foreground"><X size={17} /></button>
         </div>
-        {error && <div className="border-b bg-red-50 px-5 py-2 text-xs text-red-600">{error}</div>}
+        {error && <div className="border-b bg-[var(--color-danger-bg)] px-5 py-2 text-xs text-[var(--color-danger)]">{error}</div>}
         <div className="flex min-h-0 flex-1">
-          <aside className="flex w-[300px] shrink-0 flex-col border-r border-slate-200 bg-slate-50/70">
-            <div className="grid grid-cols-2 gap-2 border-b border-slate-200 p-3">
+          <aside className="flex w-[300px] shrink-0 flex-col border-r border-border bg-muted">
+            <div className="grid grid-cols-2 gap-2 border-b border-border p-3">
               <input ref={inputRef} type="file" multiple className="hidden"
                 accept=".doc,.docx,.ppt,.pptx,.xls,.xlsx,.pdf,.md,.txt,.csv,.json,.xml,.png,.jpg,.jpeg,.webp"
                 onChange={e => void uploadFiles(e.target.files)} />
               <button onClick={() => inputRef.current?.click()} disabled={uploading}
-                className="flex items-center justify-center gap-1.5 rounded-lg bg-teal-700 px-3 py-2 text-xs font-medium text-white transition hover:bg-teal-800 disabled:opacity-50">
+                className="flex items-center justify-center gap-1.5 rounded-lg bg-brand-deep px-3 py-2 text-xs font-medium text-[var(--color-text-inverse)] transition hover:bg-brand-deep disabled:opacity-50">
                 {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />} 上传文件
               </button>
               <button onClick={() => void downloadStewardFile(conversationId, undefined, `data-steward-${conversationId.slice(0, 8)}.zip`)}
-                className="flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 transition hover:border-teal-200 hover:bg-teal-50">
+                className="flex items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-xs text-foreground transition hover:border-brand-line hover:bg-brand-soft">
                 <FileArchive size={13} /> 一键打包
               </button>
             </div>
             <div className="flex items-center justify-between px-3 pb-2 pt-3">
-              <span className="text-xs font-semibold text-slate-600">文件树 <span className="font-normal text-slate-400">({files.length})</span></span>
-              <button onClick={() => void reload()} aria-label="刷新会话文件" className="rounded-md p-1 text-slate-400 transition hover:bg-white hover:text-teal-700"><RefreshCw size={13} /></button>
+              <span className="text-xs font-semibold text-muted-foreground">文件树 <span className="font-normal text-[var(--color-text-tertiary)]">({files.length})</span></span>
+              <button onClick={() => void reload()} aria-label="刷新会话文件" className="rounded-md p-1 text-[var(--color-text-tertiary)] transition hover:bg-card hover:text-brand-ink"><RefreshCw size={13} /></button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3 pt-1">
-              {loading ? <div className="py-16 text-center text-sm text-slate-400">加载中…</div> : files.length === 0 ? (
-                <div className="mx-1 rounded-xl border border-dashed border-slate-300 bg-white/70 px-3 py-12 text-center text-xs text-slate-400">当前会话还没有文件</div>
+              {loading ? <div className="py-16 text-center text-sm text-[var(--color-text-tertiary)]">加载中…</div> : files.length === 0 ? (
+                <div className="mx-1 rounded-xl border border-dashed border-border bg-card px-3 py-12 text-center text-xs text-[var(--color-text-tertiary)]">当前会话还没有文件</div>
               ) : (
                 <div>
                   {treeRows.map(row => row.type === 'directory' ? (
@@ -246,15 +246,15 @@ export default function WorkspaceModal({ conversationId, onClose, formatBytes, e
                         if (next.has(row.path)) next.delete(row.path); else next.add(row.path)
                         return next
                       })}
-                      className="flex h-8 w-full items-center gap-1.5 rounded-md pr-2 text-left text-xs font-medium text-slate-600 transition-colors hover:bg-white"
+                      className="flex h-8 w-full items-center gap-1.5 rounded-md pr-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-card"
                       style={{ paddingLeft: `${8 + row.depth * 16}px` }}
                     >
                       {collapsedDirs.has(row.path) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
                       {collapsedDirs.has(row.path)
-                        ? <Folder size={14} className="shrink-0 text-amber-500" />
-                        : <FolderOpen size={14} className="shrink-0 text-amber-500" />}
+                        ? <Folder size={14} className="shrink-0 text-[var(--color-warning)]" />
+                        : <FolderOpen size={14} className="shrink-0 text-[var(--color-warning)]" />}
                       <span className="min-w-0 flex-1 truncate">{row.name}</span>
-                      <span aria-hidden="true" className="ml-auto shrink-0 tabular-nums text-[10px] font-medium text-slate-400">
+                      <span aria-hidden="true" className="ml-auto shrink-0 tabular-nums text-[10px] font-medium text-[var(--color-text-tertiary)]">
                         {row.childCount}
                       </span>
                     </button>
@@ -265,14 +265,14 @@ export default function WorkspaceModal({ conversationId, onClose, formatBytes, e
                       onClick={() => setSelectedId(row.file.id)}
                       title={row.file.relativePath || row.file.filename}
                       className={`flex min-h-9 w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left transition-colors ${selectedId === row.file.id
-                        ? 'bg-teal-50 text-teal-800'
-                        : 'text-slate-600 hover:bg-white'}`}
+                        ? 'bg-brand-soft text-brand-ink'
+                        : 'text-muted-foreground hover:bg-card'}`}
                       style={{ paddingLeft: `${25 + row.depth * 16}px` }}
                     >
-                      <FileText size={14} className={selectedId === row.file.id ? 'shrink-0 text-teal-600' : 'shrink-0 text-slate-400'} />
+                      <FileText size={14} className={selectedId === row.file.id ? 'shrink-0 text-brand-ink' : 'shrink-0 text-[var(--color-text-tertiary)]'} />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-xs font-medium">{row.name}</span>
-                        <span className="mt-0.5 block text-[9px] text-slate-400">{formatBytes(row.file.size)}</span>
+                        <span className="mt-0.5 block text-[9px] text-[var(--color-text-tertiary)]">{formatBytes(row.file.size)}</span>
                       </span>
                     </button>
                   ))}
@@ -281,42 +281,42 @@ export default function WorkspaceModal({ conversationId, onClose, formatBytes, e
             </div>
           </aside>
 
-          <section className="flex min-w-0 flex-1 flex-col bg-white">
+          <section className="flex min-w-0 flex-1 flex-col bg-card">
             {selectedFile ? (
               <>
-                <div className="flex min-h-[58px] items-center gap-3 border-b border-slate-200 px-4 py-2.5">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700"><FileText size={16} /></div>
+                <div className="flex min-h-[58px] items-center gap-3 border-b border-border px-4 py-2.5">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand-ink"><FileText size={16} /></div>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-slate-800" title={selectedFile.filename}>{selectedFile.filename}</p>
-                    <p className="mt-0.5 truncate text-[11px] text-slate-400">
+                    <p className="truncate text-sm font-semibold text-foreground" title={selectedFile.filename}>{selectedFile.filename}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-[var(--color-text-tertiary)]">
                       {selectedFile.source === 'download' ? '网页下载' : selectedFile.source === 'generated' ? '管家创建' : selectedFile.source === 'edited' ? '管家编辑' : '用户上传'} · {formatBytes(selectedFile.size)}
                       {selectedFile.extractedChars > 0 ? ` · 已解析 ${selectedFile.extractedChars.toLocaleString()} 字` : ''}
                     </p>
                   </div>
                   <button title="下载文件" onClick={() => void downloadStewardFile(conversationId, selectedFile.id, selectedFile.filename)}
-                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700">
+                    className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink">
                     <Download size={13} /> 下载
                   </button>
                   <button title="删除文件" onClick={() => void remove(selectedFile.id)}
-                    className="flex items-center gap-1.5 rounded-lg border border-red-100 px-2.5 py-1.5 text-xs text-red-500 transition hover:bg-red-50">
+                    className="flex items-center gap-1.5 rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] px-2.5 py-1.5 text-xs text-[var(--color-danger)] transition hover:bg-[var(--color-danger-bg)]">
                     <Trash2 size={13} /> 删除
                   </button>
                 </div>
-                <div className="min-h-0 flex-1 overflow-hidden bg-slate-50/50 p-3">
-                  <div className="h-full overflow-hidden rounded-xl border border-slate-200 bg-white">
+                <div className="min-h-0 flex-1 overflow-hidden bg-muted p-3">
+                  <div className="h-full overflow-hidden rounded-xl border border-border bg-card">
                     {preview.kind === 'loading' ? (
-                      <div className="flex h-full items-center justify-center gap-2 text-sm text-slate-400"><Loader2 size={15} className="animate-spin" />正在生成预览…</div>
+                      <div className="flex h-full items-center justify-center gap-2 text-sm text-[var(--color-text-tertiary)]"><Loader2 size={15} className="animate-spin" />正在生成预览…</div>
                     ) : preview.kind === 'image' && preview.url ? (
                       <div className="flex h-full items-center justify-center overflow-auto p-4"><img src={preview.url} alt={selectedFile.filename} className="max-h-full max-w-full object-contain" /></div>
                     ) : preview.kind === 'pdf' && preview.url ? (
                       <iframe title={`${selectedFile.filename} 预览`} src={preview.url} className="h-full w-full border-0" />
                     ) : preview.kind === 'text' ? (
                       <div className="h-full overflow-auto p-4">
-                        <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-6 text-slate-700">{preview.text}</pre>
-                        {preview.truncated && <p className="mt-3 border-t border-slate-100 pt-3 text-xs text-amber-600">预览内容较长，当前仅展示前 60,000 个字符。</p>}
+                        <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-6 text-foreground">{preview.text}</pre>
+                        {preview.truncated && <p className="mt-3 border-t border-border pt-3 text-xs text-[var(--color-warning)]">预览内容较长，当前仅展示前 60,000 个字符。</p>}
                       </div>
                     ) : preview.kind === 'unsupported' || preview.kind === 'error' ? (
-                      <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center text-sm text-slate-400">
+                      <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center text-sm text-[var(--color-text-tertiary)]">
                         <FileText size={30} className="opacity-35" />
                         <p>{preview.message}</p>
                       </div>
@@ -325,7 +325,7 @@ export default function WorkspaceModal({ conversationId, onClose, formatBytes, e
                 </div>
               </>
             ) : (
-              <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-slate-400">
+              <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-[var(--color-text-tertiary)]">
                 <FolderOpen size={32} className="opacity-30" />
                 <p>从左侧文件树选择文件后查看内容</p>
               </div>

@@ -312,41 +312,41 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
   ]
 
   return createPortal(
-    <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px] sm:p-6">
+    <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-accent p-4 backdrop-blur-[2px] sm:p-6">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="pipeline-edit-title"
-        className="flex h-auto max-h-[88vh] w-[1040px] max-w-full flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.24)]"
+        className="flex h-auto max-h-[88vh] w-[1040px] max-w-full flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-[0_28px_90px_rgba(15,23,42,0.24)]"
       >
         {/* 头部 */}
-        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-6 py-3.5">
+        <div className="flex shrink-0 items-center justify-between border-b border-border px-6 py-3.5">
           <div className="min-w-0">
-            <h3 id="pipeline-edit-title" className="flex items-center gap-2.5 truncate text-base font-semibold tracking-tight text-slate-950">
+            <h3 id="pipeline-edit-title" className="flex items-center gap-2.5 truncate text-base font-semibold tracking-tight text-foreground">
               {isPublished ? '查看已发布流水线' : '配置流水线'}「{pipeline.name}」
               {isN8n ? (
-                <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700">
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-brand-line bg-brand-soft px-2 py-1 text-[11px] font-medium text-brand-ink">
                   <Sparkles size={10} /> n8n 流水线
                 </span>
               ) : isPython ? (
-                <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700">
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-viz-indigo-soft bg-viz-indigo-soft px-2 py-1 text-[11px] font-medium text-viz-indigo">
                   <FileCode2 size={10} /> Python 脚本
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-[11px] font-normal text-gray-500">
+                <span className="inline-flex items-center gap-1 rounded border border-border bg-muted px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground">
                   <GitBranch size={10} /> 未知引擎
                 </span>
               )}
             </h3>
-            <p className="mt-1 text-xs text-slate-500">{isPublished ? '名称与描述可更新；发布版本的编排与字段契约保持只读' : '按顺序完成执行验证、字段契约和发布确认'}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{isPublished ? '名称与描述可更新；发布版本的编排与字段契约保持只读' : '按顺序完成执行验证、字段契约和发布确认'}</p>
           </div>
-          <button onClick={handleClose} aria-label="关闭" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-900">
+          <button onClick={handleClose} aria-label="关闭" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[var(--color-text-tertiary)] transition hover:bg-muted hover:text-foreground">
             <X size={18} />
           </button>
         </div>
 
         {/* 步骤指示器 */}
-        <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-slate-100 bg-slate-50/70 px-6 py-2.5">
+        <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-border bg-muted px-6 py-2.5">
           {steps.map((s, index) => (
             <div key={s.num} className="contents">
               <button
@@ -354,53 +354,53 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                 onClick={() => setStep(s.num as 1 | 2 | 3 | 4)}
                 className={`group flex h-9 min-w-[150px] flex-1 items-center justify-center gap-2 rounded-xl border px-3 text-center text-xs font-medium transition-all duration-200 active:scale-[0.98] ${
                   step === s.num
-                    ? 'border-teal-700 bg-teal-700 text-white shadow-[0_6px_18px_rgba(15,118,110,0.18)]'
+                    ? 'border-brand bg-brand-deep text-[var(--color-text-inverse)] shadow-[0_6px_18px_rgba(15,118,110,0.18)]'
                     : step > s.num
-                      ? 'cursor-pointer border-teal-200 bg-white text-teal-800 hover:-translate-y-0.5 hover:border-teal-400 hover:shadow-sm'
-                      : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'
+                      ? 'cursor-pointer border-brand-line bg-card text-brand-ink hover:-translate-y-0.5 hover:border-brand hover:shadow-sm'
+                      : 'cursor-not-allowed border-border bg-muted text-[var(--color-text-tertiary)]'
                 }`}
               >
                 {step > s.num ? <CheckCircle2 size={14} className="shrink-0" /> : <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-current text-[10px]">{s.num}</span>}
                 <span className="truncate">{s.label}</span>
               </button>
               {index < steps.length - 1 && (
-                <ChevronRight size={15} className={`shrink-0 transition-colors duration-200 ${step > s.num ? 'text-teal-500' : 'text-slate-300'}`} />
+                <ChevronRight size={15} className={`shrink-0 transition-colors duration-200 ${step > s.num ? 'text-brand-ink' : 'text-[var(--color-text-tertiary)]'}`} />
               )}
             </div>
           ))}
         </div>
 
         {/* 内容区 */}
-        <div className="scrollbar-thin min-h-0 flex-1 overflow-auto overscroll-contain bg-white p-5 sm:px-6 sm:py-5">
+        <div className="scrollbar-thin min-h-0 flex-1 overflow-auto overscroll-contain bg-card p-5 sm:px-6 sm:py-5">
           {/* ──────── 阶段 1: 流水线信息 ──────── */}
           {step === 1 && (
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">流水线名称</label>
+                <label className="block text-sm font-medium text-foreground mb-1">流水线名称</label>
                 <input
                   value={name}
                   onChange={e => setName(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10"
+                  className="w-full rounded-xl border border-border px-3.5 py-2.5 text-sm outline-none transition focus:border-brand focus:ring-4 focus:ring-ring"
                   placeholder="输入流水线名称"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">描述</label>
+                <label className="block text-sm font-medium text-foreground mb-1">描述</label>
                 <textarea
                   value={description}
                   onChange={e => setDescription(e.target.value)}
-                  className="h-20 w-full resize-none rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10"
+                  className="h-20 w-full resize-none rounded-xl border border-border px-3.5 py-2.5 text-sm outline-none transition focus:border-brand focus:ring-4 focus:ring-ring"
                   placeholder="输入流水线描述（可选）"
                 />
               </div>
-              <div className={`flex items-start gap-2 rounded-xl border px-3.5 py-3 text-xs leading-5 ${isPublished ? 'border-teal-200 bg-teal-50 text-teal-800' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+              <div className={`flex items-start gap-2 rounded-xl border px-3.5 py-3 text-xs leading-5 ${isPublished ? 'border-brand-line bg-brand-soft text-brand-ink' : 'border-border bg-muted text-muted-foreground'}`}>
                 {isPublished ? <ShieldCheck size={14} className="mt-0.5 shrink-0" /> : <Info size={14} className="mt-0.5 shrink-0" />}
                 <span>{isPublished
                   ? '名称与描述属于基础信息，可以随时更新；已发布的编排、字段类型与主键契约仍保持封版。'
                   : '名称与描述属于基础信息，可在此随时单独保存；编排、字段契约与发布配置仍需在最后一步完成。'}</span>
               </div>
               {actionError && (
-                <div role="alert" className="flex items-start gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-600">
+                <div role="alert" className="flex items-start gap-1.5 rounded-xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-3.5 py-2.5 text-xs text-[var(--color-danger)]">
                   <XCircle size={13} className="mt-0.5 shrink-0" />
                   <span>{actionError}</span>
                 </div>
@@ -412,21 +412,21 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
           {step === 2 && (
             <div className="space-y-3">
               {dryRunPhase === 'running' && (
-                <div className="flex items-center gap-3 text-blue-600 py-8 justify-center">
+                <div className="flex items-center gap-3 text-[var(--color-info)] py-8 justify-center">
                   <Loader2 size={20} className="animate-spin" />
                   <span className="text-sm">正在执行流水线，获取预览数据…</span>
                 </div>
               )}
 
               {dryRunPhase === 'error' && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-2">
-                  <XCircle size={16} className="text-red-500 mt-0.5 shrink-0" />
+                <div className="bg-[var(--color-danger-bg)] border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] rounded-lg p-4 flex items-start gap-2">
+                  <XCircle size={16} className="text-[var(--color-danger)] mt-0.5 shrink-0" />
                   <div>
-                    <p className="text-sm text-red-700 font-medium">试运行失败</p>
-                    <p className="text-xs text-red-600 mt-0.5">{dryRunError}</p>
+                    <p className="text-sm text-[var(--color-danger)] font-medium">试运行失败</p>
+                    <p className="text-xs text-[var(--color-danger)] mt-0.5">{dryRunError}</p>
                     <button
                       onClick={runDryRun}
-                      className="mt-2 text-xs text-red-600 underline hover:text-red-800"
+                      className="mt-2 text-xs text-[var(--color-danger)] underline hover:text-[var(--color-danger)]"
                     >
                       重试
                     </button>
@@ -435,7 +435,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               )}
 
               {dryRunPhase === 'done' && !isPublished && (
-                <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
+                <div className="flex items-center justify-between text-xs text-[var(--color-text-tertiary)] mb-1">
                   <span>
                     共 {totalRows.toLocaleString()} 行，默认展示前 {Math.min(cachedSample.length, 100)} 行
                   </span>
@@ -459,10 +459,10 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               )}
 
               {dryRunPhase === 'done' && !isPublished && (dryRunResult?.outputs || []).some(o => o.gate_error || o.warnings.length > 0) && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-1">
+                <div className="bg-[var(--color-warning-bg)] border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] rounded-lg px-3 py-2 space-y-1">
                   {(dryRunResult?.outputs || []).map((o, i) => (
-                    <div key={i} className="text-xs text-amber-700 space-y-0.5">
-                      {o.gate_error && <p className="text-red-600">入湖预检：{o.gate_error}</p>}
+                    <div key={i} className="text-xs text-[var(--color-warning)] space-y-0.5">
+                      {o.gate_error && <p className="text-[var(--color-danger)]">入湖预检：{o.gate_error}</p>}
                       {o.warnings.map((w, j) => <p key={j}>{w}</p>)}
                     </div>
                   ))}
@@ -470,7 +470,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               )}
 
               {dryRunPhase === 'done' && isPublished && (
-                <div className="flex items-center gap-2 text-xs text-gray-400 mb-1">
+                <div className="flex items-center gap-2 text-xs text-[var(--color-text-tertiary)] mb-1">
                   <Info size={12} />
                   <span>
                     已发布流水线不在此处重新执行（避免触发生产工作流）。
@@ -500,7 +500,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               )}
 
               {dryRunPhase === 'done' && !isPublished && cachedColumns.length === 0 && (
-                <div className="text-center py-8 text-gray-400 text-sm">
+                <div className="text-center py-8 text-[var(--color-text-tertiary)] text-sm">
                   <AlertTriangle size={24} className="mx-auto mb-2 opacity-40" />
                   <p>流水线执行未产生任何数据列</p>
                 </div>
@@ -511,14 +511,14 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
           {/* ──────── 阶段 3: 设置主键组 ──────── */}
           {step === 3 && (
             <div className="space-y-3">
-              <div className="flex items-center gap-2 text-xs text-gray-400">
+              <div className="flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
                 <KeyRound size={12} />
-                <span>定义每个字段的入湖契约：字段标识（入湖列名，可改名）、名称、类型、主键、允许空值；<span className="text-red-500">*</span> 为必填项</span>
-                {isPublished && <span className="text-amber-600 font-medium">（已发布 · 只读）</span>}
+                <span>定义每个字段的入湖契约：字段标识（入湖列名，可改名）、名称、类型、主键、允许空值；<span className="text-[var(--color-danger)]">*</span> 为必填项</span>
+                {isPublished && <span className="text-[var(--color-warning)] font-medium">（已发布 · 只读）</span>}
               </div>
 
               {multiOutput && !isPublished && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700 flex items-start gap-1.5">
+                <div className="bg-[var(--color-warning-bg)] border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] rounded-lg px-3 py-2 text-xs text-[var(--color-warning)] flex items-start gap-1.5">
                   <AlertTriangle size={13} className="mt-0.5 shrink-0" />
                   <span>
                     该流水线单次执行产出多个数据集，流水线级字段契约暂不适用（主键的正确粒度是每个数据集一个，
@@ -528,7 +528,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               )}
 
               {lakePkCols.size > 0 && (
-                <div className="bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 text-xs text-amber-700 flex items-center gap-1.5">
+                <div className="bg-[var(--color-warning-bg)] border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] rounded-lg px-3 py-2 text-xs text-[var(--color-warning)] flex items-center gap-1.5">
                   <Lock size={11} className="shrink-0" />
                   <span>
                     资产湖已固化主键契约 <b className="font-mono">{lakeDeclaredPk}</b>（已自动勾选）。
@@ -539,7 +539,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               )}
 
               {pkFields.length > 0 && (
-                <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700">
+                <div className="bg-[var(--color-info-bg)] border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] rounded-lg px-3 py-2 text-xs text-[var(--color-info)]">
                   主键：{pkFields.map(d => d.field_key).join('、')}
                   {pkFields.length > 1 && '（复合主键）'}
                 </div>
@@ -547,14 +547,14 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
 
               <div className="border rounded-lg overflow-x-auto">
                 <table className="w-full min-w-[700px] text-xs">
-                  <thead className="bg-gray-50 border-b">
+                  <thead className="bg-muted border-b">
                     <tr>
-                      <th className="text-left px-3 py-2 font-medium text-gray-600 w-36">原始列名</th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-600 w-32">字段标识（入湖列名）<span className="ml-0.5 text-red-500" aria-label="必填">*</span></th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-600 w-32">字段名称<span className="ml-0.5 text-red-500" aria-label="必填">*</span></th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-600 w-24">字段类型<span className="ml-0.5 text-red-500" aria-label="必填">*</span></th>
-                      <th className="text-center px-3 py-2 font-medium text-gray-600 w-16">主键</th>
-                      <th className="text-center px-3 py-2 font-medium text-gray-600 w-16">允许空</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground w-36">原始列名</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground w-32">字段标识（入湖列名）<span className="ml-0.5 text-[var(--color-danger)]" aria-label="必填">*</span></th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground w-32">字段名称<span className="ml-0.5 text-[var(--color-danger)]" aria-label="必填">*</span></th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground w-24">字段类型<span className="ml-0.5 text-[var(--color-danger)]" aria-label="必填">*</span></th>
+                      <th className="text-center px-3 py-2 font-medium text-muted-foreground w-16">主键</th>
+                      <th className="text-center px-3 py-2 font-medium text-muted-foreground w-16">允许空</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
@@ -565,8 +565,8 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                       const allErrors = [fieldErrors].filter(Boolean)
                       const missingFields = requiredValidationAttempted ? missingRequiredByRow.get(i) : undefined
                       return (
-                        <tr key={i} className={allErrors.length > 0 || missingFields?.size ? 'bg-red-50' : 'hover:bg-gray-50'}>
-                          <td className="px-3 py-1.5 text-gray-500 font-mono text-[11px]" title={d.source_key}>
+                        <tr key={i} className={allErrors.length > 0 || missingFields?.size ? 'bg-[var(--color-danger-bg)]' : 'hover:bg-muted'}>
+                          <td className="px-3 py-1.5 text-muted-foreground font-mono text-[11px]" title={d.source_key}>
                             <div className="flex min-w-0 items-center gap-1.5">
                               <span className="truncate">{d.source_key}</span>
                               {d.is_primary_key && (
@@ -574,7 +574,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                                   role="img"
                                   aria-label="主键"
                                   title="主键"
-                                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-teal-50 text-teal-700 ring-1 ring-inset ring-teal-200"
+                                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-brand-soft text-brand-ink ring-1 ring-inset ring-ring"
                                 >
                                   <KeyRound size={10} />
                                 </span>
@@ -584,7 +584,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                                   role="img"
                                   aria-label="非空"
                                   title="非空"
-                                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200"
+                                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground ring-1 ring-inset ring-[var(--color-border-hover)]"
                                 >
                                   <Lock size={10} />
                                 </span>
@@ -602,11 +602,11 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                                 aria-describedby={missingFields?.has('field_key') ? `field-key-error-${i}` : undefined}
                                 onChange={e => updateColDef(i, { field_key: e.target.value })}
                                 title={declaredInLake ? '湖中已固化的主键列：改名后需以「全量覆盖」运行一次重建资产' : d.source_key !== d.field_key ? `入湖时 ${d.source_key} → ${d.field_key}` : undefined}
-                                className={`w-full px-2 py-1 border rounded text-xs font-mono ${disabled ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : missingFields?.has('field_key') ? 'border-red-400 bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-200' : d.source_key !== d.field_key ? 'border-blue-300 bg-blue-50/40' : ''}`}
+                                className={`w-full px-2 py-1 border rounded text-xs font-mono ${disabled ? 'bg-muted text-[var(--color-text-tertiary)] cursor-not-allowed' : missingFields?.has('field_key') ? 'border-[var(--color-danger)] bg-[var(--color-danger-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--color-danger)]' : d.source_key !== d.field_key ? 'border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)]' : ''}`}
                               />
-                              {declaredInLake && <Lock size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-amber-400 pointer-events-none" />}
+                              {declaredInLake && <Lock size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[var(--color-warning)] pointer-events-none" />}
                             </div>
-                            {missingFields?.has('field_key') && <p id={`field-key-error-${i}`} className="mt-0.5 text-[10px] text-red-600">字段标识为必填项</p>}
+                            {missingFields?.has('field_key') && <p id={`field-key-error-${i}`} className="mt-0.5 text-[10px] text-[var(--color-danger)]">字段标识为必填项</p>}
                           </td>
                           <td className="px-1 py-1">
                             <input
@@ -617,9 +617,9 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                               aria-invalid={missingFields?.has('field_name') || undefined}
                               aria-describedby={missingFields?.has('field_name') ? `field-name-error-${i}` : undefined}
                               onChange={e => updateColDef(i, { field_name: e.target.value })}
-                              className={`w-full px-2 py-1 border rounded text-xs ${disabled ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : missingFields?.has('field_name') ? 'border-red-400 bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-200' : ''}`}
+                              className={`w-full px-2 py-1 border rounded text-xs ${disabled ? 'bg-muted text-[var(--color-text-tertiary)] cursor-not-allowed' : missingFields?.has('field_name') ? 'border-[var(--color-danger)] bg-[var(--color-danger-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--color-danger)]' : ''}`}
                             />
-                            {missingFields?.has('field_name') && <p id={`field-name-error-${i}`} className="mt-0.5 text-[10px] text-red-600">字段名称为必填项</p>}
+                            {missingFields?.has('field_name') && <p id={`field-name-error-${i}`} className="mt-0.5 text-[10px] text-[var(--color-danger)]">字段名称为必填项</p>}
                           </td>
                           <td className="px-1 py-1">
                             <select
@@ -630,13 +630,13 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                               aria-invalid={missingFields?.has('field_type') || undefined}
                               aria-describedby={missingFields?.has('field_type') ? `field-type-error-${i}` : undefined}
                               onChange={e => updateColDef(i, { field_type: e.target.value })}
-                              className={`w-full px-2 py-1 border rounded text-xs ${disabled ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : missingFields?.has('field_type') ? 'border-red-400 bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-200' : ''}`}
+                              className={`w-full px-2 py-1 border rounded text-xs ${disabled ? 'bg-muted text-[var(--color-text-tertiary)] cursor-not-allowed' : missingFields?.has('field_type') ? 'border-[var(--color-danger)] bg-[var(--color-danger-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--color-danger)]' : ''}`}
                             >
                               {CONTRACT_FIELD_TYPES.map(t => (
                                 <option key={t} value={t}>{t}</option>
                               ))}
                             </select>
-                            {missingFields?.has('field_type') && <p id={`field-type-error-${i}`} className="mt-0.5 text-[10px] text-red-600">字段类型为必填项</p>}
+                            {missingFields?.has('field_type') && <p id={`field-type-error-${i}`} className="mt-0.5 text-[10px] text-[var(--color-danger)]">字段类型为必填项</p>}
                           </td>
                           <td className="px-1 py-1 text-center">
                             <input
@@ -666,13 +666,13 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
 
               {/* 校验错误/警告展示 */}
               {hasErrors && (
-                <div role="alert" aria-live="polite" className="bg-red-50 border border-red-200 rounded-lg p-3 space-y-1">
+                <div role="alert" aria-live="polite" className="bg-[var(--color-danger-bg)] border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] rounded-lg p-3 space-y-1">
                   {(validateResult?.errors || []).map((e, i) => (
                     <div key={i} className="flex items-start gap-1.5 text-xs">
                       {e.severity === 'warning'
-                        ? <AlertTriangle size={12} className="text-amber-500 mt-0.5 shrink-0" />
-                        : <XCircle size={12} className="text-red-500 mt-0.5 shrink-0" />}
-                      <span className={e.severity === 'warning' ? 'text-amber-700' : 'text-red-700'}>
+                        ? <AlertTriangle size={12} className="text-[var(--color-warning)] mt-0.5 shrink-0" />
+                        : <XCircle size={12} className="text-[var(--color-danger)] mt-0.5 shrink-0" />}
+                      <span className={e.severity === 'warning' ? 'text-[var(--color-warning)]' : 'text-[var(--color-danger)]'}>
                         {e.field_key && <span className="font-mono mr-1">[{e.field_key}]</span>}
                         {e.message}
                       </span>
@@ -682,8 +682,8 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               )}
 
               {validateResult?.valid && (validateResult.errors || []).length === 0 && (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
-                  <div className="flex items-center gap-2 text-xs text-emerald-700">
+                <div className="bg-[var(--color-success-bg)] border border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] rounded-lg p-3">
+                  <div className="flex items-center gap-2 text-xs text-[var(--color-success)]">
                     <CheckCircle2 size={14} />
                     全量校验通过（共 {totalRows.toLocaleString()} 行），可以进入下一步
                   </div>
@@ -691,13 +691,13 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               )}
 
               {validateResult?.valid && (validateResult.errors || []).length > 0 && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-1">
-                  <div className="flex items-center gap-2 text-xs text-amber-700 font-medium">
+                <div className="bg-[var(--color-warning-bg)] border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] rounded-lg p-3 space-y-1">
+                  <div className="flex items-center gap-2 text-xs text-[var(--color-warning)] font-medium">
                     <AlertTriangle size={14} />
                     校验完成，但存在以下问题需要处理
                   </div>
                   {(validateResult.errors || []).map((e, i) => (
-                    <div key={i} className="flex items-start gap-1.5 text-xs text-amber-700 ml-6">
+                    <div key={i} className="flex items-start gap-1.5 text-xs text-[var(--color-warning)] ml-6">
                       <span>{e.field_key && <span className="font-mono mr-1">[{e.field_key}]</span>}{e.message}</span>
                     </div>
                   ))}
@@ -711,47 +711,47 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
             <div className="space-y-4">
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <div className="border rounded-lg p-3">
-                  <p className="text-xs text-gray-400 mb-1">流水线名称</p>
-                  <p className="text-sm font-medium text-gray-800">{name || '未设置'}</p>
+                  <p className="text-xs text-[var(--color-text-tertiary)] mb-1">流水线名称</p>
+                  <p className="text-sm font-medium text-foreground">{name || '未设置'}</p>
                 </div>
                 <div className="border rounded-lg p-3">
-                  <p className="text-xs text-gray-400 mb-1">描述</p>
-                  <p className="text-sm text-gray-800">{description || '未填写'}</p>
+                  <p className="text-xs text-[var(--color-text-tertiary)] mb-1">描述</p>
+                  <p className="text-sm text-foreground">{description || '未填写'}</p>
                 </div>
               </div>
 
               {!multiOutput && columnDefs.length > 0 && (
                 <div>
-                  <p className="text-xs text-gray-400 mb-2">字段契约预览{isPublished ? '（已封版）' : '（发布后封版）'}</p>
+                  <p className="text-xs text-[var(--color-text-tertiary)] mb-2">字段契约预览{isPublished ? '（已封版）' : '（发布后封版）'}</p>
                   <div className="border rounded-lg overflow-x-auto max-h-[200px]">
                     <table className="w-full min-w-[560px] text-xs">
-                      <thead className="bg-gray-50 border-b sticky top-0">
+                      <thead className="bg-muted border-b sticky top-0">
                         <tr>
-                          <th className="text-left px-3 py-1.5 font-medium text-gray-600">原始列名</th>
-                          <th className="text-left px-3 py-1.5 font-medium text-gray-600">字段标识</th>
-                          <th className="text-left px-3 py-1.5 font-medium text-gray-600">字段名称</th>
-                          <th className="text-left px-3 py-1.5 font-medium text-gray-600">类型</th>
-                          <th className="text-center px-3 py-1.5 font-medium text-gray-600">主键</th>
-                          <th className="text-center px-3 py-1.5 font-medium text-gray-600">允许空</th>
+                          <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">原始列名</th>
+                          <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">字段标识</th>
+                          <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">字段名称</th>
+                          <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">类型</th>
+                          <th className="text-center px-3 py-1.5 font-medium text-muted-foreground">主键</th>
+                          <th className="text-center px-3 py-1.5 font-medium text-muted-foreground">允许空</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y">
                         {columnDefs.map((d, i) => (
-                          <tr key={i} className="hover:bg-gray-50">
-                            <td className="px-3 py-1 font-mono text-[11px] text-gray-500">{d.source_key}</td>
+                          <tr key={i} className="hover:bg-muted">
+                            <td className="px-3 py-1 font-mono text-[11px] text-muted-foreground">{d.source_key}</td>
                             <td className="px-3 py-1 font-mono text-[11px]">
                               {d.field_key}
-                              {d.source_key !== d.field_key && <span className="ml-1 text-blue-500">（改名）</span>}
+                              {d.source_key !== d.field_key && <span className="ml-1 text-[var(--color-info)]">（改名）</span>}
                             </td>
                             <td className="px-3 py-1">{d.field_name}</td>
                             <td className="px-3 py-1">
-                              <span className="px-1.5 py-0.5 bg-gray-100 rounded text-[11px]">{d.field_type}</span>
+                              <span className="px-1.5 py-0.5 bg-muted rounded text-[11px]">{d.field_type}</span>
                             </td>
                             <td className="px-3 py-1 text-center">
-                              {d.is_primary_key ? <KeyRound size={12} className="text-amber-500 inline" /> : '-'}
+                              {d.is_primary_key ? <KeyRound size={12} className="text-[var(--color-warning)] inline" /> : '-'}
                             </td>
                             <td className="px-3 py-1 text-center">
-                              {d.nullable ? '是' : <span className="text-red-500 font-medium">否</span>}
+                              {d.nullable ? '是' : <span className="text-[var(--color-danger)] font-medium">否</span>}
                             </td>
                           </tr>
                         ))}
@@ -772,13 +772,13 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               )}
 
               {multiOutput && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
+                <div className="bg-[var(--color-warning-bg)] border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] rounded-lg px-3 py-2 text-xs text-[var(--color-warning)]">
                   多产物流水线：本次仅保存名称与描述，字段契约不适用（主键在任务/资产湖粒度管理）。
                 </div>
               )}
 
               {!isPublished && isN8n && (
-                <div className="flex items-start gap-2 rounded-xl border border-teal-200 bg-teal-50 px-3.5 py-3 text-xs leading-5 text-teal-800">
+                <div className="flex items-start gap-2 rounded-xl border border-brand-line bg-brand-soft px-3.5 py-3 text-xs leading-5 text-brand-ink">
                   <Sparkles size={13} className="mt-0.5 shrink-0" />
                   <span>
                     发布会锁定当前 n8n 版本、唯一输入输出节点与字段契约。发布后不可撤回或编辑；
@@ -788,11 +788,11 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               )}
 
               {isPublished && (
-                <div className="flex items-start gap-2 rounded-xl border border-teal-200 bg-teal-50 px-3.5 py-3">
-                  <ShieldCheck size={15} className="mt-0.5 shrink-0 text-teal-700" />
+                <div className="flex items-start gap-2 rounded-xl border border-brand-line bg-brand-soft px-3.5 py-3">
+                  <ShieldCheck size={15} className="mt-0.5 shrink-0 text-brand-ink" />
                   <div>
-                    <p className="text-xs font-semibold text-teal-900">已发布，版本已锁定</p>
-                    <p className="mt-1 text-xs leading-5 text-teal-700">
+                    <p className="text-xs font-semibold text-brand-ink">已发布，版本已锁定</p>
+                    <p className="mt-1 text-xs leading-5 text-brand-ink">
                       该版本只能执行、停用或归档，不能撤回到草稿。需要变更时请创建新的流水线版本。
                     </p>
                   </div>
@@ -800,7 +800,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               )}
 
               {actionError && (
-                <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-600 flex items-start gap-1.5">
+                <div className="bg-[var(--color-danger-bg)] border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] rounded-lg px-3 py-2 text-xs text-[var(--color-danger)] flex items-start gap-1.5">
                   <XCircle size={13} className="mt-0.5 shrink-0" />
                   <span>{actionError}</span>
                 </div>
@@ -810,13 +810,13 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
         </div>
 
         {/* 底部按钮 */}
-        <div className="flex shrink-0 items-center justify-between border-t border-slate-100 bg-white px-6 py-4">
+        <div className="flex shrink-0 items-center justify-between border-t border-border bg-card px-6 py-4">
           <div>
             {step === 1 && (
               <button
                 type="button"
                 onClick={handleClose}
-                className="flex h-10 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-600 transition-all duration-200 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 active:scale-[0.98]"
+                className="flex h-10 items-center gap-1.5 rounded-xl border border-border bg-card px-4 text-sm font-medium text-muted-foreground transition-all duration-200 hover:border-border hover:bg-muted hover:text-foreground active:scale-[0.98]"
               >
                 <X size={14} /> 取消
               </button>
@@ -825,7 +825,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
               <button
                 type="button"
                 onClick={() => setStep((step - 1) as 1 | 2 | 3 | 4)}
-                className="flex h-10 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-600 transition-all duration-200 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 active:scale-[0.98]"
+                className="flex h-10 items-center gap-1.5 rounded-xl border border-border bg-card px-4 text-sm font-medium text-muted-foreground transition-all duration-200 hover:border-border hover:bg-muted hover:text-foreground active:scale-[0.98]"
               >
                 <ChevronLeft size={14} /> 上一步
               </button>
@@ -841,7 +841,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                   setStep((step + 1) as 1 | 2 | 3 | 4)
                 }}
                 disabled={step === 2 && dryRunPhase !== 'done'}
-                className="flex h-10 items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-sm font-medium text-white shadow-[0_6px_18px_rgba(15,118,110,0.16)] transition-all duration-200 hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
+                className="flex h-10 items-center gap-1.5 rounded-xl bg-brand-deep px-4 text-sm font-medium text-[var(--color-text-inverse)] shadow-[0_6px_18px_rgba(15,118,110,0.16)] transition-all duration-200 hover:bg-brand-deep active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-muted disabled:text-[var(--color-text-tertiary)] disabled:shadow-none"
               >
                 下一步 <ChevronRight size={14} />
               </button>
@@ -851,7 +851,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                 type="button"
                 onClick={runValidate}
                 disabled={validating}
-                className="flex h-10 items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-sm font-medium text-white shadow-[0_6px_18px_rgba(15,118,110,0.16)] transition-all duration-200 hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
+                className="flex h-10 items-center gap-1.5 rounded-xl bg-brand-deep px-4 text-sm font-medium text-[var(--color-text-inverse)] shadow-[0_6px_18px_rgba(15,118,110,0.16)] transition-all duration-200 hover:bg-brand-deep active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-muted disabled:text-[var(--color-text-tertiary)] disabled:shadow-none"
               >
                 {validating ? (
                   <><Loader2 size={14} className="animate-spin" /> 全量校验中…</>
@@ -866,7 +866,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                   type="button"
                   onClick={handleSave}
                   disabled={saving || publishing}
-                  className="flex h-10 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-600 transition-all duration-200 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex h-10 items-center gap-1.5 rounded-xl border border-border bg-card px-4 text-sm font-medium text-muted-foreground transition-all duration-200 hover:border-border hover:bg-muted hover:text-foreground active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                   保存草稿
@@ -875,7 +875,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                   type="button"
                   onClick={handlePublish}
                   disabled={publishing || saving}
-                  className="flex h-10 items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-sm font-medium text-white shadow-[0_6px_18px_rgba(15,118,110,0.16)] transition-all duration-200 hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex h-10 items-center gap-1.5 rounded-xl bg-brand-deep px-4 text-sm font-medium text-[var(--color-text-inverse)] shadow-[0_6px_18px_rgba(15,118,110,0.16)] transition-all duration-200 hover:bg-brand-deep active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {publishing ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />}
                   发布
@@ -887,7 +887,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                 type="button"
                 onClick={handleSaveBasicInfo}
                 disabled={saving || !infoDirty || !name.trim()}
-                className="flex h-10 items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-sm font-medium text-white shadow-[0_6px_18px_rgba(15,118,110,0.16)] transition-all duration-200 hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex h-10 items-center gap-1.5 rounded-xl bg-brand-deep px-4 text-sm font-medium text-[var(--color-text-inverse)] shadow-[0_6px_18px_rgba(15,118,110,0.16)] transition-all duration-200 hover:bg-brand-deep active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                 保存基础信息
@@ -898,7 +898,7 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                 type="button"
                 onClick={infoDirty ? handleSaveBasicInfo : onClose}
                 disabled={saving || !name.trim()}
-                className="flex h-10 items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-sm font-medium text-white shadow-[0_6px_18px_rgba(15,118,110,0.16)] transition-all duration-200 hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex h-10 items-center gap-1.5 rounded-xl bg-brand-deep px-4 text-sm font-medium text-[var(--color-text-inverse)] shadow-[0_6px_18px_rgba(15,118,110,0.16)] transition-all duration-200 hover:bg-brand-deep active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {saving ? <Loader2 size={14} className="animate-spin" /> : infoDirty ? <Save size={14} /> : null}
                 {infoDirty ? '保存并完成' : '完成'}
@@ -928,11 +928,11 @@ function SampleTable({ columns, rows, emptyText }: {
             <col style={{ width: 52 }} />
             {columns.map(col => <col key={col} style={{ width: 168 }} />)}
           </colgroup>
-          <thead className="bg-gray-50 border-b sticky top-0">
+          <thead className="bg-muted border-b sticky top-0">
             <tr>
-              <th className="text-left px-3 py-2 font-medium text-gray-600 w-10">#</th>
+              <th className="text-left px-3 py-2 font-medium text-muted-foreground w-10">#</th>
               {columns.map(col => (
-                <th key={col} className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 text-left font-medium text-gray-600" title={col}>
+                <th key={col} className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 text-left font-medium text-muted-foreground" title={col}>
                   {col}
                 </th>
               ))}
@@ -941,18 +941,18 @@ function SampleTable({ columns, rows, emptyText }: {
           <tbody className="divide-y">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={columns.length + 1} className="px-3 py-8 text-center text-gray-400">
+                <td colSpan={columns.length + 1} className="px-3 py-8 text-center text-[var(--color-text-tertiary)]">
                   {emptyText}
                 </td>
               </tr>
             ) : (
               rows.map((row, i) => (
-                <tr key={i} className="hover:bg-gray-50">
-                  <td className="px-3 py-1.5 text-gray-400">{i + 1}</td>
+                <tr key={i} className="hover:bg-muted">
+                  <td className="px-3 py-1.5 text-[var(--color-text-tertiary)]">{i + 1}</td>
                   {columns.map(col => (
-                    <td key={col} className="px-3 py-1.5 text-gray-700 whitespace-nowrap overflow-hidden text-ellipsis" title={String(row[col] ?? '')}>
+                    <td key={col} className="px-3 py-1.5 text-foreground whitespace-nowrap overflow-hidden text-ellipsis" title={String(row[col] ?? '')}>
                       {row[col] === null || row[col] === undefined ? (
-                        <span className="text-gray-300 italic">null</span>
+                        <span className="text-[var(--color-text-tertiary)] italic">null</span>
                       ) : (
                         String(row[col])
                       )}
@@ -1003,19 +1003,19 @@ function DryRunPagedTable({ pipelineId, dryRunId, outputCount, onCollapse, title
   const tableMinWidth = 52 + columns.length * 168
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-xs text-slate-500">
-        <Table2 size={12} className="text-gray-400" />
+    <div className="overflow-hidden rounded-xl border border-border bg-card">
+      <div className="flex items-center gap-2 border-b border-border bg-muted px-3.5 py-2.5 text-xs text-muted-foreground">
+        <Table2 size={12} className="text-[var(--color-text-tertiary)]" />
         <div className="min-w-0">
-          <p className="font-medium text-slate-700">{title}</p>
-          {description && <p className="mt-0.5 truncate text-[11px] text-slate-400">{description}</p>}
+          <p className="font-medium text-foreground">{title}</p>
+          {description && <p className="mt-0.5 truncate text-[11px] text-[var(--color-text-tertiary)]">{description}</p>}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-3">
           {outputCount > 1 && (
             <select
               value={outputIndex}
               onChange={e => { setOutputIndex(Number(e.target.value)); setPage(1) }}
-              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/10"
+              className="rounded-lg border border-border bg-card px-2 py-1 text-xs text-muted-foreground outline-none focus:border-brand focus:ring-2 focus:ring-ring"
             >
               {Array.from({ length: outputCount }, (_, i) => (
                 <option key={i} value={i}>产物 {i + 1}</option>
@@ -1023,7 +1023,7 @@ function DryRunPagedTable({ pipelineId, dryRunId, outputCount, onCollapse, title
             </select>
           )}
           {onCollapse && (
-            <button type="button" onClick={onCollapse} className="text-teal-700 transition hover:text-teal-900 hover:underline">
+            <button type="button" onClick={onCollapse} className="text-brand-ink transition hover:text-brand-ink hover:underline">
               收起
             </button>
           )}
@@ -1031,37 +1031,37 @@ function DryRunPagedTable({ pipelineId, dryRunId, outputCount, onCollapse, title
       </div>
       <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
         {loading ? (
-          <div className="py-10 text-center text-xs text-gray-400 flex items-center justify-center gap-1.5">
+          <div className="py-10 text-center text-xs text-[var(--color-text-tertiary)] flex items-center justify-center gap-1.5">
             <Loader2 size={13} className="animate-spin" /> 加载数据…
           </div>
         ) : error ? (
-          <div className="py-10 text-center text-xs text-red-500">{error}</div>
+          <div className="py-10 text-center text-xs text-[var(--color-danger)]">{error}</div>
         ) : !data || data.rows.length === 0 ? (
-          <div className="py-10 text-center text-xs text-gray-400">该页没有数据</div>
+          <div className="py-10 text-center text-xs text-[var(--color-text-tertiary)]">该页没有数据</div>
         ) : (
           <table className="w-full table-fixed text-xs" style={{ minWidth: tableMinWidth }}>
             <colgroup>
               <col style={{ width: 52 }} />
               {columns.map(c => <col key={c} style={{ width: 168 }} />)}
             </colgroup>
-            <thead className="bg-gray-50 sticky top-0">
+            <thead className="bg-muted sticky top-0">
               <tr>
-                <th className="text-left px-3 py-2 font-medium text-gray-600 border-b whitespace-nowrap w-12">#</th>
+                <th className="text-left px-3 py-2 font-medium text-muted-foreground border-b whitespace-nowrap w-12">#</th>
                 {columns.map(c => (
-                  <th key={c} className="overflow-hidden text-ellipsis whitespace-nowrap border-b px-3 py-2 text-left font-medium text-gray-600" title={c}>{c}</th>
+                  <th key={c} className="overflow-hidden text-ellipsis whitespace-nowrap border-b px-3 py-2 text-left font-medium text-muted-foreground" title={c}>{c}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y">
               {data.rows.map((row, ri) => (
-                <tr key={ri} className="hover:bg-gray-50">
-                  <td className="px-3 py-1.5 text-gray-400 whitespace-nowrap tabular-nums">
+                <tr key={ri} className="hover:bg-muted">
+                  <td className="px-3 py-1.5 text-[var(--color-text-tertiary)] whitespace-nowrap tabular-nums">
                     {(page - 1) * pageSize + ri + 1}
                   </td>
                   {columns.map(c => (
-                    <td key={c} className="px-3 py-1.5 text-gray-700 whitespace-nowrap max-w-[220px] overflow-hidden text-ellipsis" title={String(row[c] ?? '')}>
+                    <td key={c} className="px-3 py-1.5 text-foreground whitespace-nowrap max-w-[220px] overflow-hidden text-ellipsis" title={String(row[c] ?? '')}>
                       {row[c] === null || row[c] === undefined ? (
-                        <span className="text-gray-300 italic">null</span>
+                        <span className="text-[var(--color-text-tertiary)] italic">null</span>
                       ) : (
                         String(row[c])
                       )}
@@ -1073,20 +1073,20 @@ function DryRunPagedTable({ pipelineId, dryRunId, outputCount, onCollapse, title
           </table>
         )}
       </div>
-      <div className="flex items-center justify-between px-3 py-2 border-t bg-gray-50/60 text-xs text-gray-400">
+      <div className="flex items-center justify-between px-3 py-2 border-t bg-muted text-xs text-[var(--color-text-tertiary)]">
         <span>共 {total.toLocaleString()} 行 · 第 {page}/{totalPages} 页</span>
         <div className="flex items-center gap-1">
           <button
             disabled={page <= 1 || loading}
             onClick={() => setPage(p => Math.max(1, p - 1))}
-            className="p-1 rounded hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+            className="p-1 rounded hover:bg-card disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <ChevronLeft size={14} />
           </button>
           <button
             disabled={page >= totalPages || loading}
             onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-            className="p-1 rounded hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+            className="p-1 rounded hover:bg-card disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <ChevronRight size={14} />
           </button>

@@ -49,7 +49,6 @@ const NATIVE_SELECT_ALLOWLIST = new Set([
   'pages/models/ModelsPage.tsx',
                   'pages/ontology-model/OntologyNetworkPage.tsx',
   'pages/pipelines/PipelineEditWizard.tsx',
-  'pages/pipelines/PipelineListPage.tsx',
   'pages/pipelines/steward/DataStewardPage.tsx',
   'pages/pipelines/sync-tasks/GlobalHistoryModal.tsx',
   'pages/pipelines/sync-tasks/HistoryDrawer.tsx',

@@ -14,11 +14,11 @@ import {
 const TRIGGER_LABEL: Record<string, string> = { manual: '手动', scheduled: '定时' }
 
 const STATUS_META: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
-  pending: { icon: <Clock size={13} />, color: 'text-slate-500 bg-slate-100', label: '排队中' },
-  running: { icon: <Loader2 size={13} className="animate-spin" />, color: 'text-blue-600 bg-blue-50', label: '执行中' },
-  success: { icon: <CheckCircle2 size={13} />, color: 'text-emerald-600 bg-emerald-50', label: '成功' },
-  failed:  { icon: <XCircle size={13} />, color: 'text-rose-600 bg-rose-50', label: '失败' },
-  cancelled: { icon: <XCircle size={13} />, color: 'text-amber-600 bg-amber-50', label: '已取消' },
+  pending: { icon: <Clock size={13} />, color: 'text-muted-foreground bg-muted', label: '排队中' },
+  running: { icon: <Loader2 size={13} className="animate-spin" />, color: 'text-[var(--color-info)] bg-[var(--color-info-bg)]', label: '执行中' },
+  success: { icon: <CheckCircle2 size={13} />, color: 'text-[var(--color-success)] bg-[var(--color-success-bg)]', label: '成功' },
+  failed:  { icon: <XCircle size={13} />, color: 'text-viz-rose bg-viz-rose-soft', label: '失败' },
+  cancelled: { icon: <XCircle size={13} />, color: 'text-[var(--color-warning)] bg-[var(--color-warning-bg)]', label: '已取消' },
 }
 
 type StatusFilter = '' | 'pending' | 'running' | 'success' | 'failed' | 'cancelled'
@@ -165,24 +165,24 @@ export default function HistoryDrawer({
   }
 
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex justify-end" onClick={onClose}>
-      <div data-testid="execution-history-drawer" className="w-full max-w-3xl bg-white h-full flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="px-5 py-4 border-b border-slate-200 shrink-0">
+    <div className="fixed inset-0 bg-accent backdrop-blur-sm z-50 flex justify-end" onClick={onClose}>
+      <div data-testid="execution-history-drawer" className="w-full max-w-3xl bg-card h-full flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-border shrink-0">
           <div className="flex items-center justify-between">
-            <h3 className="text-base font-semibold text-slate-800">执行记录</h3>
-            <button type="button" onClick={onClose} aria-label="关闭执行记录" className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"><X size={18} /></button>
+            <h3 className="text-base font-semibold text-foreground">执行记录</h3>
+            <button type="button" onClick={onClose} aria-label="关闭执行记录" className="grid h-8 w-8 place-items-center rounded-lg text-[var(--color-text-tertiary)] transition hover:bg-muted hover:text-muted-foreground"><X size={18} /></button>
           </div>
-          <p className="text-xs text-slate-400 mt-0.5">
+          <p className="text-xs text-[var(--color-text-tertiary)] mt-0.5">
             {task.name} · 流水线「{task.pipeline_name}」 · 每次执行可逐条追溯配置、产物与原始入湖影响（相对上一原始快照）
           </p>
         </div>
 
-        <div className="shrink-0 border-b border-slate-100 bg-slate-50/70 px-5 py-3">
+        <div className="shrink-0 border-b border-border bg-muted px-5 py-3">
           <div className="flex flex-wrap items-end gap-2.5">
-            <label className="space-y-1 text-[11px] text-slate-500">
+            <label className="space-y-1 text-[11px] text-muted-foreground">
               <span className="block">执行状态</span>
               <select aria-label="执行状态筛选" value={statusFilter} onChange={event => { setStatusFilter(event.target.value as StatusFilter); setPage(1) }}
-                className="h-8 min-w-28 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-emerald-500">
+                className="h-8 min-w-28 rounded-lg border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-[var(--color-success)]">
                 <option value="">全部状态</option>
                 <option value="pending">排队中</option>
                 <option value="running">执行中</option>
@@ -191,36 +191,36 @@ export default function HistoryDrawer({
                 <option value="cancelled">已取消</option>
               </select>
             </label>
-            <label className="space-y-1 text-[11px] text-slate-500">
+            <label className="space-y-1 text-[11px] text-muted-foreground">
               <span className="block">触发方式</span>
               <select aria-label="触发方式筛选" value={triggerFilter} onChange={event => { setTriggerFilter(event.target.value as TriggerFilter); setPage(1) }}
-                className="h-8 min-w-24 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-emerald-500">
+                className="h-8 min-w-24 rounded-lg border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-[var(--color-success)]">
                 <option value="">全部方式</option>
                 <option value="manual">手动</option>
                 <option value="scheduled">定时</option>
               </select>
             </label>
-            <label className="space-y-1 text-[11px] text-slate-500">
+            <label className="space-y-1 text-[11px] text-muted-foreground">
               <span className="block">开始日期</span>
               <input aria-label="执行记录开始日期" type="date" value={dateFrom} max={dateTo || undefined} onChange={event => { setDateFrom(event.target.value); setPage(1) }}
-                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-emerald-500" />
+                className="h-8 rounded-lg border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-[var(--color-success)]" />
             </label>
-            <label className="space-y-1 text-[11px] text-slate-500">
+            <label className="space-y-1 text-[11px] text-muted-foreground">
               <span className="block">结束日期</span>
               <input aria-label="执行记录结束日期" type="date" value={dateTo} min={dateFrom || undefined} onChange={event => { setDateTo(event.target.value); setPage(1) }}
-                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-emerald-500" />
+                className="h-8 rounded-lg border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-[var(--color-success)]" />
             </label>
             {hasFilters && (
-              <button type="button" onClick={resetFilters} className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs text-slate-500 transition hover:bg-white hover:text-rose-600">
+              <button type="button" onClick={resetFilters} className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs text-muted-foreground transition hover:bg-card hover:text-viz-rose">
                 <FilterX size={13} /> 清除筛选
               </button>
             )}
-            <span className="ml-auto pb-1 text-[11px] tabular-nums text-slate-400">显示 {rangeStart}–{rangeEnd} / {total}</span>
+            <span className="ml-auto pb-1 text-[11px] tabular-nums text-[var(--color-text-tertiary)]">显示 {rangeStart}–{rangeEnd} / {total}</span>
           </div>
         </div>
 
         {loadError && (
-          <div className="mx-5 mt-3 flex shrink-0 items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+          <div className="mx-5 mt-3 flex shrink-0 items-center gap-2 rounded-lg border border-viz-rose-soft bg-viz-rose-soft px-3 py-2 text-xs text-viz-rose">
             <XCircle size={13} /><span className="flex-1">{loadError}</span>
             <button type="button" onClick={() => void load()} className="font-medium hover:underline">重试</button>
           </div>
@@ -228,13 +228,13 @@ export default function HistoryDrawer({
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {loading ? (
-            <div className="py-20 text-center text-slate-400 text-sm flex items-center justify-center gap-1">
+            <div className="py-20 text-center text-[var(--color-text-tertiary)] text-sm flex items-center justify-center gap-1">
               <Loader2 size={14} className="animate-spin" />加载中...
             </div>
           ) : visibleItems.length === 0 ? (
-            <div className="py-20 text-center text-slate-400 text-sm">{hasFilters ? '当前筛选条件下暂无执行记录' : '暂无执行记录'}</div>
+            <div className="py-20 text-center text-[var(--color-text-tertiary)] text-sm">{hasFilters ? '当前筛选条件下暂无执行记录' : '暂无执行记录'}</div>
           ) : (
-            <div className="divide-y divide-slate-100">
+            <div className="divide-y border-border">
               {visibleItems.map(h => {
                 const sm = STATUS_META[h.status] || STATUS_META.running
                 const isOpen = expanded.has(h.id)
@@ -248,38 +248,38 @@ export default function HistoryDrawer({
                           <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs ${sm.color}`}>
                             {sm.icon}{sm.label}
                           </span>
-                          <span className="text-xs text-slate-400">{TRIGGER_LABEL[h.trigger_type] || h.trigger_type}</span>
+                          <span className="text-xs text-[var(--color-text-tertiary)]">{TRIGGER_LABEL[h.trigger_type] || h.trigger_type}</span>
                           {skipped && (
-                            <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded" title="流水线输出 0 行，空输出保护已跳过入库">
+                            <span className="inline-flex items-center gap-0.5 text-[10px] text-[var(--color-warning)] bg-[var(--color-warning-bg)] px-1.5 py-0.5 rounded" title="流水线输出 0 行，空输出保护已跳过入库">
                               <ShieldCheck size={9} /> 已跳过入库
                             </span>
                           )}
                           {imp && (
                             <span className="inline-flex items-center gap-1.5 text-[10.5px]">
-                              {imp.added > 0 && <span className="text-emerald-600">+{imp.added}</span>}
-                              {imp.updated > 0 && <span className="text-amber-600">~{imp.updated}</span>}
-                              {imp.deleted > 0 && <span className="text-rose-600">-{imp.deleted}</span>}
+                              {imp.added > 0 && <span className="text-[var(--color-success)]">+{imp.added}</span>}
+                              {imp.updated > 0 && <span className="text-[var(--color-warning)]">~{imp.updated}</span>}
+                              {imp.deleted > 0 && <span className="text-viz-rose">-{imp.deleted}</span>}
                             </span>
                           )}
                         </div>
-                        <div className="text-xs text-slate-500 mt-1 flex items-center gap-1">
+                        <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
                           <Clock size={11} />{formatDate(h.started_at)}
                           {h.status === 'success' && !skipped && (
-                            <span className="text-slate-400">· 输出 {h.rows_out} 行{h.lake_rows != null ? ` · 湖内共 ${h.lake_rows} 行` : ''}</span>
+                            <span className="text-[var(--color-text-tertiary)]">· 输出 {h.rows_out} 行{h.lake_rows != null ? ` · 湖内共 ${h.lake_rows} 行` : ''}</span>
                           )}
                         </div>
                       </div>
-                      {isOpen ? <ChevronUp size={14} className="text-slate-400 mt-1" /> : <ChevronDown size={14} className="text-slate-400 mt-1" />}
+                      {isOpen ? <ChevronUp size={14} className="text-[var(--color-text-tertiary)] mt-1" /> : <ChevronDown size={14} className="text-[var(--color-text-tertiary)] mt-1" />}
                     </button>
 
                     {isOpen && (
                       <div className="mt-3">
                         {audits[h.id] === 'loading' || audits[h.id] === undefined ? (
-                          <div className="py-6 text-center text-slate-400 text-xs flex items-center justify-center gap-1.5">
+                          <div className="py-6 text-center text-[var(--color-text-tertiary)] text-xs flex items-center justify-center gap-1.5">
                             <Loader2 size={13} className="animate-spin" /> 加载审计明细...
                           </div>
                         ) : audits[h.id] === 'error' ? (
-                          <div className="py-6 text-center text-rose-500 text-xs">审计明细加载失败</div>
+                          <div className="py-6 text-center text-viz-rose text-xs">审计明细加载失败</div>
                         ) : (
                           <RunAuditView audit={audits[h.id] as RunAudit} run={h} />
                         )}
@@ -292,22 +292,22 @@ export default function HistoryDrawer({
           )}
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-3">
-          <span className="mr-auto text-[11px] text-slate-400">点击任一记录可查看执行详情</span>
-          <label className="flex items-center gap-1.5 text-xs text-slate-500">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-3 border-t border-border bg-muted px-5 py-3">
+          <span className="mr-auto text-[11px] text-[var(--color-text-tertiary)]">点击任一记录可查看执行详情</span>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
             每页
             <select aria-label="执行记录每页条数" value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}
-              className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-emerald-500">
+              className="h-8 rounded-lg border border-border bg-card px-2 text-xs outline-none focus:border-[var(--color-success)]">
               {PAGE_SIZE_OPTIONS.map(size => <option key={size} value={size}>{size}</option>)}
             </select>
             条
           </label>
-          <span className="min-w-20 text-center text-xs tabular-nums text-slate-500">第 {page} / {totalPages} 页</span>
+          <span className="min-w-20 text-center text-xs tabular-nums text-muted-foreground">第 {page} / {totalPages} 页</span>
           <div className="flex items-center gap-1">
             <button type="button" aria-label="执行记录上一页" onClick={() => setPage(current => Math.max(1, current - 1))} disabled={page <= 1 || loading}
-              className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-emerald-200 hover:text-emerald-700 disabled:opacity-35"><ChevronLeft size={13} /></button>
+              className="grid h-8 w-8 place-items-center rounded-lg border border-border bg-card text-muted-foreground transition hover:border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] hover:text-[var(--color-success)] disabled:opacity-35"><ChevronLeft size={13} /></button>
             <button type="button" aria-label="执行记录下一页" onClick={() => setPage(current => Math.min(totalPages, current + 1))} disabled={page >= totalPages || loading}
-              className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:border-emerald-200 hover:text-emerald-700 disabled:opacity-35"><ChevronRight size={13} /></button>
+              className="grid h-8 w-8 place-items-center rounded-lg border border-border bg-card text-muted-foreground transition hover:border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] hover:text-[var(--color-success)] disabled:opacity-35"><ChevronRight size={13} /></button>
           </div>
         </div>
       </div>
@@ -320,7 +320,7 @@ function RunAuditView({ audit, run }: { audit: RunAudit; run: PipelineTaskRun })
   const cfg = audit.config_snapshot
   const wmLabel = (m?: string) => (m ? WRITE_MODE_META[m as WriteMode]?.label || m : '-')
   return (
-    <div className="space-y-3 text-xs bg-slate-50/70 rounded-xl p-3">
+    <div className="space-y-3 text-xs bg-muted rounded-xl p-3">
       {/* 执行信息 */}
       <Section title="执行信息" icon={<Clock size={12} />}>
         <KV label="开始时间" value={formatDate(audit.started_at)} />
@@ -338,10 +338,10 @@ function RunAuditView({ audit, run }: { audit: RunAudit; run: PipelineTaskRun })
       {/* 调用的流水线 */}
       <Section title="调用的流水线" icon={<GitBranch size={12} />}>
         <div className="flex items-center justify-between">
-          <div className="text-slate-700 font-medium">
+          <div className="text-foreground font-medium">
             {audit.pipeline.name}{audit.pipeline.version ? ` (v${audit.pipeline.version})` : ''}
           </div>
-          <span className="text-[10.5px] text-slate-400">{audit.pipeline.domain || '通用'} · {audit.pipeline.status}</span>
+          <span className="text-[10.5px] text-[var(--color-text-tertiary)]">{audit.pipeline.domain || '通用'} · {audit.pipeline.status}</span>
         </div>
       </Section>
 
@@ -369,14 +369,14 @@ function RunAuditView({ audit, run }: { audit: RunAudit; run: PipelineTaskRun })
 
       {audit.error_message && (
         <div>
-          <div className="text-slate-500 mb-0.5 font-medium">错误信息</div>
-          <div className="text-rose-600 bg-rose-50 rounded-lg p-2 font-mono text-[11px] whitespace-pre-wrap break-all">
+          <div className="text-muted-foreground mb-0.5 font-medium">错误信息</div>
+          <div className="text-viz-rose bg-viz-rose-soft rounded-lg p-2 font-mono text-[11px] whitespace-pre-wrap break-all">
             {audit.error_message}
           </div>
         </div>
       )}
       {run.status === 'success' && audit.outputs.length === 0 && !audit.error_message && (
-        <div className="text-slate-400 text-center py-2">本次未产生入湖产物</div>
+        <div className="text-[var(--color-text-tertiary)] text-center py-2">本次未产生入湖产物</div>
       )}
     </div>
   )
@@ -388,14 +388,14 @@ function OutputAudit({ out, onOpenLake }: { out: RunAuditOutput; onOpenLake: () 
   const toggleTab = (t: typeof tab) => setTab(cur => (cur === t ? '' : t))
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-      <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between gap-2 bg-slate-50/60">
+    <div className="rounded-lg border border-border bg-card overflow-hidden">
+      <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2 bg-muted">
         <div className="flex items-center gap-1.5 min-w-0">
-          <Database size={12} className="text-slate-400 shrink-0" />
-          <span className="text-[12px] font-medium text-slate-700 truncate">{out.curated_dataset_name || '成品数据集'}</span>
-          {out.table_name && <span className="text-[10px] text-slate-400">/{out.table_name}</span>}
+          <Database size={12} className="text-[var(--color-text-tertiary)] shrink-0" />
+          <span className="text-[12px] font-medium text-foreground truncate">{out.curated_dataset_name || '成品数据集'}</span>
+          {out.table_name && <span className="text-[10px] text-[var(--color-text-tertiary)]">/{out.table_name}</span>}
         </div>
-        <button onClick={onOpenLake} className="text-[10.5px] text-blue-600 hover:underline flex items-center gap-0.5 shrink-0">
+        <button onClick={onOpenLake} className="text-[10.5px] text-[var(--color-info)] hover:underline flex items-center gap-0.5 shrink-0">
           资产湖 <ArrowRight size={10} />
         </button>
       </div>
@@ -404,8 +404,8 @@ function OutputAudit({ out, onOpenLake }: { out: RunAuditOutput; onOpenLake: () 
         {/* 流水线输出 */}
         <div>
           <button onClick={() => toggleTab('output')}
-            className="w-full flex items-center justify-between text-[11.5px] text-slate-600 hover:text-slate-800">
-            <span className="flex items-center gap-1.5"><Table2 size={11} className="text-slate-400" /> 流水线输出 <b className="text-slate-800">{out.rows_out ?? 0}</b> 行</span>
+            className="w-full flex items-center justify-between text-[11.5px] text-muted-foreground hover:text-foreground">
+            <span className="flex items-center gap-1.5"><Table2 size={11} className="text-[var(--color-text-tertiary)]" /> 流水线输出 <b className="text-foreground">{out.rows_out ?? 0}</b> 行</span>
             {out.output_sample.length > 0 && (tab === 'output' ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
           </button>
           {tab === 'output' && <RowTable rows={out.output_sample} columns={out.output_columns} />}
@@ -413,11 +413,11 @@ function OutputAudit({ out, onOpenLake }: { out: RunAuditOutput; onOpenLake: () 
 
         {/* 原始入湖影响 */}
         {im ? (
-          <div className="border-t border-slate-100 pt-2 space-y-1.5">
-            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
-              <span className="font-medium text-slate-600">原始入湖影响（相对上一原始快照）</span>
-              {im.keyed_by ? <span className="text-[10px] text-slate-400">（按主键 {im.keyed_by.join(',')} 识别）</span>
-                : <span className="text-[10px] text-slate-400">（按整行内容比对）</span>}
+          <div className="border-t border-border pt-2 space-y-1.5">
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span className="font-medium text-muted-foreground">原始入湖影响（相对上一原始快照）</span>
+              {im.keyed_by ? <span className="text-[10px] text-[var(--color-text-tertiary)]">（按主键 {im.keyed_by.join(',')} 识别）</span>
+                : <span className="text-[10px] text-[var(--color-text-tertiary)]">（按整行内容比对）</span>}
             </div>
             <div className="grid grid-cols-3 gap-1.5">
               <ImpactChip tone="emerald" icon={<Plus size={11} />} label="新增" count={im.added_count}
@@ -427,18 +427,18 @@ function OutputAudit({ out, onOpenLake }: { out: RunAuditOutput; onOpenLake: () 
               <ImpactChip tone="rose" icon={<Minus size={11} />} label="删除" count={im.deleted_count}
                 active={tab === 'deleted'} onClick={() => im.deleted_count && toggleTab('deleted')} />
             </div>
-            <div className="text-[10px] text-slate-400">
+            <div className="text-[10px] text-[var(--color-text-tertiary)]">
               入库前 {im.total_before} 行 → 入库后 {im.total_after} 行（未变 {im.unchanged_count} 行）
             </div>
             {tab === 'added' && <RowTable rows={im.added_sample} columns={sampleCols(im.added_sample, out.output_columns)} />}
             {tab === 'deleted' && <RowTable rows={im.deleted_sample} columns={sampleCols(im.deleted_sample, out.output_columns)} />}
             {tab === 'updated' && <UpdatedTable pairs={im.updated_sample} pk={im.keyed_by} />}
             {im.sample_truncated && tab && (
-              <div className="text-[10px] text-slate-400 italic">仅展示前若干条样本，完整明细以资产湖版本为准</div>
+              <div className="text-[10px] text-[var(--color-text-tertiary)] italic">仅展示前若干条样本，完整明细以资产湖版本为准</div>
             )}
           </div>
         ) : (
-          <div className="border-t border-slate-100 pt-2 text-[10.5px] text-slate-400">本次为手动运行，无原始入湖影响记录</div>
+          <div className="border-t border-border pt-2 text-[10.5px] text-[var(--color-text-tertiary)]">本次为手动运行，无原始入湖影响记录</div>
         )}
       </div>
     </div>
@@ -459,18 +459,18 @@ function fmt(v: unknown): string {
 }
 
 function RowTable({ rows, columns }: { rows: Array<Record<string, unknown>>; columns: string[] }) {
-  if (!rows.length) return <div className="text-[10.5px] text-slate-400 py-2 text-center">无数据样本</div>
+  if (!rows.length) return <div className="text-[10.5px] text-[var(--color-text-tertiary)] py-2 text-center">无数据样本</div>
   const cols = columns.length ? columns : sampleCols(rows, [])
   return (
-    <div className="mt-1.5 overflow-x-auto rounded-lg border border-slate-100">
+    <div className="mt-1.5 overflow-x-auto rounded-lg border border-border">
       <table className="w-full text-[10.5px] border-collapse">
-        <thead className="bg-slate-50">
-          <tr>{cols.map(c => <th key={c} className="px-2 py-1 text-left font-medium text-slate-500 font-mono whitespace-nowrap">{c}</th>)}</tr>
+        <thead className="bg-muted">
+          <tr>{cols.map(c => <th key={c} className="px-2 py-1 text-left font-medium text-muted-foreground font-mono whitespace-nowrap">{c}</th>)}</tr>
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={i} className="border-t border-slate-50">
-              {cols.map(c => <td key={c} className="px-2 py-1 text-slate-600 whitespace-nowrap max-w-[180px] truncate" title={fmt(r[c])}>{fmt(r[c])}</td>)}
+            <tr key={i} className="border-t border-border">
+              {cols.map(c => <td key={c} className="px-2 py-1 text-muted-foreground whitespace-nowrap max-w-[180px] truncate" title={fmt(r[c])}>{fmt(r[c])}</td>)}
             </tr>
           ))}
         </tbody>
@@ -480,7 +480,7 @@ function RowTable({ rows, columns }: { rows: Array<Record<string, unknown>>; col
 }
 
 function UpdatedTable({ pairs, pk }: { pairs: LakeImpactDetail['updated_sample']; pk: string[] | null }) {
-  if (!pairs.length) return <div className="text-[10.5px] text-slate-400 py-2 text-center">无数据样本</div>
+  if (!pairs.length) return <div className="text-[10.5px] text-[var(--color-text-tertiary)] py-2 text-center">无数据样本</div>
   // 只展示发生变化的列（+ 主键列作为定位）
   return (
     <div className="mt-1.5 space-y-1.5">
@@ -489,15 +489,15 @@ function UpdatedTable({ pairs, pk }: { pairs: LakeImpactDetail['updated_sample']
         const changed = keys.filter(k => fmt(p.before[k]) !== fmt(p.after[k]))
         const pkStr = (pk || []).map(k => `${k}=${fmt(p.after[k] ?? p.before[k])}`).join(', ')
         return (
-          <div key={i} className="rounded-lg border border-amber-100 bg-amber-50/40 p-2">
-            {pkStr && <div className="text-[10px] text-slate-500 mb-1 font-mono">{pkStr}</div>}
+          <div key={i} className="rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] p-2">
+            {pkStr && <div className="text-[10px] text-muted-foreground mb-1 font-mono">{pkStr}</div>}
             <div className="space-y-0.5">
               {changed.map(k => (
                 <div key={k} className="flex items-center gap-1.5 text-[10.5px]">
-                  <span className="text-slate-500 font-mono shrink-0">{k}:</span>
-                  <span className="text-rose-500 line-through truncate max-w-[130px]" title={fmt(p.before[k])}>{fmt(p.before[k]) || '∅'}</span>
-                  <ArrowRight size={9} className="text-slate-400 shrink-0" />
-                  <span className="text-emerald-600 truncate max-w-[130px]" title={fmt(p.after[k])}>{fmt(p.after[k]) || '∅'}</span>
+                  <span className="text-muted-foreground font-mono shrink-0">{k}:</span>
+                  <span className="text-viz-rose line-through truncate max-w-[130px]" title={fmt(p.before[k])}>{fmt(p.before[k]) || '∅'}</span>
+                  <ArrowRight size={9} className="text-[var(--color-text-tertiary)] shrink-0" />
+                  <span className="text-[var(--color-success)] truncate max-w-[130px]" title={fmt(p.after[k])}>{fmt(p.after[k]) || '∅'}</span>
                 </div>
               ))}
             </div>
@@ -513,15 +513,15 @@ function ImpactChip({ tone, icon, label, count, active, onClick }: {
   count: number; active: boolean; onClick: () => void
 }) {
   const map = {
-    emerald: 'text-emerald-600 bg-emerald-50 border-emerald-200',
-    amber:   'text-amber-600 bg-amber-50 border-amber-200',
-    rose:    'text-rose-600 bg-rose-50 border-rose-200',
+    emerald: 'text-[var(--color-success)] bg-[var(--color-success-bg)] border-[color-mix(in_srgb,var(--color-success)_35%,transparent)]',
+    amber:   'text-[var(--color-warning)] bg-[var(--color-warning-bg)] border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)]',
+    rose:    'text-viz-rose bg-viz-rose-soft border-viz-rose-soft',
   }[tone]
   const disabled = count === 0
   return (
     <button onClick={onClick} disabled={disabled}
       className={`flex items-center justify-center gap-1 px-1.5 py-1 rounded-lg border text-[11px] transition
-        ${disabled ? 'text-slate-300 bg-slate-50 border-slate-100 cursor-default' : map}
+        ${disabled ? 'text-[var(--color-text-tertiary)] bg-muted border-border cursor-default' : map}
         ${active ? 'ring-2 ring-offset-1 ring-current/30' : ''}`}>
       {icon}<span>{label}</span><b className="tabular-nums">{count}</b>
     </button>
@@ -530,9 +530,9 @@ function ImpactChip({ tone, icon, label, count, active, onClick }: {
 
 function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-slate-100 bg-white p-2.5">
-      <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 mb-1.5">
-        <span className="text-slate-400">{icon}</span>{title}
+    <div className="rounded-lg border border-border bg-card p-2.5">
+      <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground mb-1.5">
+        <span className="text-[var(--color-text-tertiary)]">{icon}</span>{title}
       </div>
       <div className="space-y-1">{children}</div>
     </div>
@@ -542,8 +542,8 @@ function Section({ title, icon, children }: { title: string; icon: React.ReactNo
 function KV({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex justify-between gap-2">
-      <span className="text-slate-500 shrink-0">{label}</span>
-      <span className={`text-slate-800 text-right break-all ${mono ? 'font-mono' : ''}`}>{value}</span>
+      <span className="text-muted-foreground shrink-0">{label}</span>
+      <span className={`text-foreground text-right break-all ${mono ? 'font-mono' : ''}`}>{value}</span>
     </div>
   )
 }

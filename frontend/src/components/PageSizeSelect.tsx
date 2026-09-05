@@ -1,5 +1,5 @@
-// 数据集成域内分页大小选择：基于 vendored Radix Select 的同构复用件，
-// 替换 structured 各视图的原生 select 每页条数控件。
+// 跨域复用的分页大小选择：基于 vendored Radix Select 的同构组合件，
+// 替换各视图的原生 select 每页条数控件（数据集成/流水线等域）。
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 export function PageSizeSelect({ value, onChange, sizes, ariaLabel, disabled, title, className }: {

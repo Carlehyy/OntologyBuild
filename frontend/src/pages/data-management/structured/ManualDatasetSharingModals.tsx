@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { PageSizeSelect } from './PageSizeSelect'
+import { PageSizeSelect } from '@/components/PageSizeSelect'
 import {
   Check, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Copy, Link2, Loader2,
   Search, ShieldCheck, Trash2, X, XCircle,
