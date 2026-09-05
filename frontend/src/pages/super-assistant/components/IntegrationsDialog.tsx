@@ -124,8 +124,8 @@ export default function IntegrationsDialog({ onClose, onSaved }: {
               aria-selected={tab === item.key}
               data-integrations-tab={item.key}
               onClick={() => setTab(item.key)}
-              className={`flex min-h-10 items-center gap-1.5 rounded-lg px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${tab === item.key
-                ? 'bg-teal-50 font-medium text-teal-800'
+              className={`flex min-h-10 items-center gap-1.5 rounded-lg px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab === item.key
+                ? 'bg-brand-soft font-medium text-brand-ink'
                 : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'}`}
             >
               {item.key === 'multica' ? <PlugZap size={14} className="shrink-0" /> : <GitPullRequest size={14} className="shrink-0" />}
@@ -142,8 +142,8 @@ export default function IntegrationsDialog({ onClose, onSaved }: {
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
                 <p className="text-xs font-semibold text-[var(--color-text-primary)]">multica</p>
-                <span className={`h-2 w-2 rounded-full ${config?.last_test_status === 'success' ? 'bg-emerald-500' : config?.last_test_status === 'error' ? 'bg-red-500' : 'bg-slate-300'}`} />
-                {config?.enabled && <span className="rounded bg-teal-50 px-1.5 py-0.5 text-[9px] text-teal-700">已启用</span>}
+                <span className={`h-2 w-2 rounded-full ${config?.last_test_status === 'success' ? 'bg-brand' : config?.last_test_status === 'error' ? 'bg-red-500' : 'bg-slate-300'}`} />
+                {config?.enabled && <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[9px] text-brand-ink">已启用</span>}
               </div>
               <p className="mt-1 text-[11px] leading-5 text-[var(--color-text-tertiary)]">
                 多智能体协作工作台：查看智能体、下发任务、查看任务清单。配置后输入 <code className="font-mono">/multica:</code> 使用命令。
@@ -158,7 +158,7 @@ export default function IntegrationsDialog({ onClose, onSaved }: {
                 value={baseUrl}
                 onChange={event => setBaseUrl(event.target.value)}
                 placeholder="http://127.0.0.1:8080"
-                className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+                className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-sm outline-none focus:border-brand-deep focus:ring-2 focus:ring-ring/10"
               />
               <span className="mt-1 block text-[10px] leading-4 text-[var(--color-text-tertiary)]">
                 自托管实例的 API 地址（默认端口 8080）；生产环境按 SSRF 策略拒绝内网地址。
@@ -171,7 +171,7 @@ export default function IntegrationsDialog({ onClose, onSaved }: {
                 value={token}
                 onChange={event => setToken(event.target.value)}
                 placeholder={config?.token_set ? '已保存（留空保留）' : 'mul_…（在 multica 网页 Settings → API Token 创建）'}
-                className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 font-mono text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+                className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 font-mono text-sm outline-none focus:border-brand-deep focus:ring-2 focus:ring-ring/10"
               />
               <span className="mt-1 block text-[10px] leading-4 text-[var(--color-text-tertiary)]">
                 加密存储、永不回显；只用 PAT，不保存登录验证码。
@@ -200,17 +200,17 @@ export default function IntegrationsDialog({ onClose, onSaved }: {
                 data-testid="multica-test-button"
                 onClick={() => void testConnection()}
                 disabled={testing || !baseUrl.trim()}
-                className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-white px-3 text-xs text-teal-700 transition-colors hover:bg-teal-50 disabled:opacity-50"
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-white px-3 text-xs text-brand-ink transition-colors hover:bg-brand-soft disabled:opacity-50"
               >
                 {testing ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />} 测试连接
               </button>
               <label className="flex min-h-10 items-center gap-2 rounded-lg border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)]">
-                <input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} className="h-4 w-4 accent-teal-700" />
+                <input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} className="h-4 w-4 accent-brand" />
                 启用集成
               </label>
             </div>
             {testResult && (
-              <p role="status" data-testid="multica-test-result" className={`rounded-lg px-3 py-2 text-[11px] leading-5 ${testResult.ok ? 'bg-teal-50 text-teal-800' : 'bg-red-50 text-red-700'}`}>
+              <p role="status" data-testid="multica-test-result" className={`rounded-lg px-3 py-2 text-[11px] leading-5 ${testResult.ok ? 'bg-brand-soft text-brand-ink' : 'bg-red-50 text-red-700'}`}>
                 {testResult.message}
               </p>
             )}
@@ -220,7 +220,7 @@ export default function IntegrationsDialog({ onClose, onSaved }: {
                 <ul className="mt-1 space-y-1">
                   {config.commands.map(command => (
                     <li key={command.command} className="flex items-baseline gap-2 text-[11px] leading-5">
-                      <code className="font-mono text-teal-700">{command.usage.split(' ', 1)[0]}</code>
+                      <code className="font-mono text-brand-ink">{command.usage.split(' ', 1)[0]}</code>
                       <span className="text-[var(--color-text-secondary)]">{command.title}{command.write ? ' · 执行前需确认' : ''}</span>
                     </li>
                   ))}
@@ -248,7 +248,7 @@ export default function IntegrationsDialog({ onClose, onSaved }: {
             onClick={() => void save()}
             data-testid="multica-save-button"
             disabled={saving || !baseUrl.trim()}
-            className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50"
+            className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-lg bg-brand px-4 text-xs font-medium text-white hover:bg-brand-deep disabled:opacity-50"
           >
             {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />} 保存
           </button>

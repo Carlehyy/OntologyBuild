@@ -26,7 +26,7 @@ function Highlight({ text, keyword }: { text: string; keyword: string }) {
   return (
     <>
       {text.slice(0, index)}
-      <mark className="rounded-sm bg-teal-100/70 px-0 text-inherit">{text.slice(index, index + keyword.length)}</mark>
+      <mark className="rounded-sm bg-brand-mist/70 px-0 text-inherit">{text.slice(index, index + keyword.length)}</mark>
       {text.slice(index + keyword.length)}
     </>
   )

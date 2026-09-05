@@ -18,11 +18,11 @@ function ToolSteps({ steps }: { steps: ToolStep[] }) {
     <div className="mb-2 space-y-1.5">
       {steps.map((step, index) => (
         <details key={`${step.toolName}-${index}`} className="group rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)]">
-          <summary className="flex min-h-10 cursor-pointer list-none items-center gap-2 px-3 text-xs text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500">
+          <summary className="flex min-h-10 cursor-pointer list-none items-center gap-2 px-3 text-xs text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
             {step.status === 'running' || step.status === 'awaiting_confirmation'
-              ? <Loader2 size={13} className="animate-spin text-teal-600" />
+              ? <Loader2 size={13} className="animate-spin text-brand-ink" />
               : step.status === 'success'
-                ? <Check size={13} className="text-emerald-600" />
+                ? <Check size={13} className="text-brand-ink" />
                 : <CircleAlert size={13} className="text-amber-600" />}
             <span className="font-medium">{step.toolName}</span>
             <span className="ml-auto text-[10px] text-[var(--color-text-tertiary)]">{step.status}</span>
@@ -114,22 +114,22 @@ function MarkdownCodeBlock({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="my-4 overflow-hidden rounded-xl border border-[var(--color-border)] bg-slate-50 shadow-[0_8px_22px_rgba(15,118,110,0.06)]">
+    <div className="my-4 overflow-hidden rounded-xl border border-[var(--color-border)] bg-slate-50 shadow-[0_8px_22px_rgba(5,150,105,0.06)]">
       <div className="flex min-h-9 items-center justify-between border-b border-[var(--color-border)] bg-slate-100/80 px-3">
-        <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-teal-700">
+        <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-brand-ink">
           {language || 'code'}
         </span>
         <button
           type="button"
           onClick={copy}
-          className="inline-flex min-h-7 items-center gap-1.5 rounded-md px-2 text-[10px] text-slate-500 transition-colors hover:bg-white hover:text-teal-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+          className="inline-flex min-h-7 items-center gap-1.5 rounded-md px-2 text-[10px] text-slate-500 transition-colors hover:bg-white hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={copied ? '代码已复制' : '复制代码'}
         >
           {copied ? <Check size={11} /> : <Copy size={11} />}
           {copied ? '已复制' : '复制'}
         </button>
       </div>
-      <pre className="overflow-x-auto bg-slate-50 p-4 text-[12px] leading-6 text-slate-700 selection:bg-teal-100 selection:text-teal-950">
+      <pre className="overflow-x-auto bg-slate-50 p-4 text-[12px] leading-6 text-slate-700 selection:bg-brand-mist selection:text-brand-ink">
         <code className="font-mono">{source}</code>
       </pre>
     </div>
@@ -147,12 +147,12 @@ const assistantMarkdownComponents: Components = {
   strong: ({ className, ...props }) => <strong className={`font-semibold text-[var(--color-text-primary)] ${className || ''}`} {...props} />,
   em: ({ className, ...props }) => <em className={`italic text-[var(--color-text-secondary)] ${className || ''}`} {...props} />,
   del: ({ className, ...props }) => <del className={`text-[var(--color-text-tertiary)] decoration-slate-400 ${className || ''}`} {...props} />,
-  ul: ({ className, ...props }) => <ul className={`mb-3 ml-1 list-disc space-y-1.5 pl-5 marker:text-teal-600 [&.contains-task-list]:list-none [&.contains-task-list]:pl-0 ${className || ''}`} {...props} />,
+  ul: ({ className, ...props }) => <ul className={`mb-3 ml-1 list-disc space-y-1.5 pl-5 marker:text-brand-ink [&.contains-task-list]:list-none [&.contains-task-list]:pl-0 ${className || ''}`} {...props} />,
   ol: ({ className, ...props }) => <ol className={`mb-3 ml-1 list-decimal space-y-1.5 pl-5 marker:font-medium marker:text-[var(--color-text-tertiary)] ${className || ''}`} {...props} />,
   li: ({ className, ...props }) => <li className={`pl-1 text-sm leading-7 text-[var(--color-text-primary)] [&.task-list-item]:list-none [&.task-list-item]:pl-0 ${className || ''}`} {...props} />,
-  input: ({ className, ...props }) => <input className={`mr-2 h-3.5 w-3.5 translate-y-0.5 rounded border-slate-300 accent-teal-600 ${className || ''}`} {...props} />,
-  blockquote: ({ className, ...props }) => <blockquote className={`my-4 rounded-r-lg border-l-[3px] border-teal-500 bg-teal-50/60 py-2 pl-4 pr-3 text-[var(--color-text-secondary)] [&>p]:text-[var(--color-text-secondary)] ${className || ''}`} {...props} />,
-  a: ({ className, ...props }) => <a className={`font-medium text-teal-700 underline decoration-teal-200 underline-offset-4 transition-colors hover:text-teal-900 hover:decoration-teal-500 focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${className || ''}`} target="_blank" rel="noreferrer noopener" {...props} />,
+  input: ({ className, ...props }) => <input className={`mr-2 h-3.5 w-3.5 translate-y-0.5 rounded border-slate-300 accent-brand ${className || ''}`} {...props} />,
+  blockquote: ({ className, ...props }) => <blockquote className={`my-4 rounded-r-lg border-l-[3px] border-brand-deep bg-brand-soft/60 py-2 pl-4 pr-3 text-[var(--color-text-secondary)] [&>p]:text-[var(--color-text-secondary)] ${className || ''}`} {...props} />,
+  a: ({ className, ...props }) => <a className={`font-medium text-brand-ink underline decoration-brand-line underline-offset-4 transition-colors hover:text-brand-ink hover:decoration-brand focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${className || ''}`} target="_blank" rel="noreferrer noopener" {...props} />,
   img: ({ className, alt, ...props }) => <img className={`my-4 max-h-[32rem] max-w-full rounded-xl border border-[var(--color-border)] object-contain shadow-sm ${className || ''}`} alt={alt || 'Markdown 图片'} loading="lazy" decoding="async" {...props} />,
   code: ({ className, ...props }) => <code className={`rounded-md border border-slate-200 bg-slate-100 px-1.5 py-0.5 font-mono text-[0.86em] text-slate-800 ${className || ''}`} {...props} />,
   pre: ({ children }) => <MarkdownCodeBlock>{children}</MarkdownCodeBlock>,
@@ -190,7 +190,7 @@ export function ChatMessage({ message }: { message: SuperMessage }) {
       shape="default"
       avatar={assistant
         ? (
-          <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-100">
+          <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand-ink ring-1 ring-brand-mist">
             <Bot size={16} />
           </div>
         )
@@ -284,7 +284,7 @@ export function ContextUsage({ messages, model }: { messages: SuperMessage[]; mo
     ? 'bg-rose-500'
     : percentage >= 65
       ? 'bg-amber-500'
-      : 'bg-teal-600'
+      : 'bg-brand'
   const sourceLabel = hasSnapshot ? '上下文' : used ? '上下文估算' : '上下文'
   const sourceDescription = hasSnapshot
     ? '最近一次模型实际输入上下文'
@@ -297,10 +297,10 @@ export function ContextUsage({ messages, model }: { messages: SuperMessage[]; mo
       data-testid="super-assistant-context-usage"
       aria-label={`${sourceLabel}占比 ${percentageLabel}，${formatTokenCount(used)} / ${formatTokenCount(limit)}`}
       title={sourceDescription}
-      className="flex h-9 w-40 shrink-0 flex-col justify-center rounded-lg border border-teal-200 bg-teal-50/80 px-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.55)] xl:w-48"
+      className="flex h-9 w-40 shrink-0 flex-col justify-center rounded-lg border border-brand-line bg-brand-soft/80 px-2.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.55)] xl:w-48"
     >
       <div className="flex min-w-0 items-center gap-1.5 text-[10px] leading-none">
-        <Gauge size={11} className="shrink-0 text-teal-700" aria-hidden="true" />
+        <Gauge size={11} className="shrink-0 text-brand-ink" aria-hidden="true" />
         <span className="truncate font-medium text-[var(--color-text-secondary)]">{sourceLabel}</span>
         <span className="ml-auto shrink-0 font-semibold tabular-nums text-[var(--color-text-primary)]">{percentageLabel}</span>
         <span className="hidden shrink-0 tabular-nums text-[var(--color-text-tertiary)] xl:inline">

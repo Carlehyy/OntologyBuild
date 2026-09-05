@@ -248,7 +248,7 @@ export default function PalaceGraphPanel({
             title={`「${selectedFile.filename}」贡献的节点${fileFocus ? '，其余已淡化' : ''}`}
             className={`flex h-7 max-w-full items-center gap-1 rounded-full px-2.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] ${
               fileFocus
-                ? 'bg-teal-50 text-teal-700 hover:bg-teal-100'
+                ? 'bg-brand-soft text-brand-ink hover:bg-brand-mist'
                 : 'bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]'
             }`}
           >

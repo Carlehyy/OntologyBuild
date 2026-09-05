@@ -92,27 +92,27 @@ function SkillCreateDialog({ onClose, onSaved }: { onClose: () => void; onSaved:
       <div className="flex-1 space-y-4 overflow-y-auto p-5">
         <label className="block text-xs text-[var(--color-text-secondary)]">技能名称 <span className="text-red-500">*</span>
           <input value={name} onChange={event => setName(event.target.value.toLowerCase().replace(/[_\s]+/g, '-'))} placeholder="research-helper"
-            className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 font-mono text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+            className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 font-mono text-sm outline-none focus:border-brand-deep focus:ring-2 focus:ring-ring/10" />
           <span className="mt-1 block text-[10px] leading-4 text-[var(--color-text-tertiary)]">用于技能包目录和调用标识，仅支持小写字母、数字和连字符。</span>
         </label>
         <label className="block text-xs text-[var(--color-text-secondary)]">技能描述 <span className="text-red-500">*</span>
           <textarea value={description} onChange={event => setDescription(event.target.value)} rows={2}
             placeholder="说明这个技能做什么，以及什么情况下应使用它"
-            className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+            className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 text-sm outline-none focus:border-brand-deep focus:ring-2 focus:ring-ring/10" />
         </label>
         <label className="block text-xs text-[var(--color-text-secondary)]">具体内容 <span className="text-red-500">*</span>
           <textarea value={content} onChange={event => setContent(event.target.value)} rows={10} placeholder="# 工作流程&#10;&#10;1. …"
-            className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs leading-5 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+            className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs leading-5 outline-none focus:border-brand-deep focus:ring-2 focus:ring-ring/10" />
         </label>
         <label className="flex min-h-11 items-center justify-between rounded-lg border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)]">
           常驻系统提示
-          <input type="checkbox" checked={alwaysActive} onChange={event => setAlwaysActive(event.target.checked)} className="h-4 w-4 accent-teal-700" />
+          <input type="checkbox" checked={alwaysActive} onChange={event => setAlwaysActive(event.target.checked)} className="h-4 w-4 accent-brand" />
         </label>
         {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
       </div>
       <footer className="flex justify-center gap-2 border-t border-[var(--color-border)] px-5 py-4">
         <button onClick={onClose} className="min-h-10 rounded-lg px-4 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">取消</button>
-        <button onClick={save} disabled={busy} className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50">
+        <button onClick={save} disabled={busy} className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-brand px-4 text-xs font-medium text-white hover:bg-brand-deep disabled:opacity-50">
           {busy && <Loader2 size={13} className="animate-spin" />} 创建
         </button>
       </footer>
@@ -181,14 +181,14 @@ function SkillEditor({ skill, onClose, onSaved }: { skill: SuperSkill; onClose: 
             <label className="text-[11px] text-[var(--color-text-secondary)]">新建相对路径</label>
             <div className="mt-1 flex gap-1.5">
               <input value={newPath} onChange={event => setNewPath(event.target.value)} onKeyDown={event => event.key === 'Enter' && startNewFile()}
-                placeholder="references/guide.md" className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-white px-2 text-xs outline-none focus:border-teal-500" />
-              <button onClick={startNewFile} aria-label="新建文件" className="flex h-10 w-10 items-center justify-center rounded-md border border-[var(--color-border)] bg-white hover:bg-teal-50"><Plus size={14} /></button>
+                placeholder="references/guide.md" className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-white px-2 text-xs outline-none focus:border-brand-deep" />
+              <button onClick={startNewFile} aria-label="新建文件" className="flex h-10 w-10 items-center justify-center rounded-md border border-[var(--color-border)] bg-white hover:bg-brand-soft"><Plus size={14} /></button>
             </div>
           </div>
           <div className="max-h-52 flex-1 overflow-y-auto p-2 md:max-h-none">
             {files.map(file => (
               <button key={file.path} onClick={() => file.editable && void loadFile(file.path)} disabled={!file.editable}
-                className={`mb-1 flex min-h-9 w-full items-center gap-2 rounded-md px-2 text-left text-xs ${selectedPath === file.path ? 'bg-teal-100 text-teal-900' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'} disabled:cursor-not-allowed disabled:opacity-45`}>
+                className={`mb-1 flex min-h-9 w-full items-center gap-2 rounded-md px-2 text-left text-xs ${selectedPath === file.path ? 'bg-brand-mist text-brand-ink' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'} disabled:cursor-not-allowed disabled:opacity-45`}>
                 {file.path.includes('/') ? <FileCode2 size={13} /> : <FileText size={13} />}
                 <span className="min-w-0 flex-1 truncate">{file.path}</span>
                 <span className="text-[9px] text-[var(--color-text-tertiary)]">{Math.ceil(file.size / 1024)}K</span>
@@ -203,16 +203,16 @@ function SkillEditor({ skill, onClose, onSaved }: { skill: SuperSkill; onClose: 
               {selectedPath !== 'SKILL.md' && (
                 <button onClick={() => setConfirmingRemove(true)} aria-label="删除当前文件" className="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] hover:bg-red-50 hover:text-red-600"><Trash2 size={14} /></button>
               )}
-              <button onClick={save} disabled={saving || loading} className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-teal-700 px-3 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50">
+              <button onClick={save} disabled={saving || loading} className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-brand px-3 text-xs font-medium text-white hover:bg-brand-deep disabled:opacity-50">
                 {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />} 保存
               </button>
             </div>
           </div>
           {loading ? (
-            <div className="flex flex-1 items-center justify-center"><Loader2 size={20} className="animate-spin text-teal-600" /></div>
+            <div className="flex flex-1 items-center justify-center"><Loader2 size={20} className="animate-spin text-brand-ink" /></div>
           ) : (
             <textarea aria-label={`编辑 ${selectedPath}`} value={content} onChange={event => setContent(event.target.value)} spellCheck={false}
-              className="min-h-[360px] flex-1 resize-none bg-[var(--color-bg-elevated)] p-4 font-mono text-xs leading-6 text-[var(--color-text-primary)] outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500" />
+              className="min-h-[360px] flex-1 resize-none bg-[var(--color-bg-elevated)] p-4 font-mono text-xs leading-6 text-[var(--color-text-primary)] outline-none focus:ring-2 focus:ring-inset focus:ring-ring" />
           )}
           {error && <p role="alert" className="border-t border-red-100 bg-red-50 px-4 py-2 text-xs text-red-700">{error}</p>}
         </div>
@@ -350,9 +350,9 @@ function McpDialog({ server, onClose, onSaved }: {
             }} rows={8}
               aria-label="MCP 客户端 JSON"
               placeholder={'{\n  "mcpServers": {\n    "api-hub": {\n      "command": "npx",\n      "args": ["-y", "mcp-remote", "https://example.com/mcp"]\n    }\n  }\n}'}
-              className="w-full resize-none overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3 font-mono text-xs leading-5 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+              className="w-full resize-none overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3 font-mono text-xs leading-5 outline-none focus:border-brand-deep focus:ring-2 focus:ring-ring/10" />
             <button type="button" onClick={applyClientConfig} disabled={!clientConfig.trim()}
-              className="min-h-9 rounded-md border border-[var(--color-border)] bg-white px-3 text-xs text-teal-700 hover:bg-teal-50 disabled:opacity-50">解析并填入下方表单</button>
+              className="min-h-9 rounded-md border border-[var(--color-border)] bg-white px-3 text-xs text-brand-ink hover:bg-brand-soft disabled:opacity-50">解析并填入下方表单</button>
             <p className="text-[10px] leading-5 text-[var(--color-text-tertiary)]">
               兼容 Claude、Cursor、Cline、Windsurf、Gemini、JetBrains、Continue、VS Code 与 Zed 常见 JSON / JSONC 格式。
             </p>
@@ -378,12 +378,12 @@ function McpDialog({ server, onClose, onSaved }: {
                 </Select>
               </label>
             )}
-            {clientConfigMessage && <p role="status" className="rounded-lg bg-teal-50 px-3 py-2 text-[10px] leading-5 text-teal-800">{clientConfigMessage}</p>}
+            {clientConfigMessage && <p role="status" className="rounded-lg bg-brand-soft px-3 py-2 text-[10px] leading-5 text-brand-ink">{clientConfigMessage}</p>}
           </div>
         </details>}
         <label className="block text-xs text-[var(--color-text-secondary)]">名称 <span className="text-red-500">*</span>
           <input value={name} disabled={!!server} onChange={event => setName(event.target.value)} placeholder="knowledge_search"
-            className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 font-mono text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100 disabled:opacity-60" />
+            className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 font-mono text-sm outline-none focus:border-brand-deep focus:ring-2 focus:ring-ring/10 disabled:opacity-60" />
         </label>
         <label className="block text-xs text-[var(--color-text-secondary)]">传输方式 <span className="text-red-500">*</span>
           <Select value={transport} onValueChange={value => setTransport(value as McpTransport)}>
@@ -400,42 +400,42 @@ function McpDialog({ server, onClose, onSaved }: {
         {transport === 'stdio' ? <>
           <label className="block text-xs text-[var(--color-text-secondary)]">command <span className="text-red-500">*</span>
             <input value={command} onChange={event => setCommand(event.target.value)} placeholder="npx"
-              className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 font-mono text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+              className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 font-mono text-sm outline-none focus:border-brand-deep focus:ring-2 focus:ring-ring/10" />
           </label>
           <label className="block text-xs text-[var(--color-text-secondary)]">args JSON
             <textarea value={args} onChange={event => setArgs(event.target.value)} rows={4} placeholder={'["-y", "@example/mcp-server"]'}
-              className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs leading-5 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+              className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs leading-5 outline-none focus:border-brand-deep focus:ring-2 focus:ring-ring/10" />
           </label>
           <label className="block text-xs text-[var(--color-text-secondary)]">env JSON
             <textarea value={env} onChange={event => setEnv(event.target.value)} rows={4} placeholder={server ? `留空保持现有环境变量（${server.env_names.join(', ') || '无'}）` : '{\n  "API_KEY": "…"\n}'}
-              className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs leading-5 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+              className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs leading-5 outline-none focus:border-brand-deep focus:ring-2 focus:ring-ring/10" />
           </label>
           <p className="rounded-lg bg-amber-50 p-3 text-[11px] leading-5 text-amber-800">stdio 会在后端容器内启动进程，部署方必须显式启用并允许该 command。env 会加密存储且不回显。</p>
         </> : <>
           <label className="block text-xs text-[var(--color-text-secondary)]">MCP URL <span className="text-red-500">*</span>
             <input type="url" value={url} onChange={event => setUrl(event.target.value)} placeholder="https://mcp.example.com/mcp"
-              className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+              className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] px-3 text-sm outline-none focus:border-brand-deep focus:ring-2 focus:ring-ring/10" />
             <span className="mt-1 block text-[10px] leading-4 text-[var(--color-text-tertiary)]">公网地址可直接连接；生产环境会拒绝环回、内网和链路本地地址。</span>
           </label>
           <label className="block text-xs text-[var(--color-text-secondary)]">请求头 JSON
             <textarea value={headers} onChange={event => setHeaders(event.target.value)} rows={4} placeholder={server ? `留空保持现有请求头（${server.header_names.join(', ') || '无'}）` : '{\n  "Authorization": "Bearer …"\n}'}
-              className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs leading-5 outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100" />
+              className="mt-1.5 w-full resize-y rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-base)] p-3 font-mono text-xs leading-5 outline-none focus:border-brand-deep focus:ring-2 focus:ring-ring/10" />
           </label>
         </>}
         <label className="flex min-h-11 items-center justify-between rounded-lg border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)]">
           启用此 Server
-          <input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} className="h-4 w-4 accent-teal-700" />
+          <input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} className="h-4 w-4 accent-brand" />
         </label>
         <label className="flex min-h-11 items-center justify-between rounded-lg border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)]">
           每次工具调用前要求确认
-          <input type="checkbox" checked={confirmation} onChange={event => setConfirmation(event.target.checked)} className="h-4 w-4 accent-teal-700" />
+          <input type="checkbox" checked={confirmation} onChange={event => setConfirmation(event.target.checked)} className="h-4 w-4 accent-brand" />
         </label>
         {!confirmation && <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">关闭确认会允许模型直接执行该 Server 的所有工具，请仅对完全可信、只读的服务使用。</p>}
         {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
       </div>
       <footer className="flex shrink-0 justify-center gap-3 border-t border-[var(--color-border)] px-5 py-4">
         <button onClick={onClose} className="min-h-10 min-w-24 rounded-lg px-4 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">取消</button>
-        <button onClick={save} disabled={busy || !name || (transport === 'stdio' ? !command : !url)} className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-medium text-white hover:bg-teal-800 disabled:opacity-50">
+        <button onClick={save} disabled={busy || !name || (transport === 'stdio' ? !command : !url)} className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-lg bg-brand px-4 text-xs font-medium text-white hover:bg-brand-deep disabled:opacity-50">
           {busy && <Loader2 size={13} className="animate-spin" />} 保存
         </button>
       </footer>
@@ -455,8 +455,8 @@ function SettingSwitch({ label, ariaLabel, checked, busy, onToggle }: {
     <div className="inline-flex items-center gap-1.5">
       <span className="text-[10px] text-[var(--color-text-secondary)]">{label}</span>
       <button type="button" role="switch" aria-label={ariaLabel} aria-checked={checked} aria-busy={busy} disabled={busy} onClick={onToggle}
-        className="relative inline-flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 focus-visible:ring-offset-1 disabled:cursor-wait disabled:opacity-60">
-        <span aria-hidden="true" className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors motion-reduce:transition-none ${busy ? 'animate-pulse motion-reduce:animate-none' : ''} ${checked ? 'bg-teal-600' : 'bg-slate-300'}`}>
+        className="relative inline-flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-1 disabled:cursor-wait disabled:opacity-60">
+        <span aria-hidden="true" className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors motion-reduce:transition-none ${busy ? 'animate-pulse motion-reduce:animate-none' : ''} ${checked ? 'bg-brand' : 'bg-slate-300'}`}>
           <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform motion-reduce:transition-none ${checked ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
         </span>
       </button>
@@ -585,22 +585,22 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
               <p className="mt-1 text-[10px] leading-4 text-[var(--color-text-tertiary)]">管理当前助手可用的 Skill 与 MCP Server</p>
             </div>
             <button type="button" onClick={onClose} aria-label="关闭助手配置"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <X size={16} />
             </button>
           </header>
           <div className="relative mx-4 mt-3 grid grid-cols-4 gap-1 rounded-lg border border-slate-200 bg-slate-50/70 p-0.5">
             <div
-              className="absolute bottom-0.5 top-0.5 w-[calc(25%_-_4px)] rounded-md bg-teal-600 shadow-sm transition-all duration-300 ease-out"
+              className="absolute bottom-0.5 top-0.5 w-[calc(25%_-_4px)] rounded-md bg-brand shadow-sm transition-all duration-300 ease-out"
               style={{ left: `calc(${(['skills', 'mcp', 'approval', 'memory'] as const).indexOf(tab) * 25}% + 2px)` }}
             />
             <button type="button" onClick={() => setTab('skills')}
               className={`relative z-10 min-h-9 rounded-md text-xs font-medium transition-colors duration-200 ${tab === 'skills' ? 'text-white' : 'text-slate-500 hover:text-slate-700'}`}>
-              Skill <span className={`ml-1 text-[10px] tabular-nums ${tab === 'skills' ? 'text-teal-100' : 'text-slate-400'}`}>{skills.length}</span>
+              Skill <span className={`ml-1 text-[10px] tabular-nums ${tab === 'skills' ? 'text-white' : 'text-slate-400'}`}>{skills.length}</span>
             </button>
             <button type="button" onClick={() => setTab('mcp')}
               className={`relative z-10 min-h-9 rounded-md text-xs font-medium transition-colors duration-200 ${tab === 'mcp' ? 'text-white' : 'text-slate-500 hover:text-slate-700'}`}>
-              MCP <span className={`ml-1 text-[10px] tabular-nums ${tab === 'mcp' ? 'text-teal-100' : 'text-slate-400'}`}>{configurableServers.length}</span>
+              MCP <span className={`ml-1 text-[10px] tabular-nums ${tab === 'mcp' ? 'text-white' : 'text-slate-400'}`}>{configurableServers.length}</span>
             </button>
             <button type="button" onClick={() => setTab('approval')}
               className={`relative z-10 flex min-h-9 items-center justify-center gap-1 rounded-md text-xs font-medium transition-colors duration-200 ${tab === 'approval' ? 'text-white' : 'text-slate-500 hover:text-slate-700'}`}>
@@ -621,9 +621,9 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
               <div className="grid gap-3">
                 {skills.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)]"><Folder size={22} className="mx-auto mb-2" />暂无 Skill</div>}
                 {skills.map(skill => (
-                  <article key={skill.id} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-4 transition-colors hover:border-teal-200">
+                  <article key={skill.id} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-4 transition-colors hover:border-brand-line">
                     <div className="flex items-start gap-2">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700"><Folder size={16} /></div>
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand-ink"><Folder size={16} /></div>
                       <div className="min-w-0 flex-1">
                         <p className="truncate font-mono text-xs font-semibold text-[var(--color-text-primary)]">{skill.name}</p>
                         <p className="mt-0.5 truncate text-[10px] text-[var(--color-text-tertiary)]">
@@ -633,7 +633,7 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1">
                       {!skill.enabled && <span className="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-500">已停用</span>}
-                      {skill.always_active && <span className="inline-flex rounded bg-teal-50 px-1.5 py-0.5 text-[9px] text-teal-700">常驻</span>}
+                      {skill.always_active && <span className="inline-flex rounded bg-brand-soft px-1.5 py-0.5 text-[9px] text-brand-ink">常驻</span>}
                     </div>
                     <p className="mt-2 line-clamp-2 text-[11px] leading-5 text-[var(--color-text-secondary)]">{skill.description || '暂无描述'}</p>
                     <div className="mt-2 flex items-center justify-between gap-2">
@@ -654,7 +654,7 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
                         />
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
-                        <button type="button" onClick={() => setEditingSkill(skill)} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-teal-50 hover:text-teal-800"><Pencil size={12} /> 文件</button>
+                        <button type="button" onClick={() => setEditingSkill(skill)} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-[var(--color-text-secondary)] transition-colors hover:bg-brand-soft hover:text-brand-ink"><Pencil size={12} /> 文件</button>
                         <button type="button" onClick={() => setRemovingSkill(skill)} aria-label={`删除 ${skill.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
                       </div>
                     </div>
@@ -667,11 +667,11 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
               <div className="grid gap-3">
                 {configurableServers.length === 0 && <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-xs text-[var(--color-text-tertiary)]"><PlugZap size={22} className="mx-auto mb-2" />暂无 MCP Server</div>}
                 {configurableServers.map(server => (
-                  <article key={server.id} className="rounded-xl border border-[var(--color-border)] p-4 transition-colors hover:border-teal-200">
+                  <article key={server.id} className="rounded-xl border border-[var(--color-border)] p-4 transition-colors hover:border-brand-line">
                     <div className="flex items-start gap-2">
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-700"><PlugZap size={16} /></div>
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5"><p className="truncate text-xs font-semibold text-[var(--color-text-primary)]">{server.name}</p><span className={`h-2 w-2 rounded-full ${server.last_test_status === 'success' ? 'bg-emerald-500' : server.last_test_status === 'error' ? 'bg-red-500' : 'bg-slate-300'}`} /></div>
+                        <div className="flex items-center gap-1.5"><p className="truncate text-xs font-semibold text-[var(--color-text-primary)]">{server.name}</p><span className={`h-2 w-2 rounded-full ${server.last_test_status === 'success' ? 'bg-brand' : server.last_test_status === 'error' ? 'bg-red-500' : 'bg-slate-300'}`} /></div>
                         <p className="mt-1 truncate text-[10px] text-[var(--color-text-tertiary)]">{server.transport === 'stdio' ? `${server.command} ${server.args.join(' ')}` : server.url}</p>
                       </div>
                     </div>
@@ -692,7 +692,7 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
                           onToggle={() => void updateServerSetting(server, 'require_confirmation', !server.require_confirmation)} />
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
-                        <button type="button" onClick={() => void testServer(server)} disabled={testingId === server.id} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-teal-700 transition-colors hover:bg-teal-50 disabled:opacity-50">{testingId === server.id ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />} 测试</button>
+                        <button type="button" onClick={() => void testServer(server)} disabled={testingId === server.id} className="inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-[11px] text-brand-ink transition-colors hover:bg-brand-soft disabled:opacity-50">{testingId === server.id ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />} 测试</button>
                         {!server.builtin_key && <button type="button" onClick={() => setEditingMcp(server)} aria-label={`编辑 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-hover)]"><Pencil size={12} /></button>}
                         <button type="button" onClick={() => setRemovingServer(server)} aria-label={`删除 MCP ${server.name}`} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-red-50 hover:text-red-600"><Trash2 size={12} /></button>
                       </div>
@@ -707,17 +707,17 @@ export default function ConfigurationPanel({ open, onClose, skills, servers, ref
             {tab === 'skills' ? (
               <div className="grid grid-cols-2 gap-2">
                 <button type="button" onClick={() => setCreatingSkill(true)}
-                  className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-dashed border-teal-400 bg-teal-50/70 px-3 text-xs font-medium text-teal-700 transition-all hover:border-teal-500 hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
+                  className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-dashed border-brand bg-brand-soft/70 px-3 text-xs font-medium text-brand-ink transition-all hover:border-brand-deep hover:bg-brand-mist active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   <Plus size={14} /> 新建 Skill
                 </button>
                 <button type="button" onClick={() => uploadRef.current?.click()}
-                  className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-dashed border-teal-400 bg-teal-50/70 px-3 text-xs font-medium text-teal-700 transition-all hover:border-teal-500 hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
+                  className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-dashed border-brand bg-brand-soft/70 px-3 text-xs font-medium text-brand-ink transition-all hover:border-brand-deep hover:bg-brand-mist active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   <Upload size={14} /> 导入 ZIP
                 </button>
               </div>
             ) : tab === 'mcp' ? (
               <button type="button" onClick={() => setEditingMcp('new')}
-                className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-teal-400 bg-teal-50/70 px-3 text-xs font-medium text-teal-700 transition-all hover:border-teal-500 hover:bg-teal-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400">
+                className="inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-brand bg-brand-soft/70 px-3 text-xs font-medium text-brand-ink transition-all hover:border-brand-deep hover:bg-brand-mist active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 <Plus size={14} /> 添加 MCP
               </button>
             ) : null}

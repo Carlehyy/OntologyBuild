@@ -37,7 +37,7 @@ function ZoneTag({ zone }: { zone: string }) {
 }
 
 function ConfidenceTag({ confidence }: { confidence: string }) {
-  const tone = confidence === 'high' ? 'bg-emerald-50 text-emerald-700'
+  const tone = confidence === 'high' ? 'bg-brand-soft text-brand-ink'
     : confidence === 'low' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'
   return <span className={`rounded px-1.5 py-0.5 text-[10px] ${tone}`}>{confidence}</span>
 }
@@ -103,7 +103,7 @@ export function ApprovalTab({ conversationId }: { conversationId: string | null 
           disabled={busyId === candidate.id}
           onClick={() => decide(candidate, option.decision)}
           className={option.primary
-            ? 'flex min-h-8 items-center gap-1 rounded-lg bg-teal-600 px-3 text-xs font-medium text-white transition-colors hover:bg-teal-700 disabled:opacity-50'
+            ? 'flex min-h-8 items-center gap-1 rounded-lg bg-brand px-3 text-xs font-medium text-white transition-colors hover:bg-brand-deep disabled:opacity-50'
             : 'flex min-h-8 items-center gap-1 rounded-lg border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] disabled:opacity-50'}
         >
           {busyId === candidate.id ? <Loader2 size={12} className="animate-spin" /> : option.primary ? <Check size={12} /> : <X size={12} />}
@@ -119,7 +119,7 @@ export function ApprovalTab({ conversationId }: { conversationId: string | null 
         type="button"
         onClick={runFullReflection}
         disabled={!conversationId || reflecting}
-        className="flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 text-xs font-medium text-teal-700 transition-colors hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-brand-line bg-brand-soft text-xs font-medium text-brand-ink transition-colors hover:bg-brand-mist disabled:cursor-not-allowed disabled:opacity-50"
         title={conversationId ? '对当前会话执行一次完整反思' : '请先选择一个会话'}
       >
         {reflecting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
@@ -138,8 +138,8 @@ export function ApprovalTab({ conversationId }: { conversationId: string | null 
         return (
           <article key={candidate.id} data-testid={`candidate-${candidate.kind}`} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-4">
             <div className="flex items-center gap-1.5">
-              {candidate.kind === 'memory' && <Brain size={14} className="shrink-0 text-teal-600" />}
-              {candidate.kind === 'skill' && <Sparkles size={14} className="shrink-0 text-teal-600" />}
+              {candidate.kind === 'memory' && <Brain size={14} className="shrink-0 text-brand-ink" />}
+              {candidate.kind === 'skill' && <Sparkles size={14} className="shrink-0 text-brand-ink" />}
               {candidate.kind === 'conflict' && <GitBranch size={14} className="shrink-0 text-amber-600" />}
               <span className="text-xs font-semibold text-[var(--color-text-primary)]">
                 {candidate.kind === 'memory' ? '新记忆' : candidate.kind === 'skill' ? '新 Skill' : '记忆冲突'}
@@ -164,7 +164,7 @@ export function ApprovalTab({ conversationId }: { conversationId: string | null 
                 <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">{String(payload.description || '')}</p>
                 {payload.skill_md ? (
                   <details className="mt-2">
-                    <summary className="cursor-pointer text-[10px] text-teal-700 hover:underline">预览 SKILL.md</summary>
+                    <summary className="cursor-pointer text-[10px] text-brand-ink hover:underline">预览 SKILL.md</summary>
                     <pre className="mt-1 max-h-48 overflow-auto rounded-lg bg-slate-50 p-2 text-[10px] leading-4 whitespace-pre-wrap">{String(payload.skill_md)}</pre>
                   </details>
                 ) : null}
@@ -339,7 +339,7 @@ export function MemoryTab() {
           data-testid="auto-accept-switch"
           onClick={toggleAutoAccept}
           disabled={!settings || togglingAuto}
-          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${settings?.auto_accept_enabled ? 'bg-teal-600' : 'bg-slate-300'}`}
+          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${settings?.auto_accept_enabled ? 'bg-brand' : 'bg-slate-300'}`}
         >
           <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${settings?.auto_accept_enabled ? 'left-[22px]' : 'left-0.5'}`} />
         </button>
@@ -350,7 +350,7 @@ export function MemoryTab() {
           value={query}
           onChange={event => setQuery(event.target.value)}
           placeholder="搜索记忆内容或标签…"
-          className="min-h-9 flex-1 rounded-lg border border-[var(--color-border)] bg-transparent px-3 text-xs outline-none focus:border-teal-500"
+          className="min-h-9 flex-1 rounded-lg border border-[var(--color-border)] bg-transparent px-3 text-xs outline-none focus:border-brand-deep"
         />
         {/* Radix Select 不允许空字符串 value，「全部分区」用哨兵值 __all__ 映射为空 */}
         <Select value={zone || '__all__'} onValueChange={value => setZone(value === '__all__' ? '' : value)}>
@@ -375,7 +375,7 @@ export function MemoryTab() {
           type="button"
           onClick={() => setCreating(true)}
           aria-label="新增记忆"
-          className="flex min-h-9 items-center gap-1 rounded-lg bg-teal-600 px-3 text-xs font-medium text-white hover:bg-teal-700"
+          className="flex min-h-9 items-center gap-1 rounded-lg bg-brand px-3 text-xs font-medium text-white hover:bg-brand-deep"
         >
           <Plus size={13} />新增
         </button>
@@ -393,7 +393,7 @@ export function MemoryTab() {
             <div className="flex flex-wrap items-center gap-1.5">
               <ZoneTag zone={memory.zone} />
               <ConfidenceTag confidence={memory.confidence} />
-              {memory.pinned ? <span className="rounded bg-teal-50 px-1.5 py-0.5 text-[10px] text-teal-700">常驻</span> : null}
+              {memory.pinned ? <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[10px] text-brand-ink">常驻</span> : null}
               <span className="text-[10px] text-[var(--color-text-tertiary)]" title="命中 / 引用次数">
                 {memory.match_count}/{memory.reference_count}
               </span>
@@ -463,12 +463,12 @@ export function MemoryTab() {
                       {cluster.members.map(member => {
                         const survivorLabel = distillSurvivorLabel(cluster, member.id)
                         return (
-                          <li key={member.id} className={`rounded-lg border p-2.5 ${survivorLabel ? 'border-teal-200 bg-teal-50/60' : 'border-[var(--color-border)]'}`}>
+                          <li key={member.id} className={`rounded-lg border p-2.5 ${survivorLabel ? 'border-brand-line bg-brand-soft/60' : 'border-[var(--color-border)]'}`}>
                             <div className="flex flex-wrap items-center gap-1.5">
                               <ZoneTag zone={member.zone} />
-                              {member.pinned ? <span className="rounded bg-teal-50 px-1.5 py-0.5 text-[10px] text-teal-700">常驻</span> : null}
+                              {member.pinned ? <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[10px] text-brand-ink">常驻</span> : null}
                               {survivorLabel && (
-                                <span className="rounded bg-teal-600 px-1.5 py-0.5 text-[10px] font-medium text-white">{survivorLabel}</span>
+                                <span className="rounded bg-brand px-1.5 py-0.5 text-[10px] font-medium text-white">{survivorLabel}</span>
                               )}
                               <span className="text-[10px] text-[var(--color-text-tertiary)]" title="命中 / 引用次数">
                                 {member.match_count}/{member.reference_count}
@@ -486,7 +486,7 @@ export function MemoryTab() {
                         disabled={distillBusy !== null}
                         onClick={() => void applyDistill(cluster, false)}
                         title="保留建议记忆，簇内其余记忆标记为已取代"
-                        className="flex min-h-8 items-center gap-1 rounded-lg bg-teal-600 px-3 text-xs font-medium text-white transition-colors hover:bg-teal-700 disabled:opacity-50"
+                        className="flex min-h-8 items-center gap-1 rounded-lg bg-brand px-3 text-xs font-medium text-white transition-colors hover:bg-brand-deep disabled:opacity-50"
                       >
                         {busyDirect ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
                         直接合并
@@ -520,7 +520,7 @@ export function MemoryTab() {
               onChange={event => setDraft({ ...draft, content: event.target.value })}
               rows={4}
               placeholder="要记住的事实，例如：用户偏好简洁的中文回答"
-              className="mt-3 w-full rounded-lg border border-[var(--color-border)] bg-transparent p-3 text-xs leading-5 outline-none focus:border-teal-500"
+              className="mt-3 w-full rounded-lg border border-[var(--color-border)] bg-transparent p-3 text-xs leading-5 outline-none focus:border-brand-deep"
             />
             <div className="mt-3 flex items-center gap-3">
               <Select value={draft.zone} onValueChange={value => setDraft({ ...draft, zone: value })}>
@@ -544,7 +544,7 @@ export function MemoryTab() {
               type="button"
               onClick={createMemory}
               disabled={!draft.content.trim() || saving}
-              className="mt-4 flex min-h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-teal-600 text-xs font-medium text-white hover:bg-teal-700 disabled:opacity-50"
+              className="mt-4 flex min-h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-brand text-xs font-medium text-white hover:bg-brand-deep disabled:opacity-50"
             >
               {saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
               保存记忆
