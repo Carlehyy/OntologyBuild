@@ -1,7 +1,7 @@
 """Stable environment-file locations for local OntologyBuild development.
 
 The paths are derived from this module rather than the process working
-directory.  This keeps ``uvicorn``, Alembic, Celery and the embedded API Hub
+directory.  This keeps ``uvicorn``, Alembic, NATS executor and the embedded API Hub
 consistent whether they are launched from the repository root or ``backend``.
 """
 

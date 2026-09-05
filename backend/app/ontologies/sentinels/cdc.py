@@ -2262,7 +2262,7 @@ def register_cdc(*, start_worker: bool = False) -> None:
 
     Listener registration is safe in any process.  Starting the durable
     recovery worker is an explicit API-process responsibility: a Mapping
-    Celery task owns a synchronous chain barrier for the changes it just
+    Executor task owns a synchronous chain barrier for the changes it just
     projected, and a second consumer in that same process would race the task
     for its own event.
     """

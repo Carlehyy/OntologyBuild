@@ -75,7 +75,7 @@ Hub SQLite 完整备份、停写、全量解密校验和可恢复迁移机制就
 | 依赖 | 运行责任 | 未就绪行为 |
 |---|---|---|
 | PostgreSQL | 平台主数据库、Alembic、发布与审计事实 | 启动/readiness 失败；不切平台 SQLite |
-| Redis + Celery worker | durable 入队、异步调度和后台执行 | readiness/入队失败；异步路径不自动改在 API 线程执行，显式同步 API 保持原契约 |
+| Redis + NATS executor | Redis 缓存与平台配置存储；NATS 承担 durable 入队、异步调度和后台执行 | readiness/入队失败；异步路径不自动改在 API 线程执行，显式同步 API 保持原契约 |
 | NATS + pipeline_executor | 流水线调度任务（定时触发与手动异步触发）、UI 手动运行整条流水线、数据集导入解析/提交的派发与执行 | 未配置 `NATS_URL` 时派发方报错、手动异步触发与数据集导入返回 503；executor 不健康时部署失败 |
 | Neo4j | 图查询、分析和可重建发布投影 | 图接口返回明确 503，发布/投影 fail closed；不切 NetworkX/SQL 图 |
 | MinIO | 新文件与对象的权威对象存储 | 写入失败；不切本地对象目录 |
@@ -83,7 +83,7 @@ Hub SQLite 完整备份、停写、全量解密校验和可恢复迁移机制就
 | Chromium CDP | 浏览器接管与数据管家浏览器会话 | `STEWARD_BROWSER_CDP_URL` 只接受 HTTP(S) 服务根地址；启动配置必需，不可达不杀死 API liveness，但 readiness 失败，不用 mock 冒充就绪 |
 
 外部依赖必须在本地配置中心或生产只读校验中提供完整配置，并以真实服务探针
-验证；API 与 worker 启动后还必须通过 `/health/ready` 和 Celery ping。
+验证；API 与 pipeline executor 启动后还必须通过 `/health/ready`。
 `/health/live` 只证明 API 进程存活，不能替代上述检查。
 
 ChromaDB 已从依赖、配置模型和运行链路移除。旧 Chroma 配置不应继续复制到新
@@ -171,7 +171,7 @@ Python 脚本流水线（`definition.engine=python`）由 Jupyter Kernel Gateway
 Compose 部署固定使用随栈启动的 `python_kernel_gateway` 服务。该服务以独立
 内核执行用户脚本，因此**不得**给它挂 `env_file` 或注入任何平台凭据环境变量
 （`DATABASE_URL`、`SECRET_KEY`、MinIO/n8n 凭据等对用户脚本可读），也不暴露
-宿主机端口，仅 backend 与 celery_worker 经 Compose 内网访问。内核环境继承
+宿主机端口，仅 backend 经 Compose 内网访问。内核环境继承
 backend 镜像依赖（requests/httpx/pandas/pymysql 等），脚本可直接发起 HTTP
 请求取数；新增第三方库须加入 backend 依赖并重建镜像。
 

@@ -1,4 +1,4 @@
-"""Pipeline 执行 Celery 任务 — 引擎注册表分发 + 共用资产湖入湖"""
+"""Pipeline 执行任务体 — 引擎注册表分发 + 共用资产湖入湖（NATS executor 消费）"""
 from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
@@ -6,17 +6,6 @@ import logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-
-def get_celery_app():
-    try:
-        from app.tasks.celery_app import celery_app
-        return celery_app
-    except Exception:
-        return None
-
-
-celery_app = get_celery_app()
 
 
 def _compute_quality_score(rows: list[dict], meta: dict) -> float:
@@ -602,7 +591,3 @@ def pipeline_run_task(pipeline_id: str, run_id: str, write_opts: dict | None = N
             db.commit()
     finally:
         db.close()
-
-
-if celery_app:
-    pipeline_run_task = celery_app.task(pipeline_run_task)

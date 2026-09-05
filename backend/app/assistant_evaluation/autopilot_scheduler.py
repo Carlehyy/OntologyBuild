@@ -1,6 +1,6 @@
 """值守定时器 — APScheduler 进程内定时 + NATS JetStream 派发。
 
-平台新任务模式（Celery 已列入退役计划，见 AGENTS.md）：定时半边由
+平台任务模式（Celery 已退役，见 AGENTS.md）：定时半边由
 APScheduler 在 API 进程内驱动（与数据同步任务池同模式），执行半边
 经 dispatch_task 投递给 nats_executor 消费进程——LLM 重活不占 Web
 线程。每 5 分钟扫描一次到期配置；派发成功即标记 last_dispatched_at，

@@ -99,7 +99,7 @@ def test_pipeline_run_task_stats_exclude_dead_fields(db, monkeypatch):
             kernel_id="kernel-1",
         ))
 
-    pipeline_run_task.run("pipe-slim-run", "run-slim-1")
+    pipeline_run_task("pipe-slim-run", "run-slim-1")
 
     run_db = runtime_session()
     try:

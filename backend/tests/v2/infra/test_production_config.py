@@ -132,39 +132,31 @@ def test_production_rejects_non_public_or_malformed_file_link_origins():
 def test_production_compose_requires_real_stack_without_chroma_or_fallbacks():
     compose = yaml.safe_load((ROOT / "docker-compose.prod.yml").read_text())
     backend = compose["services"]["backend"]
-    worker = compose["services"]["celery_worker"]
 
     assert "chromadb" not in compose["services"]
+    assert "celery_worker" not in compose["services"]  # Celery 已退役
     assert "chroma_data" not in compose["volumes"]
-    for service in (backend, worker):
-        environment = service["environment"]
-        assert "STORAGE_LOCAL_FALLBACK" not in environment
-        assert "DATASET_IMPORT_USE_CELERY" not in environment
-        assert "REQUIRE_EXTERNAL_DEPENDENCIES" not in environment
-        assert "STRICT_PRODUCTION_CONFIG" not in environment
+    environment = backend["environment"]
+    assert "STORAGE_LOCAL_FALLBACK" not in environment
+    assert "DATASET_IMPORT_USE_CELERY" not in environment
+    assert "REQUIRE_EXTERNAL_DEPENDENCIES" not in environment
+    assert "STRICT_PRODUCTION_CONFIG" not in environment
     assert backend["depends_on"]["minio"]["condition"] == "service_healthy"
     assert backend["depends_on"]["browser"]["condition"] == "service_started"
     assert "webSocketDebuggerUrl" in compose["services"]["browser"][
         "healthcheck"
     ]["test"][-1]
     assert backend["environment"]["STORAGE_LOCAL_DIR"] == "/uploads/object-storage"
-    assert worker["environment"]["STORAGE_LOCAL_DIR"] == "/uploads/object-storage"
-    assert worker["environment"]["STEWARD_BROWSER_CDP_URL"] == (
+    assert backend["environment"]["STEWARD_BROWSER_CDP_URL"] == (
         "http://browser:9222"
     )
     assert backend["environment"]["N8N_TIMEOUT_SECONDS"] == (
         "${N8N_TIMEOUT_SECONDS:-30}"
     )
-    assert worker["environment"]["N8N_TIMEOUT_SECONDS"] == (
-        "${N8N_TIMEOUT_SECONDS:-30}"
-    )
     assert "--requirepass" in compose["services"]["redis"]["command"][-1]
     assert "PIPELINE_FILE_PUBLIC_APP_BASE_URL" in backend["environment"]
     assert "PIPELINE_FILE_PUBLIC_API_BASE_URL" in backend["environment"]
-    assert "PIPELINE_FILE_PUBLIC_APP_BASE_URL" in worker["environment"]
-    assert "PIPELINE_FILE_PUBLIC_API_BASE_URL" in worker["environment"]
     assert "uploads:/uploads" in backend["volumes"]
-    assert "uploads:/uploads" in worker["volumes"]
 
 
 def test_removed_graph_fallback_dependencies_are_not_packaged():
@@ -187,25 +179,19 @@ def test_removed_graph_fallback_dependencies_are_not_packaged():
 def test_local_compose_requires_real_stack_without_chroma():
     compose = yaml.safe_load((ROOT / "docker-compose.local.yml").read_text())
     backend = compose["services"]["backend"]
-    worker = compose["services"]["celery_worker"]
     migrate = compose["services"]["migrate"]
 
     assert "chromadb" not in compose["services"]
+    assert "celery_worker" not in compose["services"]  # Celery 已退役
     assert "chroma_data" not in compose["volumes"]
     for dependency in ("db", "redis", "neo4j", "minio"):
         assert backend["depends_on"][dependency]["condition"] == (
-            "service_healthy"
-        )
-        assert worker["depends_on"][dependency]["condition"] == (
             "service_healthy"
         )
     assert backend["depends_on"]["browser"]["condition"] == "service_started"
     assert migrate["command"] == "alembic upgrade head"
     assert migrate["depends_on"]["db"]["condition"] == "service_healthy"
     assert backend["depends_on"]["migrate"]["condition"] == (
-        "service_completed_successfully"
-    )
-    assert worker["depends_on"]["migrate"]["condition"] == (
         "service_completed_successfully"
     )
     assert "webSocketDebuggerUrl" in compose["services"]["browser"][

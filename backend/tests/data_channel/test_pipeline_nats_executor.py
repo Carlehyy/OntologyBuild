@@ -314,6 +314,9 @@ def test_handler_registry_covers_all_stream_subjects():
         "pipeline-executor",
         "pipeline-run-executor",
         "dataset-import-executor",
+        "mapping-apply-executor",
+        "connection-sync-executor",
+        "dataset-event-executor",
         "dataset-migrate-executor",
         "assistant-eval-autopilot",
         "super-assistant-reflect-micro",
@@ -427,7 +430,7 @@ async def test_run_subscribes_each_subject_with_own_durable(
 
     run_task = asyncio.ensure_future(executor.run())
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and len(subscriptions) < 10:
+    while time.monotonic() < deadline and len(subscriptions) < 13:
         await asyncio.sleep(0.02)
     executor.request_shutdown()
     await asyncio.wait_for(run_task, timeout=5)
@@ -436,6 +439,9 @@ async def test_run_subscribes_each_subject_with_own_durable(
         ("pipeline.task.execute", "pipeline-executor"),
         ("task.pipeline.run", "pipeline-run-executor"),
         ("task.dataset.import", "dataset-import-executor"),
+        ("task.mapping.apply", "mapping-apply-executor"),
+        ("task.connection.sync", "connection-sync-executor"),
+        ("task.dataset.event", "dataset-event-executor"),
         ("super_assistant.reflect.micro", "super-assistant-reflect-micro"),
         ("super_assistant.reflect.full", "super-assistant-reflect-full"),
         ("super_assistant.reflect.focused", "super-assistant-reflect-focused"),

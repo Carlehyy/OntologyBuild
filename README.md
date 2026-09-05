@@ -32,7 +32,7 @@ docker compose -f docker-compose.local.yml up --build
 
 启动后访问 `http://localhost:5173`，本地示例账号 `admin / admin123`（仅用于
 本地开发）。后端存活检查位于 `http://localhost:8000/health/live`；完整平台
-可用性还必须通过 `/health/ready` 和 Celery worker 检查。
+可用性还必须通过 `/health/ready` 检查。
 
 `docker-compose.prod.yml` 是生产编排入口，按
 [部署说明](./docs/operations/deployment.md) 与 GitHub Actions 工作流执行；
@@ -56,10 +56,7 @@ uv sync --directory backend --frozen --group dev
 # app.dev_server 会先执行 alembic upgrade head，再启动热重载服务
 uv run --directory backend python -m app.dev_server
 
-uv run --directory backend \
-  celery -A app.tasks.celery_app:celery_app worker --loglevel=info
-
-# 流水线 executor：消费 NATS 派发的调度/手动触发与数据集导入任务
+# 流水线 executor：消费 NATS 派发的全部后台任务（Celery 已退役）
 uv run --directory backend python -m app.data_channel.pipeline_tasks.nats_executor
 
 npm --prefix frontend ci
@@ -81,7 +78,7 @@ npm --prefix frontend run dev
   → 数据刷新（Approved Version → Mapping → Formal → 查询投影 → Sentinel → Action）
 ```
 
-平台采用 fail-closed 依赖契约：PostgreSQL、Redis、Celery worker、NATS 与
+平台采用 fail-closed 依赖契约：PostgreSQL、Redis、NATS 与
 流水线 executor、Neo4j、MinIO 和 n8n 必须真实就绪，后端不会在依赖失败时静默切换到 SQLite、内存图或
 本地对象存储。语义搜索当前明确返回 `501 semantic_search_unsupported`，关键词
 搜索由 PostgreSQL 提供。事件登记是独立业务能力，当前没有可核验的
@@ -90,7 +87,7 @@ RegisteredEvent → Formal/Sentinel 自动接线。状态门与发布契约的�
 
 ## 技术栈
 
-- 后端：FastAPI、Python 3.12、SQLAlchemy、Alembic、Celery；
+- 后端：FastAPI、Python 3.12、SQLAlchemy、Alembic、NATS 任务链；
 - 前端：React、TypeScript、Vite、Tailwind CSS；
 - 数据与中间件：PostgreSQL、Redis、Neo4j、MinIO；
 - 工作流与浏览器：n8n、Chromium CDP；Python 脚本流水线执行：Jupyter Kernel Gateway（可选）；

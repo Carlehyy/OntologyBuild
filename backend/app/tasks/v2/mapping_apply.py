@@ -1,19 +1,16 @@
-"""Mapping Apply 异步 Celery 任务"""
+"""Mapping Apply 异步任务体（NATS executor 线程内直调）"""
 from __future__ import annotations
 import logging
-
-from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="app.tasks.v2.mapping_apply.mapping_apply_task")
 def mapping_apply_task(mapping_id: str, ontology_id: str):
     """
     异步执行 Mapping 并写入 Neo4j。
     完整实现在 M3.4 增量更新中集成到触发链路。
     """
-    # Celery workers do not run FastAPI's lifespan, where the API process
+    # executor 进程不运行 FastAPI 的 lifespan, where the API process
     # registers Sentinel CDC listeners. Register in the worker process before
     # creating its Session so Formal projection commits atomically create the
     # durable outbox rows consumed by Mapping's synchronous Sentinel barrier.

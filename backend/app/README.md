@@ -26,7 +26,7 @@ app/
 ├── auth/              身份、角色与菜单授权
 ├── inbox/             收件箱契约
 ├── shared/            迁移期共享基础能力
-├── tasks/             Celery 任务入口（已列入退役计划，禁止新增；新定时/后台任务走 APScheduler + NATS JetStream → nats_executor）
+├── tasks/             后台任务体入口（Celery 已退役；定时/后台任务走 APScheduler + NATS JetStream → nats_executor）
 ├── engine/            预留的运行引擎 package；旧 post-harness 已退役
 ├── routers/           以兼容 facade 为主，仍有例外
 ├── models/            以兼容 facade/注册为主，仍有例外
@@ -36,7 +36,7 @@ app/
 
 不要根据目录名猜测 canonical。兼容例外、特殊模块身份和迁移顺序见
 [AGENTS.md 兼容层例外台账](../../AGENTS.md)。HTTP、menu key、
-Alembic revision、Celery task name 和 patch 路径都可能是兼容契约。
+Alembic revision、NATS subject 和 patch 路径都可能是兼容契约。
 
 `main.py` 对部分 v1 域仍经 `app/routers/` facade 挂载（如 auth：`main.py` →
 `routers/auth.py` → `auth/router.py` 两跳）；实现改动落在 canonical 包，

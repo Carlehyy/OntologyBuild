@@ -310,11 +310,14 @@ class IncrementalOrchestrator:
         self._db.refresh(run)
 
         try:
-            from app.tasks.v2.pipeline_run import pipeline_run_task
-            pipeline_run_task.delay(pipeline_id, run.id)
+            from app.data_channel.pipeline_tasks.dispatch import (
+                PIPELINE_RUN_SUBJECT, dispatch_task,
+            )
+            dispatch_task(PIPELINE_RUN_SUBJECT, {
+                "pipeline_id": pipeline_id, "run_id": run.id})
         except Exception as dispatch_error:
             run.status = "failed"
-            run.error_log = "Redis/Celery 后台任务服务不可用，Pipeline 未执行"
+            run.error_log = "NATS 后台任务服务不可用，Pipeline 未执行"
             try:
                 self._db.commit()
             except Exception:  # noqa: BLE001
@@ -367,9 +370,12 @@ class IncrementalOrchestrator:
             return f"sync:{mapping_id}"
 
         try:
-            from app.tasks.v2.mapping_apply import mapping_apply_task
-            result = mapping_apply_task.delay(mapping_id, ontology_id)
-            return str(result.id) if hasattr(result, 'id') else mapping_id
+            from app.data_channel.pipeline_tasks.dispatch import (
+                MAPPING_APPLY_SUBJECT, dispatch_task,
+            )
+            dispatch_task(MAPPING_APPLY_SUBJECT, {
+                "mapping_id": mapping_id, "ontology_id": ontology_id})
+            return mapping_id
         except Exception as dispatch_error:
             logger.error(
                 "Mapping %s（本体 %s）投递失败；任务未执行（%s）",
@@ -378,5 +384,5 @@ class IncrementalOrchestrator:
                 type(dispatch_error).__name__,
             )
             raise RuntimeError(
-                "Redis/Celery 后台任务服务不可用，Mapping 未执行"
+                "NATS 后台任务服务不可用，Mapping 未执行"
             ) from dispatch_error

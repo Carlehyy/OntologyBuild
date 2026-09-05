@@ -911,17 +911,15 @@ def _curated_review_event(db):
 
 
 def test_async_dispatch_delegates_claimed_events_to_worker(db, monkeypatch):
-    """async 模式：drain 只派发 Celery，事件保持 claimed 由 worker 确认。"""
-    from app.tasks.celery_app import celery_app
+    """async 模式：drain 只经 NATS 派发，事件保持 claimed 由 executor 确认。"""
+    from app.data_channel.pipeline_tasks.dispatch import DATASET_EVENT_SUBJECT
 
     monkeypatch.setattr(
         "app.config.settings.dataset_event_dispatch_mode", "async")
     dataset, version, _review = _curated_review_event(db)
 
-    with patch.object(
-        celery_app,
-        "send_task",
-        return_value=None,
+    with patch(
+        "app.data_channel.pipeline_tasks.dispatch.dispatch_task",
     ) as send:
         result = drain_dataset_version_events(db, limit=10)
 
@@ -933,39 +931,31 @@ def test_async_dispatch_delegates_claimed_events_to_worker(db, monkeypatch):
         dataset_version_id=version.id).order_by(
             DatasetVersionEvent.created_at, DatasetVersionEvent.id).all()
     assert len(events) == 2
-    task_names = {call.args[0] for call in send.call_args_list}
-    assert task_names == {
-        "app.tasks.v2.dataset_event_processing.process_dataset_version_event"}
-    dispatched_ids = [
-        call.kwargs["args"][0] if call.kwargs.get("args")
-        else call.args[1][0]
-        for call in send.call_args_list]
+    subjects = {call.args[0] for call in send.call_args_list}
+    assert subjects == {DATASET_EVENT_SUBJECT}
+    dispatched_ids = [call.args[1]["event_id"] for call in send.call_args_list]
     assert sorted(dispatched_ids) == sorted(item.id for item in events)
     for event in events:
         assert event.status in (
             "processing", CURATED_REVIEW_PROCESSING_STATUS)
         assert event.claim_token is not None
         token = next(
-            (call.kwargs["args"][1] if call.kwargs.get("args")
-             else call.args[1][1])
+            call.args[1]["claim_token"]
             for call in send.call_args_list
-            if (call.kwargs.get("args") or call.args[1:])[0] == event.id)
+            if call.args[1]["event_id"] == event.id)
         assert token == event.claim_token
 
 
-def test_async_dispatch_falls_back_to_sync_when_celery_unavailable(
+def test_async_dispatch_falls_back_to_sync_when_nats_unavailable(
         db, monkeypatch):
-    """Celery 不可用时 fail-open：降级内联执行，事件仍按同步语义确认。"""
-    from app.tasks.celery_app import celery_app
-
+    """NATS 派发不可用时 fail-open：降级内联执行，事件仍按同步语义确认。"""
     monkeypatch.setattr(
         "app.config.settings.dataset_event_dispatch_mode", "async")
     _dataset, _version, review = _curated_review_event(db)
 
-    with patch.object(
-        celery_app,
-        "send_task",
-        side_effect=ConnectionError("redis down"),
+    with patch(
+        "app.data_channel.pipeline_tasks.dispatch.dispatch_task",
+        side_effect=ConnectionError("nats down"),
     ), patch.object(
         IncrementalOrchestrator,
         "on_review_approved",

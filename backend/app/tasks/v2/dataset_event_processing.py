@@ -1,4 +1,4 @@
-"""DatasetVersion 事件异步处理 Celery 任务。
+"""DatasetVersion 事件异步处理任务体（NATS executor 线程内直调）。
 
 API 进程的 drain 线程只负责 claim + 派发；映射全量对账、Neo4j 整图重建与
 哨兵屏障等重活在本 worker 进程内完成，完成/失败后由本任务确认 durable 事件
@@ -10,18 +10,15 @@ from __future__ import annotations
 
 import logging
 
-from app.tasks.celery_app import celery_app
-
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="app.tasks.v2.dataset_event_processing.process_dataset_version_event")
 def process_dataset_version_event(event_id: str, claim_token: str):
     """处理一个已被 claim 的 DatasetVersion 事件并确认其终态。"""
     from app.ontologies.sentinels.cdc import register_cdc
     from app.data_channel.datasets.version_events import run_claimed_event
 
-    # Celery workers do not run FastAPI's lifespan（CDC 监听在 API 进程注册）。
+    # executor 进程不运行 FastAPI 的 lifespan（CDC 监听在 API 进程注册）。
     # 事件处理内含同步哨兵屏障，必须先注册 CDC 使 Formal 投影提交时原子产生
     # durable outbox 行；注册仅开启监听不启动第二个消费者（与 API 进程的
     # 恢复 worker 分工一致，见 mapping_apply 任务）。

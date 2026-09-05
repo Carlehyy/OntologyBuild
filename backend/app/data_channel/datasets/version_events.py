@@ -449,30 +449,28 @@ def drain_dataset_version_events(
                 result["lost_claims"] += 1
                 continue
             if dispatch_mode != "sync":
-                # 按任务名派发（send_task），不 import 任务模块——worker 侧由
-                # celery_app include 注册，避免 version_events ↔ 任务模块的
-                # 静态依赖环（架构守卫约束）。
-                from app.tasks.celery_app import celery_app
+                # 经 NATS 派发到 executor；不 import 任务模块——避免
+                # version_events ↔ 任务模块的静态依赖环（架构守卫约束）。
+                from app.data_channel.pipeline_tasks.dispatch import (
+                    DATASET_EVENT_SUBJECT, dispatch_task,
+                )
 
                 try:
-                    async_result = celery_app.send_task(
-                        "app.tasks.v2.dataset_event_processing."
-                        "process_dataset_version_event",
-                        args=[event_id, token],
-                    )
-                    # 事件保持 claimed：worker 完成后经 claim CAS 确认；
-                    # worker 崩溃则超时后由下一轮 drain 重新派发（对账幂等）。
+                    dispatch_task(DATASET_EVENT_SUBJECT, {
+                        "event_id": event_id, "claim_token": token})
+                    # 事件保持 claimed：executor 完成后经 claim CAS 确认；
+                    # executor 崩溃则超时后由下一轮 drain 重新派发（对账幂等）。
                     result["dispatched"] += 1
                     logger.info(
-                        "DatasetVersion event %s dispatched to worker: %s",
-                        event_id, getattr(async_result, "id", "unknown"),
+                        "DatasetVersion event %s dispatched to executor",
+                        event_id,
                     )
                     continue
                 except Exception as dispatch_error:  # noqa: BLE001
-                    # Celery/Redis 不可用时 fail-open：降级为内联执行，
-                    # 保证自动化链路不断；worker 恢复后自动回到异步。
+                    # NATS 不可用时 fail-open：降级为内联执行，
+                    # 保证自动化链路不断；executor 恢复后自动回到异步。
                     logger.warning(
-                        "DatasetVersion event %s Celery 派发失败，降级内联: %s",
+                        "DatasetVersion event %s NATS 派发失败，降级内联: %s",
                         event_id, dispatch_error,
                     )
             dispatch_outcome = _process_claimed_event(

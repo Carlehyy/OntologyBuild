@@ -1,6 +1,7 @@
 # OntologyBuild 后端
 
-后端使用 FastAPI、SQLAlchemy、Alembic 和 Celery，要求 Python 3.12。应用入口
+后端使用 FastAPI、SQLAlchemy、Alembic、Celery-free 任务链（APScheduler +
+NATS JetStream → nats_executor）和 Redis 缓存，要求 Python 3.12。应用入口
 是 `app/main.py`，生产数据库历史以 `alembic/versions/` 为准。
 
 依赖事实源是 `pyproject.toml` 与 `uv.lock`。`requirements.txt` 为历史兼容产物，
@@ -31,13 +32,7 @@ uv sync --frozen --group dev
 uv run python -m app.dev_server
 ```
 
-另开终端启动 worker：
-
-```bash
-uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=info
-```
-
-本地完整开发还需要流水线 executor（经 NATS 消费派发任务）：
+本地完整开发需要流水线 executor（经 NATS 消费全部后台任务，Celery 已退役）：
 
 ```bash
 uv run python -m app.data_channel.pipeline_tasks.nats_executor

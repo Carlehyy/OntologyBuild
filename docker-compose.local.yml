@@ -87,7 +87,7 @@ services:
 
   # Python 脚本流水线的执行网关（Jupyter Kernel Gateway）。用户脚本在其内核
   # 中执行，因此刻意不挂 env_file、不注入任何平台凭据环境变量，也不暴露
-  # 宿主机端口——仅 backend / celery_worker 经 compose 内网访问。
+  # 宿主机端口——仅 backend 经 compose 内网访问。
   python_kernel_gateway:
     build: ./backend
     command: jupyter kernelgateway --KernelGatewayApp.ip=0.0.0.0 --KernelGatewayApp.port=8088 --KernelGatewayApp.auth_token=${PYTHON_KERNEL_GATEWAY_AUTH_TOKEN:-dev-python-gateway-token}
@@ -142,25 +142,6 @@ services:
     volumes: [./backend:/app, ./uploads:/uploads]
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-  celery_worker:
-    build: ./backend
-    env_file: .env
-    environment:
-      PYTHON_KERNEL_GATEWAY_URL: http://python_kernel_gateway:8088
-      PYTHON_KERNEL_GATEWAY_AUTH_TOKEN: ${PYTHON_KERNEL_GATEWAY_AUTH_TOKEN:-dev-python-gateway-token}
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      neo4j:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    volumes: [./backend:/app, ./uploads:/uploads]
-    command: celery -A app.tasks.celery_app:celery_app worker --loglevel=info
 
   # 流水线调度/手动异步触发的执行者：经 NATS JetStream 消费，与 Web 进程隔离。
   pipeline_executor:

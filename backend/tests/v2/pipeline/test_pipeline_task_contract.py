@@ -454,7 +454,7 @@ def test_task_execution_materializes_pipeline_id_before_session_close(
         finally:
             run_db.close()
 
-    monkeypatch.setattr(pipeline_run_task, "run", fake_pipeline_run)
+    monkeypatch.setattr(pipeline_run_task, "run", fake_pipeline_run, raising=False)
 
     result = task_engine.execute_pipeline_task(created["id"])
 
