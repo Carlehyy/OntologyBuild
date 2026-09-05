@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { PageSizeSelect } from './PageSizeSelect'
+import { PageSizeSelect } from '@/components/PageSizeSelect'
 import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Database, ExternalLink, Eye, KeyRound, Loader2, Plus, RefreshCw, Save, Trash2, Undo2, XCircle } from 'lucide-react'
 import { useParams } from 'react-router-dom'
 import { publicManualSharingApi, type PublicManualDataset } from '@/api/public-manual-sharing'

@@ -41,45 +41,45 @@ export default function FileAssetDownloadPage() {
   }, [startDownload])
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-slate-50 px-4 py-10">
+    <main className="flex min-h-dvh items-center justify-center bg-muted px-4 py-10">
       <section
         aria-labelledby="file-download-title"
-        className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_24px_70px_-28px_rgba(15,23,42,0.32)]"
+        className="w-full max-w-md overflow-hidden rounded-2xl border border-border bg-card shadow-[0_24px_70px_-28px_rgba(15,23,42,0.32)]"
       >
-        <header className="flex items-center gap-2 border-b border-slate-100 px-5 py-4">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-teal-700 text-white">
+        <header className="flex items-center gap-2 border-b border-border px-5 py-4">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-deep text-[var(--color-text-inverse)]">
             <FileDown size={17} aria-hidden="true" />
           </span>
           <div>
-            <h1 id="file-download-title" className="text-sm font-semibold text-slate-950">平台附件下载</h1>
-            <p className="mt-0.5 text-xs text-slate-500">当前下载受 OpenOntology 登录权限保护</p>
+            <h1 id="file-download-title" className="text-sm font-semibold text-foreground">平台附件下载</h1>
+            <p className="mt-0.5 text-xs text-muted-foreground">当前下载受 OpenOntology 登录权限保护</p>
           </div>
         </header>
 
         <div className="px-6 py-10 text-center" aria-live="polite">
           {phase === 'downloading' && (
             <>
-              <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-50 text-teal-700">
+              <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft text-brand-ink">
                 <Loader2 size={23} className="animate-spin" aria-hidden="true" />
               </span>
-              <h2 className="mt-4 text-base font-semibold text-slate-900">正在准备下载</h2>
-              <p className="mt-1 break-all text-xs leading-5 text-slate-500">{filename}</p>
+              <h2 className="mt-4 text-base font-semibold text-foreground">正在准备下载</h2>
+              <p className="mt-1 break-all text-xs leading-5 text-muted-foreground">{filename}</p>
             </>
           )}
 
           {phase === 'complete' && (
             <>
-              <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
+              <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--color-success-bg)] text-[var(--color-success)]">
                 <CheckCircle2 size={23} aria-hidden="true" />
               </span>
-              <h2 className="mt-4 text-base font-semibold text-slate-900">下载已开始</h2>
-              <p className="mt-1 break-all text-xs leading-5 text-slate-500">
+              <h2 className="mt-4 text-base font-semibold text-foreground">下载已开始</h2>
+              <p className="mt-1 break-all text-xs leading-5 text-muted-foreground">
                 {filename}；若浏览器没有响应，可以再次下载。
               </p>
               <button
                 type="button"
                 onClick={() => void startDownload()}
-                className="mt-5 inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-sm font-medium text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+                className="mt-5 inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-brand-deep px-4 text-sm font-medium text-[var(--color-text-inverse)] transition hover:bg-brand-deep focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               >
                 <Download size={14} aria-hidden="true" /> 再次下载
               </button>
@@ -88,15 +88,15 @@ export default function FileAssetDownloadPage() {
 
           {phase === 'error' && (
             <>
-              <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-600">
+              <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--color-danger-bg)] text-[var(--color-danger)]">
                 <XCircle size={23} aria-hidden="true" />
               </span>
-              <h2 className="mt-4 text-base font-semibold text-slate-900">附件下载失败</h2>
-              <p role="alert" className="mt-1 break-all text-xs leading-5 text-slate-500">{error}</p>
+              <h2 className="mt-4 text-base font-semibold text-foreground">附件下载失败</h2>
+              <p role="alert" className="mt-1 break-all text-xs leading-5 text-muted-foreground">{error}</p>
               <button
                 type="button"
                 onClick={() => void startDownload()}
-                className="mt-5 inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-slate-200 px-4 text-sm font-medium text-slate-700 transition hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                className="mt-5 inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-border px-4 text-sm font-medium text-foreground transition hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <RefreshCw size={14} aria-hidden="true" /> 重试
               </button>
@@ -104,12 +104,12 @@ export default function FileAssetDownloadPage() {
           )}
         </div>
 
-        <footer className="flex items-center justify-between border-t border-slate-100 bg-slate-50/70 px-5 py-3">
-          <p className="text-[11px] text-slate-500">登录地址不会公开附件内容</p>
+        <footer className="flex items-center justify-between border-t border-border bg-muted px-5 py-3">
+          <p className="text-[11px] text-muted-foreground">登录地址不会公开附件内容</p>
           <button
             type="button"
             onClick={() => navigate('/data/pipelines/steward')}
-            className="inline-flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-teal-700 transition hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-brand-ink transition hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Workflow size={13} aria-hidden="true" /> 返回数据管家
           </button>

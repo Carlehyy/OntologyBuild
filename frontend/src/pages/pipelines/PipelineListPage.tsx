@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { PageSizeSelect } from '@/components/PageSizeSelect'
 import {
   Plus, Search, Play, GitBranch, Trash2, Pencil, ChevronLeft, ChevronRight,
   X, Loader2, CheckCircle2, XCircle, Clock, Sparkles, ExternalLink,
@@ -21,8 +23,8 @@ import { ArtifactPreviewPopover, TaskPreviewPopover } from './PipelineLinkPopove
 // 发布状态：draft/published 双态（运行态在「最近执行结果」列，不混入生命周期）；
 // editing/running/failed 是 0008 迁移前的遗留值，展示上归为草稿
 const STATUS_STYLE: Record<string, string> = {
-  draft:     'bg-slate-100 text-slate-600 border-slate-200',
-  published: 'bg-teal-50 text-teal-700 border-teal-200',
+  draft:     'bg-muted text-muted-foreground border-border',
+  published: 'bg-brand-soft text-brand-ink border-brand-line',
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -32,10 +34,10 @@ const STATUS_LABEL: Record<string, string> = {
 const normStatus = (s?: string): 'draft' | 'published' => (s === 'published' ? 'published' : 'draft')
 
 const RUN_STATUS_META: Record<string, { icon: React.ReactNode; label: string; color: string }> = {
-  success: { icon: <CheckCircle2 size={12} />, label: '成功', color: 'text-green-600' },
-  failed:  { icon: <XCircle size={12} />,      label: '失败', color: 'text-red-500' },
-  running: { icon: <Loader2 size={12} className="animate-spin" />, label: '运行中', color: 'text-blue-600' },
-  pending: { icon: <Clock size={12} />,        label: '排队中', color: 'text-gray-500' },
+  success: { icon: <CheckCircle2 size={12} />, label: '成功', color: 'text-[var(--color-success)]' },
+  failed:  { icon: <XCircle size={12} />,      label: '失败', color: 'text-[var(--color-danger)]' },
+  running: { icon: <Loader2 size={12} className="animate-spin" />, label: '运行中', color: 'text-[var(--color-info)]' },
+  pending: { icon: <Clock size={12} />,        label: '排队中', color: 'text-muted-foreground' },
 }
 
 function isN8nPipeline(pl: Pipeline): boolean {
@@ -89,12 +91,12 @@ function EnabledSwitch({ on, busy, lockReason, onToggle, onLocked }: {
       role="switch" aria-checked={on} aria-disabled={locked} disabled={busy}
       onClick={locked ? onLocked : onToggle}
       className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors ${
-        on ? 'bg-teal-700' : 'bg-slate-300'} ${busy ? 'opacity-60' : locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+        on ? 'bg-brand-deep' : 'bg-accent'} ${busy ? 'opacity-60' : locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
       title={locked
         ? lockReason
         : on ? '已启用：任务池调度与联动触发会执行该流水线' : '未启用：任务池调度与联动触发将跳过（仍可手动执行试运行）'}
     >
-      <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${on ? 'left-[18px]' : 'left-0.5'}`} />
+      <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-card shadow transition-all ${on ? 'left-[18px]' : 'left-0.5'}`} />
     </button>
   )
 }
@@ -314,52 +316,64 @@ export default function PipelineListPage() {
       {overview && <PipelineOverviewBar overview={overview} />}
 
       {/* 搜索、筛选、操作按钮 */}
-      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 xl:flex-nowrap">
+      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3 xl:flex-nowrap">
         <div className="relative w-full sm:w-64 xl:w-72 xl:flex-none">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
           <input
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(1) }}
             placeholder="搜索名称 / ID..."
-            className="w-full rounded-xl border border-slate-200 py-2 pl-8 pr-3 text-sm outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10"
+            className="w-full rounded-xl border border-border py-2 pl-8 pr-3 text-sm outline-none transition focus:border-brand focus:ring-4 focus:ring-ring"
           />
           {search && (
-            <button onClick={() => { setSearch(''); setPage(1) }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black">
+            <button onClick={() => { setSearch(''); setPage(1) }} className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)] hover:text-foreground">
               <X size={12} />
             </button>
           )}
         </div>
-        <select
-          value={filterSource}
-          onChange={e => { setFilterSource(e.target.value); setPage(1) }}
-          className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-500"
+        <Select
+          value={filterSource || '__all__'}
+          onValueChange={value => { setFilterSource(value === '__all__' ? '' : value); setPage(1) }}
         >
-          <option value="">全部类型</option>
-          <option value="n8n">n8n 流水线</option>
-          <option value="python">Python 脚本</option>
-        </select>
-        <select
-          value={filterStatus}
-          onChange={e => { setFilterStatus(e.target.value); setPage(1) }}
-          className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-500"
+          <SelectTrigger className="w-fit min-w-32 shrink-0 rounded-xl bg-card px-3 py-2 text-sm" aria-label="按类型筛选">
+            <SelectValue placeholder="全部类型" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">全部类型</SelectItem>
+            <SelectItem value="n8n">n8n 流水线</SelectItem>
+            <SelectItem value="python">Python 脚本</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={filterStatus || '__all__'}
+          onValueChange={value => { setFilterStatus(value === '__all__' ? '' : value); setPage(1) }}
         >
-          <option value="">全部发布状态</option>
-          <option value="published">已发布</option>
-          <option value="draft">未发布</option>
-        </select>
-        <select
-          value={filterEnabled}
-          onChange={e => { setFilterEnabled(e.target.value); setPage(1) }}
-          className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-teal-500"
+          <SelectTrigger className="w-fit min-w-36 shrink-0 rounded-xl bg-card px-3 py-2 text-sm" aria-label="按发布状态筛选">
+            <SelectValue placeholder="全部发布状态" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">全部发布状态</SelectItem>
+            <SelectItem value="published">已发布</SelectItem>
+            <SelectItem value="draft">未发布</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={filterEnabled || '__all__'}
+          onValueChange={value => { setFilterEnabled(value === '__all__' ? '' : value); setPage(1) }}
         >
-          <option value="">全部启用状态</option>
-          <option value="enabled">已启用</option>
-          <option value="disabled">未启用</option>
-        </select>
+          <SelectTrigger className="w-fit min-w-36 shrink-0 rounded-xl bg-card px-3 py-2 text-sm" aria-label="按启用状态筛选">
+            <SelectValue placeholder="全部启用状态" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">全部启用状态</SelectItem>
+            <SelectItem value="enabled">已启用</SelectItem>
+            <SelectItem value="disabled">未启用</SelectItem>
+          </SelectContent>
+        </Select>
         {hasActiveFilters && (
           <button
             onClick={resetFilters}
-            className="shrink-0 px-2 py-1 text-xs text-gray-500 hover:text-black"
+            className="shrink-0 px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
           >
             清除筛选
           </button>
@@ -367,14 +381,14 @@ export default function PipelineListPage() {
         <div className="ml-auto flex shrink-0 items-center gap-2">
           <button
             onClick={() => navigate('/data/pipelines/steward')}
-            className="flex items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3.5 py-2 text-sm font-medium text-teal-800 transition hover:bg-teal-100 active:translate-y-px"
+            className="flex items-center gap-1.5 rounded-xl border border-brand-line bg-brand-soft px-3.5 py-2 text-sm font-medium text-brand-ink transition hover:bg-brand-soft active:translate-y-px"
             title="用对话创建与编排 n8n 数据流水线"
           >
             <Sparkles size={15} /> 数据管家
           </button>
           <button
             onClick={() => setShowCreate(true)}
-            className="flex items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-teal-800 active:translate-y-px"
+            className="flex items-center gap-1.5 rounded-xl bg-brand-deep px-3.5 py-2 text-sm font-medium text-[var(--color-text-inverse)] transition hover:bg-brand-deep active:translate-y-px"
           >
             <Plus size={15} /> 新建流水线
           </button>
@@ -383,9 +397,9 @@ export default function PipelineListPage() {
 
       {/* 列表 */}
       {loading ? (
-        <div className="text-gray-400 text-sm p-8 text-center">加载中...</div>
+        <div className="text-[var(--color-text-tertiary)] text-sm p-8 text-center">加载中...</div>
       ) : pipelines.length === 0 ? (
-        <div className="border-2 border-dashed rounded-xl p-12 text-center text-gray-400 space-y-2">
+        <div className="border-2 border-dashed rounded-xl p-12 text-center text-[var(--color-text-tertiary)] space-y-2">
           <GitBranch size={32} className="mx-auto opacity-30" />
           {hasActiveFilters ? (
             <>
@@ -395,14 +409,14 @@ export default function PipelineListPage() {
                 <button
                   type="button"
                   onClick={resetFilters}
-                  className="rounded-xl bg-teal-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-teal-800"
+                  className="rounded-xl bg-brand-deep px-4 py-2 text-sm font-medium text-[var(--color-text-inverse)] transition hover:bg-brand-deep"
                 >
                   清除筛选
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowCreate(true)}
-                  className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-teal-300 hover:text-teal-700"
+                  className="flex items-center gap-1.5 rounded-xl border border-border bg-card px-4 py-2 text-sm font-medium text-muted-foreground transition hover:border-brand-line hover:text-brand-ink"
                 >
                   <Plus size={15} /> 新建流水线
                 </button>
@@ -416,7 +430,7 @@ export default function PipelineListPage() {
                 <button
                   type="button"
                   onClick={() => setShowCreate(true)}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-teal-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-teal-800"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-brand-deep px-4 py-2 text-sm font-medium text-[var(--color-text-inverse)] transition hover:bg-brand-deep"
                 >
                   <Plus size={15} /> 新建流水线
                 </button>
@@ -425,20 +439,20 @@ export default function PipelineListPage() {
           )}
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)]">
+        <div className="overflow-x-auto rounded-2xl border border-border bg-card shadow-[0_8px_30px_rgba(15,23,42,0.04)]">
           <table className="w-full min-w-[1080px] text-sm table-fixed">
-            <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 backdrop-blur">
+            <thead className="sticky top-0 z-10 border-b border-border bg-muted backdrop-blur">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium text-gray-600 text-xs rounded-tl-xl" style={{ width: '23%' }}>
+                <th className="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs rounded-tl-xl" style={{ width: '23%' }}>
                   流水线信息
                 </th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '9%' }}>流水线类型</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '9%' }}>发布状态</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '10%' }}>启用状态</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '14%' }}>最近执行结果</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '11%' }}>产物</th>
-                <th className="text-center px-4 py-2.5 font-medium text-gray-600 text-xs" style={{ width: '11%' }}>关联任务</th>
-                <th className="text-center px-2 py-2.5 font-medium text-gray-600 text-xs rounded-tr-xl" style={{ width: '13%' }}>操作</th>
+                <th className="text-center px-4 py-2.5 font-medium text-muted-foreground text-xs" style={{ width: '9%' }}>流水线类型</th>
+                <th className="text-center px-4 py-2.5 font-medium text-muted-foreground text-xs" style={{ width: '9%' }}>发布状态</th>
+                <th className="text-center px-4 py-2.5 font-medium text-muted-foreground text-xs" style={{ width: '10%' }}>启用状态</th>
+                <th className="text-center px-4 py-2.5 font-medium text-muted-foreground text-xs" style={{ width: '14%' }}>最近执行结果</th>
+                <th className="text-center px-4 py-2.5 font-medium text-muted-foreground text-xs" style={{ width: '11%' }}>产物</th>
+                <th className="text-center px-4 py-2.5 font-medium text-muted-foreground text-xs" style={{ width: '11%' }}>关联任务</th>
+                <th className="text-center px-2 py-2.5 font-medium text-muted-foreground text-xs rounded-tr-xl" style={{ width: '13%' }}>操作</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -458,27 +472,27 @@ export default function PipelineListPage() {
                 return (
                   <tr
                     key={pl.id}
-                    className={`align-middle transition-colors hover:bg-slate-50/80 ${enabled ? '' : 'bg-slate-50/30'}`}
+                    className={`align-middle transition-colors hover:bg-muted ${enabled ? '' : 'bg-muted'}`}
                   >
                     <td className="px-4 py-3 align-middle">
-                      <p className="font-medium text-gray-900 truncate" title={pl.name}>{pl.name}</p>
-                      <p className="text-xs text-gray-400 truncate" title={pl.description || undefined}>
+                      <p className="font-medium text-foreground truncate" title={pl.name}>{pl.name}</p>
+                      <p className="text-xs text-[var(--color-text-tertiary)] truncate" title={pl.description || undefined}>
                         {pl.description || '暂未设置描述信息'}
                       </p>
                     </td>
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap">
                       {n8n ? (
-                        <span className="inline-flex w-[100px] justify-center whitespace-nowrap items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700"
+                        <span className="inline-flex w-[100px] justify-center whitespace-nowrap items-center gap-1 rounded-lg border border-brand-line bg-brand-soft px-2 py-1 text-[11px] font-medium text-brand-ink"
                           title="由数据管家托管的 n8n 流水线：编排在数据管家，发布在编辑向导，启用由本列表开关控制">
                           <Sparkles size={10} /> n8n 流水线
                         </span>
                       ) : python ? (
-                        <span className="inline-flex w-[100px] justify-center whitespace-nowrap items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700"
+                        <span className="inline-flex w-[100px] justify-center whitespace-nowrap items-center gap-1 rounded-lg border border-viz-indigo-soft bg-viz-indigo-soft px-2 py-1 text-[11px] font-medium text-viz-indigo"
                           title="Python 脚本流水线：在脚本编辑页编写取数脚本，输出 list[dict] 行数据入湖">
                           <FileCode2 size={10} /> Python 脚本
                         </span>
                       ) : (
-                        <span className="whitespace-nowrap inline-flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600"
+                        <span className="whitespace-nowrap inline-flex items-center gap-1 rounded border border-border bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
                           title="存量数据缺少可识别的引擎标记（engine 非 n8n/python），无编排入口">
                           <GitBranch size={10} /> 未知引擎
                         </span>
@@ -507,7 +521,7 @@ export default function PipelineListPage() {
                             description: enableLockReason,
                           })}
                         />
-                        <span className={`text-xs whitespace-nowrap ${enabled ? 'text-teal-700' : 'text-slate-400'}`}>
+                        <span className={`text-xs whitespace-nowrap ${enabled ? 'text-brand-ink' : 'text-[var(--color-text-tertiary)]'}`}>
                           {enabled ? '已启用' : '未启用'}
                         </span>
                       </div>
@@ -517,37 +531,37 @@ export default function PipelineListPage() {
                         <button
                           type="button"
                           onClick={() => setHistoryTarget(pl)}
-                          className="relative inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-teal-50 group/hist group/err"
+                          className="relative inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-brand-soft group/hist group/err"
                           title="点击查看历史执行记录"
                         >
                           <span className={`inline-flex items-center gap-1 text-xs ${runMeta.color}`}>
                             {runMeta.icon}{runMeta.label}
                           </span>
-                          <span className="text-xs text-gray-400 group-hover/hist:text-teal-700">{formatTime(pl.last_run_at)}</span>
+                          <span className="text-xs text-[var(--color-text-tertiary)] group-hover/hist:text-brand-ink">{formatTime(pl.last_run_at)}</span>
                           {runFailed && (
                             <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1.5 z-30 hidden group-hover/err:block w-80 text-left">
-                              <div className="bg-gray-900/95 text-white text-xs rounded-lg px-3 py-2.5 shadow-xl whitespace-normal break-all leading-relaxed">
+                              <div className="bg-accent text-[var(--color-text-inverse)] text-xs rounded-lg px-3 py-2.5 shadow-xl whitespace-normal break-all leading-relaxed">
                                 {pl.last_run_error}
                               </div>
                             </div>
                           )}
                         </button>
                       ) : (
-                        <span className="text-xs text-gray-300">从未运行</span>
+                        <span className="text-xs text-[var(--color-text-tertiary)]">从未运行</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       {curatedCount > 0 ? (
                         <ArtifactPreviewPopover pipeline={pl} />
                       ) : (
-                        <span className="text-xs text-gray-300">-</span>
+                        <span className="text-xs text-[var(--color-text-tertiary)]">-</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       {taskCount > 0 ? (
                         <TaskPreviewPopover pipeline={pl} />
                       ) : (
-                        <span className="text-xs text-gray-300">-</span>
+                        <span className="text-xs text-[var(--color-text-tertiary)]">-</span>
                       )}
                     </td>
                     <td className="px-2 py-3 text-center align-middle whitespace-nowrap" onClick={e => e.stopPropagation()}>
@@ -567,7 +581,7 @@ export default function PipelineListPage() {
                                 navigate(`/data/pipelines/script/${pl.id}`)
                               }
                             }}
-                            className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-gray-500 transition-colors hover:bg-gray-100 hover:text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
+                            className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             title={n8n ? '跳转 n8n 工作流' : '编辑 Python 脚本'}
                             aria-label={n8n ? '编排：跳转 n8n 工作流' : '脚本：编辑 Python 脚本'}
                           >
@@ -578,7 +592,7 @@ export default function PipelineListPage() {
                         <button
                           type="button"
                           onClick={() => setEditTarget(pl)}
-                          className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-gray-500 transition-colors hover:bg-gray-100 hover:text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
+                          className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           title={normStatus(pl.status) === 'published' ? '查看发布契约 / 编辑名称与描述' : '配置流水线：信息 / 执行预览 / 主键组 / 发布'}
                           aria-label={normStatus(pl.status) === 'published' ? '编辑：查看发布契约 / 编辑名称与描述' : '编辑：配置流水线信息 / 执行预览 / 主键组 / 发布'}
                         >
@@ -588,7 +602,7 @@ export default function PipelineListPage() {
                         <button
                           type="button"
                           onClick={() => setPreviewTarget(pl)}
-                          className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-gray-500 transition-colors hover:bg-gray-100 hover:text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
+                          className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           title="试执行流水线并查看输出"
                           aria-label="试运行：试执行流水线并查看输出"
                         >
@@ -599,7 +613,7 @@ export default function PipelineListPage() {
                           <button
                             type="button"
                             onClick={() => setCloneTarget(pl)}
-                            className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-gray-500 transition-colors hover:bg-gray-100 hover:text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
+                            className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             title="克隆流水线结构为未发布草稿"
                             aria-label="克隆：复制流水线结构为未发布草稿"
                           >
@@ -610,7 +624,7 @@ export default function PipelineListPage() {
                         <button
                           type="button"
                           onClick={() => setDeleteTarget(pl)}
-                          className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
+                          className="flex w-[34px] flex-col items-center gap-0.5 rounded py-1 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-danger-bg)] hover:text-[var(--color-danger)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           title="归档流水线"
                           aria-label="归档流水线"
                         >
@@ -624,26 +638,24 @@ export default function PipelineListPage() {
               })}
             </tbody>
           </table>
-          <div className="flex items-center justify-end gap-3 border-t border-slate-100 bg-slate-50/50 px-4 py-2.5">
-            <label className="flex items-center gap-1.5 text-xs text-slate-500">
+          <div className="flex items-center justify-end gap-3 border-t border-border bg-muted px-4 py-2.5">
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
               每页
-              <select
+              <PageSizeSelect
                 value={pageSize}
-                onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}
-                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
-                aria-label="每页显示条数"
-              >
-                {[10, 20, 50].map(size => <option key={size} value={size}>{size}</option>)}
-              </select>
+                onChange={size => { setPageSize(size); setPage(1) }}
+                sizes={[10, 20, 50]}
+                ariaLabel="每页显示条数"
+              />
               条
             </label>
-            <span className="min-w-20 text-center text-xs tabular-nums text-slate-500">第 {page} / {totalPages} 页</span>
+            <span className="min-w-20 text-center text-xs tabular-nums text-muted-foreground">第 {page} / {totalPages} 页</span>
             <div className="flex items-center gap-1">
               <button
                 type="button"
                 onClick={() => setPage(current => Math.max(1, current - 1))}
                 disabled={page <= 1}
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-35"
                 aria-label="上一页"
               >
                 <ChevronLeft size={14} />
@@ -652,7 +664,7 @@ export default function PipelineListPage() {
                 type="button"
                 onClick={() => setPage(current => Math.min(totalPages, current + 1))}
                 disabled={page >= totalPages}
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:border-brand-line hover:bg-brand-soft hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-35"
                 aria-label="下一页"
               >
                 <ChevronRight size={14} />
@@ -806,18 +818,18 @@ function PipelineCreateModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]" onClick={onClose}>
-      <div className="w-[500px] max-w-full rounded-2xl border border-white/70 bg-white p-6 shadow-[0_28px_90px_rgba(15,23,42,0.24)]" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-accent p-4 backdrop-blur-[2px]" onClick={onClose}>
+      <div className="w-[500px] max-w-full rounded-2xl border border-border bg-card p-6 shadow-[0_28px_90px_rgba(15,23,42,0.24)]" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-4">
           <h3 className="font-semibold">{isEdit ? '编辑数据流水线' : '新建数据流水线'}</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-black">
+          <button onClick={onClose} className="text-[var(--color-text-tertiary)] hover:text-foreground">
             <X size={16} />
           </button>
         </div>
         <div className="space-y-3">
           {!isEdit && (
             <div>
-              <label className="block text-xs text-gray-500 mb-1.5">创建方式 *</label>
+              <label className="block text-xs text-muted-foreground mb-1.5">创建方式 *</label>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
@@ -825,30 +837,30 @@ function PipelineCreateModal({
                   disabled={!n8nReady}
                   className={`text-left p-3 rounded-lg border-2 transition-all ${
                     mode === 'n8n'
-                      ? 'border-teal-400 bg-teal-50/60'
+                      ? 'border-brand bg-brand-soft'
                       : !n8nReady
-                        ? 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-55'
-                        : 'border-gray-200 hover:border-gray-300'}`}
+                        ? 'cursor-not-allowed border-border bg-muted opacity-55'
+                        : 'border-border hover:border-border'}`}
                 >
-                  <div className={`text-sm font-medium flex items-center gap-1.5 ${mode === 'n8n' ? 'text-teal-700' : 'text-gray-900'}`}>
+                  <div className={`text-sm font-medium flex items-center gap-1.5 ${mode === 'n8n' ? 'text-brand-ink' : 'text-foreground'}`}>
                     <Sparkles size={13} /> n8n 流水线
                   </div>
-                  <div className="text-xs text-gray-500 mt-0.5">后台自动在 n8n 创建骨架工作流并加入列表；点击流水线可到数据管家用 AI 完善编排</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">后台自动在 n8n 创建骨架工作流并加入列表；点击流水线可到数据管家用 AI 完善编排</div>
                 </button>
                 <button
                   type="button"
                   onClick={() => setMode('python')}
                   className={`text-left p-3 rounded-lg border-2 transition-all ${
-                    mode === 'python' ? 'border-indigo-400 bg-indigo-50/50' : 'border-gray-200 hover:border-gray-300'}`}
+                    mode === 'python' ? 'border-viz-indigo bg-viz-indigo-soft' : 'border-border hover:border-border'}`}
                 >
-                  <div className={`text-sm font-medium flex items-center gap-1.5 ${mode === 'python' ? 'text-indigo-700' : 'text-gray-900'}`}>
+                  <div className={`text-sm font-medium flex items-center gap-1.5 ${mode === 'python' ? 'text-viz-indigo' : 'text-foreground'}`}>
                     <FileCode2 size={13} /> Python 脚本
                   </div>
-                  <div className="text-xs text-gray-500 mt-0.5">自行编写 Python 脚本取数（HTTP 请求等），输出行数据写入资产湖</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">自行编写 Python 脚本取数（HTTP 请求等），输出行数据写入资产湖</div>
                 </button>
               </div>
               {!n8nReady && (
-                <div className="mt-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <div className="mt-2 flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-3 py-2 text-xs text-[var(--color-warning)]">
                   <AlertCircle size={13} className="shrink-0" />
                   <span className="flex-1">
                     {!n8nStatus
@@ -864,28 +876,28 @@ function PipelineCreateModal({
             </div>
           )}
           <div>
-            <label className="block text-xs text-gray-500 mb-1">流水线名称 *</label>
+            <label className="block text-xs text-muted-foreground mb-1">流水线名称 *</label>
             <input
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200 focus:outline-none transition-colors"
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:border-[var(--color-success)] focus:ring-1 focus:ring-[var(--color-success)] focus:outline-none transition-colors"
               placeholder="例：供应链数据清洗"
               autoFocus
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">流水线描述</label>
+            <label className="block text-xs text-muted-foreground mb-1">流水线描述</label>
             <textarea
               value={description}
               onChange={e => setDescription(e.target.value)}
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:border-emerald-400 focus:ring-1 focus:ring-emerald-200 focus:outline-none transition-colors"
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:border-[var(--color-success)] focus:ring-1 focus:ring-[var(--color-success)] focus:outline-none transition-colors"
               rows={3}
               placeholder="流水线用途说明"
             />
           </div>
         </div>
         <div className="flex items-center justify-between mt-4">
-          <p className="text-xs text-gray-400 max-w-[60%] leading-relaxed">
+          <p className="text-xs text-[var(--color-text-tertiary)] max-w-[60%] leading-relaxed">
             {isEdit
               ? '名称和描述始终可修改；发布后仅编排与字段契约封版。'
               : n8nReady
@@ -893,13 +905,13 @@ function PipelineCreateModal({
                 : 'n8n 当前不可用；可创建 Python 脚本流水线，或检查启动配置与服务连通性后再创建 n8n 流水线。'}
           </p>
           <div className="flex gap-3 shrink-0">
-            <button onClick={onClose} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">
+            <button onClick={onClose} className="px-4 py-2 border rounded-lg text-sm hover:bg-muted">
               取消
             </button>
             <button
               onClick={handleSubmit}
               disabled={saving}
-              className="flex items-center gap-1.5 px-4 py-2 bg-[var(--color-nav-bg)] text-white rounded-lg text-sm disabled:opacity-50 hover:opacity-90 transition-opacity"
+              className="flex items-center gap-1.5 px-4 py-2 bg-[var(--color-nav-bg)] text-[var(--color-text-inverse)] rounded-lg text-sm disabled:opacity-50 hover:opacity-90 transition-opacity"
             >
               {saving && <Loader2 size={13} className="animate-spin" />}
               {saving ? (isEdit ? '保存中...' : '创建中...') : (isEdit ? '保存' : '创建')}

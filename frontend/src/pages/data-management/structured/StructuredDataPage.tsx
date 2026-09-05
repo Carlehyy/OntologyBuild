@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { PageSizeSelect } from './PageSizeSelect'
+import { PageSizeSelect } from '@/components/PageSizeSelect'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   CheckCircle, AlertTriangle, Clock,

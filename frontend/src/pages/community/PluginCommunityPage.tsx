@@ -277,7 +277,7 @@ function ExportToolsDialog({ server, onClose, onDone }: { server: SuperMcpServer
           </div>
           <div className="flex gap-3">
             <button type="button" onClick={onClose} disabled={busy} className="min-h-10 min-w-24 rounded-xl border border-border bg-card px-4 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">取消</button>
-            <button type="button" onClick={() => void submit()} disabled={busy || !selected.size} className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-xl bg-brand px-4 text-xs font-medium text-white transition-colors hover:bg-brand-deep focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-45">
+            <button type="button" onClick={() => void submit()} disabled={busy || !selected.size} className="inline-flex min-h-10 min-w-24 items-center justify-center gap-2 rounded-xl bg-brand px-4 text-xs font-medium text-[var(--color-text-inverse)] transition-colors hover:bg-brand-deep focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-45">
               {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} 生成接口
             </button>
           </div>
@@ -315,7 +315,7 @@ function EmptyGuide({ onAdd }: { onAdd: () => void }) {
       <button
         type="button"
         onClick={onAdd}
-        className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand px-5 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-brand-deep active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand px-5 text-sm font-medium text-[var(--color-text-inverse)] shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-brand-deep active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       >
         <Plus size={15} /> 添加第一个 MCP
       </button>
@@ -504,7 +504,7 @@ export default function PluginCommunityPage() {
         <button
           type="button"
           onClick={() => setEditing('new')}
-          className="inline-flex h-[38px] shrink-0 items-center gap-1.5 rounded-xl bg-brand px-3.5 text-sm font-medium text-white transition-all duration-200 hover:-translate-y-px hover:bg-brand-deep active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          className="inline-flex h-[38px] shrink-0 items-center gap-1.5 rounded-xl bg-brand px-3.5 text-sm font-medium text-[var(--color-text-inverse)] transition-all duration-200 hover:-translate-y-px hover:bg-brand-deep active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           <Plus size={15} /> 添加 MCP
         </button>

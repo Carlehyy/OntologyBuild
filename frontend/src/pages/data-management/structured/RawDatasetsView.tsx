@@ -11,7 +11,7 @@ import DatasetEditorModal from './DatasetEditorModal'
 import CreateTableModal from './CreateTableModal'
 import manualSharingApi from '@/api/v2/manual-sharing'
 import { ManualApprovalModal, ManualShareModal } from './ManualDatasetSharingModals'
-import { PageSizeSelect } from './PageSizeSelect'
+import { PageSizeSelect } from '@/components/PageSizeSelect'
 
 const PIPELINE_STATUS_LABEL: Record<string, string> = {
   draft: '草稿', editing: '编辑中', running: '运行中', failed: '失败', published: '已发布',

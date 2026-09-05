@@ -9,7 +9,7 @@ import datasetsApi, {
   type DatasetSchemaColumn,
 } from '@/api/v2/datasets'
 import ConfirmDialog from '@/components/ConfirmDialog'
-import { PageSizeSelect } from './PageSizeSelect'
+import { PageSizeSelect } from '@/components/PageSizeSelect'
 
 const PAGE_SIZES = [20, 50, 100, 200, 500, 1000] as const
 const DEFAULT_PAGE_SIZE = 50

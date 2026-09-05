@@ -449,14 +449,14 @@ export default function PythonScriptPage() {
   }
 
   if (loading) {
-    return <div className="p-8 text-center text-sm text-gray-400">加载中...</div>
+    return <div className="p-8 text-center text-sm text-[var(--color-text-tertiary)]">加载中...</div>
   }
   if (loadError || !pipeline) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 p-16 text-center">
-        <AlertTriangle size={28} className="text-amber-500" />
-        <p className="text-sm text-gray-600">{loadError || '流水线不存在'}</p>
-        <button onClick={() => navigate('/data/pipelines')} className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50">
+        <AlertTriangle size={28} className="text-[var(--color-warning)]" />
+        <p className="text-sm text-muted-foreground">{loadError || '流水线不存在'}</p>
+        <button onClick={() => navigate('/data/pipelines')} className="rounded-lg border px-4 py-2 text-sm hover:bg-muted">
           返回数据流水线
         </button>
       </div>
@@ -465,9 +465,9 @@ export default function PythonScriptPage() {
   if (wrongEngine) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 p-16 text-center">
-        <FileCode2 size={28} className="text-gray-400" />
-        <p className="text-sm text-gray-600">「{pipeline.name}」不是 Python 脚本流水线。</p>
-        <button onClick={() => navigate('/data/pipelines')} className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50">
+        <FileCode2 size={28} className="text-[var(--color-text-tertiary)]" />
+        <p className="text-sm text-muted-foreground">「{pipeline.name}」不是 Python 脚本流水线。</p>
+        <button onClick={() => navigate('/data/pipelines')} className="rounded-lg border px-4 py-2 text-sm hover:bg-muted">
           返回数据流水线
         </button>
       </div>
@@ -483,27 +483,27 @@ export default function PythonScriptPage() {
         style={{ gridTemplateColumns: `minmax(460px, ${splitPct}fr) 10px minmax(400px, ${100 - splitPct}fr)` }}
       >
         {/* 左：脚本工作台（顶部描述信息 / 中部编辑器 / 底部操作栏） */}
-        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-card shadow-sm">
           {/* 面板头：当前脚本描述信息 */}
-          <div className="flex h-14 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-600">
+          <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-4">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-viz-indigo-soft text-viz-indigo">
               <FileCode2 size={16} />
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <h3 className="truncate text-sm font-semibold text-gray-900">{pipeline.name}</h3>
-                <span className="inline-flex shrink-0 items-center rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">
+                <h3 className="truncate text-sm font-semibold text-foreground">{pipeline.name}</h3>
+                <span className="inline-flex shrink-0 items-center rounded border border-viz-indigo-soft bg-viz-indigo-soft px-1.5 py-0.5 text-[10px] font-medium text-viz-indigo">
                   Python 脚本
                 </span>
                 <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] ${
                   isPublished
-                    ? 'border-teal-200 bg-teal-50 text-teal-700'
-                    : 'border-slate-200 bg-slate-100 text-slate-600'}`}
+                    ? 'border-brand-line bg-brand-soft text-brand-ink'
+                    : 'border-border bg-muted text-muted-foreground'}`}
                 >
                   {isPublished ? '已发布' : '未发布'}
                 </span>
               </div>
-              <p className="truncate text-[11px] text-gray-400">
+              <p className="truncate text-[11px] text-[var(--color-text-tertiary)]">
                 {pipeline.description || 'Python 脚本流水线'}
                 {isPublished && ' · 脚本已封版，只读'}
               </p>
@@ -512,7 +512,7 @@ export default function PythonScriptPage() {
               {!isPublished && (
                 <button
                   onClick={() => setShowWizard(true)}
-                  className="flex h-8 items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2.5 text-xs font-medium text-teal-700 transition hover:border-teal-300 hover:bg-teal-100"
+                  className="flex h-8 items-center gap-1 rounded-md border border-brand-line bg-brand-soft px-2.5 text-xs font-medium text-brand-ink transition hover:border-brand-line hover:bg-brand-soft"
                   title="打开编辑向导：执行预览 → 设置字段契约 → 发布"
                 >
                   <Rocket size={13} /> 发布向导
@@ -523,8 +523,8 @@ export default function PythonScriptPage() {
                   onClick={() => setShowHelp(v => !v)}
                   className={`flex h-8 w-8 items-center justify-center rounded-md border transition ${
                     showHelp
-                      ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
-                      : 'border-slate-200 text-gray-400 hover:bg-gray-50 hover:text-gray-600'}`}
+                      ? 'border-viz-indigo-soft bg-viz-indigo-soft text-viz-indigo'
+                      : 'border-border text-[var(--color-text-tertiary)] hover:bg-muted hover:text-muted-foreground'}`}
                   title="输出约定、执行环境与平台限制"
                 >
                   <HelpCircle size={15} />
@@ -532,14 +532,14 @@ export default function PythonScriptPage() {
                 {showHelp && (
                   <>
                     <div className="fixed inset-0 z-10" onClick={() => setShowHelp(false)} />
-                    <div className="absolute right-0 z-20 mt-1.5 w-80 rounded-xl border border-slate-200 bg-white p-4 text-xs leading-5 text-gray-600 shadow-xl">
-                      <h4 className="mb-2 text-sm font-semibold text-gray-900">输出约定与执行环境</h4>
+                    <div className="absolute right-0 z-20 mt-1.5 w-80 rounded-xl border border-border bg-card p-4 text-xs leading-5 text-muted-foreground shadow-xl">
+                      <h4 className="mb-2 text-sm font-semibold text-foreground">输出约定与执行环境</h4>
                       <ul className="list-disc space-y-1.5 pl-4">
-                        <li>最终结果赋值给 <code className="rounded bg-slate-100 px-1 font-mono">result</code>，类型 list[dict]：每行一个 {'{列名: 值}'} 对象；pandas DataFrame 可直接赋值。</li>
+                        <li>最终结果赋值给 <code className="rounded bg-muted px-1 font-mono">result</code>，类型 list[dict]：每行一个 {'{列名: 值}'} 对象；pandas DataFrame 可直接赋值。</li>
                         <li>执行不落库；「保存」时平台重新执行并复验输出格式，通过才写入。</li>
                         <li>执行环境自带 requests / httpx / pandas / pymysql / openpyxl 等依赖。</li>
                         <li>单次输出上限 50,000 行{timeoutLimit ? `；执行时限 ${timeoutLimit} 秒` : ''}，超限执行会失败。</li>
-                        <li>任务池声明增量游标后，脚本上下文注入 <code className="rounded bg-slate-100 px-1 font-mono">OB_RUN_PARAMS</code>（含 cursor_column / cursor_since / full_refresh），脚本可据此只拉取新数据。</li>
+                        <li>任务池声明增量游标后，脚本上下文注入 <code className="rounded bg-muted px-1 font-mono">OB_RUN_PARAMS</code>（含 cursor_column / cursor_since / full_refresh），脚本可据此只拉取新数据。</li>
                         <li>流水线发布后脚本封版只读；变更需新建流水线。</li>
                       </ul>
                     </div>
@@ -548,7 +548,7 @@ export default function PythonScriptPage() {
               </div>
               <button
                 onClick={() => navigate('/data/pipelines')}
-                className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-gray-400 transition hover:bg-gray-50 hover:text-gray-600"
+                className="flex h-8 w-8 items-center justify-center rounded-md border border-border text-[var(--color-text-tertiary)] transition hover:bg-muted hover:text-muted-foreground"
                 title="返回数据流水线"
               >
                 <ArrowLeft size={15} />
@@ -557,16 +557,16 @@ export default function PythonScriptPage() {
           </div>
 
           {isPublished && (
-            <div className="flex shrink-0 items-center gap-2 border-b border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+            <div className="flex shrink-0 items-center gap-2 border-b border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-4 py-2 text-xs text-[var(--color-warning)]">
               <AlertTriangle size={13} className="shrink-0" />
               流水线已发布，脚本已封版只读；仍可执行脚本核对输出。如需变更，请新建流水线。
             </div>
           )}
           {!isPublished && draftRestoredAt && (
-            <div className="flex shrink-0 items-center gap-2 border-b border-sky-100 bg-sky-50 px-4 py-2 text-xs text-sky-800">
+            <div className="flex shrink-0 items-center gap-2 border-b border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] px-4 py-2 text-xs text-[var(--color-info)]">
               <FileCode2 size={13} className="shrink-0" />
               <span className="flex-1">已恢复你上次未保存的编辑草稿（{formatClock(draftRestoredAt)}）。</span>
-              <button onClick={handleDiscardDraft} className="shrink-0 rounded border border-sky-300 bg-white px-2 py-0.5 font-medium hover:bg-sky-100">
+              <button onClick={handleDiscardDraft} className="shrink-0 rounded border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-card px-2 py-0.5 font-medium hover:bg-[var(--color-info-bg)]">
                 放弃草稿
               </button>
             </div>
@@ -602,11 +602,11 @@ export default function PythonScriptPage() {
           </div>
 
           {/* 底部操作栏 */}
-          <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-slate-200 bg-white px-4 py-2.5">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border bg-card px-4 py-2.5">
             {executing ? (
               <button
                 onClick={handleCancel}
-                className="flex items-center gap-1.5 rounded-xl border border-red-300 bg-red-50 px-3.5 py-1.5 text-sm font-medium text-red-600 transition hover:bg-red-100"
+                className="flex items-center gap-1.5 rounded-xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-3.5 py-1.5 text-sm font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-danger-bg)]"
                 title="取消本次执行（内核侧将终止）"
               >
                 <Square size={13} /> 取消
@@ -615,7 +615,7 @@ export default function PythonScriptPage() {
               <button
                 onClick={handleExecute}
                 disabled={saving}
-                className="flex items-center gap-1.5 rounded-xl bg-teal-700 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-teal-800 active:translate-y-px disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-xl bg-brand-deep px-4 py-1.5 text-sm font-medium text-[var(--color-text-inverse)] transition hover:bg-brand-deep active:translate-y-px disabled:opacity-50"
                 title="在内核中真实执行编辑器当前内容（⌘/Ctrl+Enter）"
               >
                 <Play size={14} /> 执行
@@ -627,7 +627,7 @@ export default function PythonScriptPage() {
                   onClick={handleSave}
                   disabled={!canSave}
                   title={canSave ? '保存脚本（⌘/Ctrl+S；平台会重新执行并复验输出格式）' : '保存前请先通过上方三项检查'}
-                  className="flex items-center gap-1.5 rounded-xl border border-teal-700 px-4 py-1.5 text-sm font-medium text-teal-700 transition hover:bg-teal-50 active:translate-y-px disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400"
+                  className="flex items-center gap-1.5 rounded-xl border border-brand px-4 py-1.5 text-sm font-medium text-brand-ink transition hover:bg-brand-soft active:translate-y-px disabled:cursor-not-allowed disabled:border-border disabled:text-[var(--color-text-tertiary)]"
                 >
                   {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                   {saving ? '校验并保存中...' : '保存'}
@@ -636,7 +636,7 @@ export default function PythonScriptPage() {
                   <button
                     onClick={() => setConfirm({ kind: 'revert' })}
                     disabled={executing || saving}
-                    className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
+                    className="flex items-center gap-1.5 rounded-xl border border-border px-3 py-1.5 text-sm text-muted-foreground transition hover:bg-muted disabled:opacity-50"
                     title="放弃当前修改，回退到最近一次保存的脚本"
                   >
                     <RotateCcw size={13} /> 放弃修改
@@ -645,7 +645,7 @@ export default function PythonScriptPage() {
                 <button
                   onClick={handleFormat}
                   disabled={executing || saving}
-                  className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
+                  className="flex items-center gap-1.5 rounded-xl border border-border px-3 py-1.5 text-sm text-muted-foreground transition hover:bg-muted disabled:opacity-50"
                   title="一键格式化：语法感知自动缩进 + 整理空白（Tab→空格、行尾空白、多余空行）"
                 >
                   <Wand2 size={13} /> 格式化
@@ -655,7 +655,7 @@ export default function PythonScriptPage() {
             <button
               onClick={openVersions}
               disabled={executing || saving}
-              className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
+              className="flex items-center gap-1.5 rounded-xl border border-border px-3 py-1.5 text-sm text-muted-foreground transition hover:bg-muted disabled:opacity-50"
               title="查看脚本的保存历史，可查看或恢复任一版本"
             >
               <History size={13} /> 历史版本
@@ -663,22 +663,22 @@ export default function PythonScriptPage() {
             <button
               onClick={handleExport}
               disabled={executing || saving}
-              className="flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
+              className="flex items-center gap-1.5 rounded-xl border border-border px-3 py-1.5 text-sm text-muted-foreground transition hover:bg-muted disabled:opacity-50"
               title="导出当前脚本为 .py 文件（文件名含时间戳，便于归档）"
             >
               <Download size={13} /> 导出脚本
             </button>
-            <span className="text-[11px] text-gray-400">
+            <span className="text-[11px] text-[var(--color-text-tertiary)]">
               {dirty
-                ? <span className="flex items-center gap-1 text-amber-600"><span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />有未保存修改 · 草稿已自动缓存</span>
+                ? <span className="flex items-center gap-1 text-[var(--color-warning)]"><span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-warning)]" />有未保存修改 · 草稿已自动缓存</span>
                 : savedScript
                   ? `最近保存时间 · ${formatClock(pipeline.updated_at ?? undefined)}`
                   : '尚未保存'}
             </span>
-            <span className="ml-auto hidden items-center gap-2 text-[11px] text-gray-400 lg:flex">
+            <span className="ml-auto hidden items-center gap-2 text-[11px] text-[var(--color-text-tertiary)] lg:flex">
               <Keyboard size={12} />
-              <span><kbd className="rounded border border-slate-200 bg-slate-50 px-1 font-mono">⌘/Ctrl+Enter</kbd> 执行</span>
-              <span><kbd className="rounded border border-slate-200 bg-slate-50 px-1 font-mono">⌘/Ctrl+S</kbd> 保存</span>
+              <span><kbd className="rounded border border-border bg-muted px-1 font-mono">⌘/Ctrl+Enter</kbd> 执行</span>
+              <span><kbd className="rounded border border-border bg-muted px-1 font-mono">⌘/Ctrl+S</kbd> 保存</span>
               <span className="font-mono">{script.split('\n').length} 行</span>
             </span>
           </div>
@@ -692,26 +692,26 @@ export default function PythonScriptPage() {
           onPointerDown={onSplitDragStart}
           className="group flex h-full cursor-col-resize items-center justify-center"
         >
-          <div className="h-16 w-1 rounded-full bg-slate-200 transition group-hover:bg-teal-500 group-active:bg-teal-600" />
+          <div className="h-16 w-1 rounded-full bg-[var(--color-bg-active)] transition group-hover:bg-brand group-active:bg-brand" />
         </div>
 
         {/* 右：脚本输出面板 */}
-        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="flex h-14 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-teal-50 text-teal-600">
+        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+          <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-4">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand-soft text-brand-ink">
               <Terminal size={16} />
             </div>
             <div className="min-w-0 flex-1">
-              <h3 className="truncate text-sm font-semibold text-gray-900">脚本输出</h3>
-              <p className="truncate text-[11px] text-gray-400">执行结果、格式校验与数据样本</p>
+              <h3 className="truncate text-sm font-semibold text-foreground">脚本输出</h3>
+              <p className="truncate text-[11px] text-[var(--color-text-tertiary)]">执行结果、格式校验与数据样本</p>
             </div>
             {executing && (
-              <span className="shrink-0 font-mono text-[11px] tabular-nums text-gray-400">
+              <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
                 已执行 {elapsedSec}s{timeoutLimit ? ` / ${timeoutLimit}s` : ''}
               </span>
             )}
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/40 p-3">
+          <div className="min-h-0 flex-1 overflow-y-auto bg-muted p-3">
             <ResultPanel
               result={result}
               resultKind={resultKind}
@@ -791,19 +791,19 @@ export default function PythonScriptPage() {
 
 function CheckItem({ label, tone }: { label: string; tone: 'pass' | 'fail' | 'warn' | 'idle' }) {
   const icon = tone === 'pass'
-    ? <CheckCircle2 size={12} className="text-teal-600" />
+    ? <CheckCircle2 size={12} className="text-brand-ink" />
     : tone === 'fail'
-      ? <XCircle size={12} className="text-red-500" />
+      ? <XCircle size={12} className="text-[var(--color-danger)]" />
       : tone === 'warn'
-        ? <AlertTriangle size={12} className="text-amber-500" />
+        ? <AlertTriangle size={12} className="text-[var(--color-warning)]" />
         : <Circle size={12} />
   const color = tone === 'pass'
-    ? 'text-teal-700'
+    ? 'text-brand-ink'
     : tone === 'fail'
-      ? 'text-red-600'
+      ? 'text-[var(--color-danger)]'
       : tone === 'warn'
-        ? 'text-amber-600'
-        : 'text-gray-400'
+        ? 'text-[var(--color-warning)]'
+        : 'text-[var(--color-text-tertiary)]'
   return (
     <span className={`inline-flex items-center gap-1 text-[11px] ${color}`}>
       {icon}
@@ -840,49 +840,49 @@ function VersionsDrawer({
         </SheetHeader>
         <div className="flex-1 overflow-y-auto p-4">
           {loading ? (
-            <div className="flex items-center justify-center gap-2 py-16 text-sm text-gray-400">
+            <div className="flex items-center justify-center gap-2 py-16 text-sm text-[var(--color-text-tertiary)]">
               <Loader2 size={15} className="animate-spin" /> 加载中...
             </div>
           ) : !versions || versions.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-16 text-center">
-              <History size={26} className="text-slate-300" />
-              <p className="text-sm text-gray-500">还没有保存历史</p>
-              <p className="text-xs text-gray-400">第一次保存脚本后会在这里生成版本记录</p>
+              <History size={26} className="text-[var(--color-text-tertiary)]" />
+              <p className="text-sm text-muted-foreground">还没有保存历史</p>
+              <p className="text-xs text-[var(--color-text-tertiary)]">第一次保存脚本后会在这里生成版本记录</p>
             </div>
           ) : (
             <div className="space-y-2">
               {versions.map((version, index) => (
-                <div key={version.id} className="rounded-xl border border-slate-200 bg-white">
+                <div key={version.id} className="rounded-xl border border-border bg-card">
                   <div className="flex items-center gap-2 px-3.5 py-2.5">
                     <span className={`inline-flex h-6 min-w-10 items-center justify-center rounded-lg px-2 font-mono text-xs font-semibold ${
-                      index === 0 ? 'bg-teal-50 text-teal-700' : 'bg-slate-100 text-slate-600'}`}
+                      index === 0 ? 'bg-brand-soft text-brand-ink' : 'bg-muted text-muted-foreground'}`}
                     >
                       v{version.version_no}
                     </span>
                     {index === 0 && (
-                      <span className="rounded border border-teal-200 bg-teal-50 px-1.5 py-0.5 text-[10px] font-medium text-teal-700">当前</span>
+                      <span className="rounded border border-brand-line bg-brand-soft px-1.5 py-0.5 text-[10px] font-medium text-brand-ink">当前</span>
                     )}
-                    <span className="text-xs text-gray-500">{formatDateTime(version.created_at)}</span>
-                    <span className="ml-auto text-[11px] text-gray-400">
+                    <span className="text-xs text-muted-foreground">{formatDateTime(version.created_at)}</span>
+                    <span className="ml-auto text-[11px] text-[var(--color-text-tertiary)]">
                       {version.row_count.toLocaleString()} 行 · {version.output_columns.length} 列 · {(version.duration_ms / 1000).toFixed(1)}s
                     </span>
                     <button
                       onClick={() => setExpandedId(expandedId === version.id ? null : version.id)}
-                      className="rounded-lg border border-slate-200 px-2 py-1 text-[11px] text-gray-600 transition hover:bg-gray-50"
+                      className="rounded-lg border border-border px-2 py-1 text-[11px] text-muted-foreground transition hover:bg-muted"
                     >
                       {expandedId === version.id ? '收起' : '查看'}
                     </button>
                     {!readOnly && (
                       <button
                         onClick={() => onRestore(version)}
-                        className="rounded-lg border border-indigo-200 bg-indigo-50/60 px-2 py-1 text-[11px] font-medium text-indigo-700 transition hover:bg-indigo-100"
+                        className="rounded-lg border border-viz-indigo-soft bg-viz-indigo-soft px-2 py-1 text-[11px] font-medium text-viz-indigo transition hover:bg-viz-indigo-soft"
                       >
                         恢复到编辑器
                       </button>
                     )}
                   </div>
                   {expandedId === version.id && (
-                    <pre className="max-h-72 overflow-auto border-t border-slate-100 bg-slate-50 p-3.5 font-mono text-[11px] leading-5 text-slate-700">{version.script}</pre>
+                    <pre className="max-h-72 overflow-auto border-t border-border bg-muted p-3.5 font-mono text-[11px] leading-5 text-foreground">{version.script}</pre>
                   )}
                 </div>
               ))}
@@ -931,19 +931,19 @@ function ResultPanel({
 }) {
   if (executing || saving) {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white p-10 text-sm text-gray-500">
+      <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-border bg-card p-10 text-sm text-muted-foreground">
         <div className="flex items-center gap-3">
-          <Loader2 size={16} className="animate-spin text-teal-700" />
+          <Loader2 size={16} className="animate-spin text-brand-ink" />
           {executing ? '正在内核中执行脚本，请稍候…' : '正在重新执行并校验输出格式…'}
         </div>
         {executing && (
-          <div className="flex items-center gap-3 text-xs text-gray-400">
+          <div className="flex items-center gap-3 text-xs text-[var(--color-text-tertiary)]">
             <span className="font-mono tabular-nums">
               已执行 {elapsedSec}s{timeoutLimit ? ` / 上限 ${timeoutLimit}s` : ''}
             </span>
             <button
               onClick={onCancel}
-              className="flex items-center gap-1 rounded-lg border border-red-200 px-2 py-0.5 text-red-600 transition hover:bg-red-50"
+              className="flex items-center gap-1 rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] px-2 py-0.5 text-[var(--color-danger)] transition hover:bg-[var(--color-danger-bg)]"
             >
               <Square size={11} /> 取消
             </button>
@@ -976,24 +976,24 @@ function ResultPanel({
   return (
     <div className="space-y-3">
       {/* 1. 当前脚本校验结果 */}
-      <div className="space-y-2.5 rounded-xl border border-slate-200 bg-white p-4">
+      <div className="space-y-2.5 rounded-xl border border-border bg-card p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h4 className="text-xs font-semibold text-gray-700">当前脚本校验结果</h4>
+          <h4 className="text-xs font-semibold text-foreground">当前脚本校验结果</h4>
           {!result ? (
-            <span className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-gray-400">
+            <span className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted px-2.5 py-1 text-xs text-[var(--color-text-tertiary)]">
               <Circle size={12} /> 尚未执行
             </span>
           ) : success ? (
-            <span className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-700">
+            <span className="inline-flex items-center gap-1 rounded-lg border border-brand-line bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand-ink">
               <CheckCircle2 size={12} />
               {resultKind === 'save' ? '保存成功' : '执行成功'} · 输出格式校验通过
             </span>
           ) : result.ok ? (
-            <span className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
+            <span className="inline-flex items-center gap-1 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-2.5 py-1 text-xs font-medium text-[var(--color-warning)]">
               <AlertTriangle size={12} /> 执行成功，但输出格式不符合平台要求
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-600">
+            <span className="inline-flex items-center gap-1 rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-2.5 py-1 text-xs font-medium text-[var(--color-danger)]">
               <XCircle size={12} /> {resultKind === 'save' ? '保存失败' : '执行失败'}
             </span>
           )}
@@ -1004,18 +1004,18 @@ function ResultPanel({
           <CheckItem tone={formatTone} label="输出格式符合规范" />
         </div>
         {result?.error && (
-          <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">{result.error}</p>
+          <p className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-3 py-2 text-xs text-[var(--color-danger)]">{result.error}</p>
         )}
         {result?.traceback && (
-          <div className="overflow-hidden rounded-lg border border-red-100">
+          <div className="overflow-hidden rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)]">
             {tracebackLines.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5 border-b border-red-100 bg-red-50 px-3 py-2">
-                <span className="text-[11px] text-red-500">定位到编辑器：</span>
+              <div className="flex flex-wrap items-center gap-1.5 border-b border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-3 py-2">
+                <span className="text-[11px] text-[var(--color-danger)]">定位到编辑器：</span>
                 {tracebackLines.map(line => (
                   <button
                     key={line}
                     onClick={() => onJumpToLine(line)}
-                    className="rounded border border-red-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-red-600 transition hover:bg-red-100"
+                    className="rounded border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-card px-1.5 py-0.5 font-mono text-[11px] text-[var(--color-danger)] transition hover:bg-[var(--color-danger-bg)]"
                     title="跳转到脚本对应行"
                   >
                     第 {line} 行
@@ -1023,37 +1023,37 @@ function ResultPanel({
                 ))}
               </div>
             )}
-            <pre className="max-h-56 overflow-auto bg-red-50/60 p-3.5 font-mono text-[11px] leading-5 text-red-900">{result.traceback}</pre>
+            <pre className="max-h-56 overflow-auto bg-[var(--color-danger-bg)] p-3.5 font-mono text-[11px] leading-5 text-[var(--color-danger)]">{result.traceback}</pre>
           </div>
         )}
         {result?.format_error && (
-          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{result.format_error}</p>
+          <p className="rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-3 py-2 text-xs text-[var(--color-warning)]">{result.format_error}</p>
         )}
       </div>
 
       {/* 2. 下一步操作 */}
       {nextStep === 'publish' && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2.5">
-          <Rocket size={14} className="shrink-0 text-teal-700" />
-          <p className="flex-1 text-xs leading-5 text-teal-800">
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-brand-line bg-brand-soft px-3 py-2.5">
+          <Rocket size={14} className="shrink-0 text-brand-ink" />
+          <p className="flex-1 text-xs leading-5 text-brand-ink">
             脚本已保存。<span className="font-medium">下一步：完成执行预览与字段契约并发布</span>，流水线才能被任务池调度运行。
           </p>
           <button
             onClick={onOpenWizard}
-            className="rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-teal-800"
+            className="rounded-lg bg-brand-deep px-3 py-1.5 text-xs font-medium text-[var(--color-text-inverse)] transition hover:bg-brand-deep"
           >
             前往发布向导
           </button>
           <button
             onClick={onDismissNextSteps}
-            className="rounded-lg border border-teal-200 px-2 py-1.5 text-xs text-teal-700 transition hover:bg-teal-100"
+            className="rounded-lg border border-brand-line px-2 py-1.5 text-xs text-brand-ink transition hover:bg-brand-soft"
           >
             知道了
           </button>
         </div>
       )}
       {nextStep === 'save' && (
-        <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50/70 px-3 py-2.5 text-xs text-sky-800">
+        <div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] px-3 py-2.5 text-xs text-[var(--color-info)]">
           <Save size={13} className="shrink-0" />
           下一步：保存脚本（保存时平台会重新执行并复验输出格式），随后前往发布向导完成发布。
         </div>
@@ -1072,10 +1072,10 @@ function ResultPanel({
               sub: typeBreakdown,
             },
           ].map(item => (
-            <div key={item.label} className="rounded-xl border border-slate-100 bg-white px-3 py-2" title={item.sub || undefined}>
-              <div className="text-[11px] text-gray-400">{item.label}</div>
-              <div className="truncate font-mono text-lg font-semibold tabular-nums text-gray-800">{item.value}</div>
-              {item.sub && <div className="truncate text-[10px] text-gray-400">{item.sub}</div>}
+            <div key={item.label} className="rounded-xl border border-border bg-card px-3 py-2" title={item.sub || undefined}>
+              <div className="text-[11px] text-[var(--color-text-tertiary)]">{item.label}</div>
+              <div className="truncate font-mono text-lg font-semibold tabular-nums text-foreground">{item.value}</div>
+              {item.sub && <div className="truncate text-[10px] text-[var(--color-text-tertiary)]">{item.sub}</div>}
             </div>
           ))}
         </div>
@@ -1083,14 +1083,14 @@ function ResultPanel({
 
       {/* 4. 数据样本：表头带推断类型（与字段契约词表一致，为发布第 3 步预热） */}
       {result?.ok && result.sample.length > 0 && (
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <div className="overflow-x-auto rounded-xl border border-border bg-card">
           <table className="w-full text-xs">
-            <thead className="border-b border-slate-200 bg-slate-50">
+            <thead className="border-b border-border bg-muted">
               <tr>
                 {sampleColumns.map(col => (
-                  <th key={col} className="whitespace-nowrap px-3 py-2 text-left font-medium text-gray-600">
+                  <th key={col} className="whitespace-nowrap px-3 py-2 text-left font-medium text-muted-foreground">
                     <span className="font-mono">{col}</span>
-                    <span className="ml-1.5 rounded bg-slate-100 px-1 py-0.5 text-[10px] font-normal text-gray-400">
+                    <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] font-normal text-[var(--color-text-tertiary)]">
                       {TYPE_LABELS[(columnTypes[col] as keyof typeof TYPE_LABELS) ?? 'string']}
                     </span>
                   </th>
@@ -1099,9 +1099,9 @@ function ResultPanel({
             </thead>
             <tbody className="divide-y">
               {result.sample.slice(0, PREVIEW_ROWS).map((row, idx) => (
-                <tr key={idx} className="transition-colors hover:bg-slate-50/70">
+                <tr key={idx} className="transition-colors hover:bg-muted">
                   {sampleColumns.map(col => (
-                    <td key={col} className="max-w-[240px] truncate px-3 py-1.5 font-mono text-gray-700" title={cellText(row[col])}>
+                    <td key={col} className="max-w-[240px] truncate px-3 py-1.5 font-mono text-foreground" title={cellText(row[col])}>
                       {cellText(row[col])}
                     </td>
                   ))}
@@ -1110,7 +1110,7 @@ function ResultPanel({
             </tbody>
           </table>
           {result.row_count > PREVIEW_ROWS && (
-            <p className="border-t border-slate-100 px-3 py-1.5 text-[11px] text-gray-400">
+            <p className="border-t border-border px-3 py-1.5 text-[11px] text-[var(--color-text-tertiary)]">
               仅展示前 {PREVIEW_ROWS} 行样本，共 {result.row_count.toLocaleString()} 行
             </p>
           )}
@@ -1118,24 +1118,24 @@ function ResultPanel({
       )}
 
       {result?.ok && result.row_count === 0 && (
-        <p className="text-xs text-gray-400">脚本输出 0 行。</p>
+        <p className="text-xs text-[var(--color-text-tertiary)]">脚本输出 0 行。</p>
       )}
 
       {/* 5. 脚本打印输出：默认折叠，展开可见全部内容 */}
       {result?.stdout && (
-        <details className="rounded-xl border border-slate-200 bg-white">
-          <summary className="flex cursor-pointer items-center gap-1.5 px-3 py-2 text-xs text-gray-500 transition hover:text-black">
+        <details className="rounded-xl border border-border bg-card">
+          <summary className="flex cursor-pointer items-center gap-1.5 px-3 py-2 text-xs text-muted-foreground transition hover:text-foreground">
             <Terminal size={12} /> 脚本打印输出（stdout，{result.stdout.split('\n').length} 行）
           </summary>
-          <pre className="max-h-72 overflow-auto border-t border-slate-200 bg-slate-50 p-3.5 font-mono text-[11px] leading-5 text-slate-700">{result.stdout}</pre>
+          <pre className="max-h-72 overflow-auto border-t border-border bg-muted p-3.5 font-mono text-[11px] leading-5 text-foreground">{result.stdout}</pre>
         </details>
       )}
 
       {!result && (
-        <div className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-slate-200 bg-white/60 p-10 text-center">
-          <Play size={26} className="text-slate-300" />
-          <p className="text-sm font-medium text-gray-500">点击「执行」查看脚本输出</p>
-          <p className="max-w-md text-xs leading-5 text-gray-400">
+        <div className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-border bg-card p-10 text-center">
+          <Play size={26} className="text-[var(--color-text-tertiary)]" />
+          <p className="text-sm font-medium text-muted-foreground">点击「执行」查看脚本输出</p>
+          <p className="max-w-md text-xs leading-5 text-[var(--color-text-tertiary)]">
             这里会展示行数、列结构（含推断类型）、数据样本与打印输出。
           </p>
         </div>

@@ -461,8 +461,8 @@ test('任务表格按优先级拆列、入库策略使用独立颜色并允许�
   await expect(fixedActions).toHaveCSS('position', 'sticky')
   const fixedNameX = (await fixedName.boundingBox())?.x ?? 0
   const fixedActionsX = (await fixedActions.boundingBox())?.x ?? 0
-  await expect(page.locator('[data-write-mode="overwrite"]')).toHaveClass(/emerald/)
-  await expect(page.locator('[data-write-mode="append"]')).toHaveClass(/sky/)
+  await expect(page.locator('[data-write-mode="overwrite"]')).toHaveClass(/bg-\[var\(--color-success-bg\)\]/)
+  await expect(page.locator('[data-write-mode="append"]')).toHaveClass(/bg-\[var\(--color-info-bg\)\]/)
   const lakeError = page.getByTestId('lake-result-error-task-orders-failed')
   await expect(lakeError).toHaveAttribute('title', longLakeError)
   await expect(lakeError).toHaveCSS('text-overflow', 'ellipsis')

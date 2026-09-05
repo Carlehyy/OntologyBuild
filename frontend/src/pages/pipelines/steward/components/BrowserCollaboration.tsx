@@ -712,7 +712,7 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
         ref={pipWindowRef}
         role="region"
         aria-label="实时浏览器画中画"
-        className={`fixed z-[70] flex flex-col overflow-hidden rounded-xl border bg-[#15171b] shadow-[0_20px_54px_rgba(15,23,42,0.38)] transition-[border-color,box-shadow] motion-reduce:transition-none ${pipDragging || pipResizing ? 'border-teal-400/70 shadow-[0_26px_64px_rgba(15,23,42,0.48)]' : 'border-slate-700/80'}`}
+        className={`fixed z-[70] flex flex-col overflow-hidden rounded-xl border bg-[#15171b] shadow-[0_20px_54px_rgba(15,23,42,0.38)] transition-[border-color,box-shadow] motion-reduce:transition-none ${pipDragging || pipResizing ? 'border-brand shadow-[0_26px_64px_rgba(15,23,42,0.48)]' : 'border-[var(--color-border-hover)]'}`}
         style={{
           width: pipWidth ?? `min(${PIP_DEFAULT_WIDTH}px, calc(100vw - ${PIP_VIEWPORT_MARGIN * 2}px))`,
           height: pipHeight ?? `min(${PIP_DEFAULT_HEIGHT}px, calc(100vh - ${PIP_VIEWPORT_MARGIN * 2}px))`,
@@ -721,23 +721,23 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
             : { right: PIP_VIEWPORT_MARGIN, bottom: PIP_VIEWPORT_MARGIN }),
         }}
       >
-        <div className="flex h-11 items-stretch border-b border-white/10 bg-slate-900 text-slate-200">
+        <div className="flex h-11 items-stretch border-b border-border bg-accent text-foreground">
           <button
             type="button"
             aria-label="拖动画中画窗口；也可使用方向键移动"
             title="拖动窗口；方向键可微调，按住 Shift 可快速移动"
             onPointerDown={startPipDrag}
             onKeyDown={movePipWithKeyboard}
-            className={`flex min-w-0 flex-1 touch-none select-none items-center gap-2 px-3 text-left outline-none transition-colors hover:bg-white/[0.06] focus-visible:bg-white/[0.08] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-400 ${pipDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+            className={`flex min-w-0 flex-1 touch-none select-none items-center gap-2 px-3 text-left outline-none transition-colors hover:bg-card focus-visible:bg-card focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${pipDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
           >
-            <GripHorizontal size={16} className="shrink-0 text-slate-500" />
-            <span className={`h-2 w-2 shrink-0 rounded-full ${connected ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+            <GripHorizontal size={16} className="shrink-0 text-muted-foreground" />
+            <span className={`h-2 w-2 shrink-0 rounded-full ${connected ? 'bg-[var(--color-success-bg)]' : 'bg-accent'}`} />
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[11px] font-medium text-slate-100">实时浏览器</span>
-              <span className="block truncate text-[9px] text-slate-400">旁观中 · 数据管家可继续操作</span>
+              <span className="block truncate text-[11px] font-medium text-foreground">实时浏览器</span>
+              <span className="block truncate text-[9px] text-[var(--color-text-tertiary)]">旁观中 · 数据管家可继续操作</span>
             </span>
             {connected && liveTransport === 'http' && (
-              <span title="WebSocket 不可用，已自动切换到 HTTPS" className="shrink-0 rounded bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-300">HTTP</span>
+              <span title="WebSocket 不可用，已自动切换到 HTTPS" className="shrink-0 rounded bg-[var(--color-warning-bg)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--color-warning)]">HTTP</span>
             )}
           </button>
           <button
@@ -746,7 +746,7 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
             onClick={onRestore}
             aria-label="恢复实时浏览器大窗口"
             title="恢复大窗口"
-            className="flex w-11 shrink-0 items-center justify-center border-l border-white/10 text-slate-400 outline-none transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-400"
+            className="flex w-11 shrink-0 items-center justify-center border-l border-border text-[var(--color-text-tertiary)] outline-none transition-colors hover:bg-card hover:text-[var(--color-text-inverse)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
             <Maximize2 size={15} />
           </button>
@@ -755,7 +755,7 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
             onClick={onClose}
             aria-label="关闭实时浏览器画中画"
             title="关闭画中画"
-            className="flex w-11 shrink-0 items-center justify-center border-l border-white/10 text-slate-400 outline-none transition-colors hover:bg-red-500/15 hover:text-red-300 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-400"
+            className="flex w-11 shrink-0 items-center justify-center border-l border-border text-[var(--color-text-tertiary)] outline-none transition-colors hover:bg-[var(--color-danger)] hover:text-[var(--color-danger)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
             <X size={16} />
           </button>
@@ -769,23 +769,23 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
               className="pointer-events-none h-full w-full select-none object-contain"
             />
           ) : attaching ? (
-            <div className="flex h-full flex-col items-center justify-center gap-2 text-[11px] text-slate-400">
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-[11px] text-[var(--color-text-tertiary)]">
               <Loader2 size={22} className="animate-spin opacity-60" />
               正在连接当前会话的浏览器…
             </div>
           ) : (
-            <div className="flex h-full flex-col items-center justify-center gap-2 text-[11px] text-slate-400">
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-[11px] text-[var(--color-text-tertiary)]">
               <Monitor size={25} className="opacity-40" />
               暂无浏览器画面
             </div>
           )}
           {error && (
-            <div className={`absolute inset-x-2 bottom-2 rounded-md px-2 py-1.5 text-[10px] shadow-lg ${error.startsWith('✓') ? 'bg-emerald-950/90 text-emerald-200' : 'bg-red-950/90 text-red-200'}`}>
+            <div className={`absolute inset-x-2 bottom-2 rounded-md px-2 py-1.5 text-[10px] shadow-lg ${error.startsWith('✓') ? 'bg-[var(--color-success)] text-[var(--color-success)]' : 'bg-[var(--color-danger-hover)] text-[var(--color-danger)]'}`}>
               <p className="line-clamp-2">{error}</p>
             </div>
           )}
           {pipResizing && pipWidth !== null && pipHeight !== null && (
-            <span className="pointer-events-none absolute bottom-2 right-12 z-10 rounded-md bg-slate-950/85 px-2 py-1 font-mono text-[9px] tabular-nums text-slate-200 shadow-lg">
+            <span className="pointer-events-none absolute bottom-2 right-12 z-10 rounded-md bg-accent px-2 py-1 font-mono text-[9px] tabular-nums text-foreground shadow-lg">
               {Math.round(pipWidth)} × {Math.round(pipHeight)} px
             </span>
           )}
@@ -797,10 +797,10 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
           title="仅预览；上下拖动调整高度，或使用上下方向键（Shift 可快速缩放）"
           onPointerDown={event => startPipResize('vertical', event)}
           onKeyDown={event => resizePipWithKeyboard('vertical', event)}
-          className={`relative z-10 flex h-11 shrink-0 touch-none select-none items-center justify-center gap-1.5 border-t border-white/10 bg-slate-900 pl-3 pr-12 text-[10px] font-medium outline-none transition-colors hover:bg-slate-800 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-400 ${pipResizeDirection === 'vertical' ? 'cursor-ns-resize bg-teal-400/10 text-teal-200' : 'cursor-ns-resize text-slate-300'}`}
+          className={`relative z-10 flex h-11 shrink-0 touch-none select-none items-center justify-center gap-1.5 border-t border-border bg-accent pl-3 pr-12 text-[10px] font-medium outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${pipResizeDirection === 'vertical' ? 'cursor-ns-resize bg-brand text-brand-ink' : 'cursor-ns-resize text-[var(--color-text-tertiary)]'}`}
         >
-          <GripHorizontal size={14} className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 text-slate-500" />
-          <Eye size={12} className="shrink-0 text-slate-400" />
+          <GripHorizontal size={14} className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 text-muted-foreground" />
+          <Eye size={12} className="shrink-0 text-[var(--color-text-tertiary)]" />
           <span className="truncate">仅预览 · 恢复大窗口后可点击与输入</span>
           <span data-testid="browser-pip-observer" className="sr-only">画中画不占用浏览器控制权</span>
         </button>
@@ -811,7 +811,7 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
           title="左右拖动调整宽度，或使用左右方向键（Shift 可快速缩放）"
           onPointerDown={event => startPipResize('horizontal', event)}
           onKeyDown={event => resizePipWithKeyboard('horizontal', event)}
-          className={`absolute bottom-11 right-0 top-11 z-20 flex w-11 touch-none select-none items-center justify-end pr-1 outline-none transition-colors hover:bg-white/[0.06] focus-visible:bg-white/[0.08] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-400 ${pipResizeDirection === 'horizontal' ? 'cursor-ew-resize bg-teal-400/10 text-teal-300' : 'cursor-ew-resize text-slate-500'}`}
+          className={`absolute bottom-11 right-0 top-11 z-20 flex w-11 touch-none select-none items-center justify-end pr-1 outline-none transition-colors hover:bg-card focus-visible:bg-card focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${pipResizeDirection === 'horizontal' ? 'cursor-ew-resize bg-brand text-brand-ink' : 'cursor-ew-resize text-muted-foreground'}`}
         >
           <GripHorizontal size={17} className="rotate-90" />
         </button>
@@ -822,7 +822,7 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
           title="沿右下角拖动可同时调整宽度和高度；方向键可微调（Shift 可快速缩放）"
           onPointerDown={event => startPipResize('diagonal', event)}
           onKeyDown={event => resizePipWithKeyboard('diagonal', event)}
-          className={`absolute bottom-0 right-0 z-30 flex h-11 w-11 touch-none select-none items-end justify-end rounded-tl-xl p-2 outline-none transition-colors hover:bg-white/[0.08] focus-visible:bg-white/[0.1] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-400 ${pipResizeDirection === 'diagonal' ? 'cursor-nwse-resize bg-teal-400/10 text-teal-300' : 'cursor-nwse-resize text-slate-400'}`}
+          className={`absolute bottom-0 right-0 z-30 flex h-11 w-11 touch-none select-none items-end justify-end rounded-tl-xl p-2 outline-none transition-colors hover:bg-card focus-visible:bg-card focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${pipResizeDirection === 'diagonal' ? 'cursor-nwse-resize bg-brand text-brand-ink' : 'cursor-nwse-resize text-[var(--color-text-tertiary)]'}`}
         >
           <MoveDiagonal2 size={17} />
         </button>
@@ -831,20 +831,20 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
   }
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-3" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label="实时浏览器" className="flex h-[88vh] w-[min(1500px,96vw)] flex-col overflow-hidden rounded-xl bg-white shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center gap-2 border-b bg-gray-50 px-3 py-2">
-          <Monitor size={15} className="text-teal-600" />
-          <div className={`h-2 w-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-300'}`} />
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-[var(--color-bg-overlay)] p-3" onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-label="实时浏览器" className="flex h-[88vh] w-[min(1500px,96vw)] flex-col overflow-hidden rounded-xl bg-card shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-2 border-b bg-muted px-3 py-2">
+          <Monitor size={15} className="text-brand-ink" />
+          <div className={`h-2 w-2 rounded-full ${connected ? 'bg-[var(--color-success)]' : 'bg-accent'}`} />
           <div
             data-testid="browser-collaboration-status"
             role="status"
             aria-live="polite"
             className={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium ${userHoldingControl
-              ? 'border-amber-200 bg-amber-50 text-amber-700'
+              ? 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] text-[var(--color-warning)]'
               : userTemporarilyActive
-                ? 'border-sky-200 bg-sky-50 text-sky-700'
-                : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}
+                ? 'border-[color-mix(in_srgb,var(--color-info)_35%,transparent)] bg-[var(--color-info-bg)] text-[var(--color-info)]'
+                : 'border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] text-[var(--color-success)]'}`}
           >
             {userHoldingControl || userTemporarilyActive ? <User size={12} /> : <Bot size={12} />}
             {userHoldingControl
@@ -855,21 +855,21 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
           </div>
           {connected && liveTransport === 'http' && (
             <span title="当前网络禁止 WebSocket，画面与操作已自动切换到 HTTPS"
-              className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">HTTP 兼容模式</span>
+              className="rounded bg-[var(--color-warning-bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-warning)]">HTTP 兼容模式</span>
           )}
           <input value={url} onChange={e => setUrl(e.target.value)} onKeyDown={e => e.key === 'Enter' && void open()}
-            className="h-8 min-w-0 flex-1 rounded-lg border bg-white px-3 font-mono text-xs outline-none focus:border-teal-400" />
+            className="h-8 min-w-0 flex-1 rounded-lg border bg-card px-3 font-mono text-xs outline-none focus:border-brand" />
           <button onClick={() => void open()} disabled={busy}
-            className="flex h-8 items-center gap-1.5 rounded-lg bg-teal-600 px-3 text-xs text-white disabled:opacity-50">
+            className="flex h-8 items-center gap-1.5 rounded-lg bg-brand px-3 text-xs text-[var(--color-text-inverse)] disabled:opacity-50">
             {busy ? <Loader2 size={12} className="animate-spin" /> : <Globe size={12} />} 打开
           </button>
           <button onClick={() => { setShowNetwork(v => !v); if (!showNetwork) void loadCaptures() }}
-            className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs ${showNetwork ? 'border-teal-300 bg-teal-50 text-teal-700' : 'text-gray-600'}`}>
+            className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs ${showNetwork ? 'border-brand-line bg-brand-soft text-brand-ink' : 'text-muted-foreground'}`}>
             <Activity size={12} /> 接口请求
           </button>
           <button ref={sourceButtonRef} type="button" aria-expanded={showSources} aria-controls="browser-source-drawer"
             onClick={() => { if (showSources) closeSources(); else setShowSources(true) }}
-            className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${showSources ? 'border-teal-300 bg-teal-50 text-teal-700' : 'text-gray-600 hover:bg-white'}`}>
+            className={`flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${showSources ? 'border-brand-line bg-brand-soft text-brand-ink' : 'text-muted-foreground hover:bg-card'}`}>
             <Settings size={12} /> 浏览器来源
           </button>
           <button
@@ -879,8 +879,8 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
             onClick={() => void changeUserControl(userHoldingControl ? 'release' : 'hold')}
             aria-pressed={userHoldingControl}
             className={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-45 ${userHoldingControl
-              ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-              : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'}`}
+              ? 'border-[color-mix(in_srgb,var(--color-success)_35%,transparent)] bg-[var(--color-success-bg)] text-[var(--color-success)] hover:bg-[var(--color-success-bg)]'
+              : 'border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] text-[var(--color-warning)] hover:bg-[var(--color-warning-bg)]'}`}
           >
             {controlBusy ? <Loader2 size={12} className="animate-spin" /> : userHoldingControl ? <Bot size={12} /> : <User size={12} />}
             {userHoldingControl ? '继续交给数据管家' : '暂停管家，我来处理'}
@@ -892,84 +892,84 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
             onClick={() => void minimizeToObserver()}
             aria-label="切换到画中画"
             title="画中画"
-            className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs text-gray-600 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 text-xs text-muted-foreground transition hover:bg-card disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <PictureInPicture2 size={12} /> 画中画
           </button>
-          <button aria-label="关闭实时浏览器" onClick={onClose} className="ml-1 text-gray-400 hover:text-gray-700"><X size={17} /></button>
+          <button aria-label="关闭实时浏览器" onClick={onClose} className="ml-1 text-[var(--color-text-tertiary)] hover:text-foreground"><X size={17} /></button>
         </div>
-        {error && <div className={`border-b px-4 py-2 text-xs ${error.startsWith('✓') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>{error}</div>}
+        {error && <div className={`border-b px-4 py-2 text-xs ${error.startsWith('✓') ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]' : 'bg-[var(--color-danger-bg)] text-[var(--color-danger)]'}`}>{error}</div>}
         <div className="relative min-h-0 flex-1 overflow-hidden">
           <button type="button" tabIndex={-1} aria-hidden="true" onClick={closeSources}
-            className={`absolute inset-0 z-20 bg-black/30 transition-opacity duration-200 motion-reduce:transition-none ${showSources ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'}`} />
+            className={`absolute inset-0 z-20 bg-[var(--color-bg-overlay)] transition-opacity duration-200 motion-reduce:transition-none ${showSources ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'}`} />
           <div id="browser-source-drawer" ref={sourceDrawerRef} role="dialog"
             aria-label="浏览器来源" aria-hidden={!showSources} inert={!showSources}
             onKeyDown={trapSourceDrawerFocus}
-            className={`absolute inset-x-0 top-0 z-30 flex max-h-[min(520px,82%)] flex-col overflow-hidden border-b border-slate-200 bg-[#fafafa] shadow-[0_24px_48px_rgba(15,23,42,0.24)] transition-[transform,opacity] duration-[240ms] ease-out will-change-transform motion-reduce:transition-none ${showSources ? 'translate-y-0 opacity-100' : 'pointer-events-none -translate-y-full opacity-0'}`}>
-            <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 py-2.5">
+            className={`absolute inset-x-0 top-0 z-30 flex max-h-[min(520px,82%)] flex-col overflow-hidden border-b border-border bg-[#fafafa] shadow-[0_24px_48px_rgba(15,23,42,0.24)] transition-[transform,opacity] duration-[240ms] ease-out will-change-transform motion-reduce:transition-none ${showSources ? 'translate-y-0 opacity-100' : 'pointer-events-none -translate-y-full opacity-0'}`}>
+            <div className="flex shrink-0 items-center justify-between border-b border-border bg-card px-4 py-2.5">
               <div className="flex min-w-0 items-center gap-2.5">
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700"><Settings size={14} /></span>
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand-ink"><Settings size={14} /></span>
                 <div className="min-w-0">
-                  <p className="text-xs font-semibold text-slate-800">浏览器来源</p>
-                  <p className="truncate text-[10px] text-slate-400">选择当前会话使用的平台、本机或远程浏览器</p>
+                  <p className="text-xs font-semibold text-foreground">浏览器来源</p>
+                  <p className="truncate text-[10px] text-[var(--color-text-tertiary)]">选择当前会话使用的平台、本机或远程浏览器</p>
                 </div>
-                {sourceBusy && <Loader2 size={13} className="ml-1 animate-spin text-teal-600" />}
+                {sourceBusy && <Loader2 size={13} className="ml-1 animate-spin text-brand-ink" />}
               </div>
               <button ref={sourceDrawerCloseRef} type="button" aria-label="关闭浏览器来源抽屉" onClick={closeSources}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500">
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-text-tertiary)] transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 <X size={15} />
               </button>
             </div>
             <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-[minmax(260px,0.8fr)_minmax(360px,1.2fr)]">
-            <div className="border-b border-slate-200 p-4 lg:border-b-0 lg:border-r">
+            <div className="border-b border-border p-4 lg:border-b-0 lg:border-r">
               <div className="mb-3 flex items-center justify-between">
-                <div><p className="text-xs font-semibold text-gray-800">当前会话的浏览器</p><p className="mt-0.5 text-[11px] text-gray-400">每个会话独立绑定，切换会关闭原浏览器上下文</p></div>
+                <div><p className="text-xs font-semibold text-foreground">当前会话的浏览器</p><p className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">每个会话独立绑定，切换会关闭原浏览器上下文</p></div>
               </div>
               <div className="space-y-2">
                 {sources.map(source => (
-                  <div key={source.id} className={`rounded-xl border bg-white p-3 ${selectedSource === source.id ? 'border-teal-300 ring-1 ring-teal-100' : 'border-gray-200'}`}>
+                  <div key={source.id} className={`rounded-xl border bg-card p-3 ${selectedSource === source.id ? 'border-brand-line ring-1 ring-ring' : 'border-border'}`}>
                     <div className="flex items-start gap-2">
-                      <button onClick={() => void bindSource(source.id)} className="mt-0.5 text-teal-600" aria-label={`选择${source.name}`}>
-                        {selectedSource === source.id ? <CheckCircle2 size={16} /> : <span className="block h-4 w-4 rounded-full border border-gray-300" />}
+                      <button onClick={() => void bindSource(source.id)} className="mt-0.5 text-brand-ink" aria-label={`选择${source.name}`}>
+                        {selectedSource === source.id ? <CheckCircle2 size={16} /> : <span className="block h-4 w-4 rounded-full border border-border" />}
                       </button>
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5"><p className="truncate text-xs font-medium text-gray-800">{source.name}</p>
-                          {source.sourceType === 'companion' && (source.online ? <Wifi size={12} className="text-green-500" /> : <WifiOff size={12} className="text-gray-300" />)}
+                        <div className="flex items-center gap-1.5"><p className="truncate text-xs font-medium text-foreground">{source.name}</p>
+                          {source.sourceType === 'companion' && (source.online ? <Wifi size={12} className="text-[var(--color-success)]" /> : <WifiOff size={12} className="text-[var(--color-text-tertiary)]" />)}
                         </div>
-                        <p className="mt-0.5 text-[10px] text-gray-400">{source.sourceType === 'managed' ? '平台 Docker 浏览器' : source.sourceType === 'companion' ? (source.online ? '我的电脑 · 在线' : '我的电脑 · 离线') : '管理员远程 CDP'}</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">{source.sourceType === 'managed' ? '平台 Docker 浏览器' : source.sourceType === 'companion' ? (source.online ? '我的电脑 · 在线' : '我的电脑 · 离线') : '管理员远程 CDP'}</p>
                       </div>
-                      <button onClick={() => void testSource(source.id)} className="text-[10px] text-teal-600">测试</button>
-                      {source.id !== 'managed' && <button onClick={() => void removeSource(source.id)} aria-label="删除来源" className="text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>}
+                      <button onClick={() => void testSource(source.id)} className="text-[10px] text-brand-ink">测试</button>
+                      {source.id !== 'managed' && <button onClick={() => void removeSource(source.id)} aria-label="删除来源" className="text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)]"><Trash2 size={12} /></button>}
                     </div>
                   </div>
                 ))}
               </div>
             </div>
             <div className="p-4">
-              <p className="text-xs font-semibold text-gray-800">添加兜底浏览器</p>
-              <p className="mt-1 text-[11px] leading-5 text-gray-500">云端 IP 被 WAF 拒绝时，使用“我的电脑”可以复用你本机网络；平台不会公开你电脑的调试端口。</p>
+              <p className="text-xs font-semibold text-foreground">添加兜底浏览器</p>
+              <p className="mt-1 text-[11px] leading-5 text-muted-foreground">云端 IP 被 WAF 拒绝时，使用“我的电脑”可以复用你本机网络；平台不会公开你电脑的调试端口。</p>
               <div className="mt-3 flex gap-2">
-                <button onClick={() => setSourceType('companion')} className={`rounded-lg border px-3 py-1.5 text-xs ${sourceType === 'companion' ? 'border-teal-300 bg-teal-50 text-teal-700' : 'bg-white text-gray-500'}`}>我的电脑</button>
-                <button onClick={() => setSourceType('remote_cdp')} className={`rounded-lg border px-3 py-1.5 text-xs ${sourceType === 'remote_cdp' ? 'border-teal-300 bg-teal-50 text-teal-700' : 'bg-white text-gray-500'}`}>远程 CDP（管理员）</button>
+                <button onClick={() => setSourceType('companion')} className={`rounded-lg border px-3 py-1.5 text-xs ${sourceType === 'companion' ? 'border-brand-line bg-brand-soft text-brand-ink' : 'bg-card text-muted-foreground'}`}>我的电脑</button>
+                <button onClick={() => setSourceType('remote_cdp')} className={`rounded-lg border px-3 py-1.5 text-xs ${sourceType === 'remote_cdp' ? 'border-brand-line bg-brand-soft text-brand-ink' : 'bg-card text-muted-foreground'}`}>远程 CDP（管理员）</button>
               </div>
               <div className="mt-3 grid gap-2">
-                <input value={sourceName} onChange={event => setSourceName(event.target.value)} placeholder="来源名称" className="h-8 rounded-lg border bg-white px-3 text-xs outline-none focus:border-teal-400" />
+                <input value={sourceName} onChange={event => setSourceName(event.target.value)} placeholder="来源名称" className="h-8 rounded-lg border bg-card px-3 text-xs outline-none focus:border-brand" />
                 {sourceType === 'remote_cdp' && <>
-                  <input value={endpointUrl} onChange={event => setEndpointUrl(event.target.value)} placeholder="https://browser.example.com/cdp" className="h-8 rounded-lg border bg-white px-3 font-mono text-xs outline-none focus:border-teal-400" />
-                  <textarea value={headerJson} onChange={event => setHeaderJson(event.target.value)} placeholder='{"Authorization":"Bearer …"}' className="h-16 resize-none rounded-lg border bg-white p-2 font-mono text-[11px] outline-none focus:border-teal-400" />
+                  <input value={endpointUrl} onChange={event => setEndpointUrl(event.target.value)} placeholder="https://browser.example.com/cdp" className="h-8 rounded-lg border bg-card px-3 font-mono text-xs outline-none focus:border-brand" />
+                  <textarea value={headerJson} onChange={event => setHeaderJson(event.target.value)} placeholder='{"Authorization":"Bearer …"}' className="h-16 resize-none rounded-lg border bg-card p-2 font-mono text-[11px] outline-none focus:border-brand" />
                 </>}
-                <button onClick={() => void createSource()} disabled={sourceBusy || (sourceType === 'remote_cdp' && !endpointUrl.trim())} className="h-8 rounded-lg bg-teal-600 px-3 text-xs font-medium text-white disabled:opacity-40">{sourceType === 'companion' ? '生成一次性配对信息' : '保存远程浏览器'}</button>
+                <button onClick={() => void createSource()} disabled={sourceBusy || (sourceType === 'remote_cdp' && !endpointUrl.trim())} className="h-8 rounded-lg bg-brand px-3 text-xs font-medium text-[var(--color-text-inverse)] disabled:opacity-40">{sourceType === 'companion' ? '生成一次性配对信息' : '保存远程浏览器'}</button>
               </div>
               {sourceType === 'companion' && window.location.protocol !== 'https:' && (
-                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[11px] leading-5 text-amber-700">当前平台不是 HTTPS。为防止配对令牌和浏览器流量泄露，生产环境助手会拒绝连接；请先为平台配置 HTTPS。</div>
+                <div className="mt-3 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] p-2.5 text-[11px] leading-5 text-[var(--color-warning)]">当前平台不是 HTTPS。为防止配对令牌和浏览器流量泄露，生产环境助手会拒绝连接；请先为平台配置 HTTPS。</div>
               )}
               {pairing && (
-                <div className="mt-3 rounded-xl border border-teal-200 bg-teal-50 p-3">
-                  <p className="text-[11px] font-medium text-teal-800">配对令牌只显示这一次</p>
-                  <ol className="mt-1 list-decimal space-y-1 pl-4 text-[10px] leading-5 text-teal-700"><li>安装 Node.js 22+，下载助手脚本</li><li>在脚本目录运行下面命令，Chrome/Edge 会使用独立资料目录启动</li></ol>
-                  <div className="mt-2 flex gap-2"><button onClick={() => void downloadBrowserCompanion()} className="rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-medium text-teal-700 shadow-sm">下载助手</button>
-                    <button onClick={() => void writeTextToClipboard(companionCommand).catch(() => undefined)} className="flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-[10px] font-medium text-teal-700 shadow-sm"><Copy size={10} />复制命令</button></div>
-                  <code className="mt-2 block max-h-16 overflow-auto break-all rounded-lg bg-white/80 p-2 text-[9px] leading-4 text-teal-800">{companionCommand}</code>
+                <div className="mt-3 rounded-xl border border-brand-line bg-brand-soft p-3">
+                  <p className="text-[11px] font-medium text-brand-ink">配对令牌只显示这一次</p>
+                  <ol className="mt-1 list-decimal space-y-1 pl-4 text-[10px] leading-5 text-brand-ink"><li>安装 Node.js 22+，下载助手脚本</li><li>在脚本目录运行下面命令，Chrome/Edge 会使用独立资料目录启动</li></ol>
+                  <div className="mt-2 flex gap-2"><button onClick={() => void downloadBrowserCompanion()} className="rounded-lg bg-card px-2.5 py-1.5 text-[10px] font-medium text-brand-ink shadow-sm">下载助手</button>
+                    <button onClick={() => void writeTextToClipboard(companionCommand).catch(() => undefined)} className="flex items-center gap-1 rounded-lg bg-card px-2.5 py-1.5 text-[10px] font-medium text-brand-ink shadow-sm"><Copy size={10} />复制命令</button></div>
+                  <code className="mt-2 block max-h-16 overflow-auto break-all rounded-lg bg-card p-2 text-[9px] leading-4 text-brand-ink">{companionCommand}</code>
                 </div>
               )}
             </div>
@@ -979,7 +979,7 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
           <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto p-2">
             {frame ? (
               <img ref={imageRef} data-testid="steward-live-browser-frame" src={frame} draggable={false} tabIndex={0} alt="会话浏览器协作画面"
-                className="max-h-full max-w-full select-none outline-none ring-teal-400 focus:ring-2"
+                className="max-h-full max-w-full select-none outline-none ring-ring focus:ring-2"
                 onMouseDown={e => { e.currentTarget.focus(); send({ type: 'mouse', action: 'down', ...point(e), button: e.button === 2 ? 'right' : 'left' }) }}
                 onMouseUp={e => send({ type: 'mouse', action: 'up', ...point(e), button: e.button === 2 ? 'right' : 'left' })}
                 onDoubleClick={e => send({ type: 'mouse', action: 'click', ...point(e), clickCount: 2 })}
@@ -990,36 +990,36 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
                   if (!['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) send({ type: 'key', key: keyName(e) })
                 }} />
             ) : attaching ? (
-              <div className="text-center text-sm text-gray-400">
+              <div className="text-center text-sm text-[var(--color-text-tertiary)]">
                 <Loader2 size={32} className="mx-auto mb-3 animate-spin opacity-60" />
                 正在连接当前会话的浏览器…
               </div>
             ) : (
-              <div className="text-center text-sm text-gray-400">
+              <div className="text-center text-sm text-[var(--color-text-tertiary)]">
                 <Monitor size={38} className="mx-auto mb-3 opacity-40" />
                 输入合法网址并点击“打开”；需要登录时直接在此画面手动操作
               </div>
             )}
           </div>
           {showNetwork && (
-            <aside className="w-[420px] shrink-0 overflow-auto border-l border-white/10 bg-white">
-              <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-white px-3 py-2">
-                <div><p className="text-xs font-semibold">捕获的接口与文件</p><p className="text-[10px] text-gray-400">分页线索会自动标注；认证头不展示</p></div>
-                <button aria-label="刷新接口请求" onClick={() => void loadCaptures()} className="text-gray-400"><RefreshCw size={13} /></button>
+            <aside className="w-[420px] shrink-0 overflow-auto border-l border-border bg-card">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-card px-3 py-2">
+                <div><p className="text-xs font-semibold">捕获的接口与文件</p><p className="text-[10px] text-[var(--color-text-tertiary)]">分页线索会自动标注；认证头不展示</p></div>
+                <button aria-label="刷新接口请求" onClick={() => void loadCaptures()} className="text-[var(--color-text-tertiary)]"><RefreshCw size={13} /></button>
               </div>
               <div className="space-y-2 p-2">
-                {captures.length === 0 && <p className="py-12 text-center text-xs text-gray-400">操作页面后，请求会显示在这里</p>}
+                {captures.length === 0 && <p className="py-12 text-center text-xs text-[var(--color-text-tertiary)]">操作页面后，请求会显示在这里</p>}
                 {captures.map(item => (
                   <div key={item.id} className="rounded-lg border p-2.5">
                     <div className="flex items-center gap-1.5 text-[10px]">
-                      <span className="rounded bg-gray-100 px-1.5 py-0.5 font-semibold">{item.method}</span>
-                      <span className={item.status < 400 ? 'text-green-600' : 'text-red-500'}>{item.status}</span>
-                      {item.pagination && <span className="rounded bg-blue-50 px-1.5 py-0.5 text-blue-600">分页 · {item.pagination.mode}</span>}
-                      {item.isFile && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-600">文件</span>}
+                      <span className="rounded bg-muted px-1.5 py-0.5 font-semibold">{item.method}</span>
+                      <span className={item.status < 400 ? 'text-[var(--color-success)]' : 'text-[var(--color-danger)]'}>{item.status}</span>
+                      {item.pagination && <span className="rounded bg-[var(--color-info-bg)] px-1.5 py-0.5 text-[var(--color-info)]">分页 · {item.pagination.mode}</span>}
+                      {item.isFile && <span className="rounded bg-[var(--color-warning-bg)] px-1.5 py-0.5 text-[var(--color-warning)]">文件</span>}
                     </div>
-                    <p className="mt-1.5 break-all font-mono text-[10px] leading-4 text-gray-600">{item.url}</p>
+                    <p className="mt-1.5 break-all font-mono text-[10px] leading-4 text-muted-foreground">{item.url}</p>
                     {item.isFile && <button onClick={async () => { await stewardApi.downloadCapture(conversationId, item.id); await loadCaptures() }}
-                      className="mt-2 flex items-center gap-1 text-[11px] font-medium text-teal-600"><Download size={11} />保存到会话</button>}
+                      className="mt-2 flex items-center gap-1 text-[11px] font-medium text-brand-ink"><Download size={11} />保存到会话</button>}
                   </div>
                 ))}
               </div>
@@ -1027,9 +1027,9 @@ export default function BrowserModal({ conversationId, mode, onMinimize, onResto
           )}
         </div>
         </div>
-        <div className="flex items-center justify-between gap-4 border-t bg-white px-4 py-2 text-[11px] text-gray-500">
+        <div className="flex items-center justify-between gap-4 border-t bg-card px-4 py-2 text-[11px] text-muted-foreground">
           <span>协同浏览器支持你旁观并随时参与；普通点击结束后管家会自动继续。登录等长操作可先暂停管家，完成后直接交还，无需关闭窗口。</span>
-          <span className="shrink-0 text-gray-400">密码只由你在隔离浏览器中输入</span>
+          <span className="shrink-0 text-[var(--color-text-tertiary)]">密码只由你在隔离浏览器中输入</span>
         </div>
       </div>
     </div>
