@@ -41,8 +41,8 @@ def promote_draft(
     with _ontology_build_lock(db, ontology_id):
         result = _promote_draft_locked(
             ontology_id, version_id, body, db, current_user)
-    # 新发布改变当前发布指针：详情头版本号、总览统计口径、待审批队列
-    # 与跨本体网络图全部换版本；版本树新增发布行同步换键（fail-open）。
+    # 新发布改变当前发布指针：详情头版本号、总览统计口径、待审批队列、
+    # 跨本体网络图、版本树与列表卡片指标全部换键（fail-open）。
     from app.ontologies import cache as ontology_cache
     from app.ontologies.network import cache as network_cache
     ontology_cache.invalidate_detail()
@@ -51,6 +51,7 @@ def promote_draft(
     ontology_cache.invalidate_pending()
     ontology_cache.invalidate_version_tree()
     network_cache.invalidate_network()
+    ontology_cache.invalidate_list()
     return result
 
 

@@ -22,6 +22,12 @@ os.environ["WORLD_MODEL_CACHE_ENABLED"] = "false"
 # 本体版本树缓存同理：默认关闭，缓存语义由 test_version_tree_cache.py
 # 用假客户端按需开启验证。
 os.environ["ONTOLOGY_VERSION_TREE_CACHE_ENABLED"] = "false"
+# 本体列表缓存同理：默认关闭，缓存语义由 test_ontology_list_cache.py
+# 用假客户端按需开启验证。
+os.environ["ONTOLOGY_LIST_CACHE_ENABLED"] = "false"
+# 平台概览统计缓存同理：默认关闭，缓存语义由 test_platform_stats_cache.py
+# 用假客户端按需开启验证。
+os.environ["PLATFORM_STATS_CACHE_ENABLED"] = "false"
 # 版本事件 drain 默认内联执行（历史语义）；异步派发路径由
 # test_version_automation_events.py 用 patch 单独验证。
 os.environ["DATASET_EVENT_DISPATCH_MODE"] = "sync"
@@ -66,6 +72,31 @@ os.close(_db_fd)
 TEST_DB = f"sqlite:///{_db_path}"
 engine = create_engine(TEST_DB, connect_args={"check_same_thread": False})
 TestSession = sessionmaker(bind=engine)
+
+
+class QueryCounter:
+    """统计测试会话引擎上实际执行的 SQL 条数（上下文管理器）。
+
+    用于 N+1 回归与缓存命中断言：缓存命中路径只剩认证等固定开销。
+    """
+
+    def __init__(self, session):
+        self._session = session
+        self.count = 0
+
+    def _incr(self, *args, **kwargs):
+        self.count += 1
+
+    def __enter__(self):
+        from sqlalchemy import event
+
+        event.listen(self._session.get_bind(), "before_cursor_execute", self._incr)
+        return self
+
+    def __exit__(self, *exc):
+        from sqlalchemy import event
+
+        event.remove(self._session.get_bind(), "before_cursor_execute", self._incr)
 
 
 @atexit.register

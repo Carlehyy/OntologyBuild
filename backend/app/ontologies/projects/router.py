@@ -120,6 +120,18 @@ def _release_structure_counts(release: OntologyVersion | None) -> dict[str, int]
         "sentinel_count": len(snapshot["sentinels"]),
     }
 
+
+def _cached_release_counts(release: OntologyVersion | None) -> dict[str, int]:
+    """卡片指标只依赖不可变发布快照：按 release 分键长 TTL 缓存。"""
+    if release is None:
+        return _release_structure_counts(release)
+    return ontology_cache.list_cached_call(
+        ontology_cache.release_counts_cache_key(release.id),
+        ontology_cache.RELEASE_COUNTS_TTL_SECONDS,
+        lambda: _release_structure_counts(release),
+    )
+
+
 @router.get("")
 def list_ontologies(
     name: Optional[str] = None,
@@ -127,21 +139,32 @@ def list_ontologies(
     page: int = 1, page_size: int = 20,
     db: Session = Depends(get_db), _=Depends(get_current_user)
 ):
-    q = db.query(OntologyProject)
-    if name:
-        q = q.filter(OntologyProject.name.ilike(f"%{name}%"))
-    if domain:
-        q = q.filter(OntologyProject.domain == domain)
-    total = q.count()
-    items = q.order_by(OntologyProject.created_at.desc()).offset((page-1)*page_size).limit(page_size).all()
-    releases = _resolved_release_map(db, items)
-    result = []
-    for item in items:
-        release = releases.get(item.current_release_id)
-        d = _project_payload(item, OntologyListItem, release)
-        d.update(_release_structure_counts(release))
-        result.append(d)
-    return {"data": {"items": result, "total": total, "page": page, "page_size": page_size}}
+    # 列表页高频入口：响应整体短 TTL 缓存 + 写路径 bump 版本换键；
+    # 卡片指标来自不可变发布快照，按 release 分键长 TTL（fail-open）。
+    def build():
+        q = db.query(OntologyProject)
+        if name:
+            q = q.filter(OntologyProject.name.ilike(f"%{name}%"))
+        if domain:
+            q = q.filter(OntologyProject.domain == domain)
+        total = q.count()
+        items = q.order_by(OntologyProject.created_at.desc()).offset((page-1)*page_size).limit(page_size).all()
+        releases = _resolved_release_map(db, items)
+        result = []
+        for item in items:
+            release = releases.get(item.current_release_id)
+            d = _project_payload(item, OntologyListItem, release)
+            d.update(_cached_release_counts(release))
+            result.append(d)
+        # jsonable_encoder 归一 datetime，保证缓存命中与直查返回逐字节一致。
+        return jsonable_encoder(
+            {"data": {"items": result, "total": total, "page": page, "page_size": page_size}}
+        )
+    return ontology_cache.list_cached_call(
+        ontology_cache.list_cache_key(name, domain, page, page_size),
+        settings.ontology_list_cache_ttl_seconds,
+        build,
+    )
 
 @router.post("", status_code=201)
 def create_ontology(body: OntologyCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -171,6 +194,7 @@ def create_ontology(body: OntologyCreate, db: Session = Depends(get_db), current
     db.commit(); db.refresh(project)
     network_cache.invalidate_network()
     ontology_cache.invalidate_version_tree()
+    ontology_cache.invalidate_list()
     return {"data": _project_payload(project, OntologyOut, root)}
 
 
@@ -186,6 +210,7 @@ def import_ontology_structure(
     result = import_structure_package(db, body, current_user=current_user)
     network_cache.invalidate_network()
     ontology_cache.invalidate_version_tree()
+    ontology_cache.invalidate_list()
     return {"data": result}
 
 @router.get("/{ontology_id}")
@@ -256,6 +281,7 @@ def update_ontology(ontology_id: str, body: OntologyUpdate, db: Session = Depend
     db.commit(); db.refresh(p)
     ontology_cache.invalidate_detail()
     network_cache.invalidate_network()
+    ontology_cache.invalidate_list()
     release = _resolved_release_map(db, [p]).get(p.current_release_id)
     return {"data": _project_payload(p, OntologyOut, release)}
 
@@ -318,6 +344,7 @@ def delete_ontology(ontology_id: str, db: Session = Depends(get_db), current_use
                 ontology_cache.invalidate_pending()
                 network_cache.invalidate_network()
                 ontology_cache.invalidate_version_tree()
+                ontology_cache.invalidate_list()
                 return None
             mark_failed(
                 db,
@@ -339,3 +366,4 @@ def delete_ontology(ontology_id: str, db: Session = Depends(get_db), current_use
             ontology_cache.invalidate_pending()
             network_cache.invalidate_network()
             ontology_cache.invalidate_version_tree()
+            ontology_cache.invalidate_list()

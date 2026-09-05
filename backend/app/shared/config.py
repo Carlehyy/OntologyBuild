@@ -65,9 +65,19 @@ class Settings(BaseSettings):
     # 可能由后台推进，无法事件失效，由短 TTL 兜底（与 pending 同语义）。
     ontology_version_tree_cache_enabled: bool = True
     ontology_version_tree_cache_ttl_seconds: int = Field(default=15, ge=1, le=60)
+    # 本体列表读接口缓存（fail-open 加速层，可整体关闭；与 Celery 无关，
+    # 键落 db 1）。列表卡片指标来自不可变发布快照，按 release 分键长 TTL；
+    # 列表响应键随写路径（创建/导入/更新/删除/发布）bump 版本换键，回滚等
+    # 少数指针变更路径与详情缓存一致地由短 TTL 兜底。
+    ontology_list_cache_enabled: bool = True
+    ontology_list_cache_ttl_seconds: int = Field(default=60, ge=1, le=300)
     # 数据资产湖读缓存（fail-open 加速层，可整体关闭；键落 db 1）。
     # 版本级数据键携带 version id 自然换键；总览用短 TTL + 写路径 bump 失效。
     dataset_cache_enabled: bool = True
+    # 平台概览统计读缓存（fail-open 加速层，可整体关闭；键落 db 1）。
+    # 全局只读聚合看板，无写路径联动，短 TTL 兜底新鲜度。
+    platform_stats_cache_enabled: bool = True
+    platform_stats_cache_ttl_seconds: int = Field(default=30, ge=1, le=300)
 
     # NATS JetStream 消息队列：流水线任务派发通道（PR-3 接入执行器）
     nats_url: str = ""
