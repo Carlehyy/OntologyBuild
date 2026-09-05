@@ -1,66 +1,57 @@
+"use client"
+
+import {
+  CircleCheck,
+  Info,
+  LoaderCircle,
+  OctagonX,
+  TriangleAlert,
+} from 'lucide-react'
 import * as React from 'react'
-import { AlertCircle, CheckCircle2, Info, TriangleAlert } from 'lucide-react'
-import { Toaster as SonnerToaster } from 'sonner'
+import { Toaster as Sonner } from 'sonner'
 
 /**
- * 全局消息提示挂载件（vendored，copy-and-own）。
- * 出处：sonner@2（npm 依赖）+ shadcn/ui sonner 封装思路，2026-09-05 拷贝适配。
+ * shadcn/ui 官方 sonner 封装（copy-and-own）。
+ * 出处：ui.shadcn.com/r/styles/default/sonner.json，2026-09-05 拷贝。
  *
- * 平台适配：
- * - 不引入 next-themes：深浅色由 tokens.css 的 .dark 令牌自动翻转；
- * - 位置统一 top-center，offset 4rem 让出 h-14 页头（DESIGN.md §4.3）；
- * - 层级沿用 --z-toast: 1100（高于 antd 弹层，低于悬浮 AI 助手 z-10000）；
- * - 图标沿用旧版 Toast 的语义色圆角徽章视觉。
- * 选型与场景边界见 component-catalog.ts「瞬时消息提示」条目。
+ * 与上游仅两处差异（DIFF 标注）：
+ * 1. 上游经 next-themes 的 useTheme 提供 theme；本仓库为 Vite + .dark 类主题，
+ *    不引入第二套主题系统。深浅色由令牌工具类（bg-background 等）随 .dark 自动翻转，
+ *    关闭按钮等内部变量的令牌映射在 App.tsx 挂载处以 style props 传入。
+ * 2. toastOptions 补平台时长与中文无障碍标签。
+ * 位置/层级/偏移/堆叠数等部署策略在 App.tsx 挂载处以 props 传入（官方 {...props} 透传）。
  */
 
-function ToneIcon({ className, children }: { className: string; children: React.ReactNode }) {
-  return (
-    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ring-1 ${className}`}>
-      {children}
-    </span>
-  )
-}
+type ToasterProps = React.ComponentProps<typeof Sonner>
 
-export function Toaster() {
+const Toaster = ({ ...props }: ToasterProps) => {
   return (
-    <SonnerToaster
-      position="top-center"
-      visibleToasts={3}
-      closeButton
-      offset={{ top: '4rem' }}
-      toastOptions={{ closeButtonAriaLabel: '关闭提示' }}
+    <Sonner
+      className="toaster group"
       icons={{
-        success: (
-          <ToneIcon className="bg-[var(--color-success-bg)] text-[var(--color-success)] ring-[var(--color-success-bg)]">
-            <CheckCircle2 size={17} />
-          </ToneIcon>
-        ),
-        error: (
-          <ToneIcon className="bg-[var(--color-danger-bg)] text-[var(--color-danger)] ring-[var(--color-danger-bg)]">
-            <AlertCircle size={17} />
-          </ToneIcon>
-        ),
-        warning: (
-          <ToneIcon className="bg-[var(--color-warning-bg)] text-[var(--color-warning)] ring-[var(--color-warning-bg)]">
-            <TriangleAlert size={17} />
-          </ToneIcon>
-        ),
-        info: (
-          <ToneIcon className="bg-[var(--color-info-bg)] text-[var(--color-info)] ring-[var(--color-info-bg)]">
-            <Info size={17} />
-          </ToneIcon>
-        ),
+        success: <CircleCheck className="h-4 w-4" />,
+        info: <Info className="h-4 w-4" />,
+        warning: <TriangleAlert className="h-4 w-4" />,
+        error: <OctagonX className="h-4 w-4" />,
+        loading: <LoaderCircle className="h-4 w-4 animate-spin" />,
       }}
-      style={
-        {
-          zIndex: 'var(--z-toast)',
-          '--width': 'min(390px, calc(100vw - 32px))',
-          '--normal-bg': 'var(--color-popover)',
-          '--normal-text': 'var(--color-text-primary)',
-          '--normal-border': 'var(--color-border)',
-        } as React.CSSProperties
-      }
+      toastOptions={{
+        classNames: {
+          toast:
+            'group toast group-[.toaster]:bg-background group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg',
+          description: 'group-[.toast]:text-muted-foreground',
+          actionButton:
+            'group-[.toast]:bg-primary group-[.toast]:text-primary-foreground',
+          cancelButton:
+            'group-[.toast]:bg-muted group-[.toast]:text-muted-foreground',
+        },
+        // DIFF: 平台时长与中文无障碍标签
+        duration: 4000,
+        closeButtonAriaLabel: '关闭提示',
+      }}
+      {...props}
     />
   )
 }
+
+export { Toaster }

@@ -56,9 +56,9 @@ export const COMPONENT_CATALOG: ComponentCatalogEntry[] = [
   },
   {
     scenario: '瞬时消息提示（操作结果/全局反馈 toast）',
-    component: "sonner（import { toast } from 'sonner'；全局 <Toaster /> 挂载于 App.tsx，适配层 @/components/ui/sonner）",
+    component: "sonner（import { toast } from 'sonner'；全局 <Toaster /> 挂载于 App.tsx，组件本体为 shadcn 官方原文 @/components/ui/sonner）",
     status: 'vendored',
-    note: '位置统一 top-center、层级 --z-toast:1100（DESIGN.md §4.3），样式令牌化见 index.css 的 sonner 段。确认类交互用 Dialog/ConfirmDialog，表单校验错误用内联提示，不进 toast；禁止引入 react-hot-toast/react-toastify/antd message 等平行实现（check:component-convergence 强制）。',
+    note: '位置统一 top-center、层级 --z-toast:1100（DESIGN.md §4.3，挂载 props 固化）；样式走 shadcn 官方封装 + 平台令牌（bg-background 等，.dark 自动翻转）。确认类交互用 Dialog/ConfirmDialog，表单校验错误用内联提示，不进 toast；禁止引入 react-hot-toast/react-toastify/antd message 等平行实现（check:component-convergence 强制）。',
   },
   {
     scenario: '开关 Switch / 复选 Checkbox',

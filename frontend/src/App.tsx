@@ -135,7 +135,23 @@ function LegacyWorldModelRedirect() {
 export default function App() {
   return (
     <QueryClientProvider client={qc}>
-      <Toaster />
+      {/* 全局消息提示部署策略（组件本体为 shadcn 官方原文，见 components/ui/sonner.tsx）：
+          顶部居中让出 h-14 页头；层级 --z-toast 高于 antd 弹层、低于悬浮助手；
+          --normal-* 令牌映射保证深色下关闭按钮等内部变量跟随主题翻转 */}
+      <Toaster
+        position="top-center"
+        offset={{ top: '4rem' }}
+        visibleToasts={3}
+        closeButton
+        style={
+          {
+            zIndex: 'var(--z-toast)',
+            '--normal-bg': 'var(--popover)',
+            '--normal-text': 'var(--foreground)',
+            '--normal-border': 'var(--border)',
+          } as React.CSSProperties
+        }
+      />
         <HashRouter>
           <Routes>
           <Route path="/login" element={<LoginPage />} />
