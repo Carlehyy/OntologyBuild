@@ -9,6 +9,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   AlertTriangle, ArrowRight, BadgeInfo, Boxes, CircleDotDashed, Focus, Layers3,
   Loader2, LocateFixed, Network, RefreshCw, Route, Search, Share2,
@@ -651,10 +652,14 @@ export default function OntologyNetworkPage() {
                 </div>
                 <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
                   每类限量
-                  <select value={limitPerType} onChange={event => setLimitPerType(Number(event.target.value))}
-                    className="h-7 rounded-md border border-[var(--color-border)] bg-card px-1.5 text-[11px] text-foreground outline-none focus:border-viz-violet">
-                    {[5, 10, 20].map(value => <option key={value} value={value}>{value}</option>)}
-                  </select>
+                  <Select value={String(limitPerType)} onValueChange={value => setLimitPerType(Number(value))}>
+                    <SelectTrigger className="h-7 w-16 rounded-md bg-card px-1.5 text-[11px]" aria-label="每类限量">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[5, 10, 20].map(value => <SelectItem key={value} value={String(value)}>{value}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </label>
               </div>
               <label className="flex items-center justify-between gap-2 text-[11.5px] text-muted-foreground">
@@ -704,39 +709,51 @@ export default function OntologyNetworkPage() {
                   <div className="space-y-2.5" data-testid="network-path-controls">
                     <label className="block">
                       <span className="mb-1 block text-[10px] font-medium text-muted-foreground">起点实例</span>
-                      <select value={pathSource} onChange={event => setPathSource(event.target.value)}
-                        className="h-8 w-full rounded-md border border-[var(--color-border)] bg-card px-2 text-xs text-foreground outline-none focus:border-viz-violet">
-                        <option value="">选择起点</option>
-                        {instanceOptions.map(node => (
-                          <option key={node.entityId} value={node.entityId}>
-                            [{node.ontologyName}] {node.objectTypeLabel} · {node.label}
-                          </option>
-                        ))}
-                      </select>
+                      <Select value={pathSource || '__none__'} onValueChange={value => setPathSource(value === '__none__' ? '' : value)}>
+                        <SelectTrigger className="h-8 w-full rounded-md bg-card px-2 text-xs" aria-label="选择起点">
+                          <SelectValue placeholder="选择起点" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">选择起点</SelectItem>
+                          {instanceOptions.map(node => (
+                            <SelectItem key={node.entityId} value={node.entityId}>
+                              [{node.ontologyName}] {node.objectTypeLabel} · {node.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </label>
                     <label className="block">
                       <span className="mb-1 block text-[10px] font-medium text-muted-foreground">终点实例（与起点同本体）</span>
-                      <select value={pathTarget} onChange={event => setPathTarget(event.target.value)}
-                        className="h-8 w-full rounded-md border border-[var(--color-border)] bg-card px-2 text-xs text-foreground outline-none focus:border-viz-violet">
-                        <option value="">选择终点</option>
-                        {instanceOptions.filter(node => !pathSource
+                      <Select value={pathTarget || '__none__'} onValueChange={value => setPathTarget(value === '__none__' ? '' : value)}>
+                        <SelectTrigger className="h-8 w-full rounded-md bg-card px-2 text-xs" aria-label="选择终点">
+                          <SelectValue placeholder="选择终点" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">选择终点</SelectItem>
+                          {instanceOptions.filter(node => !pathSource
                           || node.entityId === pathSource
                           || node.ontologyId === analysisOntologyId)
                           .map(node => (
-                            <option key={node.entityId} value={node.entityId}>
+                            <SelectItem key={node.entityId} value={node.entityId}>
                               [{node.ontologyName}] {node.objectTypeLabel} · {node.label}
-                            </option>
+                            </SelectItem>
                           ))}
-                      </select>
+                        </SelectContent>
+                      </Select>
                     </label>
                     <label className="block">
                       <span className="mb-1 block text-[10px] font-medium text-muted-foreground">方向</span>
-                      <select value={direction} onChange={event => setDirection(event.target.value as Direction)}
-                        className="h-8 w-full rounded-md border border-[var(--color-border)] bg-card px-2 text-xs text-foreground outline-none">
-                        <option value="both">双向关系</option>
-                        <option value="outgoing">仅正向</option>
-                        <option value="incoming">仅反向</option>
-                      </select>
+                      <Select value={direction} onValueChange={value => setDirection(value as Direction)}>
+                        <SelectTrigger className="h-8 w-full rounded-md bg-card px-2 text-xs" aria-label="路径方向">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="both">双向关系</SelectItem>
+                          <SelectItem value="outgoing">仅正向</SelectItem>
+                          <SelectItem value="incoming">仅反向</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </label>
                     <button type="button" onClick={runPath} disabled={analysisLoading}
                       className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-md bg-[var(--color-info)] px-3 text-xs font-medium text-[var(--color-text-inverse)] transition-colors hover:bg-[var(--color-info)] disabled:opacity-50">
@@ -761,15 +778,19 @@ export default function OntologyNetworkPage() {
                     </div>
                     <label className="block">
                       <span className="mb-1 block text-[10px] font-medium text-muted-foreground">字段</span>
-                      <select value={impactProperty} onChange={event => setImpactProperty(event.target.value)} disabled={!detail}
-                        className="h-8 w-full rounded-md border border-[var(--color-border)] bg-card px-2 text-xs text-foreground outline-none disabled:bg-muted">
-                        <option value="">选择字段</option>
-                        {detail?.objectType.properties.map(property => (
-                          <option key={property.name} value={property.name}>
-                            {property.displayName || property.display_name || property.name}
-                          </option>
-                        ))}
-                      </select>
+                      <Select value={impactProperty || '__none__'} onValueChange={value => setImpactProperty(value === '__none__' ? '' : value)} disabled={!detail}>
+                        <SelectTrigger className="h-8 w-full rounded-md bg-card px-2 text-xs" aria-label="选择影响字段">
+                          <SelectValue placeholder="选择字段" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">选择字段</SelectItem>
+                          {detail?.objectType.properties.map(property => (
+                            <SelectItem key={property.name} value={property.name}>
+                              {property.displayName || property.display_name || property.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </label>
                     <label className="block">
                       <span className="mb-1 block text-[10px] font-medium text-muted-foreground">拟议新值</span>
@@ -779,10 +800,14 @@ export default function OntologyNetworkPage() {
                     </label>
                     <label className="block">
                       <span className="mb-1 block text-[10px] font-medium text-muted-foreground">传播深度</span>
-                      <select value={impactDepth} onChange={event => setImpactDepth(Number(event.target.value))}
-                        className="h-8 w-full rounded-md border border-[var(--color-border)] bg-card px-2 text-xs text-foreground outline-none">
-                        {[1, 2, 3, 4].map(value => <option key={value} value={value}>{value} 跳</option>)}
-                      </select>
+                      <Select value={String(impactDepth)} onValueChange={value => setImpactDepth(Number(value))}>
+                        <SelectTrigger className="h-8 w-full rounded-md bg-card px-2 text-xs" aria-label="传播深度">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {[1, 2, 3, 4].map(value => <SelectItem key={value} value={String(value)}>{value} 跳</SelectItem>)}
+                        </SelectContent>
+                      </Select>
                     </label>
                     <button type="button" onClick={runImpact} disabled={analysisLoading || !detail}
                       className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-md bg-viz-violet px-3 text-xs font-medium text-[var(--color-text-inverse)] transition-colors hover:bg-viz-violet disabled:opacity-50">
