@@ -23,6 +23,7 @@ from app.data_channel.pipelines.python_engine.client import (
     extract_payload,
     tail_stdout,
 )
+from app.world_model import cache as wm_cache
 from app.world_model import schemas
 from app.world_model.models import (
     ENGINE_TYPES,
@@ -390,6 +391,7 @@ def create_project(
     db.add(project)
     db.commit()
     db.refresh(project)
+    wm_cache.invalidate_world_model()
     return project
 
 
@@ -409,6 +411,7 @@ def update_project(
         project.engine_type = body.engine_type
     db.commit()
     db.refresh(project)
+    wm_cache.invalidate_world_model()
     return project
 
 
@@ -440,6 +443,7 @@ def delete_project(db: Session, project_id: str) -> None:
         db.delete(svc)
     db.delete(project)
     db.commit()
+    wm_cache.invalidate_world_model()
 
 
 # ──────────────────────────── 调试执行与保存 ────────────────────────────
@@ -547,6 +551,7 @@ def save_project_script(
         db.delete(row)
 
     db.commit()
+    wm_cache.invalidate_world_model()
     return schemas.ScriptSaveResult(
         ok=True, execution=execution, version_no=next_version_no)
 
@@ -805,6 +810,7 @@ def publish_service(
     project.status = STATUS_PUBLISHED
     db.commit()
     db.refresh(service)
+    wm_cache.invalidate_world_model()
     return service
 
 
@@ -814,6 +820,7 @@ def _apply_service_status(
     service.status = status
     db.commit()
     db.refresh(service)
+    wm_cache.invalidate_world_model()
     return service
 
 
@@ -831,6 +838,7 @@ def set_service_status(
         svc.status = status
     db.commit()
     db.refresh(services[0])
+    wm_cache.invalidate_world_model()
     return services[0]
 
 
@@ -872,6 +880,7 @@ def invoke_service(
         record.error = str(exc.detail)
         db.add(record)
         db.commit()
+        wm_cache.invalidate_world_model()
         raise
     record.ok = result.ok
     record.duration_ms = result.duration_ms
@@ -880,6 +889,7 @@ def invoke_service(
         record.response_payload = {"result": result.payload}
     db.add(record)
     db.commit()
+    wm_cache.invalidate_world_model()
     return schemas.InvokeResult(
         ok=result.ok,
         payload=result.payload if result.ok else None,

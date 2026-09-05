@@ -42,9 +42,12 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.deps import get_current_user, get_db
+from app.world_model import cache as wm_cache
 from app.world_model import schemas, service
 
 router = APIRouter()
@@ -115,9 +118,18 @@ def list_projects(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    result = service.list_projects(
-        db, keyword=keyword, engine_type=engine_type, page=page, size=size)
-    return _ok(result.model_dump())
+    # 列表页高频入口：短 TTL 响应缓存 + service 层写路径 bump 版本换键
+    # （fail-open）。jsonable_encoder 归一 datetime，缓存命中与直查逐字节一致。
+    def build():
+        result = service.list_projects(
+            db, keyword=keyword, engine_type=engine_type, page=page, size=size)
+        return jsonable_encoder(_ok(result.model_dump()))
+
+    return wm_cache.cached_call(
+        wm_cache.projects_cache_key(keyword, engine_type, page, size),
+        settings.world_model_cache_ttl_seconds,
+        build,
+    )
 
 
 @router.post("/projects", status_code=201)
@@ -280,9 +292,18 @@ def list_services(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    result_page = service.list_services(
-        db, keyword=keyword, status=status, page=page, size=size)
-    return _ok(result_page.model_dump())
+    # 注册表列表含逐服务调用统计（GROUP BY 聚合）：短 TTL 缓存 + 写路径
+    # bump 失效（fail-open）。
+    def build():
+        result_page = service.list_services(
+            db, keyword=keyword, status=status, page=page, size=size)
+        return jsonable_encoder(_ok(result_page.model_dump()))
+
+    return wm_cache.cached_call(
+        wm_cache.services_cache_key(keyword, status, page, size),
+        settings.world_model_cache_ttl_seconds,
+        build,
+    )
 
 
 # 声明顺序敏感：/services/overview 必须先于 /services/{service_id} 注册
@@ -291,7 +312,15 @@ def services_overview(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return _ok(service.services_overview(db).model_dump())
+    # 看板聚合：全局单键短 TTL 缓存（fail-open）。
+    def build():
+        return jsonable_encoder(_ok(service.services_overview(db).model_dump()))
+
+    return wm_cache.cached_call(
+        wm_cache.services_overview_cache_key(),
+        settings.world_model_cache_ttl_seconds,
+        build,
+    )
 
 
 @router.get("/services/{service_id}")
@@ -330,10 +359,20 @@ def list_calls(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    result_page = service.list_call_records(
-        db, keyword=keyword, result=result, service_id=service_id,
-        start=start, end=end, page=page, size=size)
-    return _ok(result_page.model_dump())
+    # 调用记录列表（审计数据，随 invoke 追加）：短 TTL 缓存 + invoke 写
+    # 路径 bump 失效（fail-open）；时间窗进键避免跨窗口串数据。
+    def build():
+        result_page = service.list_call_records(
+            db, keyword=keyword, result=result, service_id=service_id,
+            start=start, end=end, page=page, size=size)
+        return jsonable_encoder(_ok(result_page.model_dump()))
+
+    return wm_cache.cached_call(
+        wm_cache.calls_cache_key(
+            keyword, result, service_id, start, end, page, size),
+        settings.world_model_cache_ttl_seconds,
+        build,
+    )
 
 
 @router.get("/calls/overview")
@@ -341,7 +380,15 @@ def calls_overview(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return _ok(service.call_records_overview(db).model_dump())
+    # 看板聚合：全局单键短 TTL 缓存（fail-open）。
+    def build():
+        return jsonable_encoder(_ok(service.call_records_overview(db).model_dump()))
+
+    return wm_cache.cached_call(
+        wm_cache.calls_overview_cache_key(),
+        settings.world_model_cache_ttl_seconds,
+        build,
+    )
 
 
 # 声明顺序敏感：/calls/daily 必须先于 /calls/{record_id} 注册
@@ -351,7 +398,17 @@ def calls_daily(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return _ok([item.model_dump() for item in service.call_records_daily(db, days=days)])
+    # 按日聚合趋势图：时间窗参数进键，短 TTL 缓存（fail-open）。
+    def build():
+        return jsonable_encoder(
+            _ok([item.model_dump() for item in service.call_records_daily(db, days=days)])
+        )
+
+    return wm_cache.cached_call(
+        wm_cache.calls_daily_cache_key(days),
+        settings.world_model_cache_ttl_seconds,
+        build,
+    )
 
 
 @router.get("/calls/{record_id}")
