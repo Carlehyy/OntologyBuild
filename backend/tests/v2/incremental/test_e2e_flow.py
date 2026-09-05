@@ -364,10 +364,10 @@ def test_pipeline_dispatch_fails_closed_in_compatibility_mode(monkeypatch):
     orch = IncrementalOrchestrator(db)
 
     with patch(
-        "app.tasks.v2.pipeline_run.pipeline_run_task.delay",
+        "app.data_channel.pipeline_tasks.dispatch.dispatch_task",
         side_effect=ConnectionError("broker secret"),
     ), patch(
-        "app.tasks.v2.pipeline_run.pipeline_run_task.run",
+        "app.tasks.v2.pipeline_run.pipeline_run_task",
     ) as synchronous_fallback, pytest.raises(
         RuntimeError, match="Pipeline 未执行"
     ) as exc_info:
@@ -386,10 +386,10 @@ def test_mapping_dispatch_fails_closed_in_compatibility_mode(monkeypatch):
     orch = IncrementalOrchestrator(db)
 
     with patch(
-        "app.tasks.v2.mapping_apply.mapping_apply_task.delay",
+        "app.data_channel.pipeline_tasks.dispatch.dispatch_task",
         side_effect=ConnectionError("broker secret"),
     ), patch(
-        "app.tasks.v2.mapping_apply.mapping_apply_task.run",
+        "app.tasks.v2.mapping_apply.mapping_apply_task",
     ) as synchronous_fallback, pytest.raises(
         RuntimeError, match="Mapping 未执行"
     ) as exc_info:

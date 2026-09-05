@@ -1562,7 +1562,7 @@ def test_mapping_task_reconciles_complete_ontology(
     ), patch.object(
         MappingService, "build_all", _capture,
     ):
-        mapping_apply_task.run(mapping.id, ontology.id)
+        mapping_apply_task(mapping.id, ontology.id)
 
     register.assert_called_once_with(start_worker=False)
     assert captured == {
@@ -1746,14 +1746,14 @@ def test_mapping_task_cold_worker_path_runs_real_build_all(
         MappingService, "_rebuild_neo4j_projection", return_value=True,
     ):
         # high establishes the entered edge.
-        mapping_apply_task.run(mapping.id, ontology.id)
+        mapping_apply_task(mapping.id, ontology.id)
         DatasetService(db).create_version(
             dataset.id,
             _csv_bytes([{"record_id": "R-1", "risk": "low"}]),
             rowcount=1,
         )
         # high -> low must persist and synchronously dispatch the leave edge.
-        mapping_apply_task.run(mapping.id, ontology.id)
+        mapping_apply_task(mapping.id, ontology.id)
 
     db.expire_all()
     applied = db.query(OntologyMapping).filter_by(id=mapping.id).one()
@@ -1826,7 +1826,7 @@ def test_mapping_task_accepts_link_subscription_anchor_and_stays_approved_only(
     with patch("app.database.SessionLocal", return_value=db), patch.object(
         MappingService, "build_all", _capture,
     ):
-        mapping_apply_task.run(link_mapping.id, ontology.id)
+        mapping_apply_task(link_mapping.id, ontology.id)
 
     assert captured == {
         "ontology_id": ontology.id,
@@ -1841,7 +1841,7 @@ def test_mapping_task_missing_mapping_is_hard_failure():
     fake_db.query.return_value.filter.return_value.first.return_value = None
     with patch("app.database.SessionLocal", return_value=fake_db):
         with pytest.raises(ValueError, match="not found in ontology"):
-            mapping_apply_task.run("missing-map", "ont-1")
+            mapping_apply_task("missing-map", "ont-1")
     fake_db.close.assert_called_once()
 
 
