@@ -179,7 +179,7 @@ test('提交进行中禁止关闭弹窗；登记成功 toast 展示事件编号'
   await expect(dialog).toBeVisible()
 
   releaseCreate()
-  const toast = page.getByRole('status').filter({ hasText: '事件登记成功' })
+  const toast = page.locator('[data-sonner-toast]').filter({ hasText: '事件登记成功' })
   await expect(toast).toBeVisible()
   await expect(toast).toContainText('EVT-20260808-0009')
   await expect(dialog).toBeHidden()

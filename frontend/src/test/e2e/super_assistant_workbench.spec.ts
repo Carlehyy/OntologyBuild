@@ -812,7 +812,7 @@ test('记忆宫殿：选中即预览，md 在线编辑保存触发 PUT content�
   await editorPanel.getByRole('button', { name: '保存并重建图谱' }).click()
   await expect.poll(() => mocks.palaceContentPuts.length).toBe(1)
   expect(JSON.parse(mocks.palaceContentPuts[0])).toMatchObject({ content: '# 更新后的知识库\n\n张三 任职 ACME。' })
-  // toast 提示（渲染在弹窗外层的 ToastProvider）+ 编辑器关闭回到预览
+  // toast 提示（渲染在弹窗外层的全局 Toaster（sonner））+ 编辑器关闭回到预览
   await expect(page.getByText('已保存，图谱重建已排队')).toBeVisible()
   await expect(editorPanel).toHaveCount(0)
   await expect(dialog.getByTestId('palace-file-preview')).toBeVisible()

@@ -468,7 +468,7 @@ test('版本浮层回滚生成新版本', async ({ page }) => {
   expect(putRequest.postDataJSON().definition.objects).toHaveLength(2)
 
   // 成功 toast + 新版本芯片 v3 出现并选中
-  await expect(page.getByRole('status').filter({ hasText: '已回滚并生成新版本 v3' })).toBeVisible()
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: '已回滚并生成新版本 v3' })).toBeVisible()
   const chipV3 = page.getByRole('button', { name: 'v3 · 手动' })
   await expect(chipV3).toBeVisible()
   await expect(chipV3).toHaveAttribute('aria-pressed', 'true')

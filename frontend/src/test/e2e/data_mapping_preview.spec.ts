@@ -600,7 +600,7 @@ test('详情页头部操作区：映射入口跳转、悬停即时提示、导�
     if (settled) break
   }
 
-  // 导出成功：真实触发下载 + 右下角 toast 提示；页面文档流保持原位
+  // 导出成功：真实触发下载 + 顶部居中 toast 提示；页面文档流保持原位
   const downloadPromise = page.waitForEvent('download')
   await exportButton.click()
   const download = await downloadPromise

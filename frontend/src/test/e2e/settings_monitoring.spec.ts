@@ -238,15 +238,15 @@ test.describe('系统设置 · 运行监控（admin）', () => {
 
     // z 层级契约：抽屉 z-index 1000，toast 必须位于其上方（此前被遮挡却仍判
     // 可见，靠 elementFromPoint 命中检测才能真正防止回归）
+    const toastCard = page.locator('[data-sonner-toast]').filter({ hasText: '已尝试写入剪贴板' })
+    await expect(toastCard).toBeVisible()
+    // 等入场 transform 过渡落定（--y: translateY(0)），rect 才是最终命中位置
+    await expect(toastCard).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, 0)')
     const toastOnTop = await page.evaluate(() => {
-      const title = [...document.querySelectorAll('body *')].find(
-        element => element.textContent === '已尝试写入剪贴板' && element.children.length === 0,
+      const title = [...document.querySelectorAll('[data-sonner-toast] [data-title]')].find(
+        element => element.textContent === '已尝试写入剪贴板',
       )
-      if (!title) return false
-      let card: Element | null = title
-      while (card && getComputedStyle(card).position !== 'fixed') {
-        card = card.parentElement
-      }
+      const card = title?.closest('[data-sonner-toast]')
       if (!card) return false
       const rect = card.getBoundingClientRect()
       const hit = document.elementFromPoint(

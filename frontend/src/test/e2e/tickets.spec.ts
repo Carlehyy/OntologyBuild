@@ -211,7 +211,7 @@ test('任意页面从弹窗提交工单：分类必选并自动携带当前页�
   await dialog.getByRole('radio', { name: '体验优化' }).click()
   await dialog.getByRole('button', { name: '提交工单', exact: true }).click()
 
-  await expect(page.getByRole('status').filter({ hasText: '工单提交成功' })).toBeVisible()
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: '工单提交成功' })).toBeVisible()
   expect(calls.createdBodies).toHaveLength(1)
   expect(calls.createdBodies[0].category).toBe('experience')
   // 提交页面 = 提交时所在页面完整地址（含 hash 路由）
@@ -257,7 +257,7 @@ test('反馈内容粘贴图片自动转附件并可预览；不支持的粘贴�
   await expect(dialog.locator('#ticket-content')).toHaveValue('画布放大后卡片文字模糊。')
 
   await dialog.getByRole('button', { name: '提交工单', exact: true }).click()
-  await expect(page.getByRole('status').filter({ hasText: '工单提交成功' })).toBeVisible()
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: '工单提交成功' })).toBeVisible()
   // 粘贴的图片随工单一并上传
   await expect.poll(() => calls.uploadedFiles).toEqual([expect.stringMatching(/^粘贴图片-.*\.png$/)])
 })
@@ -280,8 +280,11 @@ test('工单页提交：必填校验一次报齐，成功后展示工单编号�
   })
   await dialog.getByRole('button', { name: '提交工单', exact: true }).click()
 
-  const toast = page.getByRole('status').filter({ hasText: '工单提交成功' })
+  const toast = page.locator('[data-sonner-toast]').filter({ hasText: '工单提交成功' })
   await expect(toast).toBeVisible()
+  // 全局提示位置契约：统一顶部居中（DESIGN.md §4.3）
+  await expect(page.locator('[data-sonner-toaster]')).toHaveAttribute('data-x-position', 'center')
+  await expect(page.locator('[data-sonner-toaster]')).toHaveAttribute('data-y-position', 'top')
   await expect(toast).toContainText('TK-20260828-0009')
   await expect(toast).toContainText('待处理')
   await expect(dialog).toBeHidden()
@@ -332,7 +335,7 @@ test('管理员处理工单：评论必填，提交后状态更新并落入处�
   await expect(submit).toBeEnabled()
   await submit.click()
 
-  await expect(page.getByRole('status').filter({ hasText: '工单已处理' })).toBeVisible()
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: '工单已处理' })).toBeVisible()
   expect(calls.progressBodies).toEqual([
     { status: 'accepted', comment: '确认为有效反馈，排入下个迭代' },
   ])
@@ -357,7 +360,7 @@ test('非管理员：仅见自己的工单提示、无处理面板，仍可提�
   await dialog.getByLabel('反馈内容', { exact: false }).fill('筛选栏希望支持日期范围')
   await dialog.getByRole('radio', { name: '其他' }).click()
   await dialog.getByRole('button', { name: '提交工单', exact: true }).click()
-  await expect(page.getByRole('status').filter({ hasText: '工单提交成功' })).toBeVisible()
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: '工单提交成功' })).toBeVisible()
   expect(calls.createdBodies).toHaveLength(1)
   expect(calls.createdBodies[0].category).toBe('other')
 })
