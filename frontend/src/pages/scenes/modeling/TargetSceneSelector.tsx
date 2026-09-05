@@ -63,7 +63,7 @@ export default function TargetSceneSelector({
         aria-expanded={open}
         disabled={disabled}
         onClick={() => setOpen(value => !value)}
-        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 transition-colors hover:border-teal-300 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-2 text-xs text-foreground transition-colors hover:border-brand-line focus:border-brand focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
         title={selectedScene ? selectedScene.name : '选择草稿场景'}
       >
         <span className="max-w-[10rem] truncate">{selectedScene ? selectedScene.name : '从零新建'}</span>
@@ -75,7 +75,7 @@ export default function TargetSceneSelector({
           aria-label="清除已选场景"
           title="清除已选场景"
           onClick={() => { onChange(null); closeMenu(); triggerRef.current?.focus() }}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-muted hover:text-foreground"
         >
           <X size={12} />
         </button>
@@ -83,10 +83,10 @@ export default function TargetSceneSelector({
       {open && !disabled && (
         <>
           <div className="fixed inset-0 z-20" onClick={closeMenu} aria-hidden="true" />
-          <div className="absolute left-0 top-full z-30 mt-1.5 w-72 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_18px_52px_rgba(15,23,42,0.16)]">
-            <div className="border-b border-slate-100 p-2">
+          <div className="absolute left-0 top-full z-30 mt-1.5 w-72 overflow-hidden rounded-xl border border-border bg-card shadow-[0_18px_52px_rgba(15,23,42,0.16)]">
+            <div className="border-b border-border p-2">
               <div className="relative">
-                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
                 <input
                   autoFocus
                   value={search}
@@ -99,7 +99,7 @@ export default function TargetSceneSelector({
                     }
                   }}
                   placeholder="搜索草稿场景…"
-                  className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-2 text-xs text-slate-700 outline-none transition focus:border-teal-400 focus:bg-white"
+                  className="h-8 w-full rounded-lg border border-border bg-muted pl-8 pr-2 text-xs text-foreground outline-none transition focus:border-brand focus:bg-card"
                 />
               </div>
             </div>
@@ -112,15 +112,15 @@ export default function TargetSceneSelector({
                 onClick={() => { onChange(null); closeMenu(); triggerRef.current?.focus() }}
                 className={
                   'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors '
-                  + (!selectedScene ? 'bg-teal-50 text-teal-900' : 'text-slate-700 hover:bg-slate-50')
+                  + (!selectedScene ? 'bg-brand-soft text-brand-ink' : 'text-foreground hover:bg-muted')
                 }
               >
-                <Sparkles size={13} className="shrink-0 text-teal-500" />
+                <Sparkles size={13} className="shrink-0 text-brand-ink" />
                 <span className="min-w-0 flex-1 truncate">从零新建</span>
-                {!selectedScene && <CheckCircle2 size={14} className="shrink-0 text-teal-600" />}
+                {!selectedScene && <CheckCircle2 size={14} className="shrink-0 text-brand-ink" />}
               </button>
               {filteredScenes.length === 0 ? (
-                <div className="px-4 py-6 text-center text-xs leading-5 text-slate-400">无匹配场景</div>
+                <div className="px-4 py-6 text-center text-xs leading-5 text-[var(--color-text-tertiary)]">无匹配场景</div>
               ) : filteredScenes.map(scene => {
                 const selected = scene.id === targetSceneId
                 return (
@@ -133,12 +133,12 @@ export default function TargetSceneSelector({
                     onClick={() => { onChange(scene.id); closeMenu(); triggerRef.current?.focus() }}
                     className={
                       'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors '
-                      + (selected ? 'bg-teal-50 text-teal-900' : 'text-slate-700 hover:bg-slate-50')
+                      + (selected ? 'bg-brand-soft text-brand-ink' : 'text-foreground hover:bg-muted')
                     }
                   >
                     <span className="min-w-0 flex-1 truncate">{scene.name}</span>
-                    <span className="shrink-0 text-[10px] tabular-nums text-slate-400">v{scene.current_version_no}</span>
-                    {selected && <CheckCircle2 size={14} className="shrink-0 text-teal-600" />}
+                    <span className="shrink-0 text-[10px] tabular-nums text-[var(--color-text-tertiary)]">v{scene.current_version_no}</span>
+                    {selected && <CheckCircle2 size={14} className="shrink-0 text-brand-ink" />}
                   </button>
                 )
               })}

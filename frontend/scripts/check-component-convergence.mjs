@@ -50,10 +50,7 @@ const NATIVE_SELECT_ALLOWLIST = new Set([
   'pages/pipelines/sync-tasks/HistoryDrawer.tsx',
   'pages/pipelines/sync-tasks/SyncTasksTab.tsx',
   'pages/pipelines/sync-tasks/TaskFormModal.tsx',
-                  'pages/scenes/detail/DisplayTab.tsx',
-  'pages/scenes/list/SceneListPage.tsx',
-  'pages/scenes/modeling/SceneModelingPage.tsx',
-])
+                ])
 
 function sourceFiles(root) {
   return readdirSync(root, { withFileTypes: true }).flatMap(entry => {

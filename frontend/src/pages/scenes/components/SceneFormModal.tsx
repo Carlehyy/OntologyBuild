@@ -95,12 +95,12 @@ export function SceneFormModal({ open, title, initial, onClose, onSubmit }: {
             maxLength={500}
             rows={3}
             placeholder="简要说明场景覆盖的业务范围和用途"
-            className="w-full resize-none rounded-md border border-[var(--color-border)] bg-white px-3 py-2 text-sm text-[var(--color-text-primary)] focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/30"
+            className="w-full resize-none rounded-md border border-[var(--color-border)] bg-card px-3 py-2 text-sm text-[var(--color-text-primary)] focus:border-brand focus:outline-none focus:ring-1 focus:ring-ring"
           />
           <p className="mt-1 text-right text-[11px] text-[var(--color-text-tertiary)]">{description.length}/500</p>
         </div>
         {error && (
-          <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-100 bg-red-50/70 px-3.5 py-3 text-sm text-red-700">
+          <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-3.5 py-3 text-sm text-[var(--color-danger)]">
             <AlertCircle size={16} className="mt-0.5 shrink-0" />
             <span className="leading-5">{error}</span>
           </div>

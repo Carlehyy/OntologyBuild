@@ -10,6 +10,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, ArrowLeft, Axis3d, Check, History, Send, Sparkles, Square, X } from 'lucide-react'
 import { scenesApi } from '@/api/scenes'
@@ -260,17 +261,17 @@ export default function SceneModelingPage() {
         {/* 左卡片：三维场景可视化 */}
         <section className={`${panelClass} flex flex-col`} aria-label="三维场景可视化" data-testid="scene-canvas-card">
           {/* 顶栏白色框：返回 / 标题信息 + 右侧「版本管理」按钮 */}
-          <header className="relative flex h-14 shrink-0 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-white px-4">
+          <header className="relative flex h-14 shrink-0 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-card px-4">
             <div className="flex min-w-0 items-center gap-2">
               <Link
                 to="/scenes"
                 aria-label="返回三维场景列表"
                 title="返回三维场景列表"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition-colors hover:bg-muted hover:text-muted-foreground"
               >
                 <ArrowLeft size={16} />
               </Link>
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-teal-50 text-teal-600">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand-soft text-brand-ink">
                 <Axis3d size={18} />
               </div>
               <div className="min-w-0">
@@ -290,8 +291,8 @@ export default function SceneModelingPage() {
                 title="查看历史版本"
                 className={['inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors',
                   showVersions
-                    ? 'bg-slate-900 text-white shadow-sm hover:bg-slate-800'
-                    : 'border border-[var(--color-border)] bg-white text-slate-600 hover:bg-slate-100'].join(' ')}
+                    ? 'bg-accent text-[var(--color-text-inverse)] shadow-sm hover:bg-accent'
+                    : 'border border-[var(--color-border)] bg-card text-muted-foreground hover:bg-muted'].join(' ')}
               >
                 <History size={13} /> 版本管理
               </button>
@@ -306,27 +307,27 @@ export default function SceneModelingPage() {
                   >
                     <header className="flex items-center justify-between gap-2 border-b border-[var(--color-border)] px-3 py-2">
                       <div className="min-w-0">
-                        <p className="text-xs font-semibold text-slate-800">版本历史</p>
-                        <p className="truncate text-[10.5px] text-slate-400">选择任一版本即可在画布预览</p>
+                        <p className="text-xs font-semibold text-foreground">版本历史</p>
+                        <p className="truncate text-[10.5px] text-[var(--color-text-tertiary)]">选择任一版本即可在画布预览</p>
                       </div>
                       <button
                         type="button"
                         onClick={() => setShowVersions(false)}
                         aria-label="关闭版本历史"
-                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100"
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--color-text-tertiary)] hover:bg-muted"
                       >
                         <X size={13} />
                       </button>
                     </header>
                     <div className="scrollbar-thin max-h-72 overflow-y-auto p-1.5">
                       {!boundSceneId ? (
-                        <p className="px-2 py-4 text-center text-[11px] leading-5 text-slate-400">
+                        <p className="px-2 py-4 text-center text-[11px] leading-5 text-[var(--color-text-tertiary)]">
                           尚未绑定场景：助手生成首个版本后，即可在此回看。
                         </p>
                       ) : versionsQuery.isLoading ? (
                         <LoadingState className="py-6" />
                       ) : versionList.length === 0 ? (
-                        <p className="px-2 py-4 text-center text-[11px] leading-5 text-slate-400">暂无版本</p>
+                        <p className="px-2 py-4 text-center text-[11px] leading-5 text-[var(--color-text-tertiary)]">暂无版本</p>
                       ) : versionList.map(version => (
                         <VersionRow
                           key={version.id}
@@ -359,12 +360,12 @@ export default function SceneModelingPage() {
               ? <SceneCanvas definition={definition} className="absolute inset-0" />
               : (
                 <div className="flex h-full items-center justify-center p-6">
-                  <div className="max-w-sm rounded-lg border border-dashed border-slate-300 bg-white/90 px-5 py-6 text-center">
-                    <Axis3d size={22} className="mx-auto mb-2 text-slate-300" />
-                    <p className="text-sm font-medium text-slate-700">
+                  <div className="max-w-sm rounded-lg border border-dashed border-border bg-card px-5 py-6 text-center">
+                    <Axis3d size={22} className="mx-auto mb-2 text-[var(--color-text-tertiary)]" />
+                    <p className="text-sm font-medium text-foreground">
                       {boundSceneId ? '该场景还没有版本定义' : '尚未绑定场景'}
                     </p>
-                    <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                       {boundSceneId
                         ? '在右侧描述需求，助手将生成第一个版本'
                         : '在右侧选择草稿场景或从零新建，助手生成的白模将实时呈现在这里'}
@@ -379,9 +380,9 @@ export default function SceneModelingPage() {
 
         {/* 右卡片：场景助手对话框 */}
         <aside className={`${panelClass} flex flex-col`} aria-label="场景助手对话框" data-testid="scene-chat-card">
-          <header className="relative flex h-14 shrink-0 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-white px-4">
+          <header className="relative flex h-14 shrink-0 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-card px-4">
             <div className="flex min-w-0 items-center gap-2">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-teal-50 text-teal-600">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand-soft text-brand-ink">
                 <Sparkles size={16} />
               </div>
               <div className="min-w-0">
@@ -392,7 +393,7 @@ export default function SceneModelingPage() {
             <button
               type="button"
               onClick={() => setShowHistory(true)}
-              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-lg bg-slate-100 px-2.5 text-xs font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
+              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-lg bg-muted px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-brand-soft hover:text-brand-ink"
               title="历史会话"
             >
               <History size={13} /> 历史会话
@@ -410,39 +411,42 @@ export default function SceneModelingPage() {
           </header>
 
           {/* 发送上下文工具条：目标场景 + 对话模型 */}
-          <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-white px-3 py-2">
+          <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-card px-3 py-2">
             <TargetSceneSelector
               targetSceneId={targetSceneId === NEW_SCENE ? null : targetSceneId}
               drafts={draftScenes}
               onChange={id => { resetChat(); setTargetSceneId(id ?? NEW_SCENE) }}
             />
-            <select
-              value={modelId}
-              aria-label="选择对话模型"
-              onChange={event => setModelId(event.target.value)}
-              className="h-8 min-w-0 flex-1 truncate rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+            <Select
+              value={modelId || '__none__'}
+              onValueChange={value => setModelId(value === '__none__' ? '' : value)}
             >
-              <option value="">选择对话模型</option>
-              {llmModels.map(model => (
-                <option key={model.id} value={model.id}>{model.name}</option>
-              ))}
-            </select>
+              <SelectTrigger className="h-8 min-w-0 flex-1 rounded-md bg-card px-2 text-xs" aria-label="选择对话模型">
+                <SelectValue placeholder="选择对话模型" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">选择对话模型</SelectItem>
+                {llmModels.map(model => (
+                  <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {modelsQuery.isSuccess && llmModels.length === 0 && (
             <div className="shrink-0 px-3 pt-3">
-              <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <div className="flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-bg)] px-3 py-2 text-xs text-[var(--color-warning)]">
                 <AlertTriangle size={14} className="shrink-0" />
                 <span className="flex-1">尚未配置对话模型：场景助手需要一个 LLM 才能工作。</span>
-                <Link to="/models" className="flex items-center gap-1 rounded-lg border border-amber-300 bg-white px-2 py-1 text-xs hover:bg-amber-100">去模型配置</Link>
+                <Link to="/models" className="flex items-center gap-1 rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-card px-2 py-1 text-xs hover:bg-[var(--color-warning-bg)]">去模型配置</Link>
               </div>
             </div>
           )}
 
           <div className="scrollbar-thin min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
             {timeline.length === 0 && (
-              <div className="mt-10 space-y-2 text-center text-xs leading-5 text-slate-400">
-                <Sparkles size={22} className="mx-auto text-teal-500" />
+              <div className="mt-10 space-y-2 text-center text-xs leading-5 text-[var(--color-text-tertiary)]">
+                <Sparkles size={22} className="mx-auto text-brand-ink" />
                 <p>描述你想构建的业务场景，例如：</p>
                 <p>「建一个供应链园区：采购、仓库、生产三栋建筑，</p>
                 <p>库位利用率超 95% 时告警」</p>
@@ -453,7 +457,7 @@ export default function SceneModelingPage() {
               if (item.kind === 'user') {
                 return (
                   <div key={item.id} className="flex justify-end">
-                    <div className="max-w-[85%] rounded-lg bg-teal-600 px-3 py-2 text-xs leading-5 text-white">
+                    <div className="max-w-[85%] rounded-lg bg-brand px-3 py-2 text-xs leading-5 text-[var(--color-text-inverse)]">
                       {item.content}
                     </div>
                   </div>
@@ -461,20 +465,20 @@ export default function SceneModelingPage() {
               }
               if (item.kind === 'assistant') {
                 return (
-                  <div key={item.id} className="max-w-[90%] rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700">
+                  <div key={item.id} className="max-w-[90%] rounded-lg border border-border bg-muted px-3 py-2 text-xs leading-5 text-foreground">
                     {item.content}
                   </div>
                 )
               }
               if (item.kind === 'system') {
                 return (
-                  <div key={item.id} className="rounded-md bg-teal-50 px-2.5 py-1.5 text-center text-[11px] text-teal-700">
+                  <div key={item.id} className="rounded-md bg-brand-soft px-2.5 py-1.5 text-center text-[11px] text-brand-ink">
                     {item.text}
                   </div>
                 )
               }
               return (
-                <div key={item.id} className="rounded-md border border-red-200 bg-red-50/70 px-2.5 py-1.5 text-[11px] text-red-700">
+                <div key={item.id} className="rounded-md border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-2.5 py-1.5 text-[11px] text-[var(--color-danger)]">
                   <div className="flex items-center gap-1 font-medium">
                     <AlertTriangle size={12} /> {item.message}
                   </div>
@@ -492,8 +496,8 @@ export default function SceneModelingPage() {
           </div>
           {/* 输入栏对齐本体助手页（MYW-64 反馈）：外层 pt/pb 2.5 + 内层单行胶囊，
               发送/停止为胶囊内右侧的图标方钮。 */}
-          <div className="border-t border-[var(--color-border)] bg-white px-4 pb-2.5 pt-2.5">
-            <div className="relative flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-white py-1.5 pl-3 pr-1.5 transition-all focus-within:border-teal-400 focus-within:ring-2 focus-within:ring-teal-100">
+          <div className="border-t border-[var(--color-border)] bg-card px-4 pb-2.5 pt-2.5">
+            <div className="relative flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-card py-1.5 pl-3 pr-1.5 transition-all focus-within:border-brand focus-within:ring-2 focus-within:ring-ring">
               <input
                 value={input}
                 onChange={event => setInput(event.target.value)}
@@ -513,7 +517,7 @@ export default function SceneModelingPage() {
                   onClick={() => abortRef.current?.abort()}
                   aria-label="停止生成"
                   data-testid="scene-chat-stop"
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-rose-600 text-white transition-all duration-200 hover:bg-rose-500"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-viz-rose text-[var(--color-text-inverse)] transition-all duration-200 hover:bg-viz-rose"
                 >
                   <Square size={13} fill="currentColor" />
                 </button>
@@ -525,7 +529,7 @@ export default function SceneModelingPage() {
                   aria-label="发送"
                   data-testid="scene-chat-send"
                   title="发送"
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-teal-700 text-white transition-all duration-200 hover:bg-teal-600 disabled:cursor-not-allowed disabled:opacity-25"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand-deep text-[var(--color-text-inverse)] transition-all duration-200 hover:bg-brand disabled:cursor-not-allowed disabled:opacity-25"
                 >
                   <Send size={14} />
                 </button>
@@ -564,20 +568,20 @@ function VersionRow({ version, selected, onSelect }: {
       onClick={onSelect}
       title={version.note}
       className={'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors '
-        + (selected ? 'bg-teal-50' : 'hover:bg-slate-50')}
+        + (selected ? 'bg-brand-soft' : 'hover:bg-muted')}
     >
       <span className="min-w-0 flex-1">
-        <span className={'block truncate text-xs font-medium ' + (selected ? 'text-teal-800' : 'text-slate-700')}>
+        <span className={'block truncate text-xs font-medium ' + (selected ? 'text-brand-ink' : 'text-foreground')}>
           v{version.version_no} · {versionSourceLabel(version.source)}
         </span>
         {version.note && (
-          <span className="mt-0.5 block truncate text-[11px] text-slate-500">{version.note}</span>
+          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{version.note}</span>
         )}
-        <span className="mt-0.5 block text-[10px] tabular-nums text-slate-400">
+        <span className="mt-0.5 block text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
           {formatVersionTime(version.created_at)}
         </span>
       </span>
-      {selected && <Check size={14} className="mt-0.5 shrink-0 text-teal-600" />}
+      {selected && <Check size={14} className="mt-0.5 shrink-0 text-brand-ink" />}
     </button>
   )
 }
