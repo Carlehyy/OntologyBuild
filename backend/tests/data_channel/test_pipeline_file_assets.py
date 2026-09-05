@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 import pytest
-from jose import jwt
+import jwt
 
 from app.config import settings
 from app.data_channel.file_assets.models import PipelineFileAsset
