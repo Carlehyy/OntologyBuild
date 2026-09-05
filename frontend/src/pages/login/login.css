@@ -56,6 +56,17 @@
   user-select: none;
 }
 
+/* 文字列可读性底纱：按视口百分比绘制，任意宽高比下都盖住文案底下的插画区
+   （底图已去文字化，不再允许按像素手调的遮盖补丁） */
+.ontology-login__canvas::before {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  content: "";
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.85) 22%, rgba(255, 255, 255, 0) 36%);
+  pointer-events: none;
+}
+
 .ontology-login__brand {
   position: absolute;
   z-index: 2;
@@ -64,21 +75,6 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  isolation: isolate;
-}
-
-.ontology-login__brand::before {
-  position: absolute;
-  z-index: 0;
-  inset: -44px -100px -22px -30px;
-  content: "";
-  background: linear-gradient(90deg, #fff 0 92%, rgba(255, 255, 255, 0));
-  pointer-events: none;
-}
-
-.ontology-login__brand > * {
-  position: relative;
-  z-index: 1;
 }
 
 .ontology-login__brand-mark {
@@ -111,21 +107,6 @@
   top: 17.65%;
   left: 3.5%;
   width: 33.5%;
-  isolation: isolate;
-}
-
-.ontology-login__story::before {
-  position: absolute;
-  z-index: 0;
-  inset: -35px -70px -25px -20px;
-  content: "";
-  background: linear-gradient(90deg, #fff 0 88%, rgba(255, 255, 255, 0));
-  pointer-events: none;
-}
-
-.ontology-login__story > * {
-  position: relative;
-  z-index: 1;
 }
 
 .ontology-login__story h1 {
@@ -167,21 +148,9 @@
   margin: 0;
   padding: 0;
   list-style: none;
-  isolation: isolate;
-}
-
-.ontology-login__features::before {
-  position: absolute;
-  z-index: 0;
-  inset: -20px -150px -60px -20px;
-  content: "";
-  background: linear-gradient(90deg, #fff 0 72%, rgba(255, 255, 255, 0));
-  pointer-events: none;
 }
 
 .ontology-login__features li {
-  position: relative;
-  z-index: 1;
   display: flex;
   align-items: center;
   gap: 16px;
@@ -563,16 +532,8 @@
   opacity: 0.35;
 }
 
-.dark .ontology-login__brand::before {
-  background: linear-gradient(90deg, #11161e 0 92%, rgba(17, 22, 30, 0));
-}
-
-.dark .ontology-login__story::before {
-  background: linear-gradient(90deg, #11161e 0 88%, rgba(17, 22, 30, 0));
-}
-
-.dark .ontology-login__features::before {
-  background: linear-gradient(90deg, #11161e 0 72%, rgba(17, 22, 30, 0));
+.dark .ontology-login__canvas::before {
+  background: linear-gradient(90deg, rgba(17, 22, 30, 0.92) 0%, rgba(17, 22, 30, 0.8) 22%, rgba(17, 22, 30, 0) 36%);
 }
 
 .dark .ontology-login__brand-mark {

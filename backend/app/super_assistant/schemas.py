@@ -230,6 +230,70 @@ class McpTestOut(BaseModel):
     tools: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class MulticaCommandOut(BaseModel):
+    command: str
+    title: str
+    description: str
+    usage: str
+    write: bool
+
+
+class MulticaConfigOut(BaseModel):
+    configured: bool
+    enabled: bool
+    base_url: str
+    workspace_id: str
+    token_set: bool
+    # 命令目录由后端统一下发：未配置/未启用时为空，前端据此决定
+    # 输入框是否展示 /multica: 命令提示（未配置不可用）
+    commands: list[MulticaCommandOut] = Field(default_factory=list)
+    last_test_status: str | None
+    last_test_message: str | None
+    last_tested_at: datetime | None
+
+
+class MulticaConfigUpdate(BaseModel):
+    base_url: str = Field(min_length=1, max_length=500)
+    # token 留空/缺省表示保留已保存凭据（不回显、不覆盖）
+    token: str | None = Field(default=None, max_length=500)
+    workspace_id: str = Field(min_length=1, max_length=100)
+    enabled: bool = True
+
+    @field_validator("base_url", "workspace_id", mode="before")
+    @classmethod
+    def strip_required_fields(cls, value: str) -> str:
+        return str(value).strip()
+
+    @field_validator("token", mode="before")
+    @classmethod
+    def strip_token(cls, value: str | None) -> str | None:
+        return None if value is None else str(value).strip()
+
+
+class MulticaTestRequest(BaseModel):
+    # 草稿测试（保存前）传入表单值；缺省回落到已保存配置
+    base_url: str | None = Field(default=None, max_length=500)
+    token: str | None = Field(default=None, max_length=500)
+
+    @field_validator("base_url", "token", mode="before")
+    @classmethod
+    def strip_optional_fields(cls, value: str | None) -> str | None:
+        return None if value is None else str(value).strip() or None
+
+
+class MulticaWorkspaceOut(BaseModel):
+    id: str
+    name: str
+    slug: str
+
+
+class MulticaTestOut(BaseModel):
+    ok: bool
+    message: str
+    account_name: str | None = None
+    workspaces: list[MulticaWorkspaceOut] = Field(default_factory=list)
+
+
 class MemoryCreate(BaseModel):
     content: str = Field(min_length=1, max_length=50_000)
     zone: str = Field(default="general", min_length=1, max_length=50)

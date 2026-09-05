@@ -116,8 +116,8 @@ export default function LoginPage() {
 
         <section className="ontology-login__story" aria-labelledby="login-story-title">
           <h1 id="login-story-title">
-            <span>智能本体构建</span>
-            <strong>让知识连接未来</strong>
+            <span>构建本体智能</span>
+            <strong>让数据辅助决策</strong>
           </h1>
           <p>
             OpenOntology 是一款新一代本体构建与管理平台，帮助企业快速构建、管理和应用领域本体，让数据变化自动驱动业务运转。

@@ -15,6 +15,7 @@ from app.super_assistant import (
     conversation_service,
     mcp_server_service,
     memory_service,
+    multica_service,
     palace_service,
     reflection_service,
     router as assistant_router,
@@ -155,6 +156,17 @@ ROUTE_PARAMETERS = {
         "current_user",
     ),
     "install_platform_minio_mcp": ("db", "current_user"),
+    "get_multica_config": ("db", "current_user"),
+    "update_multica_config": (
+        "body",
+        "db",
+        "current_user",
+    ),
+    "test_multica_connection": (
+        "body",
+        "db",
+        "current_user",
+    ),
     "list_memories": (
         "zone",
         "include_superseded",
@@ -324,6 +336,18 @@ DELEGATES = {
         "mcp_server_service",
         "install_platform_minio_mcp",
     ),
+    "get_multica_config": (
+        "multica_service",
+        "get_config",
+    ),
+    "update_multica_config": (
+        "multica_service",
+        "save_config",
+    ),
+    "test_multica_connection": (
+        "multica_service",
+        "test_connection",
+    ),
     "list_memories": ("memory_service", "list_memories"),
     "create_memory": ("memory_service", "create_memory"),
     "update_memory": ("memory_service", "update_memory"),
@@ -388,6 +412,8 @@ BODY_TYPES = {
     "put_skill_file": schemas.SkillFileContent,
     "create_mcp_server": schemas.McpServerCreate,
     "update_mcp_server": schemas.McpServerUpdate,
+    "update_multica_config": schemas.MulticaConfigUpdate,
+    "test_multica_connection": schemas.MulticaTestRequest,
     "create_memory": schemas.MemoryCreate,
     "update_memory": schemas.MemoryUpdate,
     "distill_memories": schemas.MemoryDistillRequest,
@@ -492,10 +518,10 @@ def test_super_assistant_route_signatures_remain_stable():
 
 
 def test_super_assistant_handlers_delegate_without_orm_or_transactions():
-    # router.py 已贴近行数上限，新端点（如搜索）落在独立子路由模块；
-    # 委托与事务禁令对两者同样生效。
+    # router.py 已贴近行数上限，新端点（如搜索、multica 外部集成）落在独立
+    # 子路由模块；委托与事务禁令对两者同样生效。
     functions = {}
-    for filename in ("router.py", "search.py"):
+    for filename in ("router.py", "search.py", "multica.py"):
         path = ASSISTANT_DIR / filename
         tree = ast.parse(
             path.read_text(encoding="utf-8"),
@@ -629,6 +655,7 @@ def test_super_assistant_services_do_not_import_http_router():
         conversation_service,
         mcp_server_service,
         memory_service,
+        multica_service,
         palace_service,
         reflection_service,
         search_service,
@@ -685,9 +712,11 @@ def test_super_assistant_openapi_matches_pre_extraction_baseline():
     # /palace/files/{id} 的 delete、/palace/files/{id}/rebuild 与
     # /palace/graph 的 GET 共 5 个操作（4 条路径）；第二批新增 ZIP 批量导入、
     # 内容更新(PUT)/替换/预览、图谱检索与聚类合并 6 个操作（6 条路径）；
-    # 三栏重构新增 /palace/files/{id}/raw 原始字节内联读取（图片预览）
-    assert len(paths) == 40
-    assert sum(len(item) for item in paths.values()) == 55
+    # 三栏重构新增 /palace/files/{id}/raw 原始字节内联读取（图片预览）；
+    # multica 外部集成新增 /multica/config 的 GET/PUT 与 /multica/test 的
+    # POST（multica.py 子路由）共 3 个操作（2 条路径）
+    assert len(paths) == 42
+    assert sum(len(item) for item in paths.values()) == 58
     assert hashlib.sha256(payload).hexdigest() == (
-        "eec8e36d5ed979bdf23703f5ac284a36355a442b66d1fe1283e8d9d8fafcaf68"
+        "524aaf3365bd05615ebd74de623e75ca1839aca05fea9a7cc281c15a9f71c84c"
     )

@@ -77,6 +77,11 @@ from app.super_assistant.skill_store import (
     write_text_file,
 )
 from app.super_assistant.search import search_conversations  # noqa: F401  # 再导出供架构测试签名守卫
+from app.super_assistant.multica import (  # noqa: F401  # 再导出供架构测试签名守卫
+    get_multica_config,
+    test_multica_connection,
+    update_multica_config,
+)
 from app.settings.object_storage.service import (
     get_workspace_minio_service,
     minio_tool_manifest,

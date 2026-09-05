@@ -32,9 +32,9 @@ def test_revision_graph_head_is_single_head(tmp_path, monkeypatch):
     heads = ScriptDirectory.from_config(cfg).get_heads()
 
     # 单头门禁：新迁移必须线性追加（当前 head 见 alembic heads 输出）。
-    # 0092 users.token_version 会话吊销代数为当前 head。
+    # 0093 super_assistant_multica 外部集成配置表为当前 head。
     assert len(heads) == 1
-    assert heads == ["0092_user_token_version"]
+    assert heads == ["0093_super_assistant_multica"]
 
 
 def _create_0067_shape_skills_table(db_path: Path) -> None:

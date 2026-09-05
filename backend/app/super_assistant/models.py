@@ -251,6 +251,29 @@ class SuperAssistantMcpServer(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, onupdate=_now)
 
 
+class SuperAssistantMulticaConfig(Base):
+    """每用户一条的 multica 外部集成配置。
+
+    凭据与 SuperAssistantMcpServer 同约定：PAT 加密存储、永不回显
+    （token_set 由 token_encrypted 是否存在推导）。未配置（无行）或
+    enabled=False 时，multica 工具不进入超级助手工具目录，/multica:
+    命令得到确定性引导而非执行。
+    """
+
+    __tablename__ = "super_assistant_multica_configs"
+
+    owner_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    base_url: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    workspace_id: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_test_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_test_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now, onupdate=_now)
+
+
 class SuperAssistantPalaceFile(Base):
     """记忆宫殿的用户级文件库（跨会话长期资产，区别于会话附件）。
 
