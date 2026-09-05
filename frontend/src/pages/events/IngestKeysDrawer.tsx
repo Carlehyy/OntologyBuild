@@ -218,9 +218,8 @@ export default function IngestKeysDrawer({ open, onClose }: { open: boolean; onC
               <Select
                 value={status || '__all__'}
                 onValueChange={value => setStatus((value === '__all__' ? '' : value) as typeof status)}
-                aria-label="密钥状态"
               >
-                <SelectTrigger className="h-9 w-fit min-w-32 rounded-lg bg-card px-2.5 text-xs">
+                <SelectTrigger aria-label="密钥状态" className="h-9 w-fit min-w-32 rounded-lg bg-card px-2.5 text-xs">
                   <SelectValue placeholder="全部状态" />
                 </SelectTrigger>
                 <SelectContent>

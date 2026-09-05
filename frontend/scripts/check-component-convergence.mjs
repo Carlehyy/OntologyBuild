@@ -39,7 +39,6 @@ const AVAILABILITY_SCHEDULER_ALLOWLIST = new Set([
 ])
 
 const NATIVE_SELECT_ALLOWLIST = new Set([
-  'components/mcp/McpServerDialog.tsx',
   'pages/agent/AgentWorkbenchPage.tsx',
   'pages/agent/DecisionSimulationView.tsx',
   'pages/agent/DynamicSentinelDrawer.tsx',
@@ -47,14 +46,11 @@ const NATIVE_SELECT_ALLOWLIST = new Set([
   'pages/agent/ReportStudioPage.tsx',
   'pages/agent/components/OntologyNetworkView.tsx',
   'pages/models/ModelsPage.tsx',
-                  'pages/ontology-model/OntologyNetworkPage.tsx',
-  'pages/pipelines/PipelineEditWizard.tsx',
-  'pages/pipelines/steward/DataStewardPage.tsx',
   'pages/pipelines/sync-tasks/GlobalHistoryModal.tsx',
   'pages/pipelines/sync-tasks/HistoryDrawer.tsx',
   'pages/pipelines/sync-tasks/SyncTasksTab.tsx',
   'pages/pipelines/sync-tasks/TaskFormModal.tsx',
-  'pages/scenes/detail/DisplayTab.tsx',
+                  'pages/scenes/detail/DisplayTab.tsx',
   'pages/scenes/list/SceneListPage.tsx',
   'pages/scenes/modeling/SceneModelingPage.tsx',
 ])

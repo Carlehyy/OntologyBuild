@@ -27,6 +27,7 @@ import pipelinesApi from '@/api/v2/pipelines'
 import type { Pipeline } from '@/api/v2/pipelines'
 import type { ModelConfig } from '@/types/ontology'
 import { useToast } from '@/components/ui/Toast'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import SessionHistoryPopover from '@/components/SessionHistoryPopover'
 import PipelineEditWizard from '../PipelineEditWizard'
 import BrowserModal, { type BrowserDisplayMode } from './components/BrowserCollaboration'
@@ -424,18 +425,20 @@ export default function DataStewardPage() {
               </h2>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <select
-                value={modelId}
-                onChange={event => setModelId(event.target.value)}
-                aria-label="选择数据管家对话模型"
-                title="对话模型"
-                className="h-8 cursor-pointer rounded-md border border-border bg-muted px-2 text-xs text-foreground outline-none transition-colors hover:border-brand-line focus:border-brand focus:ring-2 focus:ring-ring"
+              <Select
+                value={modelId || '__none__'}
+                onValueChange={value => setModelId(value === '__none__' ? '' : value)}
               >
-                <option value="">默认模型</option>
-                {llmModels.map(model => (
-                  <option key={model.id} value={model.id}>{model.name}</option>
-                ))}
-              </select>
+                <SelectTrigger aria-label="选择数据管家对话模型" title="对话模型" className="h-8 w-fit min-w-32 cursor-pointer rounded-md bg-card px-2 text-xs">
+                  <SelectValue placeholder="默认模型" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">默认模型</SelectItem>
+                  {llmModels.map(model => (
+                    <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <button
                 onClick={openFiles}
                 title="查看会话文件"

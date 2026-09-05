@@ -4,6 +4,7 @@ import { Loader2, X } from 'lucide-react'
 import type { McpManagementClient } from '@/api/community'
 import type { McpTransport, SuperMcpServer } from '@/api/superAssistant'
 import { useToast } from '@/components/ui/Toast'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   parseMcpClientConfig,
   type ParsedMcpClientServer,
@@ -234,19 +235,23 @@ export default function McpServerDialog({
                 {clientConfigOptions.length > 1 && (
                   <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
                     选择要填入的 MCP Server
-                    <select
-                      value={selectedClientConfig}
-                      onChange={event => {
-                        const nextIndex = Number(event.target.value)
+                    <Select
+                      value={String(selectedClientConfig)}
+                      onValueChange={value => {
+                        const nextIndex = Number(value)
                         setSelectedClientConfig(nextIndex)
                         fillFromClientConfig(clientConfigOptions[nextIndex])
                       }}
-                      className="mt-1.5 min-h-10 w-full rounded-lg border border-border bg-card px-3 text-xs text-foreground outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/10"
                     >
+                      <SelectTrigger className="mt-1.5 h-10 w-full rounded-lg bg-card px-3 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
                       {clientConfigOptions.map((config, index) => (
-                        <option key={`${config.name}-${index}`} value={index}>{config.name}</option>
+                        <SelectItem key={`${config.name}-${index}`} value={String(index)}>{config.name}</SelectItem>
                       ))}
-                    </select>
+                      </SelectContent>
+                    </Select>
                   </label>
                 )}
                 {clientConfigMessage && <p role="status" className="rounded-lg bg-brand-soft px-3 py-2 text-[11px] leading-5 text-brand-ink">{clientConfigMessage}</p>}
@@ -273,11 +278,16 @@ export default function McpServerDialog({
           <div className="grid gap-4 md:grid-cols-2">
             <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
               传输方式 <span className="text-destructive">*</span>
-              <select value={transport} onChange={event => setTransport(event.target.value as McpTransport)} className="mt-1.5 min-h-11 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-4 focus:ring-ring/10">
-                <option value="streamable_http">Streamable HTTP（推荐）</option>
-                <option value="sse">SSE（旧版兼容）</option>
-                <option value="stdio">stdio（启动本地进程）</option>
-              </select>
+              <Select value={transport} onValueChange={value => setTransport(value as McpTransport)}>
+                <SelectTrigger className="mt-1.5 h-11 w-full rounded-xl bg-card px-3 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="streamable_http">Streamable HTTP（推荐）</SelectItem>
+                  <SelectItem value="sse">SSE（旧版兼容）</SelectItem>
+                  <SelectItem value="stdio">stdio（启动本地进程）</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
           </div>
 

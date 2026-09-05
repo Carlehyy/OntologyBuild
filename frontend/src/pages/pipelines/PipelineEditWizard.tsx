@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import pipelinesApi, { CONTRACT_FIELD_TYPES } from '@/api/v2/pipelines'
 import type { Pipeline, DryRunResult, DryRunRowsPage, ColumnDefinition, ValidateDefinitionsResult } from '@/api/v2/pipelines'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const splitPk = (s?: string): string[] =>
   (s ?? '').split(',').map(x => x.trim()).filter(Boolean)
@@ -622,20 +623,25 @@ export default function PipelineEditWizard({ pipeline, onClose, onSaved }: Props
                             {missingFields?.has('field_name') && <p id={`field-name-error-${i}`} className="mt-0.5 text-[10px] text-[var(--color-danger)]">字段名称为必填项</p>}
                           </td>
                           <td className="px-1 py-1">
-                            <select
+                            <Select
                               value={d.field_type}
-                              disabled={disabled}
-                              required
-                              aria-required="true"
-                              aria-invalid={missingFields?.has('field_type') || undefined}
-                              aria-describedby={missingFields?.has('field_type') ? `field-type-error-${i}` : undefined}
-                              onChange={e => updateColDef(i, { field_type: e.target.value })}
-                              className={`w-full px-2 py-1 border rounded text-xs ${disabled ? 'bg-muted text-[var(--color-text-tertiary)] cursor-not-allowed' : missingFields?.has('field_type') ? 'border-[var(--color-danger)] bg-[var(--color-danger-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--color-danger)]' : ''}`}
+                              onValueChange={value => updateColDef(i, { field_type: value })}
                             >
-                              {CONTRACT_FIELD_TYPES.map(t => (
-                                <option key={t} value={t}>{t}</option>
-                              ))}
-                            </select>
+                              <SelectTrigger
+                                disabled={disabled}
+                                aria-required="true"
+                                aria-invalid={missingFields?.has('field_type') || undefined}
+                                aria-describedby={missingFields?.has('field_type') ? `field-type-error-${i}` : undefined}
+                                className={`w-full px-2 py-1 border rounded text-xs ${disabled ? 'bg-muted text-[var(--color-text-tertiary)] cursor-not-allowed' : missingFields?.has('field_type') ? 'border-[var(--color-danger)] bg-[var(--color-danger-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--color-danger)]' : ''}`}
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {CONTRACT_FIELD_TYPES.map(t => (
+                                  <SelectItem key={t} value={t}>{t}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                             {missingFields?.has('field_type') && <p id={`field-type-error-${i}`} className="mt-0.5 text-[10px] text-[var(--color-danger)]">字段类型为必填项</p>}
                           </td>
                           <td className="px-1 py-1 text-center">
@@ -1012,15 +1018,19 @@ function DryRunPagedTable({ pipelineId, dryRunId, outputCount, onCollapse, title
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-3">
           {outputCount > 1 && (
-            <select
-              value={outputIndex}
-              onChange={e => { setOutputIndex(Number(e.target.value)); setPage(1) }}
-              className="rounded-lg border border-border bg-card px-2 py-1 text-xs text-muted-foreground outline-none focus:border-brand focus:ring-2 focus:ring-ring"
+            <Select
+              value={String(outputIndex)}
+              onValueChange={value => { setOutputIndex(Number(value)); setPage(1) }}
             >
-              {Array.from({ length: outputCount }, (_, i) => (
-                <option key={i} value={i}>产物 {i + 1}</option>
-              ))}
-            </select>
+              <SelectTrigger className="w-fit rounded-lg bg-card px-2 py-1 text-xs" aria-label="选择产物">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Array.from({ length: outputCount }, (_, i) => (
+                  <SelectItem key={i} value={String(i)}>产物 {i + 1}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
           {onCollapse && (
             <button type="button" onClick={onCollapse} className="text-brand-ink transition hover:text-brand-ink hover:underline">
