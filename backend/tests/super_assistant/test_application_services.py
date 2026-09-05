@@ -15,6 +15,7 @@ from app.model_configs.models import ModelConfig
 from app.shared.config import settings
 from app.shared.database import Base
 from app.super_assistant import (
+    conversation_service,
     mcp_server_service,
     router,
     skill_service,
@@ -235,6 +236,129 @@ def test_chat_passes_agent_mode_to_stream_chat(tmp_path, monkeypatch):
             user,
         )
         assert observed["agent_mode"] is True
+
+    engine.dispose()
+
+
+def test_message_listing_reaps_stale_streaming_rows(tmp_path):
+    """list_messages 读取兜底：超时死流行标记中断，活跃 streaming 行不受影响。"""
+    engine = create_engine(f"sqlite:///{tmp_path / 'reap.db'}")
+    Base.metadata.create_all(
+        bind=engine,
+        tables=[
+            User.__table__,
+            SuperAssistantConversation.__table__,
+            SuperAssistantMessage.__table__,
+        ],
+    )
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    now = datetime.now(timezone.utc)
+    with Session() as db:
+        user = User(
+            id="reap-owner",
+            username="reap-owner",
+            email="reap-owner@example.com",
+            password_hash="unused",
+            role="editor",
+        )
+        conversation = SuperAssistantConversation(
+            id="conversation-reap",
+            owner_id=user.id,
+            title="新会话",
+        )
+        stale = SuperAssistantMessage(
+            id="stale-message",
+            conversation_id=conversation.id,
+            role="assistant",
+            content="",
+            status="streaming",
+            created_at=now - timedelta(minutes=11),
+        )
+        fresh = SuperAssistantMessage(
+            id="fresh-message",
+            conversation_id=conversation.id,
+            role="assistant",
+            content="",
+            status="streaming",
+            created_at=now,
+        )
+        db.add_all([user, conversation, stale, fresh])
+        db.commit()
+
+        rows = conversation_service.list_messages(conversation.id, db, user)
+
+        assert [row.id for row in rows] == ["stale-message", "fresh-message"]
+        assert stale.status == "error"
+        assert stale.content == "上一次生成意外中断"
+        assert fresh.status == "streaming"
+        assert fresh.content == ""
+
+    engine.dispose()
+
+
+def test_recover_interrupted_streams_marks_stale_rows(tmp_path, monkeypatch):
+    """启动恢复：所有遗留 streaming 回复跨会话统一标记中断。"""
+    engine = create_engine(f"sqlite:///{tmp_path / 'recover.db'}")
+    Base.metadata.create_all(
+        bind=engine,
+        tables=[
+            User.__table__,
+            SuperAssistantConversation.__table__,
+            SuperAssistantMessage.__table__,
+        ],
+    )
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    with Session() as db:
+        user = User(
+            id="recover-owner",
+            username="recover-owner",
+            email="recover-owner@example.com",
+            password_hash="unused",
+            role="editor",
+        )
+        first = SuperAssistantConversation(
+            id="conversation-a", owner_id=user.id, title="新会话",
+        )
+        second = SuperAssistantConversation(
+            id="conversation-b", owner_id=user.id, title="新会话",
+        )
+        stuck_a = SuperAssistantMessage(
+            id="stuck-a",
+            conversation_id=first.id,
+            role="assistant",
+            content="",
+            status="streaming",
+        )
+        stuck_b = SuperAssistantMessage(
+            id="stuck-b",
+            conversation_id=second.id,
+            role="assistant",
+            content="",
+            status="streaming",
+        )
+        done = SuperAssistantMessage(
+            id="done-message",
+            conversation_id=first.id,
+            role="assistant",
+            content="已完成",
+            status="complete",
+        )
+        db.add_all([user, first, second, stuck_a, stuck_b, done])
+        db.commit()
+
+    monkeypatch.setattr(conversation_service, "SessionLocal", Session)
+    assert conversation_service.recover_interrupted_streams() == {
+        "interrupted": 2,
+    }
+
+    with Session() as db:
+        statuses = {
+            row.id: (row.status, row.content)
+            for row in db.query(SuperAssistantMessage).all()
+        }
+    assert statuses["stuck-a"] == ("error", "上一次生成意外中断")
+    assert statuses["stuck-b"] == ("error", "上一次生成意外中断")
+    assert statuses["done-message"] == ("complete", "已完成")
 
     engine.dispose()
 

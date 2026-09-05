@@ -645,7 +645,9 @@ def test_super_assistant_router_and_services_stay_bounded():
         # 第二批新增 batch/content/replace/preview/graph-search/consolidate
         # 6 个端点 → 811
         "router.py": 850,
-        "conversation_service.py": 320,
+        # 死流回收（_reap_stale_streaming 读取兜底）与启动恢复
+        # （recover_interrupted_streams）落地：320 → 360
+        "conversation_service.py": 360,
         "skill_service.py": 380,
         "mcp_server_service.py": 340,
     }

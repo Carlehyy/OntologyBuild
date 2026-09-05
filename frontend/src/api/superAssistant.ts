@@ -18,6 +18,8 @@ export interface SuperMessage {
   steps: ToolStep[]
   token_usage: Record<string, number>
   created_at: string
+  /** 流式期间的 thinking 轮次（来自 SSE thinking 事件，仅本地缓冲使用，服务端不存储） */
+  thinking_round?: number | null
 }
 
 export interface ToolStep {

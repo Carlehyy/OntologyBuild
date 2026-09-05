@@ -48,6 +48,7 @@ interface StreamBuffer {
   steps: ToolStep[]
   status: SuperMessage['status']
   tokenUsage: Record<string, number>
+  thinkingRound: number | null
 }
 
 function formatFileSize(size: number): string {
@@ -394,6 +395,7 @@ export default function SuperAssistantPage() {
       steps: [],
       status: 'streaming',
       tokenUsage: {},
+      thinkingRound: null,
     }
     streamsRef.current.set(conversationId, buffer)
     // 缓冲始终更新；仅当仍处于该会话时才渲染增量（跨会话隔离）
@@ -406,6 +408,7 @@ export default function SuperAssistantPage() {
             steps: buffer.steps,
             status: buffer.status,
             token_usage: buffer.tokenUsage,
+            thinking_round: buffer.thinkingRound,
           }
         : item))
     }
@@ -415,7 +418,11 @@ export default function SuperAssistantPage() {
     ])
     try {
       await superAssistantApi.streamChat(conversationId, { message, model_config_id: selectedModelId || null, agent_mode: true }, ({ event, data }) => {
-        if (event === 'text_delta') {
+        if (event === 'thinking') {
+          // 推理模型的首 token 前与多轮工具调用间只发 thinking：显示轮次避免长时间空白转圈
+          buffer.thinkingRound = Number(data.round) || null
+          applyBuffer()
+        } else if (event === 'text_delta') {
           buffer.content += String(data.delta || '')
           applyBuffer()
         } else if (event === 'tool_start') {

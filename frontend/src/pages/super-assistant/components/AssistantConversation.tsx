@@ -204,7 +204,7 @@ export function ChatMessage({ message }: { message: SuperMessage }) {
         ? (
           message.content
             ? <AssistantMarkdown content={message.content} />
-            : <span className="inline-flex items-center gap-2 text-sm text-[var(--color-text-tertiary)]"><Loader2 size={14} className="animate-spin" /> 正在思考…</span>
+            : <span className="inline-flex items-center gap-2 text-sm text-[var(--color-text-tertiary)]"><Loader2 size={14} className="animate-spin" /> {message.thinking_round ? `正在思考（第 ${message.thinking_round} 轮推理）` : '正在思考…'}</span>
         )
         : <span className="block whitespace-pre-wrap break-words">{message.content}</span>}
       footer={assistant && message.status === 'error'

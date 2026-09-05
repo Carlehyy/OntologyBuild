@@ -146,6 +146,23 @@ async def application_lifespan(
             except Exception as exc:
                 _main_logger.warning("助手评估任务恢复失败: %s", exc)
 
+        # 超级助手会话恢复：进程重启遗留的 streaming 回复标记中断（旁路能力，
+        # 失败不阻断启动——与助手评估任务恢复同策略）
+        if settings.environment != "test":
+            try:
+                from app.super_assistant.conversation_service import (
+                    recover_interrupted_streams,
+                )
+
+                stream_recovery = recover_interrupted_streams()
+                if stream_recovery.get("interrupted"):
+                    _main_logger.info(
+                        "超级助手会话恢复：标记中断 %s 条遗留 streaming 回复",
+                        stream_recovery.get("interrupted"),
+                    )
+            except Exception as exc:
+                _main_logger.warning("超级助手会话恢复失败: %s", exc)
+
         # 助手评估值守定时器（APScheduler 进程内定时 + NATS 派发；旁路能力，
         # 失败不阻断启动——与任务恢复同策略）
         if settings.environment != "test":

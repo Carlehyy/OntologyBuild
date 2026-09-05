@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.models import User
 from app.model_configs.models import ModelConfig
+from app.shared.database import SessionLocal
 from app.super_assistant import files_workspace
 from app.super_assistant.models import (
     SuperAssistantConversation,
@@ -30,6 +31,52 @@ ConversationLookup = Callable[
     SuperAssistantConversation,
 ]
 ChatStream = Callable[..., Iterator[str]]
+
+# 超过该时长的 streaming 行视为死流（与 chat 的 409 闸门同口径）；
+# 真实生成中断（进程重启/被杀）来不及走流内 GeneratorExit/异常兜底。
+_STREAMING_STALE_SECONDS = 600
+_INTERRUPTED_STREAM_NOTE = "上一次生成意外中断"
+
+
+def _reap_stale_streaming(db: Session, conversation_id: str) -> int:
+    """把会话内超时的遗留 streaming 回复标记为中断，返回回收条数。"""
+    now = datetime.now(timezone.utc)
+    stale_rows = db.query(SuperAssistantMessage).filter(
+        SuperAssistantMessage.conversation_id == conversation_id,
+        SuperAssistantMessage.role == "assistant",
+        SuperAssistantMessage.status == "streaming",
+    ).all()
+    reaped = 0
+    for row in stale_rows:
+        created_at = row.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        if (now - created_at).total_seconds() < _STREAMING_STALE_SECONDS:
+            continue
+        row.status = "error"
+        row.content = row.content or _INTERRUPTED_STREAM_NOTE
+        reaped += 1
+    if reaped:
+        db.commit()
+    return reaped
+
+
+def recover_interrupted_streams() -> dict[str, int]:
+    """启动恢复：进程重启后遗留 streaming 的回复统一标记中断（重启语义）。"""
+    db = SessionLocal()
+    try:
+        stale_rows = db.query(SuperAssistantMessage).filter(
+            SuperAssistantMessage.role == "assistant",
+            SuperAssistantMessage.status == "streaming",
+        ).all()
+        for row in stale_rows:
+            row.status = "error"
+            row.content = row.content or _INTERRUPTED_STREAM_NOTE
+        if stale_rows:
+            db.commit()
+        return {"interrupted": len(stale_rows)}
+    finally:
+        db.close()
 
 
 def _conversation(
@@ -156,6 +203,8 @@ def list_messages(
         current_user.id,
         conversation_id,
     )
+    # 读取兜底：进程死亡遗留的死流行在此回收，前端不再渲染永久"正在思考"
+    _reap_stale_streaming(db, item.id)
     return db.query(SuperAssistantMessage).filter(
         SuperAssistantMessage.conversation_id == item.id,
     ).order_by(SuperAssistantMessage.created_at.asc()).all()
@@ -175,24 +224,17 @@ def chat(
         current_user.id,
         conversation_id,
     )
+    _reap_stale_streaming(db, conversation.id)
     active = db.query(SuperAssistantMessage).filter(
         SuperAssistantMessage.conversation_id == conversation.id,
         SuperAssistantMessage.role == "assistant",
         SuperAssistantMessage.status == "streaming",
     ).order_by(SuperAssistantMessage.created_at.desc()).first()
     if active:
-        created_at = active.created_at
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
-        if (
-            datetime.now(timezone.utc) - created_at
-        ).total_seconds() < 600:
-            raise HTTPException(
-                status_code=409,
-                detail="当前会话仍有一条回复正在生成",
-            )
-        active.status = "error"
-        active.content = "上一次生成意外中断"
+        raise HTTPException(
+            status_code=409,
+            detail="当前会话仍有一条回复正在生成",
+        )
 
     if body.model_config_id:
         _enabled_model(db, body.model_config_id)
