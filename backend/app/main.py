@@ -56,7 +56,18 @@ async def lifespan(app: FastAPI):
     async with application_lifespan(app, seed_database=_seed_db):
         yield
 
-app = FastAPI(title="OntoPrompt API", version="0.1.0", lifespan=lifespan)
+# Production 下关闭交互文档：外网仅经 Nginx 暴露 /api 等业务路径，
+# /docs 不代理本就不可达，此处再关一层防止 backend 端口被误发布；
+# 非 production 环境保留便于调试。契约指纹测试走进程内 app.openapi()，不受影响。
+_disable_docs = settings.environment == "production"
+app = FastAPI(
+    title="OntoPrompt API",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url=None if _disable_docs else "/docs",
+    redoc_url=None if _disable_docs else "/redoc",
+    openapi_url=None if _disable_docs else "/openapi.json",
+)
 
 @app.get("/health/live", tags=["health"])
 def liveness():
