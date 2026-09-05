@@ -1,6 +1,6 @@
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError
+import jwt
 from sqlalchemy.orm import Session
 
 from app.auth.models import User
@@ -35,7 +35,7 @@ def get_current_user(
         if int(payload.get("ver", 0)) != user.token_version:
             raise HTTPException(status_code=401, detail="Token revoked")
         return user
-    except JWTError:
+    except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 

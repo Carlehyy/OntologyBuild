@@ -12,7 +12,7 @@ import tomllib
 import pytest
 import yaml
 from cryptography.fernet import Fernet
-from jose import JWTError
+import jwt
 
 from app.shared.config import Settings, production_config_errors
 from app.settings.workflows.n8n_client import enforce_n8n_url_policy
@@ -458,7 +458,7 @@ def test_secret_key_rotation_invalidates_only_old_jwt(monkeypatch):
         "fedcba9876543210fedcba9876543210",
     )
 
-    with pytest.raises(JWTError):
+    with pytest.raises(jwt.InvalidTokenError):
         service.decode_token(old_token)
     with pytest.raises(file_service.FileAssetError):
         file_service.decode_upload_token(old_upload_token)

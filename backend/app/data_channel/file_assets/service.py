@@ -13,7 +13,7 @@ from pathlib import PurePosixPath
 from typing import Any, BinaryIO
 from urllib.parse import quote, urlsplit
 
-from jose import JWTError, jwt
+import jwt
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -115,7 +115,7 @@ def create_upload_token(
 def decode_upload_token(token: str) -> dict[str, Any]:
     try:
         claims = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
-    except JWTError as exc:
+    except jwt.InvalidTokenError as exc:
         raise FileAssetError("文件上传令牌无效或已过期") from exc
     required = {"pipeline_id", "workflow_id", "invocation_id", "purpose"}
     if claims.get("typ") != UPLOAD_TOKEN_TYPE or not required.issubset(claims):
