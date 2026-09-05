@@ -64,8 +64,8 @@ test('偏好设置弹窗提供浅色/深色主题切换，深色即时生效并�
   // 默认浅色：无 .dark 类，body 背景为浅色基底
   await expect(page.locator('html')).not.toHaveClass(/dark/)
   await expect.poll(() => bodyBackground(page)).toBe(LIGHT_BODY_BG)
-  // 浅色下兜底层不生效：业务页硬编码元素保持原值
-  await expect(page.locator('.bg-white').first()).toHaveCSS('background-color', 'rgb(255, 255, 255)')
+  // 浅色下业务卡片面保持纯白（bg-card = --card 浅档）
+  await expect(page.locator('.bg-card').first()).toHaveCSS('background-color', 'rgb(255, 255, 255)')
 
   const dialog = await openPreferencesDialog(page)
   const group = dialog.getByRole('radiogroup', { name: '主题' })
@@ -77,9 +77,9 @@ test('偏好设置弹窗提供浅色/深色主题切换，深色即时生效并�
   await expect(group.getByRole('radio', { name: /深色/ })).toHaveAttribute('aria-checked', 'true')
   await expect.poll(() => bodyBackground(page)).toBe(DARK_BODY_BG)
   await expect.poll(async () => (await storedTheme(page)) ?? '').toContain('"dark"')
-  // 兜底覆盖层：未迁移页面的硬编码中性色映射到深色阶梯
-  await expect(page.locator('.bg-white').first()).toHaveCSS('background-color', 'rgb(22, 28, 38)')
-  await expect(page.locator('.text-slate-700').first()).toHaveCSS('color', 'rgb(208, 214, 223)')
+  // 深色下卡片面翻转 --card 深档（#161c26）
+  await expect(page.locator('.bg-card').first()).toHaveCSS('background-color', 'rgb(22, 28, 38)')
+  await expect(page.locator('.text-muted-foreground').first()).toHaveCSS('color', 'rgb(152, 162, 179)')
 
   // 关闭弹窗后刷新：防闪烁脚本 + store 水合保持深色
   await page.keyboard.press('Escape')
@@ -87,7 +87,7 @@ test('偏好设置弹窗提供浅色/深色主题切换，深色即时生效并�
   await page.reload({ waitUntil: 'domcontentloaded' })
   await expect(page.locator('html')).toHaveClass(/dark/)
   await expect.poll(() => bodyBackground(page)).toBe(DARK_BODY_BG)
-  await expect(page.locator('.bg-white').first()).toHaveCSS('background-color', 'rgb(22, 28, 38)')
+  await expect(page.locator('.bg-card').first()).toHaveCSS('background-color', 'rgb(22, 28, 38)')
 
   // 切回浅色：恢复默认外观
   const reopened = await openPreferencesDialog(page)
@@ -95,5 +95,5 @@ test('偏好设置弹窗提供浅色/深色主题切换，深色即时生效并�
   await expect(page.locator('html')).not.toHaveClass(/dark/)
   await expect.poll(() => bodyBackground(page)).toBe(LIGHT_BODY_BG)
   await expect.poll(async () => (await storedTheme(page)) ?? '').toContain('"light"')
-  await expect(page.locator('.bg-white').first()).toHaveCSS('background-color', 'rgb(255, 255, 255)')
+  await expect(page.locator('.bg-card').first()).toHaveCSS('background-color', 'rgb(255, 255, 255)')
 })

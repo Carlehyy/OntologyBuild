@@ -10,10 +10,10 @@ const KIND_LABELS: Record<string, string> = {
   flow: '能量流', dependency: '依赖', hierarchy: '层级',
 }
 const STATUS_CLASSES: Record<string, string> = {
-  alarm: 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300',
+  alarm: 'bg-[var(--color-danger-bg)] text-[var(--color-danger)] dark:bg-[var(--color-danger-hover)] dark:text-[var(--color-danger)]',
   warning: 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]',
   normal: 'bg-[var(--color-success-bg)] text-[var(--color-success)]',
-  info: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300',
+  info: 'bg-muted text-muted-foreground dark:bg-accent dark:text-[var(--color-text-tertiary)]',
 }
 
 /** 平铺区块头：细字重标题 + 计数，不带边框与圆角容器。 */
@@ -21,7 +21,7 @@ function BlockHead({ title, count }: { title: string; count?: number }) {
   return (
     <div className="mb-2 flex items-baseline gap-1.5 border-b border-[var(--color-border)] pb-1.5">
       <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">{title}</h3>
-      {count != null && <span className="text-xs tabular-nums text-slate-400">{count}</span>}
+      {count != null && <span className="text-xs tabular-nums text-[var(--color-text-tertiary)]">{count}</span>}
     </div>
   )
 }
@@ -58,7 +58,7 @@ export function ObjectsPanel({ objects }: { objects: NonNullable<SceneDefinition
                   {obj.layout.w}×{obj.layout.d}×{obj.layout.h}
                 </td>
                 <td className="py-2 pr-4">{(obj.extras ?? []).join('、') || '—'}</td>
-                <td className="py-2 font-mono text-[11px] text-teal-700 dark:text-teal-300">{obj.ontology_concept_id ?? '—'}</td>
+                <td className="py-2 font-mono text-[11px] text-brand-ink dark:text-brand-ink">{obj.ontology_concept_id ?? '—'}</td>
               </tr>
             ))}
           </tbody>
@@ -81,7 +81,7 @@ export function RelationsPanel({ relations }: { relations: NonNullable<SceneDefi
               <span className="font-mono text-[11px]">{rel.from}</span>
               <span className="text-[var(--color-text-tertiary)]">→</span>
               <span className="font-mono text-[11px]">{rel.to}</span>
-              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground dark:bg-accent dark:text-[var(--color-text-tertiary)]">
                 {KIND_LABELS[rel.kind ?? 'flow'] ?? rel.kind}
               </span>
             </li>

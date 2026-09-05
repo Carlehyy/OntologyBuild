@@ -5,6 +5,7 @@
  */
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useNavigate } from 'react-router-dom'
 import { Boxes, Copy, Pencil, Plus, Search, Sparkles, Trash2, X } from 'lucide-react'
 import { scenesApi } from '@/api/scenes'
@@ -28,18 +29,18 @@ function CreateSceneCard({ onCreate }: {
   onCreate: () => void
 }) {
   return (
-    <article className="group flex min-h-[256px] flex-col items-center justify-center overflow-hidden rounded-2xl border border-dashed border-teal-300 bg-gradient-to-br from-teal-50/80 via-white to-cyan-50/60 px-4 py-6 text-center transition-all hover:-translate-y-0.5 hover:border-teal-500 hover:shadow-lg">
-      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-teal-600 text-white shadow-md shadow-teal-600/20 transition-transform group-hover:scale-105">
+    <article className="group flex min-h-[256px] flex-col items-center justify-center overflow-hidden rounded-2xl border border-dashed border-brand-line bg-gradient-to-br from-brand-soft via-white to-viz-cyan-soft px-4 py-6 text-center transition-all hover:-translate-y-0.5 hover:border-brand hover:shadow-lg">
+      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-brand text-[var(--color-text-inverse)] shadow-md transition-transform group-hover:scale-105">
         <Plus size={25} />
       </div>
-      <h3 className="text-base font-semibold text-slate-800">新建场景</h3>
+      <h3 className="text-base font-semibold text-foreground">新建场景</h3>
       {/* 提示语保持单行：窄栏下负外边距吃掉左右内边距，字号降至 11px 保证不折行 */}
-      <p className="-mx-4 mt-2 whitespace-nowrap text-[11px] leading-5 text-slate-500 min-[1500px]:text-xs">快速创建草稿态场景，或通过场景助手对话生成</p>
+      <p className="-mx-4 mt-2 whitespace-nowrap text-[11px] leading-5 text-muted-foreground min-[1500px]:text-xs">快速创建草稿态场景，或通过场景助手对话生成</p>
       <div className="mt-5 flex items-center justify-center">
         <button
           type="button"
           onClick={onCreate}
-          className="rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm transition-colors hover:border-teal-300 hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+          className="rounded-lg border border-brand-line bg-card px-3 py-1.5 text-xs font-medium text-brand-ink shadow-sm transition-colors hover:border-brand-line hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           立即创建
         </button>
@@ -57,10 +58,10 @@ function SceneCard({ scene, onEdit, onDetail, onClone, onDelete }: {
 }) {
   const published = scene.status === 'published'
   return (
-    <article className="group flex min-h-[256px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-200 hover:shadow-lg">
+    <article className="group flex min-h-[256px] flex-col overflow-hidden rounded-2xl border border-border bg-card transition-all duration-200 hover:-translate-y-0.5 hover:border-brand-line hover:shadow-lg">
       <div className="flex flex-col p-4 pb-2.5">
         <div className="flex min-h-11 items-start gap-3 overflow-hidden">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-teal-500 to-cyan-500 text-white shadow-sm">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand to-viz-cyan text-[var(--color-text-inverse)] shadow-sm">
             <Boxes size={20} />
           </span>
           <div className="flex min-h-11 min-w-0 flex-1 flex-col justify-center overflow-hidden">
@@ -68,7 +69,7 @@ function SceneCard({ scene, onEdit, onDetail, onClone, onDelete }: {
               <button
                 type="button"
                 onClick={onDetail}
-                className="min-w-0 flex-1 truncate text-left text-[15px] font-semibold leading-5 text-slate-800 transition-colors hover:text-teal-700"
+                className="min-w-0 flex-1 truncate text-left text-[15px] font-semibold leading-5 text-foreground transition-colors hover:text-brand-ink"
                 title={scene.name}
               >
                 {scene.name}
@@ -78,17 +79,17 @@ function SceneCard({ scene, onEdit, onDetail, onClone, onDelete }: {
               <span className={
                 'inline-flex min-w-0 max-w-full truncate rounded-md border px-2 py-0.5 text-[11px] font-medium leading-4 ' +
                 (published
-                  ? 'border-teal-100 bg-teal-50 text-teal-700'
-                  : 'border-slate-200 bg-slate-50 text-slate-500')
+                  ? 'border-brand-line bg-brand-soft text-brand-ink'
+                  : 'border-border bg-muted text-muted-foreground')
               }>
                 {published ? '已发布' : '草稿'}
               </span>
               {scene.published_version_no != null ? (
-                <span className="inline-flex shrink-0 rounded-md border border-violet-100 bg-violet-50 px-2 py-0.5 font-mono text-[11px] font-medium leading-4 text-violet-600">
+                <span className="inline-flex shrink-0 rounded-md border border-viz-violet-soft bg-viz-violet-soft px-2 py-0.5 font-mono text-[11px] font-medium leading-4 text-viz-violet">
                   v{scene.published_version_no}
                 </span>
               ) : (
-                <span className="inline-flex shrink-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium leading-4 text-slate-500">
+                <span className="inline-flex shrink-0 rounded-md border border-border bg-muted px-2 py-0.5 text-[11px] font-medium leading-4 text-muted-foreground">
                   未发布
                 </span>
               )}
@@ -97,7 +98,7 @@ function SceneCard({ scene, onEdit, onDetail, onClone, onDelete }: {
         </div>
 
         <p
-          className="mt-4 min-h-[44px] text-sm leading-[22px] text-slate-500"
+          className="mt-4 min-h-[44px] text-sm leading-[22px] text-muted-foreground"
           style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
           title={scene.description || '暂无描述'}
         >
@@ -112,39 +113,39 @@ function SceneCard({ scene, onEdit, onDetail, onClone, onDelete }: {
             { label: '生效版本', value: scene.published_version_no != null ? 'v' + scene.published_version_no : '—' },
             { label: '运行日志', value: scene.runtime_log_count ?? 0 },
           ].map(metric => (
-            <div key={metric.label} className="min-w-0 rounded-xl bg-slate-50 px-0.5 py-2.5 text-center">
-              <p className="whitespace-nowrap text-[11px] font-medium text-slate-400">{metric.label}</p>
-              <p className="mt-0.5 text-lg font-semibold tabular-nums text-slate-800">{metric.value}</p>
+            <div key={metric.label} className="min-w-0 rounded-xl bg-muted px-0.5 py-2.5 text-center">
+              <p className="whitespace-nowrap text-[11px] font-medium text-[var(--color-text-tertiary)]">{metric.label}</p>
+              <p className="mt-0.5 text-lg font-semibold tabular-nums text-foreground">{metric.value}</p>
             </div>
           ))}
         </div>
       </div>
 
-      <footer className="mt-auto flex min-h-11 items-center gap-0.5 border-t border-slate-100 px-4 py-1.5">
+      <footer className="mt-auto flex min-h-11 items-center gap-0.5 border-t border-border px-4 py-1.5">
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={onEdit}
-            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
+            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-muted px-1.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-brand-soft hover:text-brand-ink"
           >
             <Pencil size={12} /> 编辑
           </button>
           <button
             type="button"
             onClick={onClone}
-            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-slate-100 px-1.5 py-1.5 text-[11px] font-medium text-slate-700 transition-colors hover:bg-teal-50 hover:text-teal-700"
+            className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-lg bg-muted px-1.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-brand-soft hover:text-brand-ink"
           >
             <Copy size={12} /> 克隆
           </button>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
-          <span className="hidden shrink-0 whitespace-nowrap text-[11px] tabular-nums text-slate-400 min-[1400px]:inline" title={'最近更新：' + new Date(scene.updated_at || '').toLocaleString('zh-CN')}>
+          <span className="hidden shrink-0 whitespace-nowrap text-[11px] tabular-nums text-[var(--color-text-tertiary)] min-[1400px]:inline" title={'最近更新：' + new Date(scene.updated_at || '').toLocaleString('zh-CN')}>
             {formatChangedAt(scene.updated_at)}
           </span>
           <button
             type="button"
             onClick={onDelete}
-            className="shrink-0 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"
+            className="shrink-0 rounded-lg p-1.5 text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-danger-bg)] hover:text-[var(--color-danger)]"
             title="删除场景"
             aria-label={'删除场景 ' + scene.name}
           >
@@ -224,47 +225,50 @@ export default function SceneListPage() {
 
   return (
     <div className="min-h-full">
-      <section className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm/50" aria-label="场景筛选">
+      <section className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-sm/50" aria-label="场景筛选">
         <div className="relative w-full sm:w-72">
-          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
           <input
             value={nameFilter}
             onChange={event => setNameFilter(event.target.value)}
             placeholder="搜索场景名称或描述"
             aria-label="按场景名称或描述筛选"
-            className="h-9 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-8 text-sm text-slate-700 placeholder:text-slate-400 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+            className="h-9 w-full rounded-lg border border-border bg-card pl-8 pr-8 text-sm text-foreground placeholder:text-[var(--color-text-tertiary)] focus:border-brand focus:outline-none focus:ring-2 focus:ring-ring"
           />
           {nameFilter && (
             <button
               type="button"
               onClick={() => setNameFilter('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)] hover:text-muted-foreground"
               aria-label="清除名称筛选"
             >
               <X size={13} />
             </button>
           )}
         </div>
-        <select
-          value={statusFilter}
-          onChange={event => setStatusFilter(event.target.value)}
-          aria-label="按状态筛选"
-          className="h-9 min-w-36 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-600 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+        <Select
+          value={statusFilter || '__all__'}
+          onValueChange={value => setStatusFilter(value === '__all__' ? '' : value)}
         >
-          <option value="">全部状态</option>
-          <option value="draft">草稿</option>
-          <option value="published">已发布</option>
-        </select>
+          <SelectTrigger className="h-9 min-w-36 w-fit rounded-lg bg-card px-3 text-sm" aria-label="按状态筛选">
+            <SelectValue placeholder="全部状态" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">全部状态</SelectItem>
+            <SelectItem value="draft">草稿</SelectItem>
+            <SelectItem value="published">已发布</SelectItem>
+          </SelectContent>
+        </Select>
         {(nameFilter || statusFilter) && (
           <button
             type="button"
             onClick={() => { setNameFilter(''); setStatusFilter('') }}
-            className="inline-flex h-9 items-center gap-1 rounded-lg px-2.5 text-xs text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+            className="inline-flex h-9 items-center gap-1 rounded-lg px-2.5 text-xs text-[var(--color-text-tertiary)] hover:bg-muted hover:text-muted-foreground"
           >
             <X size={13} /> 清除筛选
           </button>
         )}
-        <span className="ml-auto hidden text-xs tabular-nums text-slate-400 sm:inline" aria-live="polite">
+        <span className="ml-auto hidden text-xs tabular-nums text-[var(--color-text-tertiary)] sm:inline" aria-live="polite">
           {nameFilter || statusFilter
             ? '共 ' + filteredItems.length + ' / ' + allItems.length + ' 个场景'
             : '共 ' + allItems.length + ' 个场景'}
@@ -272,14 +276,14 @@ export default function SceneListPage() {
         <button
           type="button"
           onClick={() => navigate('/scenes/modeling')}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-teal-200 bg-white px-4 text-sm font-medium text-teal-700 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-300 hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-brand-line bg-card px-4 text-sm font-medium text-brand-ink shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-brand-line hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           <Sparkles size={15} /> 场景助手
         </button>
         <button
           type="button"
           onClick={() => setCreateOpen(true)}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--color-nav-bg)] px-4 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--color-nav-bg)] px-4 text-sm font-medium text-[var(--color-text-inverse)] shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           <Plus size={15} /> 新建场景
         </button>
@@ -289,25 +293,25 @@ export default function SceneListPage() {
         <CreateSceneCard onCreate={() => setCreateOpen(true)} />
 
         {isLoading ? (
-          <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-slate-200 bg-white sm:col-span-1 lg:col-span-2 xl:col-span-3">
+          <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-border bg-card sm:col-span-1 lg:col-span-2 xl:col-span-3">
             <LoadingState message="加载场景列表..." />
           </div>
         ) : isError ? (
-          <div className="flex min-h-[300px] flex-col items-center justify-center gap-3 rounded-2xl border border-red-100 bg-red-50 px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3" role="alert">
-            <p className="text-sm text-red-600">场景列表加载失败，请检查网络连接后重试。</p>
+          <div className="flex min-h-[300px] flex-col items-center justify-center gap-3 rounded-2xl border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-[var(--color-danger-bg)] px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3" role="alert">
+            <p className="text-sm text-[var(--color-danger)]">场景列表加载失败，请检查网络连接后重试。</p>
             <button
               type="button"
               onClick={() => void refetch()}
-              className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+              className="rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)] bg-card px-3 py-1.5 text-xs font-medium text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-danger)]"
             >
               重新加载
             </button>
           </div>
         ) : filteredItems.length === 0 ? (
-          <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3">
-            <Boxes size={28} className="text-slate-300" />
-            <p className="mt-3 text-sm font-medium text-slate-500">{nameFilter || statusFilter ? '没有符合条件的场景' : '还没有创建场景'}</p>
-            <p className="mt-1 text-xs text-slate-400">{nameFilter || statusFilter ? '请调整名称或状态筛选条件' : '点击左侧卡片创建第一个场景，或通过场景助手对话生成'}</p>
+          <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-border bg-card px-6 text-center sm:col-span-1 lg:col-span-2 xl:col-span-3">
+            <Boxes size={28} className="text-[var(--color-text-tertiary)]" />
+            <p className="mt-3 text-sm font-medium text-muted-foreground">{nameFilter || statusFilter ? '没有符合条件的场景' : '还没有创建场景'}</p>
+            <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">{nameFilter || statusFilter ? '请调整名称或状态筛选条件' : '点击左侧卡片创建第一个场景，或通过场景助手对话生成'}</p>
           </div>
         ) : (
           filteredItems.map(scene => (

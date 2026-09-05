@@ -35,7 +35,7 @@ const PANEL_GROUPS = [
 
 type PanelKey = (typeof PANEL_GROUPS)[number]['key']
 
-const HEADER_ICON_BUTTON_CLASS = 'inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-white shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2'
+const HEADER_ICON_BUTTON_CLASS = 'inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-nav-bg)] text-[var(--color-text-inverse)] shadow-sm transition-all hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
 
 /** 旧深链值归一：display 已并入左侧常驻画布，映射到默认面板；未知值落回对象。 */
 function normalizePanelKey(raw: string | null): PanelKey {
@@ -142,22 +142,22 @@ export default function SceneDetailPage() {
       {/* ═══ 场景基本信息卡（右侧图标操作组：返回 · 发布 · 编辑 · 克隆 · 删除） ═══ */}
       <header className="flex shrink-0 items-center justify-between gap-3 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-5 py-4 shadow-[0_8px_28px_rgba(15,23,42,0.06)]">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-teal-500 to-cyan-500 text-white shadow-sm">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand to-viz-cyan text-[var(--color-text-inverse)] shadow-sm">
             <Boxes size={22} />
           </span>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="truncate text-lg font-semibold text-slate-800 dark:text-[var(--color-text-primary)]">{scene.name}</h1>
+              <h1 className="truncate text-lg font-semibold text-foreground dark:text-[var(--color-text-primary)]">{scene.name}</h1>
               <span className={
                 'inline-flex shrink-0 rounded-md border px-2 py-0.5 text-[11px] font-medium leading-4 ' +
                 (scene.status === 'published'
-                  ? 'border-teal-100 bg-teal-50 text-teal-700 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-300'
-                  : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300')
+                  ? 'border-brand-line bg-brand-soft text-brand-ink dark:border-brand dark:bg-brand-deep dark:text-brand-ink'
+                  : 'border-border bg-muted text-muted-foreground dark:border-[var(--color-border-hover)] dark:bg-accent dark:text-[var(--color-text-tertiary)]')
               }>
                 {scene.status === 'published' ? '已发布' : '草稿'}
               </span>
             </div>
-            <p className="mt-1 truncate text-xs text-slate-400 dark:text-[var(--color-text-tertiary)]" title={scene.description || undefined}>
+            <p className="mt-1 truncate text-xs text-[var(--color-text-tertiary)] dark:text-[var(--color-text-tertiary)]" title={scene.description || undefined}>
               当前 v{scene.current_version_no}
               {scene.published_version_no != null ? ' · 生效 v' + scene.published_version_no : ' · 从未发布'}
               {scene.description ? ' · ' + scene.description : ''}
@@ -181,7 +181,7 @@ export default function SceneDetailPage() {
           <button type="button" onClick={() => setCloneOpen(true)} className={HEADER_ICON_BUTTON_CLASS} title="克隆场景" aria-label="克隆场景">
             <Copy size={18} />
           </button>
-          <button type="button" onClick={() => setRemoveOpen(true)} className={HEADER_ICON_BUTTON_CLASS + ' hover:!bg-red-500'} title="删除场景" aria-label="删除场景">
+          <button type="button" onClick={() => setRemoveOpen(true)} className={HEADER_ICON_BUTTON_CLASS + ' hover:!bg-[var(--color-danger)]'} title="删除场景" aria-label="删除场景">
             <Trash2 size={18} />
           </button>
         </div>
@@ -201,7 +201,7 @@ export default function SceneDetailPage() {
               <span
                 aria-hidden="true"
                 data-testid="panel-indicator"
-                className="absolute bottom-[-10px] z-10 h-0.5 rounded-full bg-teal-600 shadow-sm transition-all duration-200 ease-out"
+                className="absolute bottom-[-10px] z-10 h-0.5 rounded-full bg-brand shadow-sm transition-all duration-200 ease-out"
                 style={{ left: indicatorPos.left + 'px', width: indicatorPos.width + 'px' }}
               />
               {PANEL_GROUPS.map(group => {
@@ -215,10 +215,10 @@ export default function SceneDetailPage() {
                     aria-selected={isActive}
                     onClick={() => selectPanel(group.key)}
                     className={
-                      'relative z-10 whitespace-nowrap pb-2 text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-1 ' +
+                      'relative z-10 whitespace-nowrap pb-2 text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 ' +
                       (isActive
-                        ? 'font-semibold text-teal-700 dark:text-teal-300'
-                        : 'text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300')
+                        ? 'font-semibold text-brand-ink dark:text-brand-ink'
+                        : 'text-[var(--color-text-tertiary)] hover:text-muted-foreground dark:text-muted-foreground hover:text-[var(--color-text-tertiary)]')
                     }
                   >
                     {group.label}

@@ -6,6 +6,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Info } from 'lucide-react'
 import { scenesApi } from '@/api/scenes'
 import type { RuleHit, SceneDefinition, SceneDetail, SceneVersionMeta } from '@/types/scene'
@@ -83,24 +84,28 @@ export function DisplayTab({ scene }: { scene: SceneDetail }) {
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)]">
           渲染版本
-          <select
-            value={selectedNo}
-            onChange={event => setSelectedNo(Number(event.target.value))}
-            className="h-8 rounded-md border border-[var(--color-border)] bg-white px-2 text-sm text-[var(--color-text-primary)] focus:border-teal-500 focus:outline-none dark:bg-slate-900"
+          <Select
+            value={String(selectedNo)}
+            onValueChange={value => setSelectedNo(Number(value))}
           >
-            {versionOptions.map(version => (
-              <option key={version.version_no} value={version.version_no}>
-                v{version.version_no} · {version.note || version.source}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger className="h-8 rounded-md bg-card px-2 text-sm" aria-label="选择版本">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {versionOptions.map(version => (
+                <SelectItem key={version.version_no} value={String(version.version_no)}>
+                  v{version.version_no} · {version.note || version.source}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </label>
         <label className="flex cursor-pointer items-center gap-1.5 text-sm text-[var(--color-text-secondary)]">
           <input
             type="checkbox"
             checked={mockPush}
             onChange={event => setMockPush(event.target.checked)}
-            className="accent-teal-600"
+            className="accent-[var(--color-nav-bg)]"
           />
           模拟数据推送
         </label>

@@ -16,10 +16,10 @@ const LEVEL_FILTERS: { key: string; label: string }[] = [
 ]
 
 const LEVEL_BADGES: Record<string, string> = {
-  info: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300',
+  info: 'bg-muted text-muted-foreground dark:bg-accent dark:text-[var(--color-text-tertiary)]',
   normal: 'bg-[var(--color-success-bg)] text-[var(--color-success)]',
   warning: 'bg-[var(--color-warning-bg)] text-[var(--color-warning)]',
-  alarm: 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300',
+  alarm: 'bg-[var(--color-danger-bg)] text-[var(--color-danger)] dark:bg-[var(--color-danger-hover)] dark:text-[var(--color-danger)]',
 }
 const LEVEL_LABELS: Record<string, string> = {
   info: '信息', normal: '正常', warning: '预警', alarm: '告警',
@@ -59,8 +59,8 @@ export function LogsTab({ sceneId, everPublished }: { sceneId: string; everPubli
             className={
               'rounded-full border px-2.5 py-0.5 text-xs transition-colors ' +
               (level === item.key
-                ? 'border-teal-500 bg-teal-50 text-teal-700 dark:bg-teal-950 dark:text-teal-300'
-                : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-teal-300')
+                ? 'border-brand bg-brand-soft text-brand-ink dark:bg-brand-deep dark:text-brand-ink'
+                : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-brand-line')
             }
           >
             {item.label}
@@ -73,8 +73,8 @@ export function LogsTab({ sceneId, everPublished }: { sceneId: string; everPubli
           className={
             'rounded-full border px-2.5 py-0.5 text-xs transition-colors ' +
             (level === 'all'
-              ? 'border-teal-500 bg-teal-50 text-teal-700 dark:bg-teal-950 dark:text-teal-300'
-              : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-teal-300')
+              ? 'border-brand bg-brand-soft text-brand-ink dark:bg-brand-deep dark:text-brand-ink'
+              : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-brand-line')
           }
         >
           全部
@@ -90,7 +90,7 @@ export function LogsTab({ sceneId, everPublished }: { sceneId: string; everPubli
       ) : (
         <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-card">
           <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 text-[var(--color-text-tertiary)] dark:bg-slate-900">
+            <thead className="bg-muted text-[var(--color-text-tertiary)] dark:bg-accent">
               <tr>
                 <th className="px-3 py-2 font-medium">时间</th>
                 <th className="px-3 py-2 font-medium">级别</th>

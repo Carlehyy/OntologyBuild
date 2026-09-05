@@ -197,8 +197,8 @@ test('详情页左右双卡：五标签平铺、深链、指示器与画布常�
   // 兼容旧三标签深链：tab=display 归一为默认对象面板且画布仍常驻
   await page.goto('/#/scenes/scn-1?tab=display')
   await expect(page.getByRole('cell', { name: 'office' }).first()).toBeVisible()
-  // 左卡版本下拉默认选中已发布 v1
-  await expect(page.locator('[aria-label="三维场景可视化"] select')).toHaveValue('1')
+  // 左卡版本下拉默认选中已发布 v1（Radix combobox 显示所选选项文本）
+  await expect(page.locator('[aria-label="三维场景可视化"]').getByRole('combobox')).toContainText('v1')
 })
 
 test('custom 角色未授权 scenes 时直达被拦截', async ({ page }) => {
